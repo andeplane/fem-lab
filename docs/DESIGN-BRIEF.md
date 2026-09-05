@@ -215,7 +215,8 @@ Bring-your-own API key, stored locally, with a plain notice about cost.
   with a hand estimate; the UI should give those checks a place (a "verification" card in the
   chat and the Checks tab).
 - The person and the AI share one Model; either can act next. No "AI mode".
-- Cost/time shown per turn. Model choice in settings.
+- Cost/time shown per turn. Settings: provider (Anthropic or OpenAI), model, API key and
+  where it came from (typed in, or injected by the local dev server from the shell).
 - **@-mentions**: typing `@` in the chat opens a picker over everything in the Model and the
   project: bodies, faces, sets, materials, constraints, loads, steps, results, Journal entries,
   project files. `@bracket.top` or `@result:static-1` inserts a chip; the AI receives the
