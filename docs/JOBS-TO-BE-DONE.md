@@ -190,6 +190,8 @@ reason for the "everything is a Command" rule (see the glossary and ADR 0003).
 | J14.2 | I want to understand an error or a warning (what it means, how to fix it) | forums |
 | J14.3 | I want to see the effect of a choice immediately (linear vs quadratic tets; coarse vs fine; fixed vs pinned) | re-run |
 | J14.4 | I want the theory (weak form, element matrices, solver) alongside the tool, with the notation the course uses | textbooks |
+| J14.5 | When I open the tool for the first time, I want a guided, step-by-step tutorial that builds a simple model with me (each step one Command, explained), so I learn the workflow by doing | vendor tutorials as PDFs/videos |
+| J14.6 | I want a large gallery of examples, from trivial to benchmark, that open in one click and explain themselves | vendor example libraries |
 
 ## J15 Interoperate
 

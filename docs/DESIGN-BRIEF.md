@@ -161,9 +161,25 @@ Rendered Markdown: assumptions, geometry, materials, mesh and quality, loads wit
 result tables, pictures (viewer screenshots at set resolution), benchmark comparison, Journal
 as appendix. Print / export.
 
+### 5.8b Onboarding, tutorials and examples
+First-run onboarding and a tutorial system are part of the product, not a help page:
+- **Guided tutorials**: step-by-step walkthroughs of simple models (a cantilever, a plate with
+  a hole, a thermal bar), where each step names one Command, explains why, highlights the
+  control that emits it, and lets the person either click it or press "do it for me". A step
+  is complete when the Journal contains the expected Command; the tutorial reads the Journal,
+  never a hidden flag. Progress is visible (step n of m), skippable, resumable.
+- **Many examples**: the gallery (§5.7) holds every benchmark plus everyday models; each opens
+  in one click, has a one-paragraph explanation, its reference value and a theory panel.
+  Simpler examples have a tutorial variant ("build this yourself, step by step").
+- **First-run tour**: on the first visit, a short overlay tour of the five regions (tree,
+  viewer, properties, bottom panel, assistant), one sentence each, dismissable, with a
+  "start the cantilever tutorial" button at the end.
+- **Contextual help**: every panel header and every form field has a `?` that opens the
+  relevant glossary entry or theory section; errors link to the fix.
+
 ### 5.9 Start / empty state
-A blank Model with three obvious paths: "Ask the AI" (chat box), "Open an example",
-"Start from geometry". A one-line capability check underneath.
+A blank Model with four obvious paths: "Ask the AI" (chat box), "Start a tutorial",
+"Open an example", "Start from geometry". A one-line capability check underneath.
 
 ## 6. The 3D viewer
 
@@ -310,6 +326,8 @@ table, then opens the script the AI wrote, changes the load and reruns.
 5. AI chat with visible tool calls, a verification card, the `@` mention picker, the `/`
    skills menu and the AGENTS.md badge.
 6. Examples gallery card and the theory-next-to-result view.
+6b. Tutorial mode: the step panel, the highlighted control, "do it for me", progress; the
+   first-run tour.
 7. Viewer chrome: legend, deformation scale, glyph toggles, clip plane, animation bar.
 8. Command palette.
 8b. Export dialog and project-folder panel.
