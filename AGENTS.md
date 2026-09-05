@@ -39,6 +39,10 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
 - **f64 on the CPU wraps f32 on the GPU.** Assembly, residuals, norms and factorisations are
   f64; the GPU runs the f32 operator, preconditioner and vectors. GPU assembly gathers, never
   scatters with atomics. (ADR 0002)
+- **The GPU does most of the work; the CPU work that remains is multithreaded and
+  deterministic.** rayon natively, wasm-bindgen-rayon in the browser behind the
+  coi-serviceworker shim Atomify uses on GitHub Pages; fixed-order reductions so any thread
+  count gives bit-identical results, and tests run at 1 and N threads. (ADR 0013)
 
 ## Testing
 
@@ -68,4 +72,7 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
 - Record a decision as an ADR when it is hard to reverse, surprising without context, and a
   real trade-off. Update `CONTEXT.md` when a term is settled. Scan `docs/adr/` for the next
   number.
+- **Commit after every feature-sized step, and often.** Work on a branch, keep each commit
+  green and self-contained (code, its tests, its Benchmark, its doc string), and open a PR as a
+  sequence of such commits. A day of uncommitted work is a bug.
 - Stage files by name. Run the tests before claiming done; report failures with their output.

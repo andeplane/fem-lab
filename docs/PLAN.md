@@ -29,6 +29,12 @@ Decisions referenced as ADR-000N live in `adr/`. Jobs referenced as J1.1 etc. li
 8. **Benchmarks are scripts.** Every case in `BENCHMARKS.md` is a script against the Command
    API, runnable by `femlab bench` with no browser. The suite is therefore also the proof that
    the engine is a scriptable library.
+9. **CPU work is parallel and deterministic** (ADR 0013). Loops over elements, faces and nodes go
+   through rayon with fixed-order reductions; every parallel path is tested at 1 and N threads
+   for identical output. The browser gets the same threads via wasm-bindgen-rayon behind the
+   coi-serviceworker shim.
+10. **Commit after every feature-sized step**, on a branch, with the tests green. Small commits,
+   often; a PR is a sequence of them, not one squash of a day.
 
 ## 1. Where it lives
 
@@ -72,6 +78,7 @@ skeleton. Nothing user-visible.
 | 0.5 | **Test lanes.** `cargo llvm-cov` at 100 % on `crates/engine`; wgpu tests on lavapipe; vitest with 100 % thresholds on `packages/registry`; Playwright smoke on `packages/app` | CI green on an empty workspace |
 | 0.6 | **Workspace and hosts.** `crates/engine` with `Engine::new(gpu: Option<wgpu::Device>, storage, clock)`; `crates/engine-wasm` exposing it via wasm-bindgen; `crates/femlab` with `femlab run <journal>` that replays a Journal and prints `query.model`; `packages/app` Babylon `WebGPUEngine` viewer showing an empty grid and a WebGPU-unavailable message; `#![deny]` of std::fs/network in the engine crate; CI job that runs `femlab run` natively and the same Journal in the wasm build | app deployed to GitHub Pages; the two builds produce identical Model hashes |
 | 0.7 | **Rust↔TS boundary spike.** A Result of 1M f32 values crosses to Babylon as a typed-array view without a copy; a Command round-trips serialised in < 1 ms | numbers recorded in ADR 0012 |
+| 0.8 | **Threads-in-browser spike.** Copy Atomify's recipe: `public/coi-serviceworker.min.js` with `coepCredentialless`, registered before the app module, one guarded reload, Vite dev headers; `wasm-bindgen-rayon` pool in `crates/engine-wasm`; a parallel element loop at 1 and N threads on GitHub Pages and in Safari | `crossOriginIsolated === true` on the deployed page in Chrome, Firefox and Safari; identical results at 1 and N threads; the single-thread fallback shows its note when headers are absent |
 
 Exit criterion: ADR 0007's claim ("GPU kernels run in CI") is true or the plan is revised.
 
@@ -286,7 +293,7 @@ phase 0, so this phase is protocol and packaging, not solver work.
 |---|---|---|
 | S.1 | `femlab run` and `femlab bench` in the CLI host are the CI entry points for every Benchmark; results as JSON and a Markdown table | `BENCHMARKS.md` status table is generated from a CI run |
 | S.2 | Remote solve protocol: the app host can send a Journal (plus Plugin hashes) to a `femlab serve` endpoint and receive a Result stream; the engine is unchanged, the host does transport | a Journal recorded in the browser solves on the server byte-for-byte equal to the local CPU path |
-| S.3 | Server GPU: dawn.node with a real Vulkan/Metal adapter; raised limits; `worker_threads` for CPU-side assembly of large models (ADR 0009 does not apply here) | a 5M-DOF model solves on a workstation GPU; the browser refuses it with `query.cost` and offers the server |
+| S.3 | Server GPU: native wgpu with a real Vulkan/Metal adapter; raised limits; rayon across all cores for assembly and factorisation of large models (ADR 0013) | a 5M-DOF model solves on a workstation GPU; the browser refuses it with `query.cost` and offers the server |
 | S.4 | Container image (Node + Mesa lavapipe for GPU-less, Vulkan ICD passthrough for GPU) | `docker run femlab bench` passes on a GPU-less runner |
 | S.5 | Native sparse direct solver behind the same `Solver` interface for the Node host only (faer via napi or wasm; note 02), if measured as the bottleneck | opt-in; parity test against the TS Cholesky |
 

@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: superseded by ADR 0013 (threads are in; the browser host cross-origin-isolates itself with coi-serviceworker as Atomify does). The memory-budget and lazy-loading consequences below still apply.
 date: 2026-09-05
 ---
 
