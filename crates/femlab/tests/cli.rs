@@ -176,7 +176,27 @@ fn bench_runs_the_committed_cases_and_reports() {
         .args(["bench", "--markdown", "--filter", "cantilever"])
         .assert()
         .success()
-        .stdout(contains("| cantilever-model | 11/11 | green |"));
+        .stdout(contains("| cantilever-model | green | 11/11 | 1.0000e7 | 1.0000e7 | 0.00 % |"));
+    // --update-docs rewrites the marked block of a Markdown file, and says so when there is none
+    let docs = scratch("bench-docs").join("STATUS.md");
+    std::fs::write(&docs, "# Status\n\nbefore\n<!-- bench:start -->\nstale\n<!-- bench:end -->\nafter\n").unwrap();
+    femlab()
+        .args(["bench", "--filter", "cantilever-model", "--update-docs", docs.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(contains("updated"));
+    let written = std::fs::read_to_string(&docs).unwrap();
+    assert!(written.starts_with("# Status\n\nbefore\n<!-- bench:start -->\n"), "{written}");
+    assert!(written.contains("| cantilever-model | green |"), "{written}");
+    assert!(!written.contains("stale"), "{written}");
+    assert!(written.ends_with("<!-- bench:end -->\nafter\n"), "{written}");
+    let bare = scratch("bench-docs").join("NOMARKERS.md");
+    std::fs::write(&bare, "# Status\n").unwrap();
+    femlab()
+        .args(["bench", "--filter", "cantilever-model", "--update-docs", bare.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(contains("bench:start"));
     femlab().args(["bench", "--json"]).assert().success().stdout(contains("\"pass\": true"));
     femlab().args(["bench", "--filter", "nothing-matches"]).assert().success();
     let dir = scratch("bench");
@@ -212,7 +232,9 @@ fn bench_runs_the_committed_cases_and_reports() {
         .args(["bench", "--cases", dir.to_str().unwrap(), "--markdown"])
         .assert()
         .code(1)
-        .stdout(contains("| bad-volume | 2/4 | FAILED |"));
+        .stdout(contains("| bad-volume | FAILED | 2/4 | 1 | 2 | 50.00 % |"))
+        // a case with no numeric check has nothing to put in those three columns
+        .stdout(contains("| bad-command | FAILED | 0/0 | - | - | - |"));
     std::fs::write(dir.join("c-broken.json"), "{ nope").unwrap();
     femlab().args(["bench", "--cases", dir.to_str().unwrap()]).assert().code(1).stderr(contains("c-broken.json"));
     femlab()

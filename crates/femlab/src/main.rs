@@ -65,6 +65,10 @@ enum Cmd {
         /// Print a Markdown status table.
         #[arg(long)]
         markdown: bool,
+        /// Rewrite the `<!-- bench:start -->` … `<!-- bench:end -->` block of this Markdown
+        /// file with the status table (docs/BENCHMARKS.md).
+        #[arg(long)]
+        update_docs: Option<PathBuf>,
         #[arg(long)]
         threads: Option<usize>,
         /// Do not request a GPU.
@@ -107,8 +111,8 @@ fn main() {
         Cmd::Run { file, hashes, skip_solves, verify, as_script, journal, json, threads, cpu } => {
             run::run(&file, run::RunOptions { hashes, skip_solves, verify, as_script, journal, json, threads, cpu })
         }
-        Cmd::Bench { cases, filter, json, markdown, threads, cpu } => {
-            bench::bench(cases.as_deref(), filter.as_deref(), json, markdown, threads, cpu)
+        Cmd::Bench { cases, filter, json, markdown, update_docs, threads, cpu } => {
+            bench::bench(cases.as_deref(), filter.as_deref(), json, markdown, update_docs.as_deref(), threads, cpu)
         }
         Cmd::Schema { out, check } => run::schema(out.as_deref(), check),
         Cmd::Serve { port } => {
