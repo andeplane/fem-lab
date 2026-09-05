@@ -152,6 +152,8 @@ export class ResultsView {
     this.store.set({ tab: 'results', viewMode: 'results', assumptions: warnings });
     this.viewer.current?.setMode('results');
     await this.refresh(true);
+    // A real displacement is invisible at ×1, so a fresh Result opens exaggerated (design §5).
+    this.setDeformScale('auto');
   }
 }
 

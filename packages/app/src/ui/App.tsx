@@ -415,34 +415,36 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
     return () => removeEventListener('keydown', onKey);
   }, [dispatch, s.selection.refs.length]);
 
-  if (!started) {
-    return (
-      <>
-        <Start s={s} dispatch={dispatch} />
-        <Examples s={s} dispatch={dispatch} />
-      </>
-    );
-  }
+  // One fragment for both states, with the overlays at fixed positions: the start screen
+  // offers "Start a tutorial", and a tutorial that begins there has to survive the switch to
+  // the workspace its first Command causes — which it only does if the node keeps its slot.
   return (
-    <div class="shell">
-      <TopBar s={s} dispatch={dispatch} />
-      <div class="under-bar">
-        <Banner s={s} dispatch={dispatch} />
-        <div class="workspace">
-          <ModelTree s={s} dispatch={dispatch} />
-          <div class="centre">
-            <ViewerPane s={s} dispatch={dispatch} viewer={viewer} />
-            <Bottom s={s} store={store} dispatch={dispatch} query={read} />
+    <>
+      {started ? (
+        <div class="shell">
+          <TopBar s={s} dispatch={dispatch} />
+          <div class="under-bar">
+            <Banner s={s} dispatch={dispatch} />
+            <div class="workspace">
+              <ModelTree s={s} dispatch={dispatch} />
+              <div class="centre">
+                <ViewerPane s={s} dispatch={dispatch} viewer={viewer} />
+                <Bottom s={s} store={store} dispatch={dispatch} query={read} />
+              </div>
+              <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
+              {registry && s.panels['assistant'] ? <AssistantPanel registry={registry} store={store} /> : null}
+            </div>
           </div>
-          <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
-          {registry && s.panels['assistant'] ? <AssistantPanel registry={registry} store={store} /> : null}
         </div>
-      </div>
+      ) : (
+        <Start s={s} dispatch={dispatch} />
+      )}
       <Examples s={s} dispatch={dispatch} />
       <ExportModal s={s} dispatch={dispatch} />
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
-      <Tour store={store} />
-    </div>
+      {/* The tour's stops are shell regions, so it waits for the shell. */}
+      {started ? <Tour store={store} /> : null}
+    </>
   );
 }

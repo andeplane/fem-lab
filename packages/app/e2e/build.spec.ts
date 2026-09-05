@@ -46,6 +46,7 @@ test.describe('@cpu the cantilever, built through the UI', () => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
     await expect(page.getByText('Start a tutorial')).toBeVisible();
     await ready(page);
@@ -144,12 +145,13 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
 
   test('opens an example from the gallery and shows its Journal', async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
     await ready(page);
     await page.locator('button[data-cmd="panel.toggle"]', { hasText: 'Open an example' }).click();
     await expect(page.locator('.gallery')).toBeVisible();
     await shot(page, '06-gallery');
-    await page.locator('.ex-card', { hasText: 'Cantilever' }).click();
+    await page.locator('button[title="file.openExample cantilever"]').click();
     await expect(page.locator('.jrow')).toHaveCount(journal.length);
     const model = (await page.evaluate(() => window.fem.query.model())) as unknown as { name: string; hash: string };
     expect(model.name).toBe('cantilever');
@@ -159,6 +161,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
 
   test('the ⌘K palette lists the registry and fills a form', async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
     await ready(page);
     await page.evaluate(() => window.fem.model.new({ name: 'palette' }));
@@ -174,6 +177,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
 
   test('a script from the Script tab adds a body and the tree follows', async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
     await ready(page);
     await page.evaluate(() => window.fem.model.new({ name: 'scripted' }));

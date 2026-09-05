@@ -182,6 +182,8 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         const { name } = input as { name: string };
         const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
         for (const e of entries) await transport.dispatch(e.cmd as never);
+        // The gallery has done its job; leaving it up hides the Model it just opened.
+        store.togglePanel('examples', false);
         await refresh();
         return { name, commands: entries.length };
       },

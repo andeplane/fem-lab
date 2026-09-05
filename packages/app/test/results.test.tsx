@@ -265,6 +265,8 @@ describe('ResultsView', () => {
     const { store, results } = harness();
     await results.onAck({ output: { type: 'solve' }, warnings: [{ code: 'W-1', text: 'assumed a default', where: null }] });
     expect(store.state.tab).toBe('results');
+    // A fresh Result opens exaggerated; ×1 would look undeformed.
+    expect(store.state.deformScale).toBe(120);
     expect(store.state.viewMode).toBe('results');
     expect(store.state.assumptions).toHaveLength(1);
     await results.onAck({ output: { type: 'study', report: { rows: [], unit: 'mm' } } });
