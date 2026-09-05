@@ -110,6 +110,7 @@ export interface Fem {
      * stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
      * id and the Body index as cell data. Name a `step` to add that Step's result fields as
      * point data — displacement, reaction, stress and von Mises — so ParaView colours by them.
+     * `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
      */
     export(args: Omit<Extract<Command, { cmd: 'mesh.export' }>, 'cmd'>): Promise<Ack>;
   };

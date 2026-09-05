@@ -1923,6 +1923,29 @@ fn exporting_a_step_writes_its_fields_as_point_data() {
 }
 
 #[test]
+fn the_mesh_writers_are_reachable_through_mesh_export() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"blocks"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}},"order":1}"#);
+    let cases = [
+        ("msh", "blocks.msh", "model/mesh", "$MeshFormat", femlab_engine::command::ExportFormat::Msh),
+        ("inp", "blocks.inp", "text/plain", "*NODE", femlab_engine::command::ExportFormat::Inp),
+        ("stl", "blocks.stl", "model/stl", "solid", femlab_engine::command::ExportFormat::Stl),
+    ];
+    for (name, file, mime, marker, want) in cases {
+        let ack = ok(&mut e, &format!(r#"{{"cmd":"mesh.export","format":"{name}"}}"#));
+        let Output::Export { format, filename, mime: got_mime, text } = ack.output else { panic!("an export") };
+        assert_eq!(format, want);
+        assert_eq!(filename, file);
+        assert_eq!(got_mime, mime);
+        assert!(text.contains(marker), "{name} export is missing {marker}");
+    }
+    // Every variant answers `extension()`, which is what a host names the file from.
+    assert_eq!(femlab_engine::command::ExportFormat::Vtu.extension(), ("vtu", "application/xml"));
+}
+
+#[test]
 fn a_host_reads_a_field_straight_off_the_result() {
     let mut e = engine();
     solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);

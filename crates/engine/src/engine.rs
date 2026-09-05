@@ -684,11 +684,20 @@ impl Engine {
             None => Vec::new(),
         };
         let built = self.mesh()?;
-        let ids: Vec<f64> = (0..built.mesh.n_elems()).map(|e| e as f64).collect();
-        let bodies: Vec<f64> = (0..built.mesh.n_elems() as u32).map(|e| built.mesh.block_of(e).0 as f64).collect();
-        let point: Vec<(&str, usize, &[f64])> = point.iter().map(|(n, c, v)| (*n, *c, v.as_slice())).collect();
-        let text = crate::io::write_vtu(&built.mesh, &point, &[("ElementId", 1, &ids), ("Body", 1, &bodies)]);
-        Ok(Output::Export { format, filename: format!("{name}.vtu"), mime: "application/xml".into(), text })
+        let text = match format {
+            ExportFormat::Vtu => {
+                let ids: Vec<f64> = (0..built.mesh.n_elems()).map(|e| e as f64).collect();
+                let bodies: Vec<f64> =
+                    (0..built.mesh.n_elems() as u32).map(|e| built.mesh.block_of(e).0 as f64).collect();
+                let point: Vec<(&str, usize, &[f64])> = point.iter().map(|(n, c, v)| (*n, *c, v.as_slice())).collect();
+                crate::io::write_vtu(&built.mesh, &point, &[("ElementId", 1, &ids), ("Body", 1, &bodies)])
+            }
+            ExportFormat::Msh => crate::io::write_msh(&built.mesh),
+            ExportFormat::Inp => crate::io::write_inp(&built.mesh, &name),
+            ExportFormat::Stl => crate::io::write_stl_mesh(&built.mesh),
+        };
+        let (ext, mime) = format.extension();
+        Ok(Output::Export { format, filename: format!("{name}.{ext}"), mime: mime.into(), text })
     }
 
     fn add_body(&mut self, name: &str, shape: Shape) -> Result<Output, Error> {
