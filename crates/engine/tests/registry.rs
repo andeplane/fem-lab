@@ -1760,7 +1760,7 @@ fn the_conjugate_gradient_is_one_command_away_and_agrees_with_the_direct_solver(
     // and a GPU the host never granted is refused by name, with the solvers that do exist
     let err = err(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"gpu-pcg"}"#);
     assert_eq!(err.code, ErrorCode::Unsupported);
-    assert!(err.cause.contains("gpu-pcg"), "{}", err.cause);
+    assert!(err.cause.contains("no GPU adapter"), "{}", err.cause);
 }
 
 /// The locking lesson: the fully integrated linear hexahedron is much stiffer than the

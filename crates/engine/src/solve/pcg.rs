@@ -14,11 +14,19 @@ use crate::fem::assembly::Csr;
 use crate::par;
 use crate::solve::{LinearSolve, SolveInfo};
 
+/// The Jacobi preconditioner of `k`: `1/K_ii`, or 1 where a row has no diagonal at all (an
+/// ill-posed system, which the `pᵀKp` test below catches on the first iteration).
+///
+/// The GPU takes the square root of the same vector to scale its copy of the system
+/// symmetrically, so there is one definition of "the diagonal we divide by" (plan A §5.4).
+pub fn inv_diagonal(k: &Csr) -> Vec<f64> {
+    k.diag().into_iter().map(|d| if d > 0.0 { 1.0 / d } else { 1.0 }).collect()
+}
+
 /// A matrix and its Jacobi preconditioner. Borrows the matrix: nothing is factorised, so there
 /// is nothing to keep beyond the reciprocal diagonal.
 pub struct CpuPcg<'a> {
     k: &'a Csr,
-    /// `1/K_ii`, or 1 where the row has no diagonal (an ill-posed system the `p·Kp` test catches).
     inv_diag: Vec<f64>,
     rel_tol: f64,
     max_iterations: usize,
@@ -28,8 +36,7 @@ impl<'a> CpuPcg<'a> {
     /// The preconditioner is built once per matrix; `rel_tol` and `max_iterations` are the
     /// inner budget, which [`refine`](crate::solve::refine::refine) sets to `inner_tol`.
     pub fn new(k: &'a Csr, rel_tol: f64, max_iterations: usize) -> CpuPcg<'a> {
-        let inv_diag = k.diag().into_iter().map(|d| if d > 0.0 { 1.0 / d } else { 1.0 }).collect();
-        CpuPcg { k, inv_diag, rel_tol, max_iterations }
+        CpuPcg { k, inv_diag: inv_diagonal(k), rel_tol, max_iterations }
     }
 
     /// `z = M⁻¹ r`.

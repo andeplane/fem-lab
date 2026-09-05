@@ -2705,12 +2705,15 @@ fn a_host_that_says_stop_cancels_at_every_phase() {
 }
 
 #[test]
-fn only_the_cpu_solvers_and_the_static_procedure_exist_so_far() {
+fn the_gpu_solver_needs_a_gpu_and_only_the_static_procedure_exists_so_far() {
+    // `gpu-pcg` without a device is not a panic and not a silent fall-back to the CPU: it names
+    // the two solvers that do work here.
     let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![2.0] };
     let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
-    let e = pollster::block_on(solve(&k, &[1.0], &opts, &Pool::new(2), None, &mut nop)).expect_err("not built yet");
+    let e = pollster::block_on(solve(&k, &[1.0], &opts, &Pool::new(2), None, &mut nop)).expect_err("no adapter");
     assert_eq!(e.code, ErrorCode::Unsupported);
-    assert!(e.cause.contains(&solver_name(Solver::GpuPcg)), "{}", e.cause);
+    assert_eq!(e.cause, "no GPU adapter; use cpu-pcg or cpu-direct");
+    assert_eq!(e.suggestion.as_deref(), Some("solve.run { solver: 'cpu-pcg' }"));
     assert_eq!(solver_name(Solver::CpuDirect), "cpu-direct");
 
     let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
@@ -2839,6 +2842,24 @@ fn refinement_that_gets_nowhere_reports_a_stall_and_names_the_way_out() {
     let e = pollster::block_on(solve(&k, &f, &stuck, &pool, None, &mut nop)).expect_err("no progress");
     assert_eq!(e.code, ErrorCode::SolveStalled);
     assert!(e.cause.contains("stopped halving"), "{}", e.cause);
+    // A residual that stops falling *near* the target is the f64 floor of `b − K x`, not a
+    // failure: the answer stands and the Result reports the residual it really reached. On
+    // `[[2,1],[1,2]] x = [1,0]` one Jacobi-CG step lands at exactly ‖r‖/‖b‖ = 0.5, which is
+    // inside a hundred times a tolerance of 1e-2 and outside a hundred times one of 1e-4.
+    let two = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![2.0, 1.0, 1.0, 2.0] };
+    let one_step = SolveOptions {
+        solver: Solver::CpuPcg,
+        rel_tol: 1e-2,
+        max_iterations: 1,
+        max_outer: 1,
+        ..SolveOptions::default()
+    };
+    let (x, info) = pollster::block_on(solve(&two, &[1.0, 0.0], &one_step, &pool, None, &mut nop)).expect("the floor");
+    assert_eq!(info.rel_residual, 0.5);
+    assert_eq!(x, vec![0.5, 0.0]);
+    let too_far = SolveOptions { rel_tol: 1e-4, ..one_step };
+    let e = pollster::block_on(solve(&two, &[1.0, 0.0], &too_far, &pool, None, &mut nop)).expect_err("far off");
+    assert_eq!(e.code, ErrorCode::SolveStalled);
     // and a host that says stop between refinement steps is obeyed
     for at in 0..2 {
         let mut stop = cancel_on(at);

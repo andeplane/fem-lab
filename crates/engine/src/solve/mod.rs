@@ -124,13 +124,12 @@ pub async fn solve(
         // reduction they use is bit-identical at any thread count anyway (`par.rs`), so the
         // answer does not depend on which pool ran it.
         Solver::CpuPcg => {
-            let mut inner = pcg::CpuPcg::new(k, opts.inner_tol, opts.max_iterations);
-            refine::refine(k, b, &mut inner, "cpu-pcg", opts.rel_tol, opts.max_outer, progress)
+            let mut inner = crate::gpu::cg::Inner::Cpu(pcg::CpuPcg::new(k, opts.inner_tol, opts.max_iterations));
+            refine::refine(k, b, &mut inner, "cpu-pcg", opts.rel_tol, opts.max_outer, progress).await
         }
-        // `Auto` is already resolved, so what is left is the GPU conjugate gradient, which
-        // lands with `gpu/cg.rs` (plan A §5.4).
-        _ => Err(Error::unsupported(&format!("solver '{}'", solver_name(chosen)))
-            .suggest("solve.run { solver: \"cpu-pcg\" }")),
+        // `Auto` is already resolved, so what is left is the GPU. Its whole body — including
+        // the "no adapter" error — lives under `src/gpu/`, so nothing here needs a device.
+        _ => crate::gpu::cg::solve_refined(gpu, k, b, opts, progress).await,
     }
 }
 
