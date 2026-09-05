@@ -105,6 +105,13 @@ export interface Fem {
      * default incompatible modes or use order 2 when bending matters.
      */
     set(args: Omit<Extract<Command, { cmd: 'mesh.set' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * Write the current Mesh out as text the host saves; the Mesh is built first if it is
+     * stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
+     * id and the Body index as cell data. Naming a `step` to include that Step's result
+     * fields is not supported yet: it returns unsupported until solving lands.
+     */
+    export(args: Omit<Extract<Command, { cmd: 'mesh.export' }>, 'cmd'>): Promise<Ack>;
   };
   constraint: {
     /**
