@@ -26,7 +26,8 @@ impl Quantity {
     pub fn text(s: impl Into<String>) -> Quantity {
         Quantity::Text(s.into())
     }
-    fn split(&self) -> Result<(f64, &str), Error> {
+    /// The number and the unit text of a Quantity (no dimension check).
+    pub fn split(&self) -> Result<(f64, &str), Error> {
         match self {
             Quantity::Parts { value, unit } => Ok((*value, unit.as_str())),
             Quantity::Text(t) => {

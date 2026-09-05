@@ -70,6 +70,13 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
   inverses, symmetric PSD stiffness for any admissible element, `parse∘format` identity for
   units.
 - **Software adapters are for correctness, never for timing.**
+- **Coverage mechanics that bite.** `cargo llvm-cov` does not merge generic or async
+  instantiations across test binaries, so a crate's integration tests live in ONE
+  `tests/*.rs` binary, in-source `#[cfg(test)]` tests only exercise the small pure functions
+  of their own module, generic helpers take `fn` pointers rather than closures where each
+  call site would otherwise be its own instantiation, and test code avoids `matches!`,
+  `_ => panic!()` arms and `unwrap_or_else(|| panic!())` (their never-taken arms count).
+  Unreachable code is designed out (restructure), never excluded.
 
 ## Working
 
