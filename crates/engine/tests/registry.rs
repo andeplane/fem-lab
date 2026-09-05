@@ -290,8 +290,6 @@ fn transactional_dispatch_and_structured_errors() {
     );
     assert_eq!(run(&mut e, r#"{"cmd":"nonsense"}"#).unwrap_err().code, ErrorCode::Schema);
     for q in [
-        Query::Mesh {},
-        Query::Set { name: "x".into() },
         Query::Result { step: None },
         Query::Probe {
             step: None,
@@ -908,6 +906,14 @@ fn imported_file_with_a_broken_shape_fails_at_query_time() {
     let er = e.query(Query::Model {}).unwrap_err();
     assert_eq!(er.code, ErrorCode::Schema);
     assert_eq!(er.where_.as_deref(), Some("body 'b'"));
+    // the Mesh and the viewer surfaces need the same Solids, so they fail the same way
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::Schema);
+    assert_eq!(e.geometry_surface().unwrap_err().code, ErrorCode::Schema);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    assert_eq!(e.mesh().unwrap_err().code, ErrorCode::Schema);
+    assert_eq!(e.mesh_surface().unwrap_err().code, ErrorCode::Schema);
+    assert_eq!(e.query(Query::Set { name: "b.xmin".into() }).unwrap_err().code, ErrorCode::Schema);
+    assert_eq!(err(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#).code, ErrorCode::Schema);
 }
 
 #[test]
@@ -924,4 +930,305 @@ fn convert_query_variants() {
         panic!()
     };
     assert_eq!(c.value, 1000.0);
+}
+
+// ---- the derived Mesh: query.mesh, query.set, mesh.export ------------------------------------
+
+fn mesh_summary(e: &mut Engine) -> femlab_engine::query::MeshSummary {
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("query.mesh") };
+    m
+}
+
+fn set_info(e: &mut Engine, name: &str) -> femlab_engine::query::SetInfo {
+    let QueryResult::Set(s) = e.query(Query::Set { name: name.into() }).unwrap() else { panic!("query.set") };
+    s
+}
+
+#[test]
+fn the_cantilever_meshes_and_every_auto_face_resolves() {
+    let mut e = engine();
+    cantilever(&mut e);
+    // 1 m x 100 mm x 100 mm at 25 mm: 40 x 4 x 4 cells, 41 x 5 x 5 nodes
+    let m = mesh_summary(&mut e);
+    assert_eq!(m.elements, 640);
+    assert_eq!(m.nodes, 1025);
+    assert_eq!(m.element_kind, "hex8");
+    assert_eq!(m.dofs, 3075);
+    assert_eq!(m.bbox[3].value, 1000.0);
+    assert_eq!(m.bbox[3].unit, "mm");
+    assert!((m.min_edge.value - 25.0).abs() < 1e-9, "{:?}", m.min_edge);
+    assert!((m.max_edge.value - 25.0).abs() < 1e-9);
+    let q = m.quality.as_ref().unwrap();
+    assert!((q.min_det_j_ratio - 1.0).abs() < 1e-12);
+    assert!((q.max_aspect - 1.0).abs() < 1e-12);
+    assert!((q.min_angle_deg - 90.0).abs() < 1e-9);
+    assert_eq!(q.worst.len(), 10);
+    assert_eq!(q.worst[0].value, 1.0);
+    // every auto face Set of the Body is there and non-empty
+    let names: Vec<&str> = m.sets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["beam.xmax", "beam.xmin", "beam.ymax", "beam.ymin", "beam.zmax", "beam.zmin"]);
+    assert!(m.sets.iter().all(|s| s.kind == "face"));
+    assert_eq!(m.sets[1].summary, "16 faces");
+
+    let s = set_info(&mut e, "beam.xmin");
+    assert_eq!(s.kind, "face");
+    assert_eq!(s.count, 16);
+    assert!((s.measure.value - 1e4).abs() < 1e-6, "{:?}", s.measure);
+    assert_eq!(s.measure.unit, "mm^2");
+    assert_eq!(s.centroid[0].value, 0.0);
+    assert!((s.centroid[1].value - 50.0).abs() < 1e-9);
+    assert_eq!(s.bbox[3].value, 0.0);
+    assert_eq!(e.query(Query::Set { name: "nope".into() }).unwrap_err().code, ErrorCode::NotFound);
+
+    // the mesh is derived: the same Model hash, a lazily rebuilt Mesh after mesh.set
+    let hash = e.model_hash();
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":4,"ny":1,"nz":1}}}"#);
+    assert_ne!(e.model_hash(), hash);
+    assert_eq!(mesh_summary(&mut e).elements, 4);
+    // and a second read uses the cache
+    assert_eq!(mesh_summary(&mut e).elements, 4);
+    assert_eq!(e.mesh_surface().unwrap().triangles.len(), 2 * (1 + 1 + 4 * 4));
+    assert_eq!(e.geometry_surface().unwrap()[0].0, "beam");
+}
+
+#[test]
+fn named_sets_resolve_and_an_empty_one_points_at_the_nearest_face() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":4,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.nameFace","name":"top","of":"beam","where":{"kind":"normal","normal":[0,0,1]}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"tip","where":{"kind":"bbox","min":["0.7 m","0 m","0 m"],"max":["1 m","1 m","1 m"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"beam"}}"#);
+    let top = set_info(&mut e, "top");
+    assert_eq!(top.kind, "face");
+    assert_eq!(top.count, 4);
+    assert!((top.measure.value - 1e5).abs() < 1e-6, "{:?}", top.measure);
+    let tip = set_info(&mut e, "tip");
+    assert_eq!(tip.kind, "element");
+    assert_eq!(tip.count, 1);
+    assert!((tip.measure.value - 250.0 * 100.0 * 100.0).abs() < 1e-3, "{:?}", tip.measure);
+    assert_eq!(tip.measure.unit, "mm^3");
+    let whole = set_info(&mut e, "whole");
+    assert_eq!(whole.count, 4);
+    assert!((whole.measure.value - 1e7).abs() < 1e-3);
+    // a region that catches no whole element is a node Set instead
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"end","where":{"kind":"bbox","min":["0.9 m","0 m","0 m"],"max":["1 m","1 m","1 m"]}}"#,
+    );
+    let end = set_info(&mut e, "end");
+    assert_eq!(end.kind, "node");
+    assert_eq!(end.count, 4);
+    assert_eq!(end.measure.value, 0.0);
+    assert!((end.centroid[0].value - 1000.0).abs() < 1e-9);
+    // Sets resolve when the Mesh is built, so a predicate that matches nothing fails there,
+    // naming the nearest boundary face
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"ghost","of":"beam","where":{"kind":"plane","normal":[1,0,0],"offset":"2 m"}}"#,
+    );
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::SetEmpty);
+    assert!(er.cause.contains("set 'ghost'"), "{}", er.cause);
+    assert!(er.cause.contains("nearest boundary face is centred at [1000, 50, 50] mm"), "{}", er.cause);
+    assert_eq!(er.where_.as_deref(), Some("set 'ghost'"));
+    assert!(er.suggestion.as_deref().unwrap().contains("geometry.nameFace"));
+    // undoing it makes the Mesh buildable again
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(mesh_summary(&mut e).elements, 4);
+}
+
+#[test]
+fn a_mesh_needs_settings_bodies_and_a_matching_idealisation() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"m"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::ModelIllPosed);
+    assert_eq!(er.cause, "no mesh settings; call mesh.set");
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":2,"nz":2}}}"#);
+    assert_eq!(mesh_summary(&mut e).elements, 8);
+    // a 3D body under a 2D idealisation is ill-posed
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::ModelIllPosed);
+    assert!(er.cause.contains("is 3D but the idealisation is 2D"), "{}", er.cause);
+    // a Model with no Body has nothing to mesh
+    ok(&mut e, r#"{"cmd":"model.new","name":"empty"}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err().cause, "the Model has no Body to mesh");
+}
+
+#[test]
+fn a_lattice_that_catches_nothing_is_a_mesh_failure() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"ring"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"ring","shape":{"kind":"sheet","sketch":{"outer":[
+          {"kind":"arc","center":["0 m","0 m"],"to":["-1 m","0 m"],"ccw":true,"tag":"outer"},
+          {"kind":"arc","center":["0 m","0 m"],"to":["1 m","0 m"],"ccw":true,"tag":"outer"}],
+          "holes":[[{"kind":"arc","center":["0 m","0 m"],"to":["-0.4 m","0 m"],"ccw":true,"tag":"bore"},
+          {"kind":"arc","center":["0 m","0 m"],"to":["0.4 m","0 m"],"ccw":true,"tag":"bore"}]]}}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":6,"ny":6,"nz":1}}}"#);
+    let m = mesh_summary(&mut e);
+    assert_eq!(m.element_kind, "quad4");
+    assert_eq!(m.dofs, 2 * m.nodes);
+    assert!(m.sets.iter().any(|s| s.name == "ring.bore"), "{:?}", m.sets);
+    let bore = set_info(&mut e, "ring.bore");
+    assert_eq!(bore.kind, "face");
+    assert!(bore.measure.value > 0.0);
+    assert_eq!(bore.measure.unit, "m");
+    // a 2D element Set measures area
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"all","where":{"kind":"body","name":"ring"}}"#);
+    let all = set_info(&mut e, "all");
+    assert_eq!(all.kind, "element");
+    assert_eq!(all.count, m.elements);
+    assert_eq!(all.measure.unit, "m^2");
+    // a stair-stepped 6 x 6 lattice over an annulus of area pi(1 - 0.16) = 2.64 m^2 overshoots
+    assert!((2.0..3.5).contains(&all.measure.value), "{:?}", all.measure);
+    // one cell over the whole annulus is centred in the bore, so nothing is inside
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::MeshFailed);
+    assert_eq!(er.where_.as_deref(), Some("body 'ring'"));
+}
+
+#[test]
+fn two_bodies_become_two_blocks_and_export_as_vtu() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"pair"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"a","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"],"at":["2 m","0 m","0 m"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}},"order":2}"#);
+    let m = mesh_summary(&mut e);
+    assert_eq!(m.elements, 4);
+    assert_eq!(m.element_kind, "hex20");
+    let built = e.mesh().unwrap();
+    assert_eq!(built.body_of_block, ["a", "b"]);
+    assert_eq!(built.body_of_elem(0), "a");
+    assert_eq!(built.body_of_elem(3), "b");
+    assert_eq!(built.mesh.elem_sets["all"].len(), 4);
+    // node sets of a face Set are the nodes of its faces
+    assert_eq!(built.sets["a.xmin"].nodes.len(), 8);
+    assert_eq!(built.sets["a.xmin"].count(), 1);
+
+    let ack = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#);
+    let Output::Export { format, filename, mime, text } = ack.output else { panic!("expected an export") };
+    assert_eq!(format, femlab_engine::command::ExportFormat::Vtu);
+    assert_eq!(filename, "pair.vtu");
+    assert_eq!(mime, "application/xml");
+    assert!(text.contains(r#"NumberOfPoints="64""#), "{}", &text[..200]);
+    assert!(text.contains(r#"NumberOfCells="4""#));
+    assert!(text.contains(r#"Name="ElementId""#) && text.contains(r#"Name="Body""#));
+    assert_eq!(err(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#).code, ErrorCode::Unsupported);
+}
+
+#[test]
+fn the_vtu_writer_round_trips_through_base64() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"two"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["2 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+    let mesh = &e.mesh().unwrap().mesh;
+    let temperature: Vec<f64> = (0..mesh.n_nodes()).map(|n| n as f64 * 0.5).collect();
+    let text = femlab_engine::io::write_vtu(mesh, &[("T", 1, &temperature)], &[("Id", 1, &[0.0, 1.0])]);
+    // ParaView needs these attributes to open the file at all
+    for want in [
+        r#"type="UnstructuredGrid""#,
+        r#"byte_order="LittleEndian""#,
+        r#"header_type="UInt64""#,
+        r#"NumberOfPoints="12""#,
+        r#"NumberOfCells="2""#,
+        r#"<DataArray type="Float64" Name="Points" NumberOfComponents="3" format="binary">"#,
+        r#"Name="connectivity""#,
+        r#"Name="offsets""#,
+        r#"<DataArray type="UInt8" Name="types""#,
+        "</VTKFile>",
+    ] {
+        assert!(text.contains(want), "missing {want}");
+    }
+    // decode the payloads back and check the numbers
+    assert_eq!(decode_f64(&text, "Points"), mesh.coords);
+    assert_eq!(
+        decode_i64(&text, "connectivity"),
+        mesh.elem_nodes(0).iter().chain(mesh.elem_nodes(1)).map(|&n| i64::from(n)).collect::<Vec<_>>()
+    );
+    assert_eq!(decode_i64(&text, "offsets"), [8, 16]);
+    assert_eq!(decode_u8(&text, "types"), [12, 12]);
+    assert_eq!(decode_f64(&text, "T"), temperature);
+    assert_eq!(decode_f64(&text, "Id"), [0.0, 1.0]);
+    // base64 pads a payload of any length
+    assert_eq!(femlab_engine::io::vtu::base64(b"f"), "Zg==");
+    assert_eq!(femlab_engine::io::vtu::base64(b"fo"), "Zm8=");
+    assert_eq!(femlab_engine::io::vtu::base64(b"foo"), "Zm9v");
+    assert_eq!(femlab_engine::io::vtu::base64(&[0xff, 0xef, 0xfe]), "/+/+");
+
+    // every element kind writes its VTK cell type; no node permutation, so the connectivity
+    // comes back exactly as the Mesh stores it
+    use femlab_geometry::{ElementKind, Structured};
+    for (kind, want) in [
+        (ElementKind::Hex8, 12u8),
+        (ElementKind::Hex20, 25),
+        (ElementKind::Tet4, 10),
+        (ElementKind::Tet10, 24),
+        (ElementKind::Quad4, 9),
+        (ElementKind::Quad8, 23),
+        (ElementKind::Tri3, 5),
+        (ElementKind::Tri6, 22),
+    ] {
+        let m = Structured { kind, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+        let t = femlab_engine::io::write_vtu(&m, &[], &[]);
+        assert_eq!(decode_u8(&t, "types"), vec![want; m.n_elems()], "{kind:?}");
+        assert_eq!(decode_f64(&t, "Points"), m.coords, "{kind:?}");
+        assert_eq!(decode_i64(&t, "offsets").last(), Some(&((m.n_elems() * kind.n_nodes()) as i64)), "{kind:?}");
+    }
+}
+
+/// The payload of one named DataArray: the header block, then the data block, each base64.
+fn decode_array(text: &str, name: &str) -> Vec<u8> {
+    let at = text.find(&format!("Name=\"{name}\"")).expect("the array is in the file");
+    let body = &text[at..];
+    let start = body.find("binary\">").expect("binary payload") + "binary\">".len();
+    let end = body.find("</DataArray>").expect("closed");
+    let payload = &body[start..end];
+    // a UInt64 header is 8 bytes, which base64 encodes in exactly 12 characters
+    let bytes = from_base64(&payload[12..]);
+    let len = u64::from_le_bytes(from_base64(&payload[..12])[..8].try_into().unwrap()) as usize;
+    assert_eq!(len, bytes.len().min(len));
+    bytes[..len].to_vec()
+}
+
+fn from_base64(s: &str) -> Vec<u8> {
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let digits: Vec<u32> =
+        s.bytes().filter(|&c| c != b'=').map(|c| alphabet.iter().position(|&a| a == c).unwrap() as u32).collect();
+    let mut out = Vec::new();
+    for c in digits.chunks(4) {
+        let mut n = 0u32;
+        for (i, d) in c.iter().enumerate() {
+            n |= d << (18 - 6 * i);
+        }
+        for i in 0..c.len() - 1 {
+            out.push((n >> (16 - 8 * i)) as u8);
+        }
+    }
+    out
+}
+
+fn decode_f64(text: &str, name: &str) -> Vec<f64> {
+    decode_array(text, name).chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect()
+}
+
+fn decode_i64(text: &str, name: &str) -> Vec<i64> {
+    decode_array(text, name).chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect()
+}
+
+fn decode_u8(text: &str, name: &str) -> Vec<u8> {
+    decode_array(text, name)
 }

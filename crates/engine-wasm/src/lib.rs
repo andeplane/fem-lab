@@ -23,6 +23,14 @@ fn schema_err(e: serde_json::Error) -> JsValue {
     throw(&femlab_engine::Error::from(e))
 }
 
+fn put(o: &js_sys::Object, key: &str, value: JsValue) {
+    let _ = js_sys::Reflect::set(o, &JsValue::from_str(key), &value);
+}
+
+fn strings(v: &[String]) -> JsValue {
+    v.iter().map(|s| JsValue::from_str(s)).collect::<js_sys::Array>().into()
+}
+
 /// One engine instance.
 #[wasm_bindgen]
 pub struct Engine {
@@ -94,6 +102,55 @@ impl Engine {
         let q: Query = serde_json::from_str(&query_json).map_err(schema_err)?;
         let r = self.inner.query(q).map_err(|e| throw(&e))?;
         serde_json::to_string(&r).map_err(schema_err)
+    }
+
+    /// What the viewer draws, as fresh typed arrays: the Mesh skin once the Model has mesh
+    /// settings, otherwise the Bodies' geometry triangles. `triSet` indexes `setNames`
+    /// (`u32::MAX` for a triangle in no Set) and `triBody` indexes `bodyNames`.
+    pub fn surface(&mut self) -> Result<JsValue, JsValue> {
+        let mut positions: Vec<f32> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        let mut tri_set: Vec<u32> = Vec::new();
+        let mut tri_body: Vec<u32> = Vec::new();
+        let mut set_names: Vec<String> = Vec::new();
+        let mut body_names: Vec<String> = Vec::new();
+        let source = if self.inner.model().mesh.is_some() {
+            let built = self.inner.mesh().map_err(|e| throw(&e))?;
+            let s = built.mesh.surface();
+            positions.extend(s.positions.iter().flat_map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]));
+            indices.extend(s.triangles.iter().flatten().copied());
+            tri_set.extend(s.tri_face.iter().map(|f| f.and_then(|i| s.set_of_face[i as usize]).unwrap_or(u32::MAX)));
+            tri_body.extend(s.tri_elem.iter().map(|&e| built.mesh.block_of(e).0 as u32));
+            set_names = s.set_names;
+            body_names = built.body_of_block.clone();
+            "mesh"
+        } else {
+            for (body, tri) in self.inner.geometry_surface().map_err(|e| throw(&e))? {
+                let offset = (positions.len() / 3) as u32;
+                positions.extend(tri.positions.iter().flat_map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]));
+                for (t, v) in tri.triangles.iter().enumerate() {
+                    indices.extend([v[0] + offset, v[1] + offset, v[2] + offset]);
+                    let tag = tri.tag_of(t);
+                    let at = set_names.iter().position(|n| n == tag).unwrap_or_else(|| {
+                        set_names.push(tag.to_string());
+                        set_names.len() - 1
+                    });
+                    tri_set.push(at as u32);
+                    tri_body.push(body_names.len() as u32);
+                }
+                body_names.push(body);
+            }
+            "geometry"
+        };
+        let out = js_sys::Object::new();
+        put(&out, "positions", js_sys::Float32Array::from(&positions[..]).into());
+        put(&out, "indices", js_sys::Uint32Array::from(&indices[..]).into());
+        put(&out, "triSet", js_sys::Uint32Array::from(&tri_set[..]).into());
+        put(&out, "triBody", js_sys::Uint32Array::from(&tri_body[..]).into());
+        put(&out, "setNames", strings(&set_names));
+        put(&out, "bodyNames", strings(&body_names));
+        put(&out, "source", JsValue::from_str(source));
+        Ok(out.into())
     }
 
     /// The saved file (`femlab/1`) as JSON text.

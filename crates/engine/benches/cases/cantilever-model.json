@@ -1,6 +1,6 @@
 {
   "name": "cantilever-model",
-  "reference": "Model-level checks: box volume and mass are exact (1 m × 0.1 m × 0.1 m of steel at 7850 kg/m^3).",
+  "reference": "Model- and mesh-level checks: the box volume and mass are exact (1 m × 0.1 m × 0.1 m of steel at 7850 kg/m^3), and a 25 mm lattice over it is exact too: ceil(1000/25) x ceil(100/25) x ceil(100/25) = 40 x 4 x 4 = 640 hex8 cells on 41 x 5 x 5 = 1025 nodes, 3075 DOF, with 4 x 4 = 16 faces on the root face beam.xmin.",
   "journal": [
     { "cmd": "model.new", "name": "cantilever" },
     { "cmd": "model.setUnits", "units": { "length": "mm", "stress": "MPa", "force": "kN" } },
@@ -16,6 +16,13 @@
     { "query": { "query": "query.model" }, "path": "/bodies/0/measure/value", "expect": 1e7, "tol": 1e-9, "rel": true, "note": "volume in mm^3" },
     { "query": { "query": "query.model" }, "path": "/bodies/0/mass/value", "expect": 78.5, "tol": 1e-12, "rel": true, "note": "mass in kg" },
     { "query": { "query": "query.model" }, "path": "/bodies/0/faces/1", "expect": "beam.xmin" },
-    { "query": { "query": "query.model" }, "path": "/warnings", "expect": [] }
+    { "query": { "query": "query.model" }, "path": "/warnings", "expect": [] },
+    { "query": { "query": "query.mesh" }, "path": "/nodes", "expect": 1025, "note": "41 x 5 x 5" },
+    { "query": { "query": "query.mesh" }, "path": "/elements", "expect": 640, "note": "40 x 4 x 4" },
+    { "query": { "query": "query.mesh" }, "path": "/elementKind", "expect": "hex8" },
+    { "query": { "query": "query.mesh" }, "path": "/dofs", "expect": 3075, "note": "1025 nodes x 3" },
+    { "query": { "query": "query.mesh" }, "path": "/quality/minDetJRatio", "expect": 1.0, "tol": 1e-12, "rel": false },
+    { "query": { "query": "query.set", "name": "beam.xmin" }, "path": "/count", "expect": 16, "note": "4 x 4 faces on the 100 x 100 mm root" },
+    { "query": { "query": "query.set", "name": "beam.xmin" }, "path": "/measure/value", "expect": 1e4, "tol": 1e-9, "rel": true, "note": "area in mm^2" }
   ]
 }

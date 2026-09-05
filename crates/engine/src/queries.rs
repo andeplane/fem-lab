@@ -1,5 +1,7 @@
 //! `Engine::query`: the read side of the registry.
 
+use femlab_geometry::{face_centroid_normal, Face, Mesh};
+
 use crate::command::ObjectKind;
 use crate::engine::{display, Engine};
 use crate::error::Error;
@@ -49,8 +51,8 @@ impl Engine {
                 engine_version: crate::version().into(),
                 schema_version: crate::SCHEMA_VERSION.into(),
             })),
-            Query::Mesh {} => Err(Error::unsupported("query.mesh (meshing lands in a later commit)")),
-            Query::Set { .. } => Err(Error::unsupported("query.set (meshing lands in a later commit)")),
+            Query::Mesh {} => self.query_mesh().map(QueryResult::Mesh),
+            Query::Set { name } => self.query_set(&name).map(QueryResult::Set),
             Query::Result { .. } => Err(Error::unsupported("query.result (solving lands in a later commit)")),
             Query::Probe { .. } => Err(Error::unsupported("query.probe (solving lands in a later commit)")),
             Query::Path { .. } => Err(Error::unsupported("query.path (solving lands in a later commit)")),
@@ -204,6 +206,91 @@ impl Engine {
         })
     }
 
+    /// `query.mesh`: counts, extents, Sets and quality of the current Mesh, building it if stale.
+    fn query_mesh(&mut self) -> Result<MeshSummary, Error> {
+        self.mesh()?;
+        let built = self.mesh.as_ref().expect("built above");
+        let mesh = &built.mesh;
+        let m = &self.model;
+        let (lo, hi) = mesh.bbox();
+        let mut min_edge = f64::INFINITY;
+        let mut max_edge: f64 = 0.0;
+        for e in 0..mesh.n_elems() as u32 {
+            let nodes = mesh.elem_nodes(e);
+            for &[a, b] in mesh.kind_of(e).edges() {
+                let l = dist(mesh.node(nodes[a as usize]), mesh.node(nodes[b as usize]));
+                min_edge = min_edge.min(l);
+                max_edge = max_edge.max(l);
+            }
+        }
+        let q = femlab_geometry::quality(mesh, 10);
+        Ok(MeshSummary {
+            nodes: mesh.n_nodes() as u32,
+            elements: mesh.n_elems() as u32,
+            element_kind: format!("{:?}", mesh.blocks[0].kind).to_lowercase(),
+            dofs: (mesh.n_nodes() * mesh.dim) as u32,
+            bbox: bbox6(m, lo, hi),
+            min_edge: display(m, min_edge, Length::DIM),
+            max_edge: display(m, max_edge, Length::DIM),
+            sets: built
+                .sets
+                .iter()
+                .map(|(name, s)| SetRow {
+                    name: name.clone(),
+                    kind: s.kind.as_str().into(),
+                    summary: format!("{} {}s", s.count(), s.kind.as_str()),
+                })
+                .collect(),
+            quality: Some(QualitySummary {
+                min_det_j_ratio: q.min_det_j_ratio,
+                max_aspect: q.max_aspect,
+                min_angle_deg: q.min_angle_deg,
+                worst: q.worst.iter().map(|&(element, value)| QualityRow { element, value }).collect(),
+            }),
+        })
+    }
+
+    /// `query.set`: what a Set resolved to on the current Mesh.
+    fn query_set(&mut self, name: &str) -> Result<SetInfo, Error> {
+        self.mesh()?;
+        let built = self.mesh.as_ref().expect("built above");
+        let known: Vec<&str> = built.sets.keys().map(String::as_str).collect();
+        let set = built.sets.get(name).ok_or_else(|| Error::not_found("set", name, &known))?;
+        let mesh = &built.mesh;
+        let m = &self.model;
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        let mut centroid = [0.0; 3];
+        let n = set.nodes.len().max(1) as f64;
+        for &node in &set.nodes {
+            let p = mesh.node(node);
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+                centroid[k] += p[k] / n;
+            }
+        }
+        // A face Set measures area (length in 2D), an element Set volume (area in 2D), a node
+        // Set nothing.
+        let (measure, exponent) = match set.kind {
+            crate::mesh::SetKind::Face => (set.faces.iter().map(|&f| face_measure(mesh, f)).sum(), mesh.dim as i8 - 1),
+            crate::mesh::SetKind::Element => (set.elems.iter().map(|&e| elem_measure(mesh, e)).sum(), mesh.dim as i8),
+            crate::mesh::SetKind::Node => (0.0, 0),
+        };
+        Ok(SetInfo {
+            name: name.to_string(),
+            kind: set.kind.as_str().into(),
+            count: set.count() as u32,
+            bbox: bbox6(m, lo, hi),
+            measure: display(m, measure, Dimension([exponent, 0, 0, 0])),
+            centroid: [
+                display(m, centroid[0], Length::DIM),
+                display(m, centroid[1], Length::DIM),
+                display(m, centroid[2], Length::DIM),
+            ],
+        })
+    }
+
     fn query_objects(&self, kinds: Option<&[ObjectKind]>) -> ObjectList {
         let want = |k: ObjectKind| kinds.is_none_or(|ks| ks.contains(&k));
         let m = &self.model;
@@ -292,6 +379,53 @@ impl Engine {
         }
         ObjectList { objects }
     }
+}
+
+fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
+    libm::sqrt((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2))
+}
+
+/// Area of a face (3D) or length of a boundary edge (2D).
+fn face_measure(mesh: &Mesh, f: Face) -> f64 {
+    let p: Vec<[f64; 3]> =
+        mesh.face_nodes(f).take(mesh.kind_of(f.elem).face_kind().n_corners()).map(|n| mesh.node(n)).collect();
+    if p.len() == 2 {
+        return dist(p[0], p[1]);
+    }
+    let mut area = 0.0;
+    for t in 1..p.len() - 1 {
+        let u = sub(p[t], p[0]);
+        let v = sub(p[t + 1], p[0]);
+        let c = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        area += 0.5 * libm::sqrt(c[0] * c[0] + c[1] * c[1] + c[2] * c[2]);
+    }
+    area
+}
+
+/// Volume of an element (area in 2D). Exact for the planar-faced cells a lattice makes: the
+/// divergence theorem over the faces in 3D, the shoelace over the corners in 2D.
+fn elem_measure(mesh: &Mesh, e: u32) -> f64 {
+    let kind = mesh.kind_of(e);
+    if mesh.dim == 2 {
+        let p: Vec<[f64; 3]> = mesh.elem_nodes(e).iter().take(kind.n_corners()).map(|&n| mesh.node(n)).collect();
+        let mut a = 0.0;
+        for (i, q) in p.iter().enumerate() {
+            let r = p[(i + 1) % p.len()];
+            a += q[0] * r[1] - r[0] * q[1];
+        }
+        return 0.5 * a.abs();
+    }
+    let mut v = 0.0;
+    for local in 0..kind.n_faces() as u8 {
+        let face = Face { elem: e, local };
+        let (c, n) = face_centroid_normal(mesh, face);
+        v += face_measure(mesh, face) * (c[0] * n[0] + c[1] * n[1] + c[2] * n[2]) / 3.0;
+    }
+    v
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 fn vec3(m: &crate::model::Model, v: [f64; 3], dim: Dimension) -> String {

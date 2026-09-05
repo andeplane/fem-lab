@@ -612,3 +612,202 @@ proptest! {
         prop_assert_eq!(m.boundary_faces().len(), expect_boundary);
     }
 }
+
+// ---- lattice mesher, predicate resolution and quality -----------------------------------------
+
+use femlab_geometry::{
+    lattice, nearest_boundary_face, quality, resolve_face_set, resolve_region, FacePredicate, RegionPredicate, Shape,
+    Sketch, Solid,
+};
+
+fn solid(shape: Shape) -> Solid {
+    Solid::evaluate(&shape).unwrap()
+}
+
+fn beam() -> Solid {
+    solid(Shape::Box { size: [1.0, 0.1, 0.1] })
+}
+
+/// A 4 × 4 × 1 box with a 2 × 2 hole through it, the hole named so its walls carry the name.
+fn holed() -> Solid {
+    solid(Shape::Subtract {
+        from: Box::new(Shape::Box { size: [4.0, 4.0, 1.0] }),
+        cut: vec![Shape::Named {
+            name: "hole".into(),
+            shape: Box::new(Shape::Transform {
+                shape: Box::new(Shape::Box { size: [2.0, 2.0, 3.0] }),
+                at: femlab_geometry::Affine3 { translate: [1.0, 1.0, -1.0], ..Default::default() },
+            }),
+        }],
+    })
+}
+
+fn annulus_sheet() -> Solid {
+    solid(Shape::Sheet {
+        sketch: Sketch {
+            outer: Sketch::circle([0.0, 0.0], 1.0, "outer"),
+            holes: vec![Sketch::circle([0.0, 0.0], 0.4, "bore")],
+        },
+    })
+}
+
+fn set_len(m: &Mesh, name: &str) -> usize {
+    m.face_sets.get(name).map_or(0, Vec::len)
+}
+
+#[test]
+fn lattice_is_exact_on_an_aligned_box() {
+    let m = lattice(&beam(), None, Some([10, 1, 1]), false).unwrap();
+    assert!(m.validate().is_ok());
+    assert_eq!(m.n_elems(), 10);
+    assert_eq!(m.n_nodes(), 44);
+    assert_eq!(m.kind_of(0), ElementKind::Hex8);
+    assert_eq!(set_len(&m, "xmin"), 1);
+    assert_eq!(set_len(&m, "xmax"), 1);
+    assert_eq!(set_len(&m, "ymin"), 10);
+    assert_eq!(set_len(&m, "ymax"), 10);
+    assert_eq!(set_len(&m, "zmin"), 10);
+    assert_eq!(set_len(&m, "zmax"), 10);
+    assert_eq!(m.face_sets.keys().cloned().collect::<Vec<_>>(), ["xmax", "xmin", "ymax", "ymin", "zmax", "zmin"]);
+    assert_eq!(m.elem_sets["all"].len(), 10);
+    assert_eq!(m.boundary_faces().len(), 42);
+    assert!((measure(&m) - 0.01).abs() < 1e-15, "{}", measure(&m));
+    // the size rule is ceil(extent / size) per axis, at least one cell
+    let by_size = lattice(&beam(), Some(0.025), None, false).unwrap();
+    assert_eq!(by_size.n_elems(), 40 * 4 * 4);
+    assert_eq!(by_size.n_nodes(), 41 * 5 * 5);
+    assert_eq!(set_len(&by_size, "xmin"), 16);
+    let coarse = lattice(&beam(), Some(10.0), None, false).unwrap();
+    assert_eq!(coarse.n_elems(), 1);
+    // counts below one are lifted to one
+    assert_eq!(lattice(&beam(), None, Some([0, 0, 0]), false).unwrap().n_elems(), 1);
+    // neither a size nor counts, and a non-positive size, are errors
+    assert!(lattice(&beam(), None, None, false).is_err());
+    assert!(lattice(&beam(), Some(0.0), None, false).is_err());
+}
+
+#[test]
+fn lattice_makes_hex20_quad4_and_quad8() {
+    let q = lattice(&beam(), None, Some([2, 1, 1]), true).unwrap();
+    assert!(q.validate().is_ok());
+    assert_eq!(q.kind_of(0), ElementKind::Hex20);
+    assert_eq!(q.n_elems(), 2);
+    // two hex20 sharing a face: 20 + 20 nodes less the 8 of the shared face
+    assert_eq!(q.n_nodes(), 20 + 20 - 8);
+    assert!((measure(&q) - 0.01).abs() < 1e-15);
+    let sheet = solid(Shape::Sheet { sketch: Sketch::rect(2.0, 1.0) });
+    let s = lattice(&sheet, None, Some([2, 1, 7]), false).unwrap();
+    assert!(s.validate().is_ok());
+    assert_eq!(s.dim, 2);
+    assert_eq!(s.kind_of(0), ElementKind::Quad4);
+    assert_eq!(s.n_elems(), 2);
+    assert_eq!(s.n_nodes(), 6);
+    assert_eq!(set_len(&s, "xmin"), 1);
+    assert_eq!(set_len(&s, "ymin"), 2);
+    assert!(!s.face_sets.contains_key("zmin"));
+    assert!((measure(&s) - 2.0).abs() < 1e-15);
+    let s2 = lattice(&sheet, None, Some([2, 1, 1]), true).unwrap();
+    assert_eq!(s2.kind_of(0), ElementKind::Quad8);
+    assert!((measure(&s2) - 2.0).abs() < 1e-15);
+}
+
+#[test]
+fn lattice_names_hole_walls_from_the_solid_and_refuses_an_empty_result() {
+    let m = lattice(&holed(), None, Some([4, 4, 1]), false).unwrap();
+    assert!(m.validate().is_ok());
+    assert_eq!(m.n_elems(), 12);
+    assert!((measure(&m) - 12.0).abs() < 1e-12);
+    assert_eq!(set_len(&m, "hole.xmin"), 2);
+    assert_eq!(set_len(&m, "hole.xmax"), 2);
+    assert_eq!(set_len(&m, "hole.ymin"), 2);
+    assert_eq!(set_len(&m, "hole.ymax"), 2);
+    assert_eq!(set_len(&m, "zmin"), 12);
+    assert_eq!(set_len(&m, "xmin"), 4);
+    // the hole is through, so no cap of it survives
+    assert!(!m.face_sets.contains_key("hole.zmin"));
+    // a 2D sheet takes its inner tags from the nearest outline edge
+    let a = lattice(&annulus_sheet(), None, Some([6, 6, 1]), false).unwrap();
+    assert!(a.validate().is_ok());
+    assert!(set_len(&a, "bore") > 0, "{:?}", a.face_sets.keys().collect::<Vec<_>>());
+    assert!(set_len(&a, "outer") > 0);
+    // one cell over the annulus is centred in the bore: nothing is inside, which is an error
+    let e = lattice(&annulus_sheet(), None, Some([1, 1, 1]), false).unwrap_err();
+    assert!(e.0.contains("no cell whose centre is inside"), "{e}");
+}
+
+#[test]
+fn predicates_resolve_on_the_mesh_boundary() {
+    let m = lattice(&beam(), None, Some([10, 1, 1]), false).unwrap();
+    let root = FacePredicate::Plane { normal: [1.0, 0.0, 0.0], offset: 0.0, tol: None };
+    assert_eq!(resolve_face_set(&m, &root, None), m.face_sets["xmin"]);
+    // restricted to a subset of the boundary, only faces of that subset can match
+    let ymin = m.face_sets["ymin"].clone();
+    assert!(resolve_face_set(&m, &root, Some(&ymin)).is_empty());
+    let up = FacePredicate::Normal { normal: [0.0, 0.0, 1.0], max_angle_deg: None };
+    assert_eq!(resolve_face_set(&m, &up, None).len(), 10);
+    // the same predicate survives a remesh at three sizes
+    for n in [5u32, 10, 20] {
+        let r = lattice(&beam(), None, Some([n, 1, 1]), false).unwrap();
+        assert_eq!(resolve_face_set(&r, &root, None).len(), 1);
+        assert_eq!(resolve_face_set(&r, &up, None).len(), n as usize);
+    }
+    // 2D: boundary edges with the in-plane outward normal
+    let sheet = solid(Shape::Sheet { sketch: Sketch::rect(2.0, 1.0) });
+    let s = lattice(&sheet, None, Some([2, 1, 1]), false).unwrap();
+    let right = FacePredicate::Normal { normal: [1.0, 0.0, 0.0], max_angle_deg: None };
+    assert_eq!(resolve_face_set(&s, &right, None), s.face_sets["xmax"]);
+    // regions pick nodes by position and elements by centroid
+    let half = RegionPredicate::Bbox { min: [-1.0, -1.0, -1.0], max: [0.5, 1.0, 1.0] };
+    let body = |_: u32| "beam";
+    let (nodes, elems) = resolve_region(&m, &half, &body);
+    assert_eq!(elems.len(), 5);
+    assert_eq!(nodes.len(), 6 * 4);
+    let (all_nodes, all_elems) = resolve_region(&m, &RegionPredicate::Body { name: "beam".into() }, &body);
+    assert_eq!(all_elems.len(), 10);
+    assert_eq!(all_nodes.len(), 44);
+    let (none_nodes, none_elems) = resolve_region(&m, &RegionPredicate::Body { name: "other".into() }, &body);
+    assert!(none_nodes.is_empty() && none_elems.is_empty());
+    // the nearest boundary face is what an empty-Set error points at
+    let (face, d) = nearest_boundary_face(&m, [-1.0, 0.05, 0.05]).unwrap();
+    assert!(m.face_sets["xmin"].contains(&face));
+    assert!((d - 1.0).abs() < 1e-12, "{d}");
+}
+
+#[test]
+fn quality_is_perfect_on_a_lattice_and_zero_on_a_degenerate_element() {
+    for m in [
+        lattice(&beam(), None, Some([10, 1, 1]), false).unwrap(),
+        lattice(&beam(), None, Some([2, 1, 1]), true).unwrap(),
+        cube(ElementKind::Tet4, [1, 1, 1]),
+        cube(ElementKind::Tri3, [2, 2, 1]),
+        cube(ElementKind::Quad4, [2, 2, 1]),
+    ] {
+        let q = quality(&m, 3);
+        assert!((q.min_det_j_ratio - 1.0).abs() < 1e-12, "{q:?}");
+        assert!(q.min_angle_deg > 1.0 && q.min_angle_deg <= 90.0 + 1e-9, "{q:?}");
+        assert!(q.max_aspect >= 1.0 - 1e-12, "{q:?}");
+        assert_eq!(q.worst.len(), m.n_elems().min(3));
+    }
+    // the beam's cells are 0.1 × 0.1 × 0.1 cubes: aspect 1, corner angles 90°
+    let q = quality(&lattice(&beam(), None, Some([10, 1, 1]), false).unwrap(), 2);
+    assert!((q.max_aspect - 1.0).abs() < 1e-12, "{q:?}");
+    assert!((q.min_angle_deg - 90.0).abs() < 1e-9, "{q:?}");
+    assert_eq!(q.worst, [(0, 1.0), (1, 1.0)]);
+    // a collapsed hex has no Jacobian and no shortest edge
+    let flat = Mesh {
+        dim: 3,
+        coords: vec![0.0; 24],
+        blocks: vec![ElementBlock { kind: ElementKind::Hex8, conn: (0..8).collect(), first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let q = quality(&flat, 5);
+    assert_eq!(q.min_det_j_ratio, 0.0);
+    assert_eq!(q.max_aspect, f64::MAX);
+    assert_eq!(q.min_angle_deg, 90.0);
+    assert_eq!(q.worst, [(0, 0.0)]);
+    // an empty mesh has nothing to be wrong with
+    let empty = Mesh { blocks: vec![], coords: vec![], ..flat };
+    assert_eq!(quality(&empty, 5).worst, []);
+}

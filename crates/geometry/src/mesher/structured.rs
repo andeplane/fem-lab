@@ -17,12 +17,12 @@ pub struct Structured {
     pub n: [usize; 3],
 }
 
-const SET_NAMES: [&str; 6] = ["xmin", "xmax", "ymin", "ymax", "zmin", "zmax"];
+pub(crate) const SET_NAMES: [&str; 6] = ["xmin", "xmax", "ymin", "ymax", "zmin", "zmax"];
 /// Local face on the low / high side per axis: hex S6/S4, S3/S5, S1/S2; quad S4/S2, S1/S3.
-const FACE_LOCAL_3D: [[u8; 2]; 3] = [[5, 3], [2, 4], [0, 1]];
-const FACE_LOCAL_2D: [[u8; 2]; 2] = [[3, 1], [0, 2]];
+pub(crate) const FACE_LOCAL_3D: [[u8; 2]; 3] = [[5, 3], [2, 4], [0, 1]];
+pub(crate) const FACE_LOCAL_2D: [[u8; 2]; 2] = [[3, 1], [0, 2]];
 /// Grid offsets of the corners in Abaqus order (the first four are the quad's).
-const CORNERS: [[usize; 3]; 8] =
+pub(crate) const CORNERS: [[usize; 3]; 8] =
     [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
 
 /// Kuhn split of a hex into six positively oriented tets sharing the 0–6 diagonal.

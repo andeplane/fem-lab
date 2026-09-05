@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::{Shape, Solid};
 
-use crate::command::{Command, IdealisationSpec, LatticeSize, MesherSpec, ObjectKind};
+use crate::command::{Command, ExportFormat, IdealisationSpec, LatticeSize, MesherSpec, ObjectKind};
 use crate::error::{Error, ErrorCode, Warning};
 use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
@@ -55,6 +55,8 @@ pub struct Engine {
     pub(crate) gpu: Option<crate::gpu::Gpu>,
     /// Evaluated body shapes, keyed by body name; cleared on any geometry change.
     pub(crate) solids: BTreeMap<String, Solid>,
+    /// The derived Mesh with its resolved Sets; cleared by every Command, rebuilt on demand.
+    pub(crate) mesh: Option<crate::mesh::BuiltMesh>,
 }
 
 impl Engine {
@@ -69,6 +71,7 @@ impl Engine {
             pool: Pool::new(threads),
             gpu,
             solids: BTreeMap::new(),
+            mesh: None,
         }
     }
 
@@ -109,6 +112,8 @@ impl Engine {
     pub async fn dispatch(&mut self, cmd: Command, on_progress: OnProgress<'_>) -> Result<Ack, Error> {
         let before = self.model.clone();
         let solids_before = self.solids.clone();
+        // The Mesh is derived from the Model, so any Command can stale it; it rebuilds lazily.
+        self.mesh = None;
         match self.apply(&cmd, on_progress).await {
             Ok(output @ (Output::Undo { .. } | Output::Redo { .. })) => {
                 let hash = self.model_hash();
@@ -196,7 +201,7 @@ impl Engine {
         self.journal = f.journal;
         self.undo.clear();
         self.redo.clear();
-        self.solids.clear();
+        self.invalidate_geometry();
         Ok(())
     }
 
@@ -330,6 +335,35 @@ impl Engine {
 
     fn invalidate_geometry(&mut self) {
         self.solids.clear();
+        self.mesh = None;
+    }
+
+    /// The derived Mesh with every Set resolved, built on demand (plan B §2.1).
+    pub fn mesh(&mut self) -> Result<&crate::mesh::BuiltMesh, Error> {
+        if self.mesh.is_none() {
+            let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
+            for b in &bodies {
+                self.solid(b)?;
+            }
+            self.mesh = Some(crate::mesh::build(&self.model, &self.solids)?);
+        }
+        Ok(self.mesh.as_ref().expect("just built"))
+    }
+
+    /// The mesh skin the viewer draws.
+    pub fn mesh_surface(&mut self) -> Result<femlab_geometry::Surface, Error> {
+        Ok(self.mesh()?.mesh.surface())
+    }
+
+    /// The Bodies' triangle meshes, for the viewer before there is a Mesh.
+    pub fn geometry_surface(&mut self) -> Result<Vec<(String, femlab_geometry::TriMesh)>, Error> {
+        let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
+        let mut out = Vec::with_capacity(bodies.len());
+        for b in bodies {
+            let tri = self.solid(&b)?.triangles().clone();
+            out.push((b, tri));
+        }
+        Ok(out)
     }
 
     // ------------------------------------------------------------------ apply
@@ -481,6 +515,7 @@ impl Engine {
                     Some(MeshSettings { mesher: settings, order, formulation: formulation.unwrap_or_default() });
                 Ok(Output::None)
             }
+            Command::MeshExport { format, step } => self.mesh_export(*format, step.as_deref()),
             Command::ConstraintFix { name, on, dofs } => {
                 check_name(name)?;
                 self.check_set(on)?;
@@ -644,6 +679,19 @@ impl Engine {
             Command::JournalUndo { steps } => self.undo(steps.unwrap_or(1)),
             Command::JournalRedo { steps } => self.redo(steps.unwrap_or(1)),
         }
+    }
+
+    /// `mesh.export`: the Mesh as text, with the element id and Body index as cell data.
+    fn mesh_export(&mut self, format: ExportFormat, step: Option<&str>) -> Result<Output, Error> {
+        if step.is_some() {
+            return Err(Error::unsupported("mesh.export of a Step's fields (solving lands in a later commit)"));
+        }
+        let name = self.model.name.clone();
+        let built = self.mesh()?;
+        let ids: Vec<f64> = (0..built.mesh.n_elems()).map(|e| e as f64).collect();
+        let bodies: Vec<f64> = (0..built.mesh.n_elems() as u32).map(|e| built.mesh.block_of(e).0 as f64).collect();
+        let text = crate::io::write_vtu(&built.mesh, &[], &[("ElementId", 1, &ids), ("Body", 1, &bodies)]);
+        Ok(Output::Export { format, filename: format!("{name}.vtu"), mime: "application/xml".into(), text })
     }
 
     fn add_body(&mut self, name: &str, shape: Shape) -> Result<Output, Error> {
