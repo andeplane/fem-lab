@@ -457,7 +457,7 @@
         ]
       },
       {
-        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Naming a `step` to include that Step's result\nfields is not supported yet: it returns unsupported until solving lands.",
+        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.",
         "type": "object",
         "properties": {
           "format": {
@@ -3119,7 +3119,7 @@
             "maxItems": 3
           },
           "balance": {
-            "description": "|Σ reactions + Σ applied| / max(|Σ applied|, tiny); zero means perfect balance.",
+            "description": "|Σ reactions + Σ applied| over the largest single force in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
             "type": "number",
             "format": "double"
           }
@@ -3796,7 +3796,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Naming a `step` to include that Step's result\nfields is not supported yet: it returns unsupported until solving lands.",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.",
             "type": "object",
             "properties": {
               "format": {
@@ -5714,7 +5714,7 @@
             "maxItems": 3
           },
           "balance": {
-            "description": "|Σ reactions + Σ applied| / max(|Σ applied|, tiny); zero means perfect balance.",
+            "description": "|Σ reactions + Σ applied| over the largest single force in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
             "type": "number",
             "format": "double"
           }
@@ -7854,7 +7854,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Naming a `step` to include that Step's result\nfields is not supported yet: it returns unsupported until solving lands.",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.",
             "type": "object",
             "properties": {
               "format": {

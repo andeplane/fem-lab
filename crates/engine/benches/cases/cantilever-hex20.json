@@ -1,0 +1,142 @@
+{
+  "name": "cantilever-hex20",
+  "reference": "Benchmark B1 with quadratic hexahedra (order 2) at the same 25 mm lattice: 0.1904070 mm, 0.81 % below the Timoshenko value. Refining to 12.5 mm moves it only to 0.1905657, so the remaining gap is the beam formula, not the mesh: a fully clamped three-dimensional root holds the cross-section flat and stops it contracting, which beam theory does not, and that makes the solid about 0.7 % stiffer than the formula. The gate is therefore 1 %, and the 0.5 % of the plan would be a tolerance the physics cannot meet with this fixture.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "cantilever"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "beam",
+      "size": [
+        "1 m",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "beam"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "25 mm"
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.xmin"
+    },
+    {
+      "cmd": "load.traction",
+      "name": "tip",
+      "on": "beam.xmax",
+      "total": [
+        "0 N",
+        "0 N",
+        "-1 kN"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "tip"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "1 m",
+          "50 mm",
+          "50 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.1919619,
+      "tol": 0.01,
+      "rel": true,
+      "note": "tip deflection in mm, within 1 % of Timoshenko (0.7 % of which is the clamped root)"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: reactions balance the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/solver",
+      "expect": "cpu-direct"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/appliedTotal/2/value",
+      "expect": -1.0,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "the tip traction totals -1 kN"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/reactions/0/total/2/value",
+      "expect": 1.0,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "and the root carries it"
+    }
+  ]
+}

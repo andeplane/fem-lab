@@ -21,6 +21,7 @@ pub mod procedure;
 pub mod queries;
 pub mod query;
 pub mod solve;
+pub mod solve_run;
 pub mod units;
 
 pub use command::Command;

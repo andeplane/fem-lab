@@ -1739,7 +1739,7 @@ fn cancel_on(at: usize) -> impl FnMut(Progress) -> bool {
 
 fn run_static(p: &Problem<'_>, progress: OnProgress<'_>) -> Result<StepResult, Error> {
     let step = Step::Static { solver: SolveOptions::default() };
-    pollster::block_on(procedure::run(p, &step, None, None, progress))
+    pollster::block_on(procedure::run(p, &step, &Pool::new(2), None, None, progress))
 }
 
 /// A7: the reactions must balance the applied load, on every structural case.
@@ -1853,9 +1853,15 @@ fn the_patch_test_passes_for_every_kind_and_every_constant_strain_mode() {
                 let exact = patch_mesh_field(&mesh, &id, &e);
                 let rc = boundary_constraints(&mesh, &exact);
                 let red = reduce(&a.k, &vec![0.0; a.k.n], &rc);
-                let (u_f, info) =
-                    pollster::block_on(solve(&red.k_ff, &red.f_f, &SolveOptions::default(), None, &mut nop))
-                        .expect("the patch system is positive definite");
+                let (u_f, info) = pollster::block_on(solve(
+                    &red.k_ff,
+                    &red.f_f,
+                    &SolveOptions::default(),
+                    &Pool::new(2),
+                    None,
+                    &mut nop,
+                ))
+                .expect("the patch system is positive definite");
                 assert!(info.rel_residual < 1e-10, "{kind:?}: residual {}", info.rel_residual);
                 let u = expand(&red, &u_f);
                 let scale = exact.iter().fold(0.0f64, |m, x| m.max(x.abs()));
@@ -2099,7 +2105,7 @@ fn only_the_direct_solver_and_the_static_procedure_exist_so_far() {
     let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![2.0] };
     for solver in [Solver::CpuPcg, Solver::GpuPcg] {
         let opts = SolveOptions { solver, ..SolveOptions::default() };
-        let e = pollster::block_on(solve(&k, &[1.0], &opts, None, &mut nop)).expect_err("not built yet");
+        let e = pollster::block_on(solve(&k, &[1.0], &opts, &Pool::new(2), None, &mut nop)).expect_err("not built yet");
         assert_eq!(e.code, ErrorCode::Unsupported);
         assert!(e.cause.contains(&solver_name(solver)), "{}", e.cause);
     }
@@ -2112,7 +2118,8 @@ fn only_the_direct_solver_and_the_static_procedure_exist_so_far() {
     let bodies = vec!["c".to_string()];
     let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
     for step in [Step::Modal, Step::HeatSteady, Step::HeatTransient, Step::Explicit] {
-        let e = pollster::block_on(procedure::run(&p, &step, None, None, &mut nop)).expect_err("only static so far");
+        let e = pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut nop))
+            .expect_err("only static so far");
         assert_eq!(e.code, ErrorCode::Unsupported);
         assert!(e.cause.contains(step.name()), "{}", e.cause);
     }
@@ -2148,8 +2155,8 @@ fn a_material_the_checks_cannot_see_still_stops_the_procedure() {
 fn an_indefinite_matrix_is_not_positive_definite() {
     // [[1, 2], [2, 1]] is symmetric but indefinite: Cholesky hits a non-positive pivot
     let k = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![1.0, 2.0, 2.0, 1.0] };
-    let e =
-        pollster::block_on(solve(&k, &[1.0, 1.0], &SolveOptions::default(), None, &mut nop)).expect_err("indefinite");
+    let e = pollster::block_on(solve(&k, &[1.0, 1.0], &SolveOptions::default(), &Pool::new(2), None, &mut nop))
+        .expect_err("indefinite");
     assert_eq!(e.code, ErrorCode::SolveNotPositiveDefinite);
     assert_eq!(e.suggestion.as_deref(), Some("constraint.fix"));
     assert_eq!(e.where_.as_deref(), Some("solve"));
@@ -2636,4 +2643,45 @@ fn recovering_stress_reports_a_material_it_cannot_call() {
     p.materials[0].props = vec![YOUNG];
     let u = vec![0.0; p.n_dofs()];
     assert_eq!(stress_gp(&p, &u).map(|_| ()).expect_err("one prop, not two").code, ErrorCode::MaterialProps);
+}
+
+/// A8: the whole Step, not just the assembly, is bit-identical at one and many threads —
+/// through faer's parallel factorisation as well (plan A §5.1, R2).
+#[test]
+fn a_step_result_is_bit_identical_at_one_and_many_threads() {
+    let many = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(2);
+    // A5: the uniaxial bar. B1 coarse: the cantilever under a tip traction, which is what
+    // exercises the factorisation on a three-dimensional pattern.
+    let cases: [(ElementKind, [usize; 3], Vec<Load>); 2] = [
+        (ElementKind::Hex8, [10, 1, 1], Vec::new()),
+        (ElementKind::Hex8, [8, 2, 2], vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }]),
+    ];
+    for (kind, n, loads) in cases {
+        let mesh = Structured { kind, n }.box_([1.0, 0.1, 0.1]);
+        let sets = sets_of(&mesh);
+        let bodies = vec!["bar".to_string()];
+        let constraints = if loads.is_empty() {
+            bar_constraints(kind, 2e-4)
+        } else {
+            vec![fix("root", "xmin", [true, true, true], 0.0)]
+        };
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::IncompatibleModes, constraints);
+        p.loads = loads;
+        let step = Step::Static { solver: SolveOptions::default() };
+        let run = |threads: usize| {
+            let pool = Pool::new(threads);
+            pollster::block_on(procedure::run(&p, &step, &pool, None, None, &mut nop)).expect("solves")
+        };
+        let (one, par) = (run(1), run(many));
+        assert_eq!(one.fields.keys().collect::<Vec<_>>(), par.fields.keys().collect::<Vec<_>>());
+        for (name, a) in &one.fields {
+            let b = &par.fields[name];
+            let differing = a.data.iter().zip(&b.data).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+            assert_eq!(differing, 0, "{name:?}: {differing} of {} values differ at {many} threads", a.data.len());
+        }
+        for (k, v) in &one.scalars {
+            assert_eq!(v.to_bits(), par.scalars[k].to_bits(), "scalar {k}");
+        }
+        assert_eq!(one.reactions, par.reactions);
+    }
 }

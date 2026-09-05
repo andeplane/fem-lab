@@ -57,6 +57,9 @@ pub struct Engine {
     pub(crate) solids: BTreeMap<String, Solid>,
     /// The derived Mesh with its resolved Sets; cleared by every Command, rebuilt on demand.
     pub(crate) mesh: Option<crate::mesh::BuiltMesh>,
+    /// One Result per Step with the Model hash it was solved at. An edit does not throw a
+    /// Result away — it makes it stale, and `query.result` says so (plan B §2.1).
+    pub(crate) results: BTreeMap<String, (String, crate::procedure::StepResult)>,
 }
 
 impl Engine {
@@ -72,6 +75,7 @@ impl Engine {
             gpu,
             solids: BTreeMap::new(),
             mesh: None,
+            results: BTreeMap::new(),
         }
     }
 
@@ -201,6 +205,7 @@ impl Engine {
         self.journal = f.journal;
         self.undo.clear();
         self.redo.clear();
+        self.results.clear();
         self.invalidate_geometry();
         Ok(())
     }
@@ -219,6 +224,7 @@ impl Engine {
         self.undo.clear();
         self.redo.clear();
         self.solids.clear();
+        self.results.clear();
         let mut hashes = Vec::with_capacity(entries.len());
         let mut nop = |_p: Progress| true;
         for e in entries {
@@ -368,12 +374,13 @@ impl Engine {
 
     // ------------------------------------------------------------------ apply
 
-    async fn apply(&mut self, cmd: &Command, _on_progress: OnProgress<'_>) -> Result<Output, Error> {
+    async fn apply(&mut self, cmd: &Command, on_progress: OnProgress<'_>) -> Result<Output, Error> {
         match cmd {
             Command::ModelNew { name, description } => {
                 let mut m = Model::new(name);
                 m.description = description.clone();
                 self.model = m;
+                self.results.clear();
                 self.invalidate_geometry();
                 Ok(Output::None)
             }
@@ -673,7 +680,9 @@ impl Engine {
                 self.model.steps = steps;
                 Ok(Output::None)
             }
-            Command::SolveRun { .. } => Err(Error::unsupported("solve.run (numerics land in a later commit)")),
+            Command::SolveRun { step, solver, tolerance, max_iterations } => {
+                self.solve_run(step, *solver, *tolerance, *max_iterations, on_progress).await
+            }
             Command::StudyConverge { .. } => Err(Error::unsupported("study.converge")),
             Command::PluginLoad { .. } => Err(Error::unsupported("plugin.load (phase P)")),
             Command::JournalUndo { steps } => self.undo(steps.unwrap_or(1)),
@@ -683,14 +692,18 @@ impl Engine {
 
     /// `mesh.export`: the Mesh as text, with the element id and Body index as cell data.
     fn mesh_export(&mut self, format: ExportFormat, step: Option<&str>) -> Result<Output, Error> {
-        if step.is_some() {
-            return Err(Error::unsupported("mesh.export of a Step's fields (solving lands in a later commit)"));
-        }
         let name = self.model.name.clone();
+        // A Step's fields are point data on the same Mesh; without a Step the file is the Mesh
+        // alone, which is what a user exports before solving.
+        let point: Vec<(&str, usize, Vec<f64>)> = match step {
+            Some(s) => crate::solve_run::export_fields(self.stored(Some(s))?.2),
+            None => Vec::new(),
+        };
         let built = self.mesh()?;
         let ids: Vec<f64> = (0..built.mesh.n_elems()).map(|e| e as f64).collect();
         let bodies: Vec<f64> = (0..built.mesh.n_elems() as u32).map(|e| built.mesh.block_of(e).0 as f64).collect();
-        let text = crate::io::write_vtu(&built.mesh, &[], &[("ElementId", 1, &ids), ("Body", 1, &bodies)]);
+        let point: Vec<(&str, usize, &[f64])> = point.iter().map(|(n, c, v)| (*n, *c, v.as_slice())).collect();
+        let text = crate::io::write_vtu(&built.mesh, &point, &[("ElementId", 1, &ids), ("Body", 1, &bodies)]);
         Ok(Output::Export { format, filename: format!("{name}.vtu"), mime: "application/xml".into(), text })
     }
 

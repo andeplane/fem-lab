@@ -13,6 +13,7 @@ use crate::command::Solver;
 use crate::engine::{OnProgress, Progress};
 use crate::error::Error;
 use crate::fem::assembly::{pattern, Csr};
+use crate::par::Pool;
 use crate::query::CostEstimate;
 
 /// What a Command asked of the solver. `rel_tol` and `max_iterations` are the iterative
@@ -64,12 +65,14 @@ pub fn solver_name(solver: Solver) -> String {
 
 /// Solve `k x = b` with the requested solver.
 ///
-/// `_gpu` is the host's device, which the GPU conjugate gradient will take (plan A §5.4); the
-/// direct path never touches it.
+/// The factorisation runs inside `pool`, which is the engine's own, so the thread count a host
+/// asked for is the one faer sees. `_gpu` is the host's device, which the GPU conjugate
+/// gradient will take (plan A §5.4); the direct path never touches it.
 pub async fn solve(
     k: &Csr,
     b: &[f64],
     opts: &SolveOptions,
+    pool: &Pool,
     _gpu: Option<&crate::gpu::Gpu>,
     progress: OnProgress<'_>,
 ) -> Result<(Vec<f64>, SolveInfo), Error> {
@@ -81,9 +84,11 @@ pub async fn solve(
     if !progress(Progress { phase: "solve", fraction: 0.5, message: format!("factorising {} equations", k.n) }) {
         return Err(Error::cancelled());
     }
-    let mut factored = direct::Direct::factor(k)?;
-    let mut x = vec![0.0; k.n];
-    factored.solve(b, &mut x).map(|info| (x, info))
+    pool.install(|| {
+        let mut factored = direct::Direct::factor(k)?;
+        let mut x = vec![0.0; k.n];
+        factored.solve(b, &mut x).map(|info| (x, info))
+    })
 }
 
 /// Bytes per stored non-zero: an `f64` value and a `u32` column index.

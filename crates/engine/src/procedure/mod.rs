@@ -13,7 +13,7 @@ use crate::command::Field;
 use crate::engine::{OnProgress, Progress};
 use crate::error::{Error, Warning};
 use crate::fem::problem::Problem;
-use crate::post::FieldData;
+use crate::post::{Extremum, FieldData};
 use crate::solve::{SolveInfo, SolveOptions};
 
 /// One analysis step.
@@ -46,10 +46,18 @@ impl Step {
 /// Everything one Step produced. Fields cross to hosts as `f64`; the host casts to `f32` for
 /// rendering. `scalars` carries the numbers a Result summary reports without a field: the
 /// applied totals, the worst Jacobian, the residual the solver reached.
+///
+/// `extremes` and `reactions` are computed here and kept, not recomputed on demand: a Result
+/// outlives the Mesh it was solved on (the Model can be edited under it), and a summary must
+/// stay readable — and honest about being stale — after that.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepResult {
     pub fields: BTreeMap<Field, FieldData>,
     pub scalars: BTreeMap<String, f64>,
+    /// Per-component extremes of every nodal field, in `Field` order.
+    pub extremes: Vec<(Field, Extremum)>,
+    /// The total force each Constraint carries, in Model order.
+    pub reactions: Vec<(String, [f64; 3])>,
     pub solver: SolveInfo,
     pub warnings: Vec<Warning>,
 }
@@ -62,12 +70,13 @@ pub struct StepResult {
 pub async fn run(
     p: &Problem<'_>,
     step: &Step,
+    pool: &crate::par::Pool,
     gpu: Option<&crate::gpu::Gpu>,
     _prev: Option<&StepResult>,
     progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
     match step {
-        Step::Static { solver } => static_::run(p, solver, gpu, progress).await,
+        Step::Static { solver } => static_::run(p, solver, pool, gpu, progress).await,
         other => Err(Error::unsupported(&format!("the '{}' procedure", other.name()))
             .suggest("step.add { procedure: \"static\" }")),
     }

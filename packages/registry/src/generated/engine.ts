@@ -256,6 +256,11 @@ export type Command =
       cmd: "mesh.set";
     }
   | {
+      format: ExportFormat;
+      step?: string | null;
+      cmd: "mesh.export";
+    }
+  | {
       name: string;
       on: string;
       dofs?: Dof[] | null;
@@ -1047,6 +1052,10 @@ export type LatticeSize =
  */
 export type Formulation = "incompatible-modes" | "full";
 /**
+ * A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.
+ */
+export type ExportFormat = "vtu";
+/**
  * A displacement component.
  */
 export type Dof = "ux" | "uy" | "uz";
@@ -1569,6 +1578,11 @@ export type ModelFile_Command =
       cmd: "mesh.set";
     }
   | {
+      format: ExportFormat;
+      step?: string | null;
+      cmd: "mesh.export";
+    }
+  | {
       name: string;
       on: string;
       dofs?: Dof[] | null;
@@ -2045,6 +2059,13 @@ export type Output =
       type: "study";
     }
   | {
+      format: ExportFormat;
+      filename: string;
+      mime: string;
+      text: string;
+      type: "export";
+    }
+  | {
       steps: number;
       type: "undo";
     }
@@ -2499,6 +2520,29 @@ export interface MeshSummary {
   minEdge: Valued;
   maxEdge: Valued;
   sets: SetRow[];
+  quality?: QualitySummary | null;
+}
+/**
+ * Mesh quality inside `query.mesh`: worst-case ratios and the elements that set them.
+ */
+export interface QualitySummary {
+  /**
+   * Smallest corner `min(det J) / max(det J)`; 1 is perfect, 0 degenerate, negative inverted.
+   */
+  minDetJRatio: number;
+  /**
+   * Largest longest-edge over shortest-edge ratio.
+   */
+  maxAspect: number;
+  /**
+   * Smallest angle at any element corner, in degrees.
+   */
+  minAngleDeg: number;
+  worst: QualityRow[];
+}
+export interface QualityRow {
+  element: number;
+  value: number;
 }
 /**
  * `query.set` response.
@@ -2538,7 +2582,9 @@ export interface ResultSummary {
    */
   appliedTotal: [Valued, Valued, Valued];
   /**
-   * |Σ reactions + Σ applied| / max(|Σ applied|, tiny); zero means perfect balance.
+   * |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+   * by a prescribed displacement — where both totals are zero — still reports a meaningful
+   * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
    */
   balance: number;
 }

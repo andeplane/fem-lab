@@ -282,7 +282,9 @@ pub struct ResultSummary {
     pub extremes: Vec<Extreme>,
     pub reactions: Vec<ReactionRow>,
     pub applied_total: [Valued; 3],
-    /// |Σ reactions + Σ applied| / max(|Σ applied|, tiny); zero means perfect balance.
+    /// |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+    /// by a prescribed displacement — where both totals are zero — still reports a meaningful
+    /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
     pub balance: f64,
 }
 

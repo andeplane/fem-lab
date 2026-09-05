@@ -274,7 +274,6 @@ fn transactional_dispatch_and_structured_errors() {
         err(&mut e, r#"{"cmd":"geometry.add","name":"s","shape":{"kind":"sphere","radius":"1 kg"}}"#).code,
         ErrorCode::UnitDimension
     );
-    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"static"}"#).code, ErrorCode::Unsupported);
     assert_eq!(
         err(
             &mut e,
@@ -289,6 +288,7 @@ fn transactional_dispatch_and_structured_errors() {
         ErrorCode::Unsupported
     );
     assert_eq!(run(&mut e, r#"{"cmd":"nonsense"}"#).unwrap_err().code, ErrorCode::Schema);
+    // every Result Query needs a Result, and says so rather than guessing
     for q in [
         Query::Result { step: None },
         Query::Probe {
@@ -305,9 +305,8 @@ fn transactional_dispatch_and_structured_errors() {
             to: [Q::text("1 m"), Q::text("0 m"), Q::text("0 m")],
             n: 3,
         },
-        Query::Cost { step: "static".into() },
     ] {
-        assert_eq!(e.query(q).unwrap_err().code, ErrorCode::Unsupported);
+        assert_eq!(e.query(q).unwrap_err().code, ErrorCode::NotFound);
     }
     assert_eq!(e.revision(), 9);
     assert_eq!(e.model_hash(), hash);
@@ -1126,7 +1125,7 @@ fn two_bodies_become_two_blocks_and_export_as_vtu() {
     assert!(text.contains(r#"NumberOfPoints="64""#), "{}", &text[..200]);
     assert!(text.contains(r#"NumberOfCells="4""#));
     assert!(text.contains(r#"Name="ElementId""#) && text.contains(r#"Name="Body""#));
-    assert_eq!(err(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#).code, ErrorCode::Unsupported);
+    assert_eq!(err(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#).code, ErrorCode::NotFound);
 }
 
 #[test]
@@ -1231,4 +1230,393 @@ fn decode_i64(text: &str, name: &str) -> Vec<i64> {
 
 fn decode_u8(text: &str, name: &str) -> Vec<u8> {
     decode_array(text, name)
+}
+
+// ------------------------------------------------------------------- solve.run
+
+/// Benchmark B1: `δ = PL³/(3EI) + PL/(κGA)` with `κ = 5/6`, `L = 1 m`, `b = h = 0.1 m`,
+/// `P = 1 kN`, `E = 210 GPa`, `ν = 0.3` — in millimetres, the Model's display unit.
+const B1_THEORY_MM: f64 = 0.191_961_904_761_904_8;
+
+fn solved_cantilever(e: &mut Engine, mesh: &str) {
+    ok(e, r#"{"cmd":"model.new","name":"cantilever"}"#);
+    ok(e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","force":"kN"}}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#);
+    ok(e, mesh);
+    ok(e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin"}"#);
+    ok(e, r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 N","0 N","-1 kN"]}"#);
+    ok(e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":["tip"]}"#);
+    ok(e, r#"{"cmd":"solve.run","step":"static"}"#);
+}
+
+fn result(e: &mut Engine) -> femlab_engine::query::ResultSummary {
+    let QueryResult::Result(r) = e.query(Query::Result { step: None }).unwrap_or_else(|e| panic!("{e:?}")) else {
+        panic!("query.result returns a ResultSummary")
+    };
+    r
+}
+
+fn tip_uz(e: &mut Engine) -> f64 {
+    let q = Query::Probe {
+        step: None,
+        field: Field::Displacement,
+        component: Some(2),
+        at: [Q::text("1 m"), Q::text("50 mm"), Q::text("50 mm")],
+    };
+    let QueryResult::Probe(p) = e.query(q).unwrap_or_else(|e| panic!("{e:?}")) else { panic!("a ProbeResult") };
+    assert_eq!(p.value.unit, "mm");
+    assert!(p.interpolated);
+    p.value.value
+}
+
+#[test]
+fn solving_the_cantilever_reports_the_tip_deflection_and_balanced_reactions() {
+    let mut e = engine();
+    solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"25 mm"},"order":1}"#);
+    let r = result(&mut e);
+    assert_eq!(r.step, "static");
+    assert!(!r.stale);
+    assert_eq!(r.solver, "cpu-direct");
+    assert!(r.balance <= 1e-9, "reactions must balance: {}", r.balance);
+    // the applied total is the 1 kN the traction asked for, and the root carries it back
+    assert_eq!(r.applied_total[2].unit, "kN");
+    assert!((r.applied_total[2].value + 1.0).abs() <= 1e-9);
+    assert_eq!(r.reactions.len(), 1);
+    assert_eq!(r.reactions[0].constraint, "root");
+    assert!((r.reactions[0].total[2].value - 1.0).abs() <= 1e-9);
+    // B1: within 2 % of Timoshenko for the incompatible-modes hexahedron at 25 mm
+    let uz = tip_uz(&mut e);
+    let error = (uz.abs() - B1_THEORY_MM).abs() / B1_THEORY_MM;
+    assert!(error < 0.02, "hex8 incompatible modes: {uz} mm, {:.2} % from {B1_THEORY_MM}", error * 100.0);
+    // the extremes name their field and carry their unit and location
+    let disp = r.extremes.iter().find(|x| x.field == "displacement" && x.component == 2).expect("uz extreme");
+    assert_eq!(disp.min.unit, "mm");
+    assert!((disp.min.value - uz).abs() < 0.01 * B1_THEORY_MM, "{} vs {uz}", disp.min.value);
+    assert!((disp.min_at[0].value - 1000.0).abs() < 1e-9, "the largest deflection is at the free end");
+    assert!(r.extremes.iter().any(|x| x.field == "vonMises" && x.min.unit == "MPa"));
+    assert!(r.extremes.iter().any(|x| x.field == "reaction" && x.min.unit == "kN"));
+    assert!(r.extremes.iter().all(|x| x.field != "stressUnaveraged"), "only nodal fields have extremes");
+    // query.model now says the Step is solved
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert!(m.steps[0].solved);
+}
+
+/// The locking lesson: the fully integrated linear hexahedron is much stiffer than the
+/// incompatible-modes one on the same mesh, and the ratio is what the Benchmark records.
+#[test]
+fn the_fully_integrated_hexahedron_locks() {
+    let coarse = r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1,"formulation":"%"}"#;
+    let mut a = engine();
+    solved_cantilever(&mut a, &coarse.replace('%', "incompatible-modes"));
+    let im = (tip_uz(&mut a).abs() - B1_THEORY_MM).abs() / B1_THEORY_MM;
+    let mut b = engine();
+    solved_cantilever(&mut b, &coarse.replace('%', "full"));
+    let full = (tip_uz(&mut b).abs() - B1_THEORY_MM).abs() / B1_THEORY_MM;
+    assert!(im < 0.02, "incompatible modes at 50 mm: {:.2} %", im * 100.0);
+    assert!(full > 5.0 * im, "full integration {:.2} % vs incompatible {:.2} %", full * 100.0, im * 100.0);
+}
+
+/// Quadratic elements land within 1 % of the beam formula; the last 0.7 % is the fully clamped
+/// root, which beam theory does not model, not the mesh (see the Benchmark case's note).
+#[test]
+fn quadratic_elements_reach_the_beam_formula() {
+    let mut e = engine();
+    solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"25 mm"},"order":2}"#);
+    let error = (tip_uz(&mut e).abs() - B1_THEORY_MM).abs() / B1_THEORY_MM;
+    assert!(error < 0.01, "hex20 at 25 mm: {:.2} %", error * 100.0);
+    assert!(result(&mut e).balance <= 1e-9);
+}
+
+#[test]
+fn a_solve_refuses_a_model_it_cannot_answer_for() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"bare"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":[]}"#);
+    // no material on the Body
+    assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"static"}"#), ErrorCode::ModelNoMaterial);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#);
+    assert!(run(&mut e, r#"{"cmd":"solve.run","step":"static"}"#).is_ok());
+    // nothing holding it
+    ok(&mut e, r#"{"cmd":"step.add","name":"loose","procedure":"static","constraints":[],"loads":[]}"#);
+    let err = err(&mut e, r#"{"cmd":"solve.run","step":"loose"}"#);
+    assert_eq!(err.code, ErrorCode::ConstraintRigidModes);
+    assert!(err.cause.contains("translation x"), "{}", err.cause);
+    // and a Step nobody defined
+    assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"nope"}"#), ErrorCode::NotFound);
+    // a Result Query before any solve, and for a Step that has none
+    let mut fresh = engine();
+    assert_eq!(fresh.query(Query::Result { step: None }).expect_err("nothing solved").code, ErrorCode::NotFound);
+    assert_eq!(
+        e.query(Query::Result { step: Some("loose".into()) }).expect_err("never solved").code,
+        ErrorCode::NotFound
+    );
+}
+
+#[test]
+fn a_result_goes_stale_when_the_model_changes_and_undo_orphans_it() {
+    let mut e = engine();
+    solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    assert!(!result(&mut e).stale);
+    // an edit that does not touch the mesh still stales the Result: the Model hash moved
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+    assert!(result(&mut e).stale, "the Result predates the edit");
+    // undoing back to the solved Model makes it current again
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert!(!result(&mut e).stale);
+    // undoing past the solve orphans the Result: it survives, and says it is stale
+    ok(&mut e, r#"{"cmd":"journal.undo","steps":3}"#);
+    // the Step is gone from the Model, so only its name reaches the Result it orphaned
+    assert_eq!(e.query(Query::Result { step: None }).expect_err("no Step to default to").code, ErrorCode::NotFound);
+    let QueryResult::Result(r) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
+    assert!(r.stale, "the Step it belongs to is gone");
+    assert_eq!(r.step, "static");
+    // model.new throws Results away entirely
+    ok(&mut e, r#"{"cmd":"model.new","name":"other"}"#);
+    assert_eq!(e.query(Query::Result { step: None }).expect_err("cleared").code, ErrorCode::NotFound);
+}
+
+#[test]
+fn probing_and_walking_a_solved_field() {
+    let mut e = engine();
+    solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    // the magnitude when no component is named
+    let q = Query::Probe {
+        step: Some("static".into()),
+        field: Field::Displacement,
+        component: None,
+        at: [Q::text("1 m"), Q::text("50 mm"), Q::text("50 mm")],
+    };
+    let QueryResult::Probe(p) = e.query(q).unwrap() else { panic!() };
+    assert!(p.value.value > 0.0, "a magnitude is positive: {}", p.value.value);
+    // off the mesh
+    let off = Query::Probe {
+        step: None,
+        field: Field::Displacement,
+        component: Some(2),
+        at: [Q::text("2 m"), Q::text("50 mm"), Q::text("50 mm")],
+    };
+    assert_eq!(e.query(off).expect_err("outside").code, ErrorCode::NotFound);
+    // an unaveraged field is not nodal, so it cannot be sampled at a point
+    let per_elem = Query::Probe {
+        step: None,
+        field: Field::StressUnaveraged,
+        component: Some(0),
+        at: [Q::text("0 m"), Q::text("50 mm"), Q::text("50 mm")],
+    };
+    assert_eq!(e.query(per_elem).expect_err("per element node").code, ErrorCode::Unsupported);
+    // a path down the axis rises monotonically to the tip
+    let path = Query::Path {
+        step: None,
+        field: Field::Displacement,
+        component: Some(2),
+        from: [Q::text("0 m"), Q::text("50 mm"), Q::text("50 mm")],
+        to: [Q::text("1 m"), Q::text("50 mm"), Q::text("50 mm")],
+        n: 9,
+    };
+    let QueryResult::Path(p) = e.query(path).unwrap() else { panic!() };
+    assert_eq!(p.s.len(), 9);
+    assert_eq!(p.unit, "mm");
+    let v: Vec<f64> = p.values.iter().map(|x| x.expect("inside the beam")).collect();
+    assert!(v.windows(2).all(|w| w[1] < w[0]), "{v:?}");
+    // a path that misses the mesh reports the gaps
+    let miss = Query::Path {
+        step: None,
+        field: Field::Displacement,
+        component: Some(2),
+        from: [Q::text("2 m"), Q::text("0 m"), Q::text("0 m")],
+        to: [Q::text("3 m"), Q::text("0 m"), Q::text("0 m")],
+        n: 3,
+    };
+    let QueryResult::Path(p) = e.query(miss).unwrap() else { panic!() };
+    assert!(p.values.iter().all(Option::is_none));
+    // re-meshing under the Result makes it unsamplable, and says why
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"25 mm"},"order":1}"#);
+    let q = Query::Probe {
+        step: None,
+        field: Field::Displacement,
+        component: Some(2),
+        at: [Q::text("1 m"), Q::text("50 mm"), Q::text("50 mm")],
+    };
+    let e2 = e.query(q).expect_err("the mesh moved");
+    assert_eq!(e2.code, ErrorCode::NotFound);
+    assert!(e2.cause.contains("nodes"), "{}", e2.cause);
+}
+
+#[test]
+fn the_cost_of_a_step_is_the_sparsity_of_its_mesh() {
+    let mut e = engine();
+    cantilever(&mut e);
+    let QueryResult::Cost(c) = e.query(Query::Cost { step: "static".into() }).unwrap() else { panic!() };
+    assert_eq!(c.dofs, 3075, "1025 nodes x 3");
+    assert!(c.nnz > c.dofs);
+    assert_eq!(c.bytes, c.nnz * 12 + c.dofs * 32);
+    assert!(c.feasible);
+    assert!(c.note.starts_with("cpu-direct"), "{}", c.note);
+    assert_eq!(e.query(Query::Cost { step: "nope".into() }).expect_err("no such step").code, ErrorCode::NotFound);
+}
+
+#[test]
+fn exporting_a_step_writes_its_fields_as_point_data() {
+    let mut e = engine();
+    solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    let ack = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#);
+    let Output::Export { text, filename, .. } = ack.output else { panic!("an export") };
+    assert_eq!(filename, "cantilever.vtu");
+    for name in ["Displacement", "Reaction", "Stress", "VonMises"] {
+        assert!(text.contains(&format!("Name=\"{name}\"")), "missing {name}");
+    }
+    let nodes = decode_f64(&text, "Points").len() / 3;
+    assert_eq!(decode_f64(&text, "Displacement").len(), nodes * 3);
+    assert_eq!(decode_f64(&text, "VonMises").len(), nodes);
+    assert_eq!(decode_f64(&text, "Stress").len(), nodes * 6);
+    // the same export without a Step carries the Mesh alone
+    let ack = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#);
+    let Output::Export { text, .. } = ack.output else { panic!() };
+    assert!(!text.contains("VonMises"));
+    // and a Step with no Result cannot be exported
+    assert_eq!(code(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"nope"}"#), ErrorCode::NotFound);
+}
+
+#[test]
+fn a_host_reads_a_field_straight_off_the_result() {
+    let mut e = engine();
+    solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    let u = e.field(Some("static"), Field::Displacement).expect("displacement");
+    assert_eq!(u.comps, 3);
+    assert_eq!(u.data.len(), u.len() * 3);
+    let uz = u.component(2);
+    assert_eq!(uz.len(), u.len());
+    assert!(uz.iter().any(|v| *v < 0.0), "the beam sags");
+    assert_eq!(e.field(None, Field::Displacement).expect("the last solved step").comps, 3);
+    // temperature was never computed in a static Step
+    assert_eq!(e.field(None, Field::Temperature).expect_err("no such field").code, ErrorCode::NotFound);
+}
+
+#[test]
+fn a_cancelled_solve_changes_nothing() {
+    let mut e = engine();
+    cantilever(&mut e);
+    let cmd: Command = serde_json::from_str(r#"{"cmd":"solve.run","step":"static"}"#).unwrap();
+    let before = e.revision();
+    let mut stop = |_: Progress| false;
+    let err = pollster::block_on(e.dispatch(cmd, &mut stop)).expect_err("cancelled");
+    assert_eq!(err.code, ErrorCode::Cancelled);
+    assert_eq!(e.revision(), before, "a cancelled Command is not journaled");
+    assert_eq!(e.query(Query::Result { step: None }).expect_err("nothing stored").code, ErrorCode::NotFound);
+}
+
+#[test]
+fn a_gravity_load_and_a_prescribed_displacement_go_through_the_same_path() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"block"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["b"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm"},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"base","on":"b.zmin"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.prescribe","name":"pull","on":"b.zmax","dof":"uz","value":"1 mm"}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(&mut e, r#"{"cmd":"load.force","name":"tug","on":"b.xmax","total":["1 kN","0 N","0 N"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["base","pull"],"loads":["g","tug"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let r = result(&mut e);
+    // the weight of a 1 m³ steel block plus the 1 kN tug
+    assert!((r.applied_total[2].value + 7850.0 * 9.81).abs() <= 1e-6 * 7850.0 * 9.81);
+    assert!((r.applied_total[0].value - 1000.0).abs() <= 1e-9 * 1000.0);
+    assert!(r.balance <= 1e-9, "{}", r.balance);
+    assert_eq!(r.reactions.len(), 2);
+    assert!(r.reactions.iter().any(|x| x.constraint == "pull"));
+}
+
+#[test]
+fn a_temperature_load_expands_a_free_block() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"hot"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa"}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"alpha":"1.2e-5 1/K"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["b"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm"},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"sx","on":"b.xmin","normal":"x"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"sy","on":"b.ymin","normal":"y"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"sz","on":"b.zmin","normal":"z"}"#);
+    ok(&mut e, r#"{"cmd":"load.temperature","name":"hot","bodies":["b"],"value":"100 K","reference":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["sx","sy","sz"],"loads":["hot"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let r = result(&mut e);
+    // ε = α ΔT over 1 m is 1.2 mm at the far face, and the block carries no stress
+    let ux = r.extremes.iter().find(|x| x.field == "displacement" && x.component == 0).expect("ux");
+    assert!((ux.max.value - 1.2).abs() <= 1e-6, "{} mm", ux.max.value);
+    let vm = r.extremes.iter().find(|x| x.field == "vonMises").expect("von Mises");
+    assert!(vm.max.value.abs() <= 1e-6, "{} MPa", vm.max.value);
+}
+
+/// The paths a Result Query can fail on: a Set a Load names that the Mesh never made, a Model
+/// that cannot be meshed at all, and a point given in the wrong dimension.
+#[test]
+fn result_queries_refuse_what_they_cannot_answer() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"beam"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["b"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"b.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"nowhere","on":"b.side","total":["0 N","0 N","-1 kN"]}"#);
+    ok(&mut e, r#"{"cmd":"load.force","name":"tug","on":"b.side","total":["1 kN","0 N","0 N"]}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"squeeze","on":"b.xmax","value":"1 MPa"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["squeeze"]}"#);
+    // no mesh settings: nothing can be built
+    assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"s"}"#), ErrorCode::ModelIllPosed);
+    assert_eq!(e.query(Query::Cost { step: "s".into() }).expect_err("no mesh").code, ErrorCode::ModelIllPosed);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    // a pressure on a real face solves, and the solver options come off the Command
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s","solver":"cpu-direct","tolerance":1e-12,"maxIterations":10}"#);
+    assert!(result(&mut e).balance <= 1e-9);
+    // a Load on a face the Mesh never made
+    ok(&mut e, r#"{"cmd":"step.add","name":"t","procedure":"static","constraints":["root"],"loads":["nowhere"]}"#);
+    assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"t"}"#), ErrorCode::SetEmpty);
+    ok(&mut e, r#"{"cmd":"step.add","name":"u","procedure":"static","constraints":["root"],"loads":["tug"]}"#);
+    assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"u"}"#), ErrorCode::SetEmpty);
+    // a point in the wrong dimension, on the probe and on both ends of a path
+    let mut bad = |q: Query| e.query(q).expect_err("a mass is not a length").code;
+    assert_eq!(
+        bad(Query::Probe {
+            step: None,
+            field: Field::Displacement,
+            component: Some(2),
+            at: [Q::text("1 kg"), Q::text("0 m"), Q::text("0 m")],
+        }),
+        ErrorCode::UnitDimension
+    );
+    let line = |from: [Q<femlab_engine::units::Length>; 3], to: [Q<femlab_engine::units::Length>; 3]| Query::Path {
+        step: None,
+        field: Field::Displacement,
+        component: Some(2),
+        from,
+        to,
+        n: 3,
+    };
+    let ok3 = || [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")];
+    let bad3 = || [Q::text("1 kg"), Q::text("0 m"), Q::text("0 m")];
+    assert_eq!(bad(line(bad3(), ok3())), ErrorCode::UnitDimension);
+    assert_eq!(bad(line(ok3(), bad3())), ErrorCode::UnitDimension);
+    // and a Model that stops meshing under a Result
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    let q = Query::Probe {
+        step: None,
+        field: Field::Displacement,
+        component: Some(2),
+        at: [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")],
+    };
+    assert_eq!(e.query(q).expect_err("a 3D body in a 2D idealisation").code, ErrorCode::ModelIllPosed);
 }
