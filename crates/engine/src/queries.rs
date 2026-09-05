@@ -8,7 +8,9 @@ use crate::error::{Error, ErrorCode};
 use crate::model::{ConstraintKind, Idealisation, LoadKind, SetSource};
 use crate::post::FieldData;
 use crate::query::*;
-use crate::units::{self, Acceleration, Density, Dim, Dimension, Force, Length, Mass, Stress, Temperature, Q};
+use crate::units::{
+    self, Acceleration, Density, Dim, Dimension, Force, HeatTransfer, Length, Mass, Stress, Temperature, Q,
+};
 
 /// Three lengths in SI, with the field path an error names.
 fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
@@ -153,6 +155,10 @@ impl Engine {
                         format!("{} = {} {}", format!("{dof:?}").to_lowercase(), units::fmt_sig(v.value, 4), v.unit)
                     }
                     ConstraintKind::Symmetry { normal } => format!("symmetry, normal {normal:?}").to_lowercase(),
+                    ConstraintKind::Temperature { value } => {
+                        let v = display(m, *value, Temperature::DIM);
+                        format!("temperature = {} {}", units::fmt_sig(v.value, 4), v.unit)
+                    }
                 },
             })
             .collect();
@@ -168,6 +174,28 @@ impl Engine {
                     LoadKind::Traction { total, .. } => ("traction", format!("total {}", vec3(m, *total, Force::DIM))),
                     LoadKind::Force { total, .. } => ("force", format!("total {}", vec3(m, *total, Force::DIM))),
                     LoadKind::Gravity { g } => ("gravity", format!("g = {}", vec3(m, *g, Acceleration::DIM))),
+                    LoadKind::Convection { h, t_inf, .. } => {
+                        let hv = display(m, *h, HeatTransfer::DIM);
+                        let t = display(m, *t_inf, Temperature::DIM);
+                        (
+                            "convection",
+                            format!(
+                                "h = {} {}, tInf = {} {}",
+                                units::fmt_sig(hv.value, 4),
+                                hv.unit,
+                                units::fmt_sig(t.value, 4),
+                                t.unit
+                            ),
+                        )
+                    }
+                    LoadKind::HeatFlux { q, .. } => {
+                        let v = display(m, *q, crate::units::HeatFlux::DIM);
+                        ("heatFlux", format!("{} {}", units::fmt_sig(v.value, 4), v.unit))
+                    }
+                    LoadKind::HeatSource { bodies, q } => {
+                        let v = display(m, *q, crate::units::HeatSource::DIM);
+                        ("heatSource", format!("{} {} on {}", units::fmt_sig(v.value, 4), v.unit, bodies.join(", ")))
+                    }
                     LoadKind::Temperature { bodies, value, reference } => {
                         let v = display(m, *value, Temperature::DIM);
                         let r = display(m, *reference, Temperature::DIM);
@@ -192,7 +220,7 @@ impl Engine {
             .iter()
             .map(|s| StepRow {
                 name: s.name.clone(),
-                procedure: format!("{:?}", s.procedure).to_lowercase(),
+                procedure: crate::solve_run::procedure_name(s.procedure),
                 constraints: s.constraints.clone(),
                 loads: s.loads.clone(),
                 solved: self.results.contains_key(&s.name),
@@ -460,7 +488,7 @@ impl Engine {
                     ref_: format!("step:{}", s.name),
                     kind: "step".into(),
                     name: s.name.clone(),
-                    summary: format!("{:?}", s.procedure).to_lowercase(),
+                    summary: crate::solve_run::procedure_name(s.procedure),
                 });
             }
         }

@@ -564,6 +564,31 @@
         ]
       },
       {
+        "description": "Hold a Set at a fixed temperature in a heat Step (the Dirichlet boundary of conduction).\nA heat Step needs either one of these or a convection boundary, or the temperature is\nonly defined up to a constant and the solve is singular. In a transient Step the value is\nmultiplied by the Step's `amplitude`, so \"100 K\" with a sine amplitude is a driven end.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/$defs/Q_temperature"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "constraint.temperature"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "on",
+          "value"
+        ]
+      },
+      {
         "description": "Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without\nit first. Removing a constraint makes existing Results of that Step stale.",
         "type": "object",
         "properties": {
@@ -730,6 +755,88 @@
         ]
       },
       {
+        "description": "Newton cooling on a face Set: heat `h (T − tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "string"
+          },
+          "h": {
+            "$ref": "#/$defs/Q_heat_transfer_coefficient"
+          },
+          "tInf": {
+            "$ref": "#/$defs/Q_temperature"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "load.convection"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "on",
+          "h",
+          "tInf"
+        ]
+      },
+      {
+        "description": "A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "string"
+          },
+          "q": {
+            "$ref": "#/$defs/Q_heat_flux"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "load.heatFlux"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "on",
+          "q"
+        ]
+      },
+      {
+        "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "bodies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "q": {
+            "$ref": "#/$defs/Q_heat_source"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "load.heatSource"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "bodies",
+          "q"
+        ]
+      },
+      {
         "description": "Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it\nfirst. Removing a load makes existing Results of that Step stale.",
         "type": "object",
         "properties": {
@@ -747,7 +854,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder.",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
         "type": "object",
         "properties": {
           "name": {
@@ -776,6 +883,89 @@
             "items": {
               "$ref": "#/$defs/Field"
             }
+          },
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nModes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "shift": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "dt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Q_time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tEnd": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Q_time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "theta": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "outputEvery": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "dtFactor": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "amplitude": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AmplitudeSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "initial": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "cmd": {
             "type": "string",
@@ -2191,6 +2381,11 @@
           "z"
         ]
       },
+      "Q_temperature": {
+        "description": "A temperature with unit, e.g. \"20 degC\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "temperature"
+      },
       "Q_force": {
         "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -2201,10 +2396,20 @@
         "$ref": "#/$defs/Quantity",
         "x-dimension": "acceleration"
       },
-      "Q_temperature": {
-        "description": "A temperature with unit, e.g. \"20 degC\". Any unit of the right dimension is accepted.",
+      "Q_heat_transfer_coefficient": {
+        "description": "A heat transfer coefficient with unit, e.g. \"25 W/(m^2 K)\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
-        "x-dimension": "temperature"
+        "x-dimension": "heat_transfer_coefficient"
+      },
+      "Q_heat_flux": {
+        "description": "A heat flux with unit, e.g. \"1 kW/m^2\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "heat_flux"
+      },
+      "Q_heat_source": {
+        "description": "A heat source with unit, e.g. \"1 kW/m^3\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "heat_source"
       },
       "Procedure": {
         "description": "Analysis procedures.",
@@ -2213,6 +2418,26 @@
             "description": "Linear static equilibrium.",
             "type": "string",
             "const": "static"
+          },
+          {
+            "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
+            "type": "string",
+            "const": "modal"
+          },
+          {
+            "description": "Steady heat conduction with convection, flux and source boundaries; needs `k`.",
+            "type": "string",
+            "const": "heat-steady"
+          },
+          {
+            "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
+            "type": "string",
+            "const": "heat-transient"
+          },
+          {
+            "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
+            "type": "string",
+            "const": "explicit"
           }
         ]
       },
@@ -2228,6 +2453,66 @@
           "strain",
           "reaction",
           "temperature"
+        ]
+      },
+      "Q_time": {
+        "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "time"
+      },
+      "AmplitudeSpec": {
+        "description": "A scalar `g(t)` that scales every prescribed temperature of a transient Step.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
+        "oneOf": [
+          {
+            "description": "`amplitude · sin(2π t / period)`. NAFEMS T3's `100 sin(π t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
+            "type": "object",
+            "properties": {
+              "amplitude": {
+                "type": "number",
+                "format": "double"
+              },
+              "period": {
+                "$ref": "#/$defs/Q_time"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sine"
+              }
+            },
+            "required": [
+              "kind",
+              "amplitude",
+              "period"
+            ]
+          },
+          {
+            "description": "Piecewise-linear through the points `(t[i], value[i])`, held flat outside the table.\n`t` must be ascending and the two arrays the same length.",
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_time"
+                }
+              },
+              "value": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "table"
+              }
+            },
+            "required": [
+              "kind",
+              "t",
+              "value"
+            ]
+          }
         ]
       },
       "Solver": {
@@ -3723,6 +4008,20 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "frequencies": {
+            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            }
+          },
+          "history": {
+            "description": "One row per output time of a transient Step: when, and the range the field covered.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/HistoryRow"
+            }
+          },
           "balance": {
             "description": "|Σ reactions + Σ applied| over the largest single force in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
             "type": "number",
@@ -3806,6 +4105,26 @@
         "required": [
           "constraint",
           "total"
+        ]
+      },
+      "HistoryRow": {
+        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
+        "type": "object",
+        "properties": {
+          "time": {
+            "$ref": "#/$defs/Valued"
+          },
+          "min": {
+            "$ref": "#/$defs/Valued"
+          },
+          "max": {
+            "$ref": "#/$defs/Valued"
+          }
+        },
+        "required": [
+          "time",
+          "min",
+          "max"
         ]
       },
       "ProbeResult": {
@@ -4508,6 +4827,31 @@
             ]
           },
           {
+            "description": "Hold a Set at a fixed temperature in a heat Step (the Dirichlet boundary of conduction).\nA heat Step needs either one of these or a convection boundary, or the temperature is\nonly defined up to a constant and the solve is singular. In a transient Step the value is\nmultiplied by the Step's `amplitude`, so \"100 K\" with a sine amplitude is a driven end.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "constraint.temperature"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "value"
+            ]
+          },
+          {
             "description": "Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without\nit first. Removing a constraint makes existing Results of that Step stale.",
             "type": "object",
             "properties": {
@@ -4674,6 +5018,88 @@
             ]
           },
           {
+            "description": "Newton cooling on a face Set: heat `h (T − tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "h": {
+                "$ref": "#/$defs/Q_heat_transfer_coefficient"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.convection"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "h",
+              "tInf"
+            ]
+          },
+          {
+            "description": "A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "q": {
+                "$ref": "#/$defs/Q_heat_flux"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.heatFlux"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "q"
+            ]
+          },
+          {
+            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "bodies": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "q": {
+                "$ref": "#/$defs/Q_heat_source"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.heatSource"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "bodies",
+              "q"
+            ]
+          },
+          {
             "description": "Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it\nfirst. Removing a load makes existing Results of that Step stale.",
             "type": "object",
             "properties": {
@@ -4691,7 +5117,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
             "type": "object",
             "properties": {
               "name": {
@@ -4720,6 +5146,89 @@
                 "items": {
                   "$ref": "#/$defs/Field"
                 }
+              },
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nModes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "shift": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "dt": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "tEnd": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "theta": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "outputEvery": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "dtFactor": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "amplitude": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AmplitudeSpec"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "initial": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_temperature"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "cmd": {
                 "type": "string",
@@ -6066,6 +6575,11 @@
           "z"
         ]
       },
+      "Q_temperature": {
+        "description": "A temperature with unit, e.g. \"20 degC\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "temperature"
+      },
       "Q_force": {
         "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -6076,10 +6590,20 @@
         "$ref": "#/$defs/Quantity",
         "x-dimension": "acceleration"
       },
-      "Q_temperature": {
-        "description": "A temperature with unit, e.g. \"20 degC\". Any unit of the right dimension is accepted.",
+      "Q_heat_transfer_coefficient": {
+        "description": "A heat transfer coefficient with unit, e.g. \"25 W/(m^2 K)\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
-        "x-dimension": "temperature"
+        "x-dimension": "heat_transfer_coefficient"
+      },
+      "Q_heat_flux": {
+        "description": "A heat flux with unit, e.g. \"1 kW/m^2\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "heat_flux"
+      },
+      "Q_heat_source": {
+        "description": "A heat source with unit, e.g. \"1 kW/m^3\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "heat_source"
       },
       "Procedure": {
         "description": "Analysis procedures.",
@@ -6088,6 +6612,26 @@
             "description": "Linear static equilibrium.",
             "type": "string",
             "const": "static"
+          },
+          {
+            "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
+            "type": "string",
+            "const": "modal"
+          },
+          {
+            "description": "Steady heat conduction with convection, flux and source boundaries; needs `k`.",
+            "type": "string",
+            "const": "heat-steady"
+          },
+          {
+            "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
+            "type": "string",
+            "const": "heat-transient"
+          },
+          {
+            "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
+            "type": "string",
+            "const": "explicit"
           }
         ]
       },
@@ -6103,6 +6647,66 @@
           "strain",
           "reaction",
           "temperature"
+        ]
+      },
+      "Q_time": {
+        "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "time"
+      },
+      "AmplitudeSpec": {
+        "description": "A scalar `g(t)` that scales every prescribed temperature of a transient Step.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
+        "oneOf": [
+          {
+            "description": "`amplitude · sin(2π t / period)`. NAFEMS T3's `100 sin(π t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
+            "type": "object",
+            "properties": {
+              "amplitude": {
+                "type": "number",
+                "format": "double"
+              },
+              "period": {
+                "$ref": "#/$defs/Q_time"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sine"
+              }
+            },
+            "required": [
+              "kind",
+              "amplitude",
+              "period"
+            ]
+          },
+          {
+            "description": "Piecewise-linear through the points `(t[i], value[i])`, held flat outside the table.\n`t` must be ascending and the two arrays the same length.",
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_time"
+                }
+              },
+              "value": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "table"
+              }
+            },
+            "required": [
+              "kind",
+              "t",
+              "value"
+            ]
+          }
         ]
       },
       "Solver": {
@@ -6622,6 +7226,20 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "frequencies": {
+            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            }
+          },
+          "history": {
+            "description": "One row per output time of a transient Step: when, and the range the field covered.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/HistoryRow"
+            }
+          },
           "balance": {
             "description": "|Σ reactions + Σ applied| over the largest single force in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
             "type": "number",
@@ -6722,6 +7340,26 @@
         "required": [
           "constraint",
           "total"
+        ]
+      },
+      "HistoryRow": {
+        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
+        "type": "object",
+        "properties": {
+          "time": {
+            "$ref": "#/$defs/Valued"
+          },
+          "min": {
+            "$ref": "#/$defs/Valued"
+          },
+          "max": {
+            "$ref": "#/$defs/Valued"
+          }
+        },
+        "required": [
+          "time",
+          "min",
+          "max"
         ]
       },
       "StudyReport": {
@@ -7960,6 +8598,24 @@
               "kind",
               "normal"
             ]
+          },
+          {
+            "description": "A held temperature, in kelvin: the Dirichlet boundary of a heat Step.",
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "temperature"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ]
           }
         ]
       },
@@ -8116,11 +8772,82 @@
               "value",
               "reference"
             ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "string"
+              },
+              "h": {
+                "type": "number",
+                "format": "double"
+              },
+              "t_inf": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "convection"
+              }
+            },
+            "required": [
+              "kind",
+              "on",
+              "h",
+              "t_inf"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "string"
+              },
+              "q": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "heatFlux"
+              }
+            },
+            "required": [
+              "kind",
+              "on",
+              "q"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "bodies": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "q": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "heatSource"
+              }
+            },
+            "required": [
+              "kind",
+              "bodies",
+              "q"
+            ]
           }
         ]
       },
       "Step": {
-        "description": "A Step.",
+        "description": "A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;\n`after` names the Step whose Result this one continues (plan B §2.2).",
         "type": "object",
         "properties": {
           "name": {
@@ -8146,6 +8873,80 @@
             "items": {
               "$ref": "#/$defs/Field"
             }
+          },
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nModes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "shift": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "dt": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "tEnd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "theta": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "outputEvery": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "dtFactor": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "amplitude": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Amplitude"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "initial": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         },
         "required": [
@@ -8163,6 +8964,26 @@
             "description": "Linear static equilibrium.",
             "type": "string",
             "const": "static"
+          },
+          {
+            "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
+            "type": "string",
+            "const": "modal"
+          },
+          {
+            "description": "Steady heat conduction with convection, flux and source boundaries; needs `k`.",
+            "type": "string",
+            "const": "heat-steady"
+          },
+          {
+            "description": "Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.",
+            "type": "string",
+            "const": "heat-transient"
+          },
+          {
+            "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
+            "type": "string",
+            "const": "explicit"
           }
         ]
       },
@@ -8178,6 +8999,61 @@
           "strain",
           "reaction",
           "temperature"
+        ]
+      },
+      "Amplitude": {
+        "description": "A time function scaling the prescribed temperatures of a transient Step, SI.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "amplitude": {
+                "type": "number",
+                "format": "double"
+              },
+              "period": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sine"
+              }
+            },
+            "required": [
+              "kind",
+              "amplitude",
+              "period"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "value": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "table"
+              }
+            },
+            "required": [
+              "kind",
+              "t",
+              "value"
+            ]
+          }
         ]
       },
       "MeshSettings": {
@@ -9171,6 +10047,31 @@
             ]
           },
           {
+            "description": "Hold a Set at a fixed temperature in a heat Step (the Dirichlet boundary of conduction).\nA heat Step needs either one of these or a convection boundary, or the temperature is\nonly defined up to a constant and the solve is singular. In a transient Step the value is\nmultiplied by the Step's `amplitude`, so \"100 K\" with a sine amplitude is a driven end.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "value": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "constraint.temperature"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "value"
+            ]
+          },
+          {
             "description": "Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without\nit first. Removing a constraint makes existing Results of that Step stale.",
             "type": "object",
             "properties": {
@@ -9337,6 +10238,88 @@
             ]
           },
           {
+            "description": "Newton cooling on a face Set: heat `h (T − tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "h": {
+                "$ref": "#/$defs/Q_heat_transfer_coefficient"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.convection"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "h",
+              "tInf"
+            ]
+          },
+          {
+            "description": "A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "q": {
+                "$ref": "#/$defs/Q_heat_flux"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.heatFlux"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "q"
+            ]
+          },
+          {
+            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "bodies": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "q": {
+                "$ref": "#/$defs/Q_heat_source"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.heatSource"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "bodies",
+              "q"
+            ]
+          },
+          {
             "description": "Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it\nfirst. Removing a load makes existing Results of that Step stale.",
             "type": "object",
             "properties": {
@@ -9354,7 +10337,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
             "type": "object",
             "properties": {
               "name": {
@@ -9383,6 +10366,89 @@
                 "items": {
                   "$ref": "#/$defs/Field"
                 }
+              },
+              "after": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nModes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "shift": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "dt": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "tEnd": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_time"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "theta": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "outputEvery": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "dtFactor": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "amplitude": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AmplitudeSpec"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "initial": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_temperature"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "cmd": {
                 "type": "string",
@@ -10711,6 +11777,11 @@
           }
         ]
       },
+      "Q_temperature": {
+        "description": "A temperature with unit, e.g. \"20 degC\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "temperature"
+      },
       "Q_force": {
         "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -10721,10 +11792,80 @@
         "$ref": "#/$defs/Quantity",
         "x-dimension": "acceleration"
       },
-      "Q_temperature": {
-        "description": "A temperature with unit, e.g. \"20 degC\". Any unit of the right dimension is accepted.",
+      "Q_heat_transfer_coefficient": {
+        "description": "A heat transfer coefficient with unit, e.g. \"25 W/(m^2 K)\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
-        "x-dimension": "temperature"
+        "x-dimension": "heat_transfer_coefficient"
+      },
+      "Q_heat_flux": {
+        "description": "A heat flux with unit, e.g. \"1 kW/m^2\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "heat_flux"
+      },
+      "Q_heat_source": {
+        "description": "A heat source with unit, e.g. \"1 kW/m^3\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "heat_source"
+      },
+      "Q_time": {
+        "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "time"
+      },
+      "AmplitudeSpec": {
+        "description": "A scalar `g(t)` that scales every prescribed temperature of a transient Step.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
+        "oneOf": [
+          {
+            "description": "`amplitude · sin(2π t / period)`. NAFEMS T3's `100 sin(π t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
+            "type": "object",
+            "properties": {
+              "amplitude": {
+                "type": "number",
+                "format": "double"
+              },
+              "period": {
+                "$ref": "#/$defs/Q_time"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sine"
+              }
+            },
+            "required": [
+              "kind",
+              "amplitude",
+              "period"
+            ]
+          },
+          {
+            "description": "Piecewise-linear through the points `(t[i], value[i])`, held flat outside the table.\n`t` must be ascending and the two arrays the same length.",
+            "type": "object",
+            "properties": {
+              "t": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_time"
+                }
+              },
+              "value": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "table"
+              }
+            },
+            "required": [
+              "kind",
+              "t",
+              "value"
+            ]
+          }
+        ]
       },
       "Solver": {
         "description": "Linear solver choice. `auto` picks the direct solver for small systems and the GPU\nconjugate gradient with f64 refinement for large ones when a GPU is present.",

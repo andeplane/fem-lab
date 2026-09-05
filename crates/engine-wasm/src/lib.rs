@@ -155,15 +155,15 @@ impl Engine {
 
     /// One Result field as a fresh `Float32Array`: the whole thing component-fastest, or one
     /// component when `component` is given. `step` defaults to the last solved Step and
-    /// `field` is the Query's own spelling (`displacement`, `stress`, `vonMises`, ...).
+    /// `field` is the Query's own spelling (`displacement`, `stress`, `vonMises`, ...), or
+    /// `mode:k` for the k-th mode shape of a modal Step.
     pub fn field(
         &self,
         step: Option<String>,
         field: String,
         component: Option<u8>,
     ) -> Result<js_sys::Float32Array, JsValue> {
-        let which: femlab_engine::command::Field = serde_json::from_str(&format!("\"{field}\"")).map_err(schema_err)?;
-        let data = self.inner.field(step.as_deref(), which).map_err(|e| throw(&e))?;
+        let data = self.inner.field_named(step.as_deref(), &field).map_err(|e| throw(&e))?;
         let values = match component {
             Some(c) => data.component(c as usize),
             None => data.data.clone(),

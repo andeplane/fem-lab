@@ -9,8 +9,8 @@ use crate::error::Error;
 use crate::fem::problem::Problem;
 use crate::fem::{assembly, checks, loads};
 use crate::par::Pool;
-use crate::post::{extremes, reactions_per_constraint, stress, FieldData, Per};
-use crate::procedure::{report, StepResult};
+use crate::post::{extremes, reactions_per_constraint, stress, Per};
+use crate::procedure::{report, vector_field, StepResult};
 use crate::solve::{solve, SolveOptions};
 
 /// Solve one linear static Step.
@@ -72,18 +72,15 @@ pub async fn run(
         .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
-    Ok(StepResult { fields, scalars, extremes: ex, reactions, solver, warnings: Vec::new() })
-}
-
-/// A per-node vector as three components, so a 2D Result reaches a host and a VTU writer with
-/// the same shape as a 3D one (the z component is zero).
-fn vector_field(v: &[f64], dofs_per_node: usize) -> FieldData {
-    let n = v.len() / dofs_per_node;
-    let mut data = vec![0.0; n * 3];
-    for node in 0..n {
-        for c in 0..dofs_per_node {
-            data[node * 3 + c] = v[node * dofs_per_node + c];
-        }
-    }
-    FieldData::new(Per::Node, 3, data)
+    Ok(StepResult {
+        fields,
+        scalars,
+        extremes: ex,
+        reactions,
+        frequencies: Vec::new(),
+        modes: Vec::new(),
+        history: None,
+        solver,
+        warnings: Vec::new(),
+    })
 }

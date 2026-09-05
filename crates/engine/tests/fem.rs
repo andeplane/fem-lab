@@ -4,6 +4,7 @@
 //! One binary: llvm-cov does not merge instantiations across binaries.
 
 use std::collections::BTreeMap;
+use std::f64::consts::PI;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use femlab_engine::command::Formulation;
@@ -13,6 +14,7 @@ use femlab_engine::fem::assembly::{
 };
 use femlab_engine::fem::checks;
 use femlab_engine::fem::element::{element_for, Element, ElementCtx, FaceLoad, Iso, Material};
+use femlab_engine::fem::heat::HeatLoad;
 use femlab_engine::fem::loads::{assemble_loads, face_set_area, Load, LoadTotals};
 use femlab_engine::fem::material::{
     builtin_law, check_batch, isotropic_d, plane_stress_condense, LinearElastic, MaterialBatch, MaterialLaw,
@@ -33,12 +35,12 @@ use femlab_engine::post::convergence::{observed_rate, richardson};
 use femlab_engine::post::probe::{path, probe};
 use femlab_engine::post::stress::{average_at_nodes, principal, stress_gp, von_mises};
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
-use femlab_engine::procedure::{self, Step, StepResult};
+use femlab_engine::procedure::{self, heat, Step, StepResult};
 use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
 use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
 use femlab_engine::{OnProgress, Progress};
 use femlab_geometry::mesh::{ElementKind, FaceKind};
-use femlab_geometry::{annulus, perturb_interior, Mesh, Structured};
+use femlab_geometry::{annulus, mapped, perturb_interior, Curve, Mesh, QuadBlock, Structured};
 
 // ---------------------------------------------------------------- quadrature
 
@@ -2062,6 +2064,8 @@ fn problem<'a>(
         constraints,
         loads: Vec::new(),
         temperature: None,
+        heat: false,
+        heat_loads: Vec::new(),
     }
 }
 
@@ -2705,7 +2709,7 @@ fn a_host_that_says_stop_cancels_at_every_phase() {
 }
 
 #[test]
-fn only_the_direct_solver_and_the_static_procedure_exist_so_far() {
+fn only_the_direct_solver_exists_so_far_and_every_procedure_names_itself() {
     let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![2.0] };
     for solver in [Solver::CpuPcg, Solver::GpuPcg] {
         let opts = SolveOptions { solver, ..SolveOptions::default() };
@@ -2717,17 +2721,26 @@ fn only_the_direct_solver_and_the_static_procedure_exist_so_far() {
     assert_eq!(resolve_solver(Solver::GpuPcg), Solver::GpuPcg);
     assert_eq!(solver_name(Solver::CpuDirect), "cpu-direct");
 
-    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
-    let sets = sets_of(&mesh);
-    let bodies = vec!["c".to_string()];
-    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
-    for step in [Step::Modal, Step::HeatSteady, Step::HeatTransient, Step::Explicit] {
-        let e = pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut nop))
-            .expect_err("only static so far");
-        assert_eq!(e.code, ErrorCode::Unsupported);
-        assert!(e.cause.contains(step.name()), "{}", e.cause);
-    }
-    assert_eq!(Step::Static { solver: SolveOptions::default() }.name(), "static");
+    let opts = SolveOptions::default();
+    let names: Vec<&str> = [
+        Step::Static { solver: opts },
+        Step::Modal { n_modes: 3, shift: None, solver: opts },
+        Step::HeatSteady { solver: opts },
+        Step::HeatTransient {
+            dt: 1.0,
+            t_end: 2.0,
+            theta: 0.5,
+            initial: 0.0,
+            output_every: 1,
+            amplitude: None,
+            solver: opts,
+        },
+        Step::Explicit { t_end: 1.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 },
+    ]
+    .iter()
+    .map(Step::name)
+    .collect();
+    assert_eq!(names, ["static", "modal", "heat-steady", "heat-transient", "explicit"]);
 }
 
 /// The checks pass but the material does not: a law given the wrong number of properties
@@ -3287,5 +3300,745 @@ fn a_step_result_is_bit_identical_at_one_and_many_threads() {
             assert_eq!(v.to_bits(), par.scalars[k].to_bits(), "scalar {k}");
         }
         assert_eq!(one.reactions, par.reactions);
+    }
+}
+
+// ------------------------------------------------------- heat, modal, transient, explicit
+//
+// Benchmarks E1, E2, C7, E3, B4, C6, F1 and F2 of `docs/BENCHMARKS.md`, plus the
+// well-posedness and argument checks the four new procedures own. Everything here builds a
+// `Problem` and calls `procedure::run` directly; the Command-level forms are the Journals in
+// `crates/engine/benches/cases`.
+
+/// A Material with a conductivity, a capacity and a density, for the heat and dynamics cases.
+fn conductor(k: f64, rho: f64, cp: f64) -> Material {
+    Material {
+        law: builtin_law("linear-elastic").expect("built in"),
+        props: vec![YOUNG, POISSON],
+        rho,
+        alpha: 0.0,
+        k,
+        cp,
+    }
+}
+
+/// A heat Problem over one Body with the given held temperatures and boundary loads.
+fn heat_problem<'a>(
+    mesh: &'a Mesh,
+    sets: &'a BTreeMap<String, ResolvedSet>,
+    bodies: &'a [String],
+    id: Idealisation,
+    material: Material,
+    constraints: Vec<Constraint>,
+    heat_loads: Vec<HeatLoad>,
+) -> Problem<'a> {
+    Problem {
+        mesh,
+        sets,
+        body_of_block: bodies,
+        material_of_block: vec![Some(0); mesh.blocks.len()],
+        materials: vec![material],
+        idealisation: id,
+        formulation: Formulation::Full,
+        constraints,
+        loads: Vec::new(),
+        temperature: None,
+        heat: true,
+        heat_loads,
+    }
+}
+
+/// A held temperature on a Set: the heat DOF is component 0.
+fn hold(name: &str, on: &str, value: f64) -> Constraint {
+    Constraint { name: name.into(), nodes: on.into(), dofs: [true, false, false], value }
+}
+
+fn run_step(p: &Problem<'_>, step: &Step) -> Result<StepResult, Error> {
+    pollster::block_on(procedure::run(p, step, &Pool::new(2), None, None, &mut nop))
+}
+
+fn steady() -> Step {
+    Step::HeatSteady { solver: SolveOptions::default() }
+}
+
+/// The nodal temperature of a heat Result.
+fn temperature_of(res: &StepResult) -> Vec<f64> {
+    res.fields[&Field::Temperature].component(0)
+}
+
+/// The temperature interpolated at a point.
+fn temperature_at(mesh: &Mesh, res: &StepResult, x: [f64; 3]) -> f64 {
+    probe(mesh, &res.fields[&Field::Temperature], x).expect("the point is inside the mesh").1[0]
+}
+
+/// One `Body` name, as the Problem wants it.
+fn one_body() -> Vec<String> {
+    vec!["bar".to_string()]
+}
+
+/// Benchmark E1: a bar between two fixed temperatures conducts a linear profile, exactly, for
+/// every element family — hexahedra, tetrahedra from the Kuhn split, quadrilaterals, triangles.
+#[test]
+fn a_bar_between_two_fixed_temperatures_is_linear_for_every_kind() {
+    let (t0, t1, length) = (300.0, 400.0, 1.0);
+    for kind in [ElementKind::Hex8, ElementKind::Tet4, ElementKind::Quad4, ElementKind::Tri3] {
+        let mesh = Structured { kind, n: [10, 1, 1] }.box_([length, 0.1, 0.1]);
+        let id = if kind.dim() == 3 { Idealisation::Solid3d } else { Idealisation::PlaneStrain };
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            id,
+            conductor(45.0, 7800.0, 460.0),
+            vec![hold("cold", "xmin", t0), hold("hot", "xmax", t1)],
+            Vec::new(),
+        );
+        let res = run_step(&p, &steady()).expect("a well-posed conduction problem");
+        for (node, got) in temperature_of(&res).iter().enumerate() {
+            let want = t0 + (t1 - t0) * mesh.node(node as u32)[0] / length;
+            assert!((got - want).abs() <= 1e-10 * (t1 - t0), "{kind:?} node {node}: {got} vs {want}");
+        }
+        // The heat that enters at the hot end leaves at the cold one, and the balance says so.
+        let (cold, hot) = (res.reactions[0].1[0], res.reactions[1].1[0]);
+        assert!((cold + hot).abs() <= 1e-9 * hot.abs(), "{kind:?}: {cold} + {hot}");
+    }
+}
+
+/// Benchmark E2 (Ansys VM97): a fin with convection along both faces and over its tip, against
+/// the closed-form fin with a convective tip.
+///
+/// The published fin formula is one-dimensional; the model here is the real two-dimensional
+/// slab, whose mid-plane has to conduct across the half-thickness before the film can take the
+/// heat away. That resistance keeps the fin hotter than the 1D formula, by an amount set by the
+/// Biot number `h·(t/2)/k` — 0.042 for VM97's proportions. The case therefore asserts three
+/// things: the tip is within 2 % of the 1D formula at VM97's thickness, the two meshes agree to
+/// 0.1 % so the remainder is physics rather than discretisation, and a fin of the same `mL` with
+/// a tenth of the Biot number — where the 1D formula really is the answer — lands inside 0.3 %.
+#[test]
+fn ansys_vm97_fin_matches_the_closed_form_with_a_convective_tip() {
+    let (length, thick) = (0.1016f64, 0.0254f64);
+    let coarse = fin_tip_error(length, thick, [16, 4]);
+    let fine = fin_tip_error(length, thick, [32, 8]);
+    assert!(fine <= 0.02, "tip rise off the 1D fin by {:.3} %", 100.0 * fine);
+    assert!((fine - coarse).abs() <= 1e-3, "the two meshes disagree: {coarse} and {fine}");
+    // Ten times thinner and √10 times shorter, so `mL` — and therefore the shape of the 1D
+    // answer — is unchanged and only the Biot number falls, by ten.
+    let thin = fin_tip_error(length / 10.0f64.sqrt(), 0.1 * thick, [32, 8]);
+    assert!(thin <= 0.003, "a thin fin should match the 1D formula: {:.3} %", 100.0 * thin);
+    assert!(thin * 4.0 < fine, "the gap should fall with the Biot number: {thin} against {fine}");
+}
+
+/// The relative error of the tip temperature rise of a plane fin against the 1D closed form
+/// with a convective tip: `θ(L)/θ₀ = 1 / [cosh mL + (h/mk) sinh mL]`, `m = √(2h/(k t))`.
+fn fin_tip_error(length: f64, thick: f64, n: [usize; 2]) -> f64 {
+    let (k, h, t_wall, t_inf) = (25.96f64, 85.17f64, 866.48f64, 310.93f64);
+    let m = (h * 2.0 / (k * thick)).sqrt();
+    let ratio = h / (m * k);
+    let want = (t_wall - t_inf) / (libm::cosh(m * length) + ratio * libm::sinh(m * length));
+    let mesh = Structured { kind: ElementKind::Quad8, n: [n[0], n[1], 1] }.box_([length, thick, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let film = |set: &str| HeatLoad::Convection { faces: set.into(), h, t_inf };
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(k, 7800.0, 460.0),
+        vec![hold("root", "xmin", t_wall)],
+        vec![film("xmax"), film("ymin"), film("ymax")],
+    );
+    let res = run_step(&p, &steady()).expect("a well-posed fin");
+    let tip = temperature_at(&mesh, &res, [length, 0.5 * thick, 0.0]) - t_inf;
+    (tip - want).abs() / want
+}
+
+/// Benchmark C7 (NAFEMS T4): steady conduction in a rectangle with one held edge, one
+/// insulated edge and two convecting edges. T(E) = 18.3 °C at E = (0.6, 0.2).
+#[test]
+fn nafems_t4_conduction_with_convection_reaches_eighteen_point_three_degrees() {
+    let (w, hgt) = (0.6, 1.0);
+    let (k, film, t_inf, t_hot) = (52.0, 750.0, 273.15, 373.15);
+    let want = 273.15 + 18.3;
+    let mut errors = Vec::new();
+    for n in [[6, 10], [12, 20], [24, 40]] {
+        let mesh = Structured { kind: ElementKind::Quad8, n: [n[0], n[1], 1] }.box_([w, hgt, 0.0]);
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let conv = |set: &str| HeatLoad::Convection { faces: set.into(), h: film, t_inf };
+        let p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::PlaneStrain,
+            conductor(k, 7800.0, 460.0),
+            vec![hold("ab", "ymin", t_hot)],
+            // DA (x = 0) is insulated, which needs no boundary condition at all.
+            vec![conv("xmax"), conv("ymax")],
+        );
+        let res = run_step(&p, &steady()).expect("a well-posed T4");
+        errors.push(temperature_at(&mesh, &res, [w, 0.2, 0.0]));
+    }
+    assert!((errors[1] - want).abs() <= 0.5 && (errors[2] - want).abs() <= 0.5, "T(E) = {errors:?}, want {want}");
+    // The published 18.3 is the rounded value of a converged 18.25, so the honest convergence
+    // statement is that the successive changes shrink, not that the gap to 18.3 does.
+    assert!(
+        (errors[2] - errors[1]).abs() < (errors[1] - errors[0]).abs(),
+        "the mesh sequence is not settling: {errors:?}"
+    );
+}
+
+/// A steady heat Step over a mesh whose faces convect and nothing is held is still well posed:
+/// the film is what makes `K + H` non-singular. Without either, the check names the fix.
+#[test]
+fn a_heat_step_needs_a_held_temperature_or_a_convection_boundary() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let bare = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        conductor(45.0, 7800.0, 460.0),
+        Vec::new(),
+        vec![HeatLoad::Flux { faces: "xmin".into(), q: 100.0 }],
+    );
+    let e = run_step(&bare, &steady()).expect_err("nothing holds the temperature");
+    assert_eq!(e.code, ErrorCode::ConstraintRigidModes);
+    assert!(e.cause.contains("not held anywhere"), "{}", e.cause);
+
+    // The same body with a film on the far face: a flux in, a film out, and a solvable balance.
+    let convected = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        conductor(45.0, 7800.0, 460.0),
+        Vec::new(),
+        vec![
+            HeatLoad::Flux { faces: "xmin".into(), q: 1000.0 },
+            HeatLoad::Convection { faces: "xmax".into(), h: 50.0, t_inf: 300.0 },
+        ],
+    );
+    let res = run_step(&convected, &steady()).expect("the film holds it");
+    let t = temperature_of(&res);
+    // Steady state: everything that enters at xmin leaves through the film, so the far face
+    // sits at T∞ + q A /(h A) and the near face one conduction drop above it.
+    let area = 0.01;
+    let far = 300.0 + 1000.0 * area / (50.0 * area);
+    let near = far + 1000.0 * 1.0 / 45.0;
+    let (lo, hi) = (t.iter().copied().fold(f64::INFINITY, f64::min), t.iter().copied().fold(0.0f64, f64::max));
+    assert!((lo - far).abs() <= 1e-9 * far, "far face {lo} vs {far}");
+    assert!((hi - near).abs() <= 1e-9 * near, "near face {hi} vs {near}");
+    assert_eq!(HeatLoad::Source { bodies: one_body(), q: 1.0 }.set(), None);
+    assert_eq!(HeatLoad::Flux { faces: "f".into(), q: 1.0 }.set(), Some("f"));
+    assert_eq!(HeatLoad::Convection { faces: "c".into(), h: 1.0, t_inf: 0.0 }.set(), Some("c"));
+}
+
+/// A volumetric source in a slab held at both faces gives the parabolic profile
+/// `T = T_s + q (L x − x²) / 2k`, which is the oracle for `load.heatSource`.
+#[test]
+fn a_volumetric_source_in_a_held_slab_is_parabolic() {
+    let (length, k, q, t_s) = (0.2, 45.0, 5e5, 300.0);
+    let mesh = Structured { kind: ElementKind::Hex20, n: [8, 1, 1] }.box_([length, 0.05, 0.05]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        conductor(k, 7800.0, 460.0),
+        vec![hold("left", "xmin", t_s), hold("right", "xmax", t_s)],
+        vec![HeatLoad::Source { bodies: one_body(), q }],
+    );
+    let res = run_step(&p, &steady()).expect("a well-posed slab");
+    for (node, got) in temperature_of(&res).iter().enumerate() {
+        let x = mesh.node(node as u32)[0];
+        let want = t_s + q * (length * x - x * x) / (2.0 * k);
+        assert!((got - want).abs() <= 1e-8 * (want - t_s).max(1.0), "node {node}: {got} vs {want}");
+    }
+}
+
+/// Benchmark E3 (NAFEMS T3): a bar driven by `100 sin(π t / 40)` at one end and held at zero at
+/// the other reaches 36.60 K at x = 0.08 m after 32 s. Crank–Nicolson at Δt = 0.5 s.
+///
+/// The Step runs in kelvin above the initial state, which is the same problem the published
+/// case states in °C: linear conduction is invariant under a shift of the whole temperature.
+#[test]
+fn nafems_t3_transient_reaches_thirty_six_point_six_at_thirty_two_seconds() {
+    let (t_at, dt, rows) = t3_probe(0.5, 0.5, 32.0);
+    assert!((t_at - 36.60).abs() <= 0.5, "T at 20 mm from the driven end after 32 s = {t_at}");
+    assert!((dt - 0.5).abs() < 1e-12);
+    // A history row per step, from t = 0 to t = 32 s.
+    assert_eq!(rows, 65);
+}
+
+/// The θ-method's temporal order: Crank–Nicolson is second order, backward Euler first, both
+/// measured against the same problem at a quarter of the smallest step.
+#[test]
+fn the_theta_method_converges_at_its_own_order_in_time() {
+    for (theta, expected) in [(0.5, 1.8), (1.0, 0.8)] {
+        let reference = t3_probe(theta, 0.0625, 32.0).0;
+        let steps = [1.0, 0.5, 0.25];
+        let errors: Vec<f64> = steps.iter().map(|&dt| (t3_probe(theta, dt, 32.0).0 - reference).abs()).collect();
+        let rate = observed_rate(&steps, &errors);
+        assert!(rate >= expected, "θ = {theta}: rate {rate} below {expected} ({errors:?})");
+        assert!(errors[1] < errors[0] && errors[2] < errors[1], "θ = {theta}: {errors:?}");
+    }
+}
+
+/// One NAFEMS T3 run: the temperature at x = 0.08 m at `t_end`, the step it used, and how many
+/// history rows it kept.
+fn t3_probe(theta: f64, dt: f64, t_end: f64) -> (f64, f64, usize) {
+    let length = 0.1;
+    let mesh = Structured { kind: ElementKind::Quad4, n: [20, 1, 1] }.box_([length, 0.005, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(35.0, 7200.0, 440.5),
+        // The driven face is at x = L and the held-cold one at x = 0, so the published probe
+        // "x = 0.08 m" is the point 20 mm inside the driven surface.
+        vec![hold("driven", "xmax", 100.0), hold("cold", "xmin", 0.0)],
+        Vec::new(),
+    );
+    let step = Step::HeatTransient {
+        dt,
+        t_end,
+        theta,
+        initial: 0.0,
+        output_every: 1,
+        // 100 sin(π t / 40) is a period of 80 s on a prescribed 100 K.
+        amplitude: Some(procedure::Amplitude::Sine { amplitude: 1.0, period: 80.0 }),
+        solver: SolveOptions::default(),
+    };
+    let res = run_step(&p, &step).expect("a well-posed transient");
+    let rows = res.history.as_ref().expect("a transient keeps a history").times.len();
+    (temperature_at(&mesh, &res, [0.08, 0.0025, 0.0]), res.scalars["dt"], rows)
+}
+
+/// A transient Step with no clock is a schema error naming the field, and a table amplitude
+/// interpolates, holds flat outside itself, and reduces to a constant with one row.
+#[test]
+fn a_transient_needs_a_positive_step_and_reads_its_amplitude_table() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        conductor(45.0, 7800.0, 460.0),
+        vec![hold("left", "xmin", 300.0), hold("right", "xmax", 400.0)],
+        Vec::new(),
+    );
+    let bad = Step::HeatTransient {
+        dt: 0.0,
+        t_end: 1.0,
+        theta: 0.5,
+        initial: 300.0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+    };
+    let e = run_step(&p, &bad).expect_err("a zero step");
+    assert_eq!(e.code, ErrorCode::Schema);
+
+    // A table amplitude that switches the driven end on over the first second, kept flat after.
+    let table = procedure::Amplitude::Table { t: vec![0.0, 1.0, 2.0], value: vec![0.0, 1.0, 1.0] };
+    assert_eq!(table.at(-1.0), 0.0);
+    assert!((table.at(0.5) - 0.5).abs() < 1e-15);
+    assert_eq!(table.at(9.0), 1.0);
+    let sine = procedure::Amplitude::Sine { amplitude: 2.0, period: 4.0 };
+    assert!((sine.at(1.0) - 2.0).abs() < 1e-12);
+
+    let step = Step::HeatTransient {
+        dt: 0.25,
+        t_end: 2.0,
+        theta: 1.0,
+        initial: 300.0,
+        output_every: 4,
+        amplitude: Some(table),
+        solver: SolveOptions::default(),
+    };
+    let res = run_step(&p, &step).expect("a well-posed transient");
+    let h = res.history.as_ref().expect("a history");
+    // Rows at t = 0, 1 and 2, and the driven end reaches its full value only after the ramp.
+    assert_eq!(h.times.len(), 3);
+    assert!((h.values[0][0] - 0.0).abs() < 1e-12, "the ramp starts at zero: {}", h.values[0][0]);
+    assert_eq!(res.scalars["steps"], 8.0);
+}
+
+/// Benchmark B4: the first three bending modes of a slender hex20 cantilever in one plane,
+/// against Euler–Bernoulli. The square section makes every bending mode a pair, so the modes
+/// are filtered by the direction their shape actually moves in.
+#[test]
+fn a_slender_cantilever_has_the_euler_bernoulli_bending_frequencies() {
+    let (length, side) = (1.0, 0.05);
+    let mesh = Structured { kind: ElementKind::Hex20, n: [20, 2, 2] }.box_([length, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    let step = Step::Modal { n_modes: 8, shift: None, solver: SolveOptions::default() };
+    let res = run_step(&p, &step).expect("a clamped cantilever has modes");
+    // A square section makes every bending mode a degenerate pair, and any rotation of a
+    // degenerate pair is as good an eigenvector, so the shapes cannot be split by direction.
+    // What is well defined is the pair itself: keep transverse modes and drop the second of any
+    // two frequencies within 1 % of each other, which leaves one mode per bending plane.
+    let mut in_plane: Vec<f64> = Vec::new();
+    for (f, shape) in res.frequencies.iter().zip(&res.modes) {
+        let amp = |c: usize| shape.component(c).iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        let transverse = amp(1).max(amp(2)) > 2.0 * amp(0);
+        if transverse && in_plane.last().is_none_or(|last| (f - last).abs() > 0.01 * last) {
+            in_plane.push(*f);
+        }
+    }
+    let i = side.powi(4) / 12.0;
+    let area = side * side;
+    let base = (YOUNG * i / (DENSITY * area * length.powi(4))).sqrt();
+    let wanted: Vec<f64> = [1.8751, 4.6941, 7.8548].iter().map(|b| b * b / (2.0 * PI) * base).collect();
+    assert!(in_plane.len() >= 3, "expected three bending modes in one plane, got {in_plane:?}");
+    for (i, tol) in [(0usize, 0.015), (1, 0.03), (2, 0.03)] {
+        let err = (in_plane[i] - wanted[i]).abs() / wanted[i];
+        assert!(err <= tol, "mode {} is {} Hz, want {} Hz ({:.2} %)", i + 1, in_plane[i], wanted[i], 100.0 * err);
+    }
+    // Every shape is M-normalised, so no mode is the zero vector.
+    for shape in &res.modes {
+        assert!(shape.data.iter().any(|v| v.abs() > 0.0));
+    }
+}
+
+/// Benchmark C6 (NAFEMS FV32): the first six frequencies of the cantilevered tapered membrane,
+/// on the mapped block whose corners are the published ones.
+#[test]
+fn nafems_fv32_tapered_membrane_has_the_published_frequencies() {
+    let want = [44.623, 130.03, 162.70, 246.05, 379.90, 391.44];
+    let material = Material {
+        law: builtin_law("linear-elastic").expect("built in"),
+        props: vec![200e9, 0.3],
+        rho: 8000.0,
+        alpha: 0.0,
+        k: 0.0,
+        cp: 0.0,
+    };
+    let mut worst = Vec::new();
+    for n in [[16, 8], [32, 16]] {
+        let block = QuadBlock {
+            corners: [[0.0, 0.0], [10.0, 2.0], [10.0, 3.0], [0.0, 5.0]],
+            edges: [Curve::Line, Curve::Line, Curve::Line, Curve::Line],
+            n: [n[0], n[1]],
+            grading: [1.0, 1.0],
+            tags: [None, None, None, Some("root".into())],
+        };
+        let mesh = mapped(&[block], ElementKind::Quad8).expect("one straight-edged block");
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let mut p = problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::PlaneStress { thickness: 0.05 },
+            Formulation::Full,
+            vec![fix("root", "root", [true, true, false], 0.0)],
+        );
+        p.materials = vec![material_of(&material)];
+        let step = Step::Modal { n_modes: 6, shift: None, solver: SolveOptions::default() };
+        let res = run_step(&p, &step).expect("a clamped membrane has modes");
+        let errs: Vec<f64> = res.frequencies.iter().zip(want).map(|(got, w)| (got - w).abs() / w).collect();
+        worst.push(errs.iter().fold(0.0f64, |m, e| m.max(*e)));
+    }
+    assert!(worst[0] <= 0.01 && worst[1] <= 0.01, "FV32 frequencies off by {worst:?}");
+}
+
+/// A copy of a Material, since `Material` holds a `&'static dyn MaterialLaw` and is not `Clone`.
+fn material_of(m: &Material) -> Material {
+    Material { law: m.law, props: m.props.clone(), rho: m.rho, alpha: m.alpha, k: m.k, cp: m.cp }
+}
+
+/// A completely free block has six frequencies at zero — the rigid modes — and the seventh is a
+/// real deformation. The shift is what makes `K − σM` factorisable at all.
+#[test]
+fn a_free_block_has_six_zero_frequencies() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 2, 2] }.box_([0.1, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    let step = Step::Modal { n_modes: 8, shift: None, solver: SolveOptions::default() };
+    let res = run_step(&p, &step).expect("a free body still has modes");
+    let seventh = res.frequencies[6];
+    for (i, f) in res.frequencies.iter().take(6).enumerate() {
+        assert!(*f <= 1e-6 * seventh, "rigid mode {i} is {f} Hz against {seventh} Hz");
+    }
+    assert!(seventh > 1e3, "the first deformation mode of a 100 mm steel cube: {seventh} Hz");
+    assert_eq!(res.frequencies.len(), 8);
+    // Mode 1 is also the Result's displacement field, so a VTU export shows it.
+    assert_eq!(res.fields[&Field::Displacement], res.modes[0]);
+}
+
+/// A modal Step over a Material without a density has no mass matrix, and says so instead of
+/// factorising a singular pencil.
+#[test]
+fn a_modal_step_without_a_density_names_the_missing_property() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.materials[0].rho = 0.0;
+    let step = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() };
+    let e = run_step(&p, &step).expect_err("no density, no mass");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert!(e.cause.contains("density"), "{}", e.cause);
+
+    // An explicit Step has the same problem and reports it the same way.
+    let boom = Step::Explicit { t_end: 1e-3, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &boom).expect_err("no density, no time step");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+}
+
+/// Benchmark F1: a free block given a rigid-body velocity keeps its momentum and its energy for
+/// two thousand explicit steps. `v = v₀ + ω × (x − c)` is in the null space of `K`, so a
+/// correct integrator moves it and never strains it.
+#[test]
+fn a_free_block_conserves_momentum_and_energy_under_explicit_integration() {
+    let side = 0.1;
+    let mesh = Structured { kind: ElementKind::Hex8, n: [4, 4, 4] }.box_([side, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    let (v0, omega, centre) = ([1.0, 2.0, 3.0], [0.5, -1.0, 2.0], [0.5 * side; 3]);
+    let mut v = vec![0.0; mesh.n_nodes() * 3];
+    for node in 0..mesh.n_nodes() {
+        let x = mesh.node(node as u32);
+        let r = [x[0] - centre[0], x[1] - centre[1], x[2] - centre[2]];
+        let spin =
+            [omega[1] * r[2] - omega[2] * r[1], omega[2] * r[0] - omega[0] * r[2], omega[0] * r[1] - omega[1] * r[0]];
+        for c in 0..3 {
+            v[node * 3 + c] = v0[c] + spin[c];
+        }
+    }
+    // A first, tiny run reads the critical step, so the case really is "2000 steps at 0.9 Δt".
+    let probe_step =
+        Step::Explicit { t_end: 1.0, dt_factor: 0.9, initial_velocity: Some(v.clone()), output_every: 1_000_000 };
+    let dt = match &probe_step {
+        Step::Explicit { dt_factor, .. } => *dt_factor,
+        _ => 0.0,
+    } * critical_step(&p);
+    let step = Step::Explicit { t_end: 2000.0 * dt, dt_factor: 0.9, initial_velocity: Some(v), output_every: 500 };
+    let res = run_step(&p, &step).expect("a free block integrates");
+    assert_eq!(res.scalars["steps"], 2000.0);
+    assert!(res.scalars["momentum_change"] <= 1e-6, "Δp/|p₀| = {}", res.scalars["momentum_change"]);
+    assert!(res.scalars["energy_drift"] <= 0.01, "energy drift {}", res.scalars["energy_drift"]);
+    // The momentum itself is the block's mass times v₀, which is the independent check that the
+    // conserved quantity is the right one.
+    let mass = DENSITY * side.powi(3);
+    for (c, axis) in ["x", "y", "z"].iter().enumerate() {
+        let got = res.scalars[&format!("momentum_{axis}")];
+        assert!((got - mass * v0[c]).abs() <= 1e-9 * mass * v0[c], "p{axis} = {got}, want {}", mass * v0[c]);
+    }
+    assert_eq!(res.history.as_ref().expect("a history").times.len(), 5);
+}
+
+/// The critical time step of a Problem, read off a one-step run.
+fn critical_step(p: &Problem<'_>) -> f64 {
+    let probe = Step::Explicit { t_end: 1e-12, dt_factor: 1.0, initial_velocity: None, output_every: 1 };
+    run_step(p, &probe).expect("one step").scalars["dt_crit"]
+}
+
+/// Benchmark F2: the estimated critical step really is critical. At 0.9 of it the cantilever
+/// rings for five thousand steps; at 1.25 the energy runs away and the Step says `unstable`.
+#[test]
+fn the_critical_time_step_separates_a_ringing_beam_from_a_diverging_one() {
+    let mesh = cantilever_mesh([8, 2, 2], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let dt_crit = critical_step(&p);
+    let stable =
+        Step::Explicit { t_end: 5000.0 * 0.9 * dt_crit, dt_factor: 0.9, initial_velocity: None, output_every: 1000 };
+    let res = run_step(&p, &stable).expect("0.9 Δt_crit is stable");
+    assert_eq!(res.scalars["steps"], 5000.0);
+    assert!(res.scalars["energy_max"].is_finite());
+    assert!((res.scalars["dt"] - 0.9 * dt_crit).abs() <= 1e-15 * dt_crit);
+
+    let unstable =
+        Step::Explicit { t_end: 500.0 * 1.25 * dt_crit, dt_factor: 1.25, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &unstable).expect_err("1.25 Δt_crit diverges");
+    assert_eq!(e.code, ErrorCode::ExplicitUnstable);
+    assert!(e.cause.contains("diverged at step"), "{}", e.cause);
+}
+
+/// An explicit Step with no clock is a schema error naming the field.
+#[test]
+fn an_explicit_step_needs_a_positive_end_time() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    let step = Step::Explicit { t_end: 0.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &step).expect_err("no end time");
+    assert_eq!(e.code, ErrorCode::Schema);
+}
+
+/// Every heat kernel refuses a folded element, with the same `mesh.inverted` error the elastic
+/// ones give: the Jacobian is the same routine.
+#[test]
+fn the_heat_kernels_reject_a_folded_element() {
+    let mat = conductor(45.0, 7800.0, 460.0);
+    for kind in ALL_KINDS {
+        let coords = folded(kind);
+        let n = kind.n_nodes();
+        let id = idealisations(kind).swap_remove(0);
+        let c = ctx(&coords, &mat, id, Formulation::Full);
+        let mut m = vec![0.0; n * n];
+        let mut v = vec![0.0; n];
+        let fails = [
+            femlab_engine::fem::heat::conductivity(kind, &c, &mut m).err(),
+            femlab_engine::fem::heat::capacity(kind, &c, &mut m).err(),
+            femlab_engine::fem::heat::source(kind, &c, 1.0, &mut v).err(),
+        ];
+        for e in fails {
+            let e = e.expect("a folded element must fail");
+            assert_eq!(e.code, ErrorCode::MeshInverted, "{kind:?}");
+        }
+    }
+}
+
+/// The heat and mass assemblies are called by the procedures after the checks have run, so a
+/// Problem whose blocks have no material or whose loads name nothing never reaches them; called
+/// directly they still report the Body and the Set.
+#[test]
+fn the_heat_and_mass_assemblies_report_what_the_checks_would_have_caught() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        conductor(45.0, 7800.0, 460.0),
+        vec![hold("left", "xmin", 300.0)],
+        vec![
+            HeatLoad::Source { bodies: one_body(), q: 1.0 },
+            HeatLoad::Convection { faces: "xmax".into(), h: 10.0, t_inf: 300.0 },
+        ],
+    );
+    p.material_of_block = vec![None];
+    let pat = pattern(&mesh, 1);
+    // The face loop runs first, so with a convection load it is the one that reports the Body.
+    assert_eq!(heat::assemble(&p, &pat).expect_err("no material").code, ErrorCode::ModelNoMaterial);
+    // Without one, the element loop reports it instead.
+    p.heat_loads = vec![HeatLoad::Source { bodies: one_body(), q: 1.0 }];
+    assert_eq!(heat::assemble(&p, &pat).expect_err("no material").code, ErrorCode::ModelNoMaterial);
+    assert_eq!(heat::assemble_capacity(&p, &pat).expect_err("no material").code, ErrorCode::ModelNoMaterial);
+    let e = run_step(&p, &steady()).expect_err("the checks catch it first");
+    assert_eq!(e.code, ErrorCode::ModelNoMaterial);
+    // The material is there but the convection Set is not: the face loop reports the Set.
+    p.material_of_block = vec![Some(0)];
+    p.heat_loads = vec![HeatLoad::Convection { faces: "nowhere".into(), h: 10.0, t_inf: 300.0 }];
+    assert_eq!(heat::assemble(&p, &pat).expect_err("no such Set").code, ErrorCode::SetEmpty);
+
+    // The consistent mass assembly the modal procedure uses reports the same thing.
+    let structural = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    let mut no_material = structural;
+    no_material.material_of_block = vec![None];
+    let pat3 = pattern(&mesh, 3);
+    let e =
+        femlab_engine::procedure::modal::assemble_mass(&no_material, &pat3, false).expect_err("no material, no mass");
+    assert_eq!(e.code, ErrorCode::ModelNoMaterial);
+}
+
+/// A material the checks cannot see stops a modal and an explicit Step where the elastic
+/// integral calls the law, and a shift above the first eigenvalue makes the shifted matrix
+/// indefinite, which the factorisation says out loud.
+#[test]
+fn a_material_the_checks_cannot_see_stops_the_dynamic_procedures() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let held = vec![fix("root", "xmin", [true, true, true], 0.0)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.materials[0].props = vec![YOUNG];
+    let modal = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() };
+    assert_eq!(run_step(&p, &modal).expect_err("one prop instead of two").code, ErrorCode::MaterialProps);
+    let boom = Step::Explicit { t_end: 1e-5, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    assert_eq!(run_step(&p, &boom).expect_err("one prop instead of two").code, ErrorCode::MaterialProps);
+
+    p.materials[0].props = vec![YOUNG, POISSON];
+    let shifted = Step::Modal { n_modes: 2, shift: Some(1e18), solver: SolveOptions::default() };
+    let e = run_step(&p, &shifted).expect_err("a shift far above the spectrum");
+    assert_eq!(e.code, ErrorCode::SolveNotPositiveDefinite);
+}
+
+/// A host that says stop cancels a transient, a modal and an explicit Step at their own phases.
+#[test]
+fn a_host_that_says_stop_cancels_every_new_procedure() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let held = vec![hold("left", "xmin", 300.0), hold("right", "xmax", 400.0)];
+    let hot =
+        heat_problem(&mesh, &sets, &bodies, Idealisation::Solid3d, conductor(45.0, 7800.0, 460.0), held, Vec::new());
+    let solid = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    let transient = Step::HeatTransient {
+        dt: 1.0,
+        t_end: 4.0,
+        theta: 0.5,
+        initial: 300.0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+    };
+    let steps: Vec<(&Problem<'_>, Step)> = vec![
+        (&hot, steady()),
+        (&hot, transient),
+        (&solid, Step::Modal { n_modes: 2, shift: Some(-1.0), solver: SolveOptions::default() }),
+        (&solid, Step::Explicit { t_end: 1e-5, dt_factor: 0.9, initial_velocity: None, output_every: 1 }),
+    ];
+    for (p, step) in steps {
+        for at in 0..3 {
+            let mut go = cancel_on(at);
+            let r = pollster::block_on(procedure::run(p, &step, &Pool::new(2), None, None, &mut go));
+            if let Err(e) = r {
+                assert_eq!(e.code, ErrorCode::Cancelled, "{}", e.cause);
+            }
+        }
     }
 }

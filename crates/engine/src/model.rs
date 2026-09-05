@@ -96,9 +96,20 @@ pub struct Material {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConstraintKind {
-    Fix { dofs: Vec<Dof> },
-    Prescribe { dof: Dof, value: f64 },
-    Symmetry { normal: Axis },
+    Fix {
+        dofs: Vec<Dof>,
+    },
+    Prescribe {
+        dof: Dof,
+        value: f64,
+    },
+    Symmetry {
+        normal: Axis,
+    },
+    /// A held temperature, in kelvin: the Dirichlet boundary of a heat Step.
+    Temperature {
+        value: f64,
+    },
 }
 
 /// A Constraint on a Set.
@@ -120,6 +131,9 @@ pub enum LoadKind {
     Force { on: String, total: [f64; 3] },
     Gravity { g: [f64; 3] },
     Temperature { bodies: Vec<String>, value: f64, reference: f64 },
+    Convection { on: String, h: f64, t_inf: f64 },
+    HeatFlux { on: String, q: f64 },
+    HeatSource { bodies: Vec<String>, q: f64 },
 }
 
 /// A Load.
@@ -135,13 +149,26 @@ impl LoadKind {
     /// The Set this load acts on, if any.
     pub fn set(&self) -> Option<&str> {
         match self {
-            LoadKind::Pressure { on, .. } | LoadKind::Traction { on, .. } | LoadKind::Force { on, .. } => Some(on),
-            LoadKind::Gravity { .. } | LoadKind::Temperature { .. } => None,
+            LoadKind::Pressure { on, .. }
+            | LoadKind::Traction { on, .. }
+            | LoadKind::Force { on, .. }
+            | LoadKind::Convection { on, .. }
+            | LoadKind::HeatFlux { on, .. } => Some(on),
+            LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => None,
         }
     }
 }
 
-/// A Step.
+/// A time function scaling the prescribed temperatures of a transient Step, SI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Amplitude {
+    Sine { amplitude: f64, period: f64 },
+    Table { t: Vec<f64>, value: Vec<f64> },
+}
+
+/// A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
+/// `after` names the Step whose Result this one continues (plan B §2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Step {
@@ -150,6 +177,26 @@ pub struct Step {
     pub constraints: Vec<String>,
     pub loads: Vec<String>,
     pub output: Vec<Field>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n_modes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shift: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t_end: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theta: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_every: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt_factor: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amplitude: Option<Amplitude>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial: Option<f64>,
 }
 
 /// Mesher settings, SI.
@@ -390,6 +437,16 @@ mod tests {
             constraints: vec![],
             loads: vec![],
             output: vec![],
+            after: None,
+            n_modes: None,
+            shift: None,
+            dt: None,
+            t_end: None,
+            theta: None,
+            output_every: None,
+            dt_factor: None,
+            amplitude: None,
+            initial: None,
         });
         m.sets.push(NamedSet {
             name: "top".into(),

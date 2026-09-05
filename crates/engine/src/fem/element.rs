@@ -100,12 +100,12 @@ const PLANE: [usize; 3] = [0, 1, 3];
 /// `det J` at or below this fraction of the reference measure is a folded element.
 const DET_TOL: f64 = 1e-14;
 
-fn inverted() -> Error {
+pub(crate) fn inverted() -> Error {
     Error::new(ErrorCode::MeshInverted, "the element is folded: det J ≤ 0 at a Gauss point").at("element")
 }
 
 /// The idealisation's weight factor at a point: thickness, 1, or `2π r`.
-fn scale_at(id: &Idealisation, x: [f64; 3]) -> f64 {
+pub(crate) fn scale_at(id: &Idealisation, x: [f64; 3]) -> f64 {
     match id {
         Idealisation::Solid3d | Idealisation::PlaneStrain => 1.0,
         Idealisation::PlaneStress { thickness } => *thickness,
@@ -130,7 +130,7 @@ fn det3(j: &[[f64; 3]; 3]) -> f64 {
 
 /// `J⁻¹` and `det J` of `J_ij = Σ_a x_ai dN_a/dξ_j`, or `None` when the element is folded there.
 /// In 2D the unused row and column are the identity, so the 3×3 formulas give the 2×2 answer.
-fn jac_inv(dim: usize, coords: &[f64], dn: &[[f64; 3]], v_ref: f64) -> Option<([[f64; 3]; 3], f64)> {
+pub(crate) fn jac_inv(dim: usize, coords: &[f64], dn: &[[f64; 3]], v_ref: f64) -> Option<([[f64; 3]; 3], f64)> {
     let mut j = [[0.0f64; 3]; 3];
     for (a, d) in dn.iter().enumerate() {
         for (i, ji) in j.iter_mut().enumerate().take(dim) {
@@ -159,7 +159,7 @@ fn jac_inv(dim: usize, coords: &[f64], dn: &[[f64; 3]], v_ref: f64) -> Option<([
 }
 
 /// `∂N_a/∂x_i = Σ_j (dN_a/dξ_j)(J⁻¹)_ji`.
-fn grad_of(d: &[f64; 3], inv: &[[f64; 3]; 3], dim: usize) -> [f64; 3] {
+pub(crate) fn grad_of(d: &[f64; 3], inv: &[[f64; 3]; 3], dim: usize) -> [f64; 3] {
     let mut g = [0.0; 3];
     for (i, gi) in g.iter_mut().enumerate().take(dim) {
         *gi = (0..dim).map(|k| d[k] * inv[k][i]).sum();

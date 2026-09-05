@@ -12,6 +12,7 @@ use femlab_geometry::Mesh;
 use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::resolve;
 use crate::fem::element::min_det_j;
+use crate::fem::heat::HeatLoad;
 use crate::fem::loads::Load;
 use crate::fem::problem::{empty_set, no_material, Problem};
 use crate::model::Idealisation;
@@ -26,8 +27,27 @@ pub fn all(p: &Problem<'_>) -> Vec<Error> {
     out.extend(empty_sets(p));
     out.extend(inverted(p.mesh));
     out.extend(resolve(p).err());
-    out.extend(rigid_modes(p));
+    out.extend(if p.heat { unheld_temperature(p) } else { rigid_modes(p) });
     out
+}
+
+/// A heat Problem with neither a fixed temperature nor a convection boundary: `(K + H) T = f`
+/// is singular, because adding a constant to `T` changes nothing. This is the heat analogue of
+/// the rigid-body check (plan A §7): "no Dirichlet and no convection".
+fn unheld_temperature(p: &Problem<'_>) -> Option<Error> {
+    let held = p.constraints.iter().any(|c| c.dofs[0]);
+    let convected = p.heat_loads.iter().any(|l| matches!(l, HeatLoad::Convection { .. }));
+    if held || convected {
+        return None;
+    }
+    Some(
+        Error::new(
+            ErrorCode::ConstraintRigidModes,
+            "the temperature is not held anywhere: the Step has no fixed temperature and no convection boundary",
+        )
+        .at("constraints")
+        .suggest("constraint.temperature on a Set, or load.convection on a face"),
+    )
 }
 
 /// A Body whose blocks have no material: nothing can be integrated over it.
@@ -45,7 +65,12 @@ fn missing_materials(p: &Problem<'_>) -> Vec<Error> {
 
 /// A Constraint or Load on a Set that resolved to nothing does nothing, silently.
 fn empty_sets(p: &Problem<'_>) -> Vec<Error> {
-    let named = p.constraints.iter().map(|c| c.nodes.as_str()).chain(p.loads.iter().filter_map(Load::set));
+    let named = p
+        .constraints
+        .iter()
+        .map(|c| c.nodes.as_str())
+        .chain(p.loads.iter().filter_map(Load::set))
+        .chain(p.heat_loads.iter().filter_map(HeatLoad::set));
     named.filter(|n| p.sets.get(*n).is_none_or(|s| s.nodes.is_empty())).map(empty_set).collect()
 }
 

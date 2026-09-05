@@ -660,6 +660,8 @@ impl ResolvedUnits {
             d if d == Time::DIM => self.time.as_str(),
             d if d == Temperature::DIM => self.temperature.as_str(),
             d if d == Acceleration::DIM => self.acceleration.as_str(),
+            // Frequencies are quoted in Hz by everyone, so there is no display unit to choose.
+            d if d == Frequency::DIM => return (value_si, "Hz".to_string()),
             Dimension([3, 0, 0, 0]) => {
                 return (value_si / powi(len_factor(&self.length), 3), format!("{}^3", self.length))
             }
@@ -835,7 +837,8 @@ mod tests {
         let (v, u) = r.fmt(1e-6, Dimension([2, 0, 0, 0]));
         assert!((v - 1.0).abs() < 1e-9);
         assert_eq!(u, "mm^2");
-        assert_eq!(r.fmt(3.0, Frequency::DIM), (3.0, "SI".to_string()));
+        assert_eq!(r.fmt(3.0, Frequency::DIM), (3.0, "Hz".to_string()));
+        assert_eq!(r.fmt(3.0, ThermalExpansion::DIM), (3.0, "SI".to_string()));
         let bad = UnitSet { stress: Some("mm".into()), ..Default::default() };
         let e = bad.validate().unwrap_err();
         assert_eq!(e.code, ErrorCode::UnitDimension);
