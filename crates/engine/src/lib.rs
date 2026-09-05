@@ -8,6 +8,7 @@
 pub mod command;
 pub mod engine;
 pub mod error;
+pub mod fem;
 pub mod hash;
 pub mod journal;
 pub mod model;
