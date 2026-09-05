@@ -3,14 +3,19 @@
 //! isoparametric solid against rigid modes, patch tests, closed-form totals and beam theory.
 //! One binary: llvm-cov does not merge instantiations across binaries.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use femlab_engine::command::Formulation;
+use femlab_engine::fem::assembly::{
+    assemble_stiffness, expand, pattern, reactions, reduce, resolve, Assembled, Csr, Pattern,
+};
 use femlab_engine::fem::element::{element_for, Element, ElementCtx, FaceLoad, Iso, Material};
 use femlab_engine::fem::material::{
     builtin_law, check_batch, isotropic_d, plane_stress_condense, LinearElastic, MaterialBatch, MaterialLaw,
     MaterialOut, VOIGT,
 };
+use femlab_engine::fem::problem::{Constraint, Problem};
 use femlab_engine::fem::quadrature::{
     gauss_legendre, Rule, HEX_2X2X2, HEX_3X3X3, QUAD_2X2, QUAD_3X3, TET_1, TET_4, TRI_1, TRI_3,
 };
@@ -20,8 +25,10 @@ use femlab_engine::fem::shape::{
     LINE_2, LINE_3,
 };
 use femlab_engine::model::Idealisation;
-use femlab_engine::{Error, ErrorCode};
+use femlab_engine::par::Pool;
+use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
 use femlab_geometry::mesh::{ElementKind, FaceKind};
+use femlab_geometry::{Mesh, Structured};
 
 // ---------------------------------------------------------------- quadrature
 
@@ -1393,4 +1400,311 @@ fn a_material_with_the_wrong_props_fails_every_integral_that_calls_the_law() {
         assert!(el.mass(&c, &mut k, true).is_ok());
         assert!(el.body_load(&c, &|_x| [0.0; 3], &mut v).is_ok());
     }
+}
+
+// ---------------------------------------------------------------- assembly
+
+/// Every Set the structured builder names, as the engine's resolved Sets: a face Set carries
+/// the nodes of its faces, which is what a Constraint on `xmin` wants.
+fn sets_of(mesh: &Mesh) -> BTreeMap<String, ResolvedSet> {
+    let mut sets = BTreeMap::new();
+    for (name, faces) in &mesh.face_sets {
+        let mut nodes: Vec<u32> = faces.iter().flat_map(|&f| mesh.face_nodes(f)).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        sets.insert(name.clone(), ResolvedSet { kind: SetKind::Face, faces: faces.clone(), nodes, elems: Vec::new() });
+    }
+    for (name, elems) in &mesh.elem_sets {
+        let mut nodes: Vec<u32> = elems.iter().flat_map(|&e| mesh.elem_nodes(e).iter().copied()).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        sets.insert(
+            name.clone(),
+            ResolvedSet { kind: SetKind::Element, faces: Vec::new(), nodes, elems: elems.clone() },
+        );
+    }
+    sets
+}
+
+/// A Problem over one Body of steel with the given Constraints.
+fn problem<'a>(
+    mesh: &'a Mesh,
+    sets: &'a BTreeMap<String, ResolvedSet>,
+    bodies: &'a [String],
+    id: Idealisation,
+    form: Formulation,
+    constraints: Vec<Constraint>,
+) -> Problem<'a> {
+    Problem {
+        mesh,
+        sets,
+        body_of_block: bodies,
+        material_of_block: vec![Some(0); mesh.blocks.len()],
+        materials: vec![steel()],
+        idealisation: id,
+        formulation: form,
+        constraints,
+        temperature: None,
+    }
+}
+
+fn fix(name: &str, on: &str, dofs: [bool; 3], value: f64) -> Constraint {
+    Constraint { name: name.into(), nodes: on.into(), dofs, value }
+}
+
+/// The `[8,2,2]` hex8 cantilever of Benchmark A4: 1 m × 0.1 m × 0.1 m of steel.
+fn cantilever_mesh(n: [usize; 3], kind: ElementKind) -> Mesh {
+    Structured { kind, n }.box_([1.0, 0.1, 0.1])
+}
+
+fn assemble(p: &Problem<'_>) -> (Pattern, Assembled) {
+    let pat = pattern(p.mesh, p.dofs_per_node());
+    let a = assemble_stiffness(p, &pat).expect("steel on a box assembles");
+    (pat, a)
+}
+
+fn lcg_vec(n: usize, seed: u64) -> Vec<f64> {
+    let mut r = Lcg(seed);
+    (0..n).map(|_| 2.0 * r.unit() - 1.0).collect()
+}
+
+#[test]
+fn the_pattern_is_structurally_symmetric_and_holds_every_coupling() {
+    for kind in [ElementKind::Hex8, ElementKind::Tet4, ElementKind::Quad4] {
+        let mesh = cantilever_mesh([3, 2, 2], kind);
+        let dpn = mesh.dim;
+        let pat = pattern(&mesh, dpn);
+        let csr = &pat.csr;
+        assert_eq!(csr.n, mesh.n_nodes() * dpn);
+        assert_eq!(csr.nnz(), csr.col_idx.len());
+        assert_eq!(csr.vals.len(), csr.nnz());
+        for r in 0..csr.n {
+            let row = &csr.col_idx[csr.row_ptr[r] as usize..csr.row_ptr[r + 1] as usize];
+            assert!(row.windows(2).all(|w| w[0] < w[1]), "row {r} is not sorted and unique");
+            for &c in row {
+                let other = &csr.col_idx[csr.row_ptr[c as usize] as usize..csr.row_ptr[c as usize + 1] as usize];
+                assert!(other.binary_search(&(r as u32)).is_ok(), "({r}, {c}) has no transpose");
+            }
+        }
+        // every element coupling has a distinct slot, and every slot is inside the row it names
+        for e in 0..mesh.n_elems() as u32 {
+            let nd = mesh.kind_of(e).n_nodes() * dpn;
+            let slot = &pat.slot[pat.slot_ptr[e as usize] as usize..pat.slot_ptr[e as usize + 1] as usize];
+            assert_eq!(slot.len(), nd * nd);
+            let conn = mesh.elem_nodes(e);
+            for i in 0..nd {
+                let row = conn[i / dpn] as usize * dpn + i % dpn;
+                for j in 0..nd {
+                    let at = slot[i * nd + j] as usize;
+                    assert!(at >= csr.row_ptr[row] as usize && at < csr.row_ptr[row + 1] as usize);
+                    assert_eq!(csr.col_idx[at] as usize, conn[j / dpn] as usize * dpn + j % dpn);
+                }
+            }
+        }
+    }
+}
+
+/// A4: `⟨K u, v⟩ = ⟨u, K v⟩` on the assembled operator, and `diag` agrees with the rows.
+#[test]
+fn the_assembled_operator_is_symmetric_and_its_diagonal_is_positive() {
+    let mesh = cantilever_mesh([8, 2, 2], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::IncompatibleModes, vec![]);
+    let (_, a) = assemble(&p);
+    assert!(a.min_det_j > 0.0);
+    assert_eq!(a.f_thermal.iter().filter(|x| **x != 0.0).count(), 0, "no temperature, no thermal load");
+    let n = a.k.n;
+    let mut ku = vec![0.0; n];
+    let mut kv = vec![0.0; n];
+    for pair in 0..5 {
+        let u = lcg_vec(n, 11 + pair);
+        let v = lcg_vec(n, 101 + pair);
+        a.k.spmv(&u, &mut ku);
+        a.k.spmv(&v, &mut kv);
+        let left: f64 = ku.iter().zip(&v).map(|(a, b)| a * b).sum();
+        let right: f64 = kv.iter().zip(&u).map(|(a, b)| a * b).sum();
+        assert!((left - right).abs() <= 1e-12 * left.abs().max(1.0), "{left} vs {right}");
+    }
+    let diag = a.k.diag();
+    assert_eq!(diag.len(), n);
+    assert!(diag.iter().all(|&d| d > 0.0), "a stiffness diagonal is positive");
+    for (r, d) in diag.iter().enumerate() {
+        let row = &a.k.col_idx[a.k.row_ptr[r] as usize..a.k.row_ptr[r + 1] as usize];
+        let at = row.binary_search(&(r as u32)).expect("the pattern has a diagonal");
+        assert_eq!(*d, a.k.vals[a.k.row_ptr[r] as usize + at]);
+    }
+    // a matrix without a diagonal entry reports zero there
+    let empty = Csr { n: 2, row_ptr: vec![0, 0, 0], col_idx: vec![], vals: vec![] };
+    assert_eq!(empty.diag(), vec![0.0, 0.0]);
+}
+
+/// A8, the numerics half: the same assembly at 1 and N threads, bit for bit.
+#[test]
+fn assembly_is_bit_identical_at_one_and_many_threads() {
+    let mesh = cantilever_mesh([6, 3, 3], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::IncompatibleModes, vec![]);
+    let many = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(2);
+    let one = Pool::new(1).install(|| assemble(&p).1.k.vals);
+    let par = Pool::new(many).install(|| assemble(&p).1.k.vals);
+    assert_eq!(one.len(), par.len());
+    let differing = one.iter().zip(&par).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
+    assert_eq!(differing, 0, "{differing} of {} values differ at {many} threads", one.len());
+}
+
+/// Reduce, expand and the reactions on a bar pulled by a prescribed end displacement, against
+/// the closed form `σ = E δ / L`, `R = σ A`.
+#[test]
+fn reduce_expand_and_reactions_recover_the_uniaxial_bar() {
+    let mesh = cantilever_mesh([4, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let delta = 1e-4;
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::IncompatibleModes,
+        vec![
+            fix("root", "xmin", [true, false, false], 0.0),
+            fix("sym_y", "ymin", [false, true, false], 0.0),
+            fix("sym_z", "zmin", [false, false, true], 0.0),
+            fix("pull", "xmax", [true, false, false], delta),
+        ],
+    );
+    let (_, a) = assemble(&p);
+    let rc = resolve(&p).expect("no conflict");
+    assert_eq!(rc.fixed.len(), rc.owner.len());
+    let f = vec![0.0; a.k.n];
+    let red = reduce(&a.k, &f, &rc);
+    assert_eq!(red.free.len() + red.fixed.len(), a.k.n);
+    assert_eq!(red.k_ff.n, red.free.len());
+    assert!(red.f_f.iter().any(|x| *x != 0.0), "the prescribed end loads the free rows");
+    // solve K_ff u_f = f_f by dense Cholesky and check the bar's uniform strain
+    let mut dense = vec![0.0; red.k_ff.n * red.k_ff.n];
+    for r in 0..red.k_ff.n {
+        for e in red.k_ff.row_ptr[r] as usize..red.k_ff.row_ptr[r + 1] as usize {
+            dense[r * red.k_ff.n + red.k_ff.col_idx[e] as usize] = red.k_ff.vals[e];
+        }
+    }
+    let u_f = spd_solve(&dense, red.k_ff.n, &red.f_f);
+    let u = expand(&red, &u_f);
+    // the exact constant-strain answer: u = (delta x, -nu delta y, -nu delta z)
+    for node in 0..mesh.n_nodes() {
+        let x = mesh.node(node as u32);
+        let want = [delta * x[0], -POISSON * delta * x[1], -POISSON * delta * x[2]];
+        for c in 0..3 {
+            assert!((u[3 * node + c] - want[c]).abs() <= 1e-9 * delta, "node {node} component {c}");
+        }
+    }
+    let r = reactions(&a.k, &u, &f, &red);
+    let total: f64 = red.fixed.iter().map(|&d| if d % 3 == 0 { r[d as usize] } else { 0.0 }).sum();
+    assert!(total.abs() <= 1e-9 * (YOUNG * delta * 0.01), "reactions cancel: {total}");
+    let root: f64 = sets["xmin"].nodes.iter().map(|&n| r[3 * n as usize]).sum();
+    let expected = -YOUNG * delta / 1.0 * 0.01;
+    assert!((root - expected).abs() <= 1e-8 * expected.abs(), "root reaction {root} vs {expected}");
+    // every unconstrained DOF carries no reaction
+    assert!(red.free.iter().all(|&d| r[d as usize] == 0.0));
+}
+
+#[test]
+fn two_constraints_that_disagree_on_one_dof_are_a_conflict() {
+    let mesh = cantilever_mesh([2, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let same = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("a", "xmin", [true, false, false], 0.0), fix("b", "xmin", [true, true, false], 0.0)],
+    );
+    assert!(resolve(&same).is_ok(), "the same value twice is not a conflict");
+    let clash = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("a", "xmin", [true, false, false], 0.0), fix("b", "xmin", [true, false, false], 1e-3)],
+    );
+    let e = resolve(&clash).expect_err("two values on one DOF");
+    assert_eq!(e.code, ErrorCode::ConstraintConflict);
+    assert!(e.cause.contains("'a' and 'b'") && e.cause.contains("ux"), "{}", e.cause);
+    assert_eq!(e.where_.as_deref(), Some("constraint 'b'"));
+    let missing = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("a", "nowhere", [true, false, false], 0.0)],
+    );
+    let e = resolve(&missing).expect_err("an unknown set");
+    assert_eq!(e.code, ErrorCode::SetEmpty);
+}
+
+#[test]
+fn a_block_without_a_material_names_its_body_and_a_temperature_reaches_the_element() {
+    let mesh = cantilever_mesh([2, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, vec![]);
+    p.material_of_block = vec![None];
+    let e = p.material_of(0).err().expect("no material");
+    assert_eq!(e.code, ErrorCode::ModelNoMaterial);
+    assert_eq!(e.where_.as_deref(), Some("body 'beam'"));
+    let pat = pattern(&mesh, 3);
+    assert_eq!(assemble_stiffness(&p, &pat).expect_err("no material").code, ErrorCode::ModelNoMaterial);
+
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, vec![]);
+    let dt = 80.0;
+    p.temperature = Some((vec![dt; mesh.n_nodes()], 0.0));
+    let mut t = vec![0.0; 8];
+    p.gather_temperature(0, &mut t);
+    assert_eq!(t, vec![dt; 8]);
+    let coords = vec![0.0; 24];
+    assert_eq!(p.ctx(0, &coords, &t).expect("material").t_ref, 0.0);
+    let a = assemble_stiffness(&p, &pat).expect("assembles with a temperature");
+    // free thermal expansion: Σ f_thermal balances over the body (no net force)
+    for c in 0..3 {
+        let net: f64 = (0..mesh.n_nodes()).map(|n| a.f_thermal[3 * n + c]).sum();
+        assert!(net.abs() <= 1e-6, "component {c} of the thermal load nets {net}");
+    }
+    assert!(a.f_thermal.iter().any(|x| x.abs() > 1.0), "and it is not all zero");
+}
+
+#[test]
+fn a_folded_element_stops_assembly_and_names_itself() {
+    let mut mesh = cantilever_mesh([2, 1, 1], ElementKind::Hex8);
+    // mirror the second element's far face back through the first: det J goes negative
+    let far: Vec<u32> = mesh.node_sets["xmax"].clone();
+    for n in far {
+        mesh.coords[3 * n as usize] = -1.0;
+    }
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, vec![]);
+    let pat = pattern(&mesh, 3);
+    let e = assemble_stiffness(&p, &pat).expect_err("a folded element");
+    assert_eq!(e.code, ErrorCode::MeshInverted);
+    assert_eq!(e.where_.as_deref(), Some("element 1"));
+}
+
+/// The chunk length falls with the element size and never below one element.
+#[test]
+fn the_assembly_chunk_shrinks_with_the_element_and_the_faer_view_is_the_same_arrays() {
+    let mesh = cantilever_mesh([2, 2, 2], ElementKind::Hex20);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, vec![]);
+    let (_, a) = assemble(&p);
+    let f = a.k.as_faer();
+    assert_eq!(f.nrows(), a.k.n);
+    assert_eq!(f.ncols(), a.k.n);
+    assert_eq!(f.val().len(), a.k.nnz());
 }
