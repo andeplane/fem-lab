@@ -5,6 +5,28 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod predicate;
+pub mod shape;
+pub mod sketch;
+pub mod solid;
+
+pub use predicate::{FacePredicate, RegionPredicate};
+pub use shape::{Affine3, Shape};
+pub use sketch::{Segment, Sketch};
+pub use solid::{Solid, TriMesh};
+
+/// A geometry failure with a one-line, user-readable cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeomError(pub String);
+
+impl std::fmt::Display for GeomError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for GeomError {}
+
 /// Crate version, for hosts that report it.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -13,7 +35,8 @@ pub fn version() -> &'static str {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn version_is_semver() {
+    fn version_is_semver_and_error_displays() {
         assert_eq!(super::version().split('.').count(), 3);
+        assert_eq!(super::GeomError("x".into()).to_string(), "x");
     }
 }
