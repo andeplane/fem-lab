@@ -7,6 +7,7 @@ import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { devApiKeys } from './dev-keys';
 import { appHostCommands, makeHostContext, type ViewerRef } from './host';
+import { ResultsView } from './results';
 import { ScriptHost } from './script-host';
 import { Store } from './store';
 import { App } from './ui/App';
@@ -46,7 +47,11 @@ async function boot(): Promise<void> {
     (p) => late.query(p as { query: string }),
   );
 
-  const ctx = makeHostContext(store, transport, viewer, host, scripts);
+  const results = new ResultsView(store, transport, viewer);
+  const ctx = makeHostContext(store, transport, viewer, host, scripts, results);
+  // One sink is enough: the transport runs one Command at a time, so `Solving n %` can only
+  // ever be about the Command the person is waiting for.
+  transport.onProgress((p) => store.set({ progress: { phase: p.phase, fraction: p.fraction ?? 0 } }));
   const refresh = async (): Promise<void> => {
     const model = (await transport.query({ query: 'query.model' })) as never;
     const journal = (await transport.query({ query: 'query.journal' })) as never;
@@ -54,6 +59,7 @@ async function boot(): Promise<void> {
     const objects = ((await transport.query({ query: 'query.objects' })) as { objects: never[] }).objects;
     store.set({ model, journal, script, objects, revision: (model as { revision: number }).revision });
     viewer.current?.setSurface(await transport.surface());
+    await results.refresh();
   };
   const registry = new Registry({
     schema: schema as unknown as EngineSchema,
@@ -64,18 +70,26 @@ async function boot(): Promise<void> {
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
   const dispatch: Registry['dispatch'] = async (cmd) => {
     store.set({ lastError: null });
+    // A long Command owns the Solve button and the solving card until it settles either way.
+    const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
+    if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
       const ack = await registry.dispatch(cmd);
       store.log('command', cmd.cmd);
-      if (registry.describe(cmd.cmd).provider === 'engine') {
+      // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
+      // journals like any other, so the Journal has to be re-read after it too.
+      if (registry.describe(cmd.cmd).provider === 'engine' || cmd.cmd === 'file.export') {
         const { seq } = ack as { seq?: number };
         if (typeof seq === 'number' && seq >= 0) store.set({ journalWho: { ...store.state.journalWho, [seq]: { who: store.state.source, at: Date.now() } } });
         await refresh();
       }
+      await results.onAck(ack);
       return ack;
     } catch (e) {
       store.fail(e);
       throw e;
+    } finally {
+      if (long) store.set({ solving: null, progress: null });
     }
   };
   const query: Registry['query'] = (q) => registry.query(q);

@@ -4,8 +4,10 @@
 import type { JournalEntry } from '@femlab/registry';
 import type { Store, Tab, UiState } from '../store';
 import { TABS } from '../store';
+import { Checks, Results } from './Results';
+import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
-import { blockers, commandLine } from './schema';
+import { commandLine } from './schema';
 
 const argText = (cmd: Record<string, unknown>): string => {
   const { cmd: _name, ...rest } = cmd;
@@ -24,7 +26,9 @@ export function solveBoundary(entries: JournalEntry[]): number {
 
 function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const entries = s.journal?.entries ?? [];
-  const boundary = solveBoundary(entries);
+  // Rows after the solve are only "stale" once the engine says the Result is: an export or a
+  // camera move after a solve changes nothing the Result depends on.
+  const boundary = s.result?.stale === true ? solveBoundary(entries) : -1;
   return (
     <div class="rows">
       {entries.map((e) => {
@@ -96,59 +100,11 @@ function Script({ s, store, dispatch }: { s: UiState; store: Store; dispatch: Di
   );
 }
 
-function Checks({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
-  const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0);
-  return (
-    <div class="checks">
-      <div class="section-label">Well-posedness</div>
-      {list.length === 0 ? (
-        <div class="surface pass">
-          <span>✓</span>
-          <span>Nothing blocks a solve: every Body has a Material, the Model is held, loaded and has a Step.</span>
-        </div>
-      ) : null}
-      {list.map((b) => (
-        <div key={b.code} class="check-row">
-          <span class="mono code">{b.code}</span>
-          <span class="check-text">{b.text}</span>
-          {b.fixCmd ? (
-            <Cmd dispatch={dispatch} cmd="form.open" class="chip-add" args={{ command: b.fixCmd }}>
-              {b.fixLabel}
-            </Cmd>
-          ) : null}
-        </div>
-      ))}
-      <div class="section-label">Mesh quality · cost · assumption log</div>
-      <div class="empty-note">Element quality, the DOF and memory estimate and every default the solver assumed appear here once a Mesh exists and query.cost has run.</div>
-    </div>
-  );
-}
-
-function Results({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
-  const next = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0)[0];
-  return (
-    <div class="checks">
-      <div class="empty-note">
-        No Result yet. Extremes, reactions with the balance check, the code utilisations and the convergence study appear here the moment a Step finishes.
-      </div>
-      {next?.fixCmd ? (
-        <Cmd dispatch={dispatch} cmd="form.open" class="chip-add" args={{ command: next.fixCmd }}>
-          {next.fixLabel}
-        </Cmd>
-      ) : (
-        <Cmd dispatch={dispatch} cmd="solve.run" class="chip-add" args={{ step: s.model?.steps[0]?.name ?? '' }}>
-          solve.run
-        </Cmd>
-      )}
-    </div>
-  );
-}
-
-export function Bottom({ s, store, dispatch }: { s: UiState; store: Store; dispatch: Dispatch }) {
+export function Bottom({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
   const counts: Record<Tab, string> = {
     journal: String(s.journal?.entries.length ?? 0),
     script: 'ts',
-    results: '—',
+    results: s.result ? (s.result.stale ? 'stale' : String(s.result.extremes.length)) : '—',
     checks: String((s.model?.warnings.length ?? 0) || 'ok'),
     console: String(s.console.length),
   };
@@ -172,8 +128,8 @@ export function Bottom({ s, store, dispatch }: { s: UiState; store: Store; dispa
       <div class="bottom-body">
         {s.tab === 'journal' ? <Journal s={s} dispatch={dispatch} /> : null}
         {s.tab === 'script' ? <Script s={s} store={store} dispatch={dispatch} /> : null}
-        {s.tab === 'results' ? <Results s={s} dispatch={dispatch} /> : null}
-        {s.tab === 'checks' ? <Checks s={s} dispatch={dispatch} /> : null}
+        {s.tab === 'results' ? <Results s={s} dispatch={dispatch} query={query} /> : null}
+        {s.tab === 'checks' ? <Checks s={s} dispatch={dispatch} query={query} /> : null}
         {s.tab === 'console' ? (
           <div class="rows">
             {s.console.map((l, i) => (

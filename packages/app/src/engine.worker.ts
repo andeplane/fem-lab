@@ -4,6 +4,7 @@
 // `slice()`d the instant they are made and never escape unsliced (plan B risk R1).
 import init, { Engine, version } from './generated/wasm/femlab_engine_wasm.js';
 import wasmUrl from './generated/wasm/femlab_engine_wasm_bg.wasm?url';
+import { siUnitOf } from './fields';
 import type { AppReq, AppRes } from './protocol';
 import { toStructured } from './protocol';
 
@@ -68,6 +69,32 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
       return JSON.parse(need().query(JSON.stringify(req.payload)));
     case 'surface':
       return surface();
+    case 'field': {
+      const { step, field, component } = req.payload as { step?: string; field: string; component?: number };
+      // `field()` already returns a fresh Float32Array (Rust built the f32 staging vector), so
+      // there is no view over wasm memory to outlive here.
+      const values = need().field(step, field, component);
+      let min = 0;
+      let max = 0;
+      for (let i = 0; i < values.length; i++) {
+        const v = values[i]!;
+        if (i === 0 || v < min) min = v;
+        if (i === 0 || v > max) max = v;
+      }
+      return {
+        value: { min, max, unit: siUnitOf(field as never) },
+        buffers: [{ name: 'values', dtype: 'f32' as const, length: values.length }],
+        raw: [values.buffer as ArrayBuffer],
+      };
+    }
+    case 'export': {
+      // `mesh.export` is an engine Command, so an export is journaled like everything else;
+      // the host re-reads the Journal afterwards (main.tsx).
+      const { format, step } = req.payload as { format: string; step?: string };
+      const json = await need().dispatch(JSON.stringify({ cmd: 'mesh.export', format, ...(step === undefined ? {} : { step }) }), undefined);
+      const { output } = JSON.parse(json) as { output: { filename: string; mime: string; text: string } };
+      return { filename: output.filename, mime: output.mime, bytes: new TextEncoder().encode(output.text) };
+    }
     case 'exportFile':
       return JSON.parse(need().export_file());
     case 'importFile':
@@ -83,7 +110,7 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
     case 'gpuSelfTest':
       return need().gpu_self_test((req.payload as { n: number }).n);
     default:
-      throw { code: 'unsupported', cause: `the engine Worker has no '${req.op}' op`, where: req.op, suggestion: 'file.export and query.field arrive with the solver' };
+      throw { code: 'unsupported', cause: `the engine Worker has no '${req.op}' op`, where: req.op, suggestion: `known ops: create, dispatch, query, surface, field, export, exportFile, importFile, replay` };
   }
 }
 

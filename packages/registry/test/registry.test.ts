@@ -3,7 +3,8 @@ import schema from '../src/generated/engine.schema.json';
 import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';
-import { ACK, MODEL_FILE, PROJECT, fakeHost, fakeTransport } from './fakes';
+import { EXPORT_FORMATS, extremesCsv, pathCsv, reactionsCsv } from '../src/host-commands';
+import { ACK, MODEL_FILE, PATH, PROJECT, RESULT, fakeHost, fakeTransport } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
 const make = (projectOpen = false) => {
@@ -155,7 +156,7 @@ describe('Registry', () => {
     await expect(registry.query({ query: 'query.skills' })).resolves.toEqual([{ name: 'beam-theory-check', description: expect.any(String), when: 'a beam', source: 'builtin' }]);
     await expect(registry.query({ query: 'query.project' })).resolves.toEqual(PROJECT);
     await expect(registry.query({ query: 'query.view' })).resolves.toMatchObject({ position: [1, 2, 3] });
-    await expect(registry.query({ query: 'query.screenshot', width: 800 })).resolves.toEqual({ png: 'iVBOR' });
+    await expect(registry.query({ query: 'query.screenshot', width: 800 })).resolves.toEqual({ png: 'data:image/png;base64,QUJD' });
     expect(host.view.screenshot).toHaveBeenCalledWith({ width: 800 });
   });
 
@@ -241,6 +242,62 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'ai.setModel', model: 'm' });
     expect(host.ai.setModel).toHaveBeenCalledWith('m');
     await expect(registry.dispatch({ cmd: 'script.run', code: '1' })).resolves.toEqual({ result: 1, console: [] });
+  });
+
+  it('file.export writes the four formats the engine cannot see, and hands the rest to it', async () => {
+    const { registry, host, transport } = make();
+    const wrote = (): [string, string, string | Uint8Array] => (host.files.download as unknown as { mock: { calls: [string, string, string | Uint8Array][] } }).mock.calls.at(-1)!;
+
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'script' } })).resolves.toEqual({ name: 'beam.ts', to: 'download' });
+    expect(wrote()).toEqual(['beam.ts', 'text/typescript', 'fem.model.new({ name: "beam" })']);
+
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'journal' } });
+    expect(wrote()[0]).toBe('beam.femlab.json');
+    expect(String(wrote()[2])).toContain('"femlab/1"');
+
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'png' } });
+    expect(host.view.screenshot).toHaveBeenCalledWith({ legend: true });
+    expect(wrote()).toEqual(['beam.png', 'image/png', new Uint8Array([65, 66, 67])]);
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'png', legend: false } });
+    expect(host.view.screenshot).toHaveBeenLastCalledWith({ legend: false });
+
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv' } });
+    expect(wrote()[0]).toBe('beam-extremes.csv');
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv', table: 'reactions', step: 'static' } });
+    expect(wrote()[0]).toBe('beam-reactions.csv');
+    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'static' });
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv', table: 'path', path: { field: 'vonMises', from: ['0 m', '0 m', '0 m'], to: ['1 m', '0 m', '0 m'], n: 3 } } });
+    expect(wrote()).toEqual(['beam-path.csv', 'text/csv', pathCsv(PATH)]);
+
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'report' } })).rejects.toMatchObject({ code: 'unsupported', where: 'report' });
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'msh' } });
+    expect(transport.export).toHaveBeenCalledWith({ format: 'msh' });
+  });
+
+  it('the CSV writers carry the numbers the Results tab shows', () => {
+    expect(extremesCsv(RESULT).split('\n')).toEqual([
+      'field,component,min,minX,minY,minZ,max,maxX,maxY,maxZ,unit',
+      'displacement,2,-0.19,1000,50,50,0,0,0,0,mm',
+      '',
+    ]);
+    expect(reactionsCsv(RESULT).split('\n')).toEqual([
+      'constraint,fx,fy,fz,unit',
+      'root,0,0,1,kN',
+      'sum reactions,0,0,1,kN',
+      'sum applied,0,0,-1,kN',
+      'balance,0,,,',
+      '',
+    ]);
+    expect(pathCsv(PATH)).toBe('s,value (MPa)\n0,0\n0.5,\n1,2\n');
+    // A name with a comma in it has to survive the round trip.
+    const quoted = reactionsCsv({ ...RESULT, reactions: [{ constraint: 'root, left', total: RESULT.reactions[0]!.total }] });
+    expect(quoted).toContain('"root, left"');
+  });
+
+  it('query.exportFormats is the Export dialog', async () => {
+    const { registry } = make();
+    await expect(registry.query({ query: 'query.exportFormats' })).resolves.toEqual({ formats: EXPORT_FORMATS });
+    expect(EXPORT_FORMATS.map((f) => f.format)).toContain('stl');
   });
 
   it('accepts a custom host table', async () => {
