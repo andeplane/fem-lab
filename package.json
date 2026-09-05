@@ -3,6 +3,9 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "test": "npm run test --workspaces --if-present"
+    "codegen": "node tools/codegen.mjs",
+    "codegen:check": "node tools/codegen.mjs --check",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
   }
 }
