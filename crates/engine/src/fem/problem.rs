@@ -12,6 +12,7 @@ use femlab_geometry::Mesh;
 use crate::command::Formulation;
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::{ElementCtx, Material};
+use crate::fem::heat::HeatLoad;
 use crate::fem::loads::Load;
 use crate::mesh::ResolvedSet;
 use crate::model::Idealisation;
@@ -48,12 +49,23 @@ pub struct Problem<'a> {
     pub loads: Vec<Load>,
     /// Nodal temperature and the reference temperature; `None` is no thermal strain.
     pub temperature: Option<(Vec<f64>, f64)>,
+    /// True when the unknown is temperature rather than displacement: one DOF per node, the
+    /// heat kernels instead of the elastic ones, and `constraints[i].dofs[0]` the only
+    /// component a Constraint can hold (plan A §6).
+    pub heat: bool,
+    /// Convection, flux and source loads; empty for a structural Step.
+    pub heat_loads: Vec<HeatLoad>,
 }
 
 impl Problem<'_> {
-    /// Displacement components per node: 3 in 3D, 2 in every 2D idealisation.
+    /// Unknowns per node: one temperature for a heat Step, else 3 displacements in 3D and 2 in
+    /// every 2D idealisation.
     pub fn dofs_per_node(&self) -> usize {
-        self.mesh.dim
+        if self.heat {
+            1
+        } else {
+            self.mesh.dim
+        }
     }
 
     pub fn n_dofs(&self) -> usize {

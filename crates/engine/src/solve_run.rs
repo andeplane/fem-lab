@@ -9,15 +9,16 @@ use crate::command::{Field, ObjectKind, Procedure, Solver};
 use crate::engine::{display, Engine, OnProgress};
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::Material;
+use crate::fem::heat::HeatLoad;
 use crate::fem::loads::{face_set_area, Load};
 use crate::fem::problem::{Constraint, Problem};
 use crate::mesh::BuiltMesh;
 use crate::model::{ConstraintKind, LoadKind, Model, Step};
 use crate::post::Extremum;
 use crate::procedure::{self, StepResult};
-use crate::query::{Extreme, Output, ReactionRow, ResultSummary, Valued};
+use crate::query::{Extreme, HistoryRow, Output, ReactionRow, ResultSummary, Valued};
 use crate::solve::SolveOptions;
-use crate::units::{Dim, Dimension, Force, Length, Stress, Temperature};
+use crate::units::{Dim, Dimension, Force, Frequency, Length, Stress, Temperature, Time};
 
 /// The material law every Model material resolves to for now; plugins add their own later.
 const LAW: &str = "linear-elastic";
@@ -44,6 +45,7 @@ pub fn field_name(field: Field) -> String {
 /// Set's own integrated area, and its "10 kN on this Set of nodes" by the node count, so what
 /// is assembled sums back to what was asked for.
 pub fn build_problem<'a>(model: &Model, built: &'a BuiltMesh, step: &Step) -> Result<Problem<'a>, Error> {
+    let heat = matches!(step.procedure, Procedure::HeatSteady | Procedure::HeatTransient);
     let materials: Vec<Material> = model
         .materials
         .iter()
@@ -85,6 +87,9 @@ pub fn build_problem<'a>(model: &Model, built: &'a BuiltMesh, step: &Step) -> Re
                 on[normal.index()] = true;
                 (on, 0.0)
             }
+            // The heat DOF is component 0; a temperature Constraint in a structural Step holds
+            // nothing, which is what an all-false `dofs` means, so it is inert there.
+            ConstraintKind::Temperature { value } => ([heat, false, false], *value),
         };
         constraints.push(Constraint { name: c.name.clone(), nodes: c.on.clone(), dofs, value });
     }
@@ -99,8 +104,11 @@ pub fn build_problem<'a>(model: &Model, built: &'a BuiltMesh, step: &Step) -> Re
         constraints,
         loads: Vec::new(),
         temperature: None,
+        heat,
+        heat_loads: Vec::new(),
     };
     let mut loads = Vec::with_capacity(step.loads.len());
+    let mut heat_loads = Vec::new();
     for name in &step.loads {
         let l = model.load(name).expect("step.add validated the Load names");
         match &l.kind {
@@ -124,10 +132,72 @@ pub fn build_problem<'a>(model: &Model, built: &'a BuiltMesh, step: &Step) -> Re
                 }
                 p.temperature = Some((nodal, *reference));
             }
+            LoadKind::Convection { on, h, t_inf } => {
+                heat_loads.push(HeatLoad::Convection { faces: on.clone(), h: *h, t_inf: *t_inf });
+            }
+            LoadKind::HeatFlux { on, q } => heat_loads.push(HeatLoad::Flux { faces: on.clone(), q: *q }),
+            LoadKind::HeatSource { bodies, q } => {
+                heat_loads.push(HeatLoad::Source { bodies: bodies.clone(), q: *q });
+            }
         }
     }
     p.loads = loads;
+    p.heat_loads = heat_loads;
     Ok(p)
+}
+
+/// The wire name of a procedure, from serde's rename.
+pub fn procedure_name(p: Procedure) -> String {
+    serde_json::to_string(&p).unwrap_or_default().trim_matches('"').to_string()
+}
+
+/// The `procedure::Step` a Model Step means: the fields that procedure reads, and the defaults
+/// plan A names for the ones the Command left out. A missing `dt` or `tEnd` is a schema error
+/// naming the field, because a transient with no clock is not a Step anybody meant.
+fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedure::Step, Error> {
+    let want = |v: Option<f64>, field: &'static str| {
+        v.ok_or_else(|| {
+            let name = procedure_name(step.procedure);
+            Error::schema(format!("the '{name}' procedure needs {field}"))
+                .at(field)
+                .suggest(format!("step.add with procedure {name} and a {field}"))
+        })
+    };
+    Ok(match step.procedure {
+        Procedure::Static => procedure::Step::Static { solver: opts },
+        Procedure::Modal => {
+            procedure::Step::Modal { n_modes: step.n_modes.unwrap_or(6) as usize, shift: step.shift, solver: opts }
+        }
+        Procedure::HeatSteady => procedure::Step::HeatSteady { solver: opts },
+        Procedure::HeatTransient => procedure::Step::HeatTransient {
+            dt: want(step.dt, "dt")?,
+            t_end: want(step.t_end, "tEnd")?,
+            theta: step.theta.unwrap_or(0.5),
+            initial: step.initial.unwrap_or(293.15),
+            output_every: step.output_every.unwrap_or(1) as usize,
+            amplitude: step.amplitude.as_ref().map(amplitude),
+            solver: opts,
+        },
+        Procedure::Explicit => procedure::Step::Explicit {
+            t_end: want(step.t_end, "tEnd")?,
+            dt_factor: step.dt_factor.unwrap_or(0.9),
+            initial_velocity: None,
+            output_every: step.output_every.unwrap_or(1) as usize,
+        },
+    })
+}
+
+/// The Model's amplitude as the procedure's; the two are the same shape in different modules
+/// because one is serialised into the Journal and the other is not.
+fn amplitude(a: &crate::model::Amplitude) -> procedure::Amplitude {
+    match a {
+        crate::model::Amplitude::Sine { amplitude, period } => {
+            procedure::Amplitude::Sine { amplitude: *amplitude, period: *period }
+        }
+        crate::model::Amplitude::Table { t, value } => {
+            procedure::Amplitude::Table { t: t.clone(), value: value.clone() }
+        }
+    }
 }
 
 impl Engine {
@@ -151,15 +221,28 @@ impl Engine {
             max_iterations: max_iterations.map_or(SolveOptions::default().max_iterations, |n| n as usize),
             ..SolveOptions::default()
         };
-        let procedure_step = match step.procedure {
-            Procedure::Static => procedure::Step::Static { solver: opts },
+        let proc_step = procedure_step(&step, opts)?;
+        // A chained Step reads the Result of the Step it names; without one it cannot run.
+        let prev = match &step.after {
+            Some(name) => Some(self.results.get(name).map(|(_, r)| r.clone()).ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
+                    .at(format!("step '{}'", step.name))
+                    .suggest(format!("solve.run on step '{name}' first"))
+            })?),
+            None => None,
         };
         self.mesh()?;
         let started = self.host.now_ms();
         let mut result = {
             let built = self.mesh.as_ref().expect("built above");
-            let p = build_problem(&self.model, built, &step)?;
-            procedure::run(&p, &procedure_step, &self.pool, self.gpu.as_ref(), None, on_progress).await?
+            let mut p = build_problem(&self.model, built, &step)?;
+            // Thermal → structural: the previous Step's temperature becomes this one's field,
+            // keeping the reference a `load.temperature` in this Step set (plan A §6).
+            if let Some(t) = prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)) {
+                let t_ref = p.temperature.as_ref().map_or(293.15, |(_, r)| *r);
+                p.temperature = Some((t.component(0), t_ref));
+            }
+            procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
         };
         result.solver.time_ms = self.host.now_ms() - started;
         let hash = self.model_hash();
@@ -185,6 +268,26 @@ impl Engine {
             Error::not_found("result", step.unwrap_or(name), &known).suggest("solve.run on that Step first")
         })?;
         Ok((name, hash, res))
+    }
+
+    /// One Result field by its wire name, which is what a host passes through: a `Field`
+    /// spelling (`displacement`, `vonMises`, …) or `mode:k` for the k-th mode shape of a modal
+    /// Step, counting from 1.
+    pub fn field_named(&self, step: Option<&str>, name: &str) -> Result<&crate::post::FieldData, Error> {
+        if let Some(k) = name.strip_prefix("mode:") {
+            let (step_name, _, res) = self.stored(step)?;
+            let i: usize = k.parse().unwrap_or(0);
+            return res.modes.get(i.wrapping_sub(1)).ok_or_else(|| {
+                Error::new(
+                    ErrorCode::NotFound,
+                    format!("step '{step_name}' has {} mode shapes, not one called '{name}'", res.modes.len()),
+                )
+                .suggest("query.result lists the frequencies that were computed")
+            });
+        }
+        let which: Field = serde_json::from_str(&format!("\"{name}\""))
+            .map_err(|_| Error::schema(format!("'{name}' is not a Result field")).at("field"))?;
+        self.field(step, which)
     }
 
     /// One Result field, for a host that wants the raw array.
@@ -230,6 +333,16 @@ impl Engine {
                 .map(|(n, r)| ReactionRow { constraint: n.clone(), total: vec3(m, *r, Force::DIM) })
                 .collect(),
             applied_total: vec3(m, applied, Force::DIM),
+            frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
+            history: res
+                .history
+                .iter()
+                .flat_map(crate::procedure::heat::history_extremes)
+                .map(|(t, lo, hi)| {
+                    let dim = field_dimension(res.history.as_ref().map_or(Field::Temperature, |h| h.field));
+                    HistoryRow { time: display(m, t, Time::DIM), min: display(m, lo, dim), max: display(m, hi, dim) }
+                })
+                .collect(),
             balance: residual / biggest,
         }
     }
@@ -258,6 +371,7 @@ pub fn export_fields(res: &StepResult) -> Vec<(&'static str, usize, Vec<f64>)> {
         ("Reaction", Field::Reaction),
         ("Stress", Field::Stress),
         ("VonMises", Field::VonMises),
+        ("Temperature", Field::Temperature),
     ]
     .iter()
     .filter_map(|&(label, field)| res.fields.get(&field).map(|f| (label, f.comps, f.data.clone())))

@@ -1,0 +1,122 @@
+{
+  "name": "explicit-free-fall",
+  "reference": "Benchmark F1/F2 in Command form: an unconstrained hex8 block under gravity, integrated by central differences at 0.9 of the Irons critical step. On a uniform hex8 grid the consistent gravity load and the HRZ lumped mass give exactly g at every node, and the leapfrog is exact for a constant acceleration, so after t the block has fallen u = g t^2 / 2 = 4.905 um at t = 1 ms. The tolerance is the half step the run rounds tEnd to, not the integrator.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "explicit-free-fall"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "block",
+      "size": [
+        "100 mm",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "block"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 4,
+          "ny": 4,
+          "nz": 4
+        }
+      }
+    },
+    {
+      "cmd": "load.gravity",
+      "name": "g",
+      "g": [
+        "0 m/s^2",
+        "0 m/s^2",
+        "-9.81 m/s^2"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "drop",
+      "procedure": "explicit",
+      "constraints": [],
+      "loads": [
+        "g"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "tEnd": "1 ms",
+      "dtFactor": 0.9,
+      "outputEvery": 100
+    },
+    {
+      "cmd": "solve.run",
+      "step": "drop"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "50 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 2
+      },
+      "path": "/value/value",
+      "expect": -0.004905,
+      "tol": 0.005,
+      "rel": true,
+      "note": "g t^2 / 2 = 4.905 um after 1 ms, in mm"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "0 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        "component": 2
+      },
+      "path": "/value/value",
+      "expect": -0.004905,
+      "tol": 0.005,
+      "rel": true,
+      "note": "every node falls together"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/solver",
+      "expect": "cpu-explicit"
+    }
+  ]
+}

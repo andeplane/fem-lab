@@ -289,6 +289,20 @@ export type Command =
     }
   | {
       name: string;
+      on: string;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      value:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "constraint.temperature";
+    }
+  | {
+      name: string;
       cmd: "constraint.remove";
     }
   | {
@@ -431,6 +445,57 @@ export type Command =
     }
   | {
       name: string;
+      on: string;
+      /**
+       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       */
+      h:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.convection";
+    }
+  | {
+      name: string;
+      on: string;
+      /**
+       * A heat flux with unit, e.g. "1 kW/m^2". Any unit of the right dimension is accepted.
+       */
+      q:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.heatFlux";
+    }
+  | {
+      name: string;
+      bodies: string[];
+      /**
+       * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
+       */
+      q:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.heatSource";
+    }
+  | {
+      name: string;
       cmd: "load.remove";
     }
   | {
@@ -439,6 +504,40 @@ export type Command =
       constraints: string[];
       loads: string[];
       output?: Field[] | null;
+      after?: string | null;
+      nModes?: number | null;
+      shift?: number | null;
+      dt?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      tEnd?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      theta?: number | null;
+      outputEvery?: number | null;
+      dtFactor?: number | null;
+      amplitude?: AmplitudeSpec | null;
+      initial?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
       cmd: "step.add";
     }
   | {
@@ -1193,12 +1292,46 @@ export type Axis = "x" | "y" | "z";
 /**
  * Analysis procedures.
  */
-export type Procedure = "static";
+export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
 /**
  * Result fields.
  */
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
+/**
+ * A scalar `g(t)` that scales every prescribed temperature of a transient Step.
+ *
+ * Commands are replayed from the Journal, so a time function is data, never a closure: it is
+ * either a sine or a piecewise-linear table, and nothing else.
+ */
+export type AmplitudeSpec =
+  | {
+      amplitude: number;
+      /**
+       * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
+       */
+      period:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "sine";
+    }
+  | {
+      /**
+       * Items: A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
+       */
+      t: (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )[];
+      value: number[];
+      kind: "table";
+    };
 /**
  * Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations
  * (100 000 in the browser, where the heap is smaller) and above that a conjugate gradient
@@ -1801,6 +1934,20 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      on: string;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      value:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "constraint.temperature";
+    }
+  | {
+      name: string;
       cmd: "constraint.remove";
     }
   | {
@@ -1943,6 +2090,57 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      on: string;
+      /**
+       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       */
+      h:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.convection";
+    }
+  | {
+      name: string;
+      on: string;
+      /**
+       * A heat flux with unit, e.g. "1 kW/m^2". Any unit of the right dimension is accepted.
+       */
+      q:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.heatFlux";
+    }
+  | {
+      name: string;
+      bodies: string[];
+      /**
+       * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
+       */
+      q:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.heatSource";
+    }
+  | {
+      name: string;
       cmd: "load.remove";
     }
   | {
@@ -1951,6 +2149,40 @@ export type ModelFile_Command =
       constraints: string[];
       loads: string[];
       output?: Field[] | null;
+      after?: string | null;
+      nModes?: number | null;
+      shift?: number | null;
+      dt?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      tEnd?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      theta?: number | null;
+      outputEvery?: number | null;
+      dtFactor?: number | null;
+      amplitude?: AmplitudeSpec | null;
+      initial?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
       cmd: "step.add";
     }
   | {
@@ -2480,6 +2712,10 @@ export type Constraint1 =
   | {
       normal: Axis;
       kind: "symmetry";
+    }
+  | {
+      value: number;
+      kind: "temperature";
     };
 /**
  * A Load.
@@ -2524,6 +2760,36 @@ export type Load1 =
       value: number;
       reference: number;
       kind: "temperature";
+    }
+  | {
+      on: string;
+      h: number;
+      t_inf: number;
+      kind: "convection";
+    }
+  | {
+      on: string;
+      q: number;
+      kind: "heatFlux";
+    }
+  | {
+      bodies: string[];
+      q: number;
+      kind: "heatSource";
+    };
+/**
+ * A time function scaling the prescribed temperatures of a transient Step, SI.
+ */
+export type Amplitude =
+  | {
+      amplitude: number;
+      period: number;
+      kind: "sine";
+    }
+  | {
+      t: number[];
+      value: number[];
+      kind: "table";
     };
 
 /**
@@ -2987,6 +3253,15 @@ export interface ResultSummary {
    */
   appliedTotal: [Valued, Valued, Valued];
   /**
+   * Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
+   * shape is the Result field named `mode:k`.
+   */
+  frequencies?: Valued[];
+  /**
+   * One row per output time of a transient Step: when, and the range the field covered.
+   */
+  history?: HistoryRow[];
+  /**
    * |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
    * by a prescribed displacement — where both totals are zero — still reports a meaningful
    * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
@@ -3019,6 +3294,14 @@ export interface ReactionRow {
    * @maxItems 3
    */
   total: [Valued, Valued, Valued];
+}
+/**
+ * One time of a transient Step's history: the extremes of the field at that instant.
+ */
+export interface HistoryRow {
+  time: Valued;
+  min: Valued;
+  max: Valued;
 }
 /**
  * `query.probe` response.
@@ -3294,7 +3577,8 @@ export interface Material {
   source?: string | null;
 }
 /**
- * A Step.
+ * A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
+ * `after` names the Step whose Result this one continues (plan B §2.2).
  */
 export interface Step {
   name: string;
@@ -3302,6 +3586,16 @@ export interface Step {
   constraints: string[];
   loads: string[];
   output: Field[];
+  after?: string | null;
+  nModes?: number | null;
+  shift?: number | null;
+  dt?: number | null;
+  tEnd?: number | null;
+  theta?: number | null;
+  outputEvery?: number | null;
+  dtFactor?: number | null;
+  amplitude?: Amplitude | null;
+  initial?: number | null;
 }
 /**
  * A Plugin used by the Model (phase P).

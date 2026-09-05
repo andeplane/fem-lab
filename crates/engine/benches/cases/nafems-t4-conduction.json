@@ -1,0 +1,157 @@
+{
+  "name": "nafems-t4-conduction",
+  "reference": "Benchmark C7 (NAFEMS T4): steady conduction in a 0.6 x 1.0 m rectangle of k = 52 W/mK, held at 100 degC along AB (y = 0), insulated along DA (x = 0) and losing heat to a h = 750 W/m^2K film at 0 degC along BC (x = 0.6) and CD (y = 1.0). The published target is T(E) = 18.3 degC at E = (0.6, 0.2), whose converged value is 18.25 degC; the tolerance is the published 0.5 degC.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "nafems-t4"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "temperature": "degC"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStrain"
+      }
+    },
+    {
+      "cmd": "geometry.add",
+      "name": "plate",
+      "shape": {
+        "kind": "sheet",
+        "sketch": {
+          "outer": [
+            {
+              "kind": "line",
+              "to": [
+                "0.6 m",
+                "0 m"
+              ],
+              "tag": "ymin"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0.6 m",
+                "1.0 m"
+              ],
+              "tag": "xmax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "1.0 m"
+              ],
+              "tag": "ymax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "0 m"
+              ],
+              "tag": "xmin"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "slab",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "k": "52 W/(m K)",
+      "cp": "460 J/(kg K)",
+      "source": "NAFEMS T4"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "slab",
+      "bodies": [
+        "plate"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 24,
+          "ny": 40,
+          "nz": 1
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.temperature",
+      "name": "ab",
+      "on": "plate.ymin",
+      "value": "100 degC"
+    },
+    {
+      "cmd": "load.convection",
+      "name": "bc",
+      "on": "plate.xmax",
+      "h": "750 W/(m^2 K)",
+      "tInf": "0 degC"
+    },
+    {
+      "cmd": "load.convection",
+      "name": "cd",
+      "on": "plate.ymax",
+      "h": "750 W/(m^2 K)",
+      "tInf": "0 degC"
+    },
+    {
+      "cmd": "step.add",
+      "name": "conduct",
+      "procedure": "heat-steady",
+      "constraints": [
+        "ab"
+      ],
+      "loads": [
+        "bc",
+        "cd"
+      ],
+      "output": [
+        "temperature"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "conduct"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": [
+          "0.6 m",
+          "0.2 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 18.3,
+      "tol": 0.5,
+      "note": "T(E), NAFEMS T4"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

@@ -542,6 +542,14 @@ impl Engine {
                 };
                 Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
             }
+            Command::ConstraintTemperature { name, on, value } => {
+                check_name(name)?;
+                self.check_set(on)?;
+                let v = value.si().map_err(|e| e.at("value"))?;
+                let c =
+                    Constraint { name: name.clone(), on: on.clone(), kind: ConstraintKind::Temperature { value: v } };
+                Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
+            }
             Command::ConstraintRemove { name } => {
                 self.model
                     .constraint(name)
@@ -586,11 +594,7 @@ impl Engine {
             }
             Command::LoadTemperature { name, bodies, value, reference } => {
                 check_name(name)?;
-                for b in bodies {
-                    self.model
-                        .body(b)
-                        .ok_or_else(|| Error::not_found("body", b, &self.model.names(ObjectKind::Body)))?;
-                }
+                self.check_bodies(bodies)?;
                 let v = value.si().map_err(|e| e.at("value"))?;
                 let r = match reference {
                     Some(q) => q.si().map_err(|e| e.at("reference"))?,
@@ -600,6 +604,28 @@ impl Engine {
                     name: name.clone(),
                     kind: LoadKind::Temperature { bodies: bodies.clone(), value: v, reference: r },
                 };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
+            Command::LoadConvection { name, on, h, t_inf } => {
+                check_name(name)?;
+                self.check_set(on)?;
+                let hv = h.si().map_err(|e| e.at("h"))?;
+                let tv = t_inf.si().map_err(|e| e.at("tInf"))?;
+                let l = Load { name: name.clone(), kind: LoadKind::Convection { on: on.clone(), h: hv, t_inf: tv } };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
+            Command::LoadHeatFlux { name, on, q } => {
+                check_name(name)?;
+                self.check_set(on)?;
+                let v = q.si().map_err(|e| e.at("q"))?;
+                let l = Load { name: name.clone(), kind: LoadKind::HeatFlux { on: on.clone(), q: v } };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
+            Command::LoadHeatSource { name, bodies, q } => {
+                check_name(name)?;
+                self.check_bodies(bodies)?;
+                let v = q.si().map_err(|e| e.at("q"))?;
+                let l = Load { name: name.clone(), kind: LoadKind::HeatSource { bodies: bodies.clone(), q: v } };
                 Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
             }
             Command::LoadRemove { name } => {
@@ -614,7 +640,23 @@ impl Engine {
                 self.model.loads.retain(|l| l.name != *name);
                 Ok(Output::None)
             }
-            Command::StepAdd { name, procedure, constraints, loads, output } => {
+            Command::StepAdd {
+                name,
+                procedure,
+                constraints,
+                loads,
+                output,
+                after,
+                n_modes,
+                shift,
+                dt,
+                t_end,
+                theta,
+                output_every,
+                dt_factor,
+                amplitude,
+                initial,
+            } => {
                 check_name(name)?;
                 for c in constraints {
                     self.model
@@ -630,12 +672,27 @@ impl Engine {
                     use crate::command::Field::*;
                     vec![Displacement, Stress, VonMises, Reaction]
                 });
+                if let Some(prev) = after {
+                    self.model
+                        .step(prev)
+                        .ok_or_else(|| Error::not_found("step", prev, &self.model.names(ObjectKind::Step)))?;
+                }
                 let s = Step {
                     name: name.clone(),
                     procedure: *procedure,
                     constraints: constraints.clone(),
                     loads: loads.clone(),
                     output: out,
+                    after: after.clone(),
+                    n_modes: *n_modes,
+                    shift: *shift,
+                    dt: opt_si(dt, "dt")?,
+                    t_end: opt_si(t_end, "tEnd")?,
+                    theta: *theta,
+                    output_every: *output_every,
+                    dt_factor: *dt_factor,
+                    amplitude: amplitude.as_ref().map(to_amplitude).transpose()?,
+                    initial: opt_si(initial, "initial")?,
                 };
                 Ok(upsert(&mut self.model.steps, s, |s| &s.name, ObjectKind::Step))
             }
@@ -835,6 +892,14 @@ impl Engine {
             .suggest("use an auto face like 'beam.xmin' (see query.model) or geometry.nameFace"))
     }
 
+    /// Every named Body exists, or `not-found` listing the ones that do.
+    fn check_bodies(&self, bodies: &[String]) -> Result<(), Error> {
+        for b in bodies {
+            self.model.body(b).ok_or_else(|| Error::not_found("body", b, &self.model.names(ObjectKind::Body)))?;
+        }
+        Ok(())
+    }
+
     fn rename(&mut self, kind: ObjectKind, name: &str, to: &str) -> Result<Output, Error> {
         check_name(to)?;
         if !self.model.names(kind).contains(&name) {
@@ -862,10 +927,12 @@ impl Engine {
                 }
                 for l in &mut m.loads {
                     match &mut l.kind {
-                        LoadKind::Pressure { on, .. } | LoadKind::Traction { on, .. } | LoadKind::Force { on, .. } => {
-                            *on = rename_set_ref(on, name, to)
-                        }
-                        LoadKind::Temperature { bodies, .. } => {
+                        LoadKind::Pressure { on, .. }
+                        | LoadKind::Traction { on, .. }
+                        | LoadKind::Force { on, .. }
+                        | LoadKind::Convection { on, .. }
+                        | LoadKind::HeatFlux { on, .. } => *on = rename_set_ref(on, name, to),
+                        LoadKind::Temperature { bodies, .. } | LoadKind::HeatSource { bodies, .. } => {
                             for b in bodies {
                                 if b == name {
                                     *b = to.into();
@@ -1065,6 +1132,34 @@ fn opt_si<D: crate::units::Dim>(q: &Option<Q<D>>, field: &str) -> Result<Option<
     match q {
         Some(v) => Ok(Some(v.si().map_err(|e| e.at(field))?)),
         None => Ok(None),
+    }
+}
+
+/// An `AmplitudeSpec` in SI, with a table checked for the two arrays agreeing.
+fn to_amplitude(a: &crate::command::AmplitudeSpec) -> Result<crate::model::Amplitude, Error> {
+    match a {
+        crate::command::AmplitudeSpec::Sine { amplitude, period } => {
+            let p = period.si().map_err(|e| e.at("amplitude.period"))?;
+            if p == 0.0 {
+                return Err(Error::schema("a sine amplitude needs a non-zero period").at("amplitude.period"));
+            }
+            Ok(crate::model::Amplitude::Sine { amplitude: *amplitude, period: p })
+        }
+        crate::command::AmplitudeSpec::Table { t, value } => {
+            if t.len() != value.len() || t.is_empty() {
+                return Err(Error::schema(format!(
+                    "an amplitude table needs equally long, non-empty t and value arrays, got {} and {}",
+                    t.len(),
+                    value.len()
+                ))
+                .at("amplitude.t"));
+            }
+            let mut times = Vec::with_capacity(t.len());
+            for (i, q) in t.iter().enumerate() {
+                times.push(q.si().map_err(|e| e.at(format!("amplitude.t[{i}]")))?);
+            }
+            Ok(crate::model::Amplitude::Table { t: times, value: value.clone() })
+        }
     }
 }
 

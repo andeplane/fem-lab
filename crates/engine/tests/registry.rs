@@ -2103,3 +2103,412 @@ fn result_queries_refuse_what_they_cannot_answer() {
     };
     assert_eq!(e.query(q).expect_err("a 3D body in a 2D idealisation").code, ErrorCode::ModelIllPosed);
 }
+
+// ---------------------------------------------------- heat, modal, transient and explicit Steps
+
+/// A heat-conducting bar: a box of steel with a conductivity and a capacity, meshed coarsely.
+fn heat_bar(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"heat"}"#);
+    ok(e, r#"{"cmd":"model.setUnits","units":{"length":"mm","temperature":"degC","time":"s"}}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(
+        e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+            "alpha":"1.2e-5 1/K","k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+    );
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["bar"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":10,"ny":1,"nz":1}}}"#);
+}
+
+fn result_of(e: &mut Engine, step: Option<&str>) -> femlab_engine::query::ResultSummary {
+    let QueryResult::Result(r) = e.query(Query::Result { step: step.map(str::to_string) }).unwrap() else {
+        panic!("a Result summary")
+    };
+    r
+}
+
+fn probe_at(e: &mut Engine, step: &str, field: Field, component: Option<u8>, at: [&str; 3]) -> f64 {
+    let q = Query::Probe {
+        step: Some(step.to_string()),
+        field,
+        component,
+        at: [Q::text(at[0]), Q::text(at[1]), Q::text(at[2])],
+    };
+    let QueryResult::Probe(p) = e.query(q).unwrap() else { panic!("a probe") };
+    p.value.value
+}
+
+/// The steady heat procedure through the registry: a held temperature at each end, the linear
+/// profile out of `query.probe`, and the temperature field in the VTU export.
+#[test]
+fn a_steady_heat_step_conducts_a_linear_profile_and_exports_it() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold","hot"],
+            "loads":[],"output":["temperature"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    assert!((probe_at(&mut e, "conduct", Field::Temperature, None, ["500 mm", "50 mm", "50 mm"]) - 50.0).abs() < 1e-9);
+
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.constraints[0].summary, "temperature = 0 degC");
+    assert_eq!(m.steps[0].procedure, "heat-steady");
+    let summary = result_of(&mut e, None);
+    assert_eq!(summary.step, "conduct");
+    assert!(summary.frequencies.is_empty() && summary.history.is_empty());
+    // The heat in balances the heat out, exactly as a reaction balance does for forces.
+    assert!(summary.balance < 1e-9, "{}", summary.balance);
+
+    let Output::Export { text, .. } = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"conduct"}"#).output
+    else {
+        panic!("an export")
+    };
+    assert!(text.contains("Name=\"Temperature\""), "the VTU carries the temperature field");
+}
+
+/// Convection, flux and source loads reach the Model, report themselves, survive a Body rename,
+/// and hold a Step that has no fixed temperature at all.
+#[test]
+fn the_three_heat_loads_report_themselves_and_hold_a_step_on_their_own() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"in","on":"bar.xmin","q":"1 kW/m^2"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"ohmic","bodies":["bar"],"q":"0 kW/m^3"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    let kinds: Vec<&str> = m.loads.iter().map(|l| l.kind.as_str()).collect();
+    assert_eq!(kinds, ["convection", "heatFlux", "heatSource"]);
+    assert!(m.loads[0].summary.contains("tInf = 20 degC"), "{}", m.loads[0].summary);
+    assert!(m.loads[1].summary.starts_with('1'), "{}", m.loads[1].summary);
+    assert!(m.loads[2].summary.ends_with("on bar"), "{}", m.loads[2].summary);
+
+    // A rename follows the Set of a face load and the Body list of a source alike.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"bar","to":"rod"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.loads[0].on.as_deref(), Some("rod.xmax"));
+    assert!(m.loads[2].summary.ends_with("on rod"), "{}", m.loads[2].summary);
+
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":[],
+            "loads":["film","in","ohmic"],"output":["temperature"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    // Steady state: everything in through the flux leaves through the film, so the far face is
+    // T∞ + q/h and the near face one conduction drop above it.
+    let far = probe_at(&mut e, "conduct", Field::Temperature, None, ["1 m", "50 mm", "50 mm"]);
+    let near = probe_at(&mut e, "conduct", Field::Temperature, None, ["0 mm", "50 mm", "50 mm"]);
+    assert!((far - 40.0).abs() < 1e-8, "far face {far}");
+    assert!((near - (40.0 + 1000.0 / 45.0)).abs() < 1e-8, "near face {near}");
+}
+
+/// A heat Step with neither a held temperature nor a film is refused with the Command that
+/// fixes it, and so is a transient with no clock.
+#[test]
+fn a_heat_step_says_what_it_is_missing() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"step.add","name":"bare","procedure":"heat-steady","constraints":[],"loads":[]}"#);
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"bare"}"#);
+    assert_eq!(bad.code, ErrorCode::ConstraintRigidModes);
+
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"noclock","procedure":"heat-transient","constraints":["cold","hot"],
+            "loads":[],"tEnd":"10 s"}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"noclock"}"#);
+    assert_eq!(bad.code, ErrorCode::Schema);
+    assert_eq!(bad.where_.as_deref(), Some("dt"));
+    assert!(bad.cause.contains("heat-transient"), "{}", bad.cause);
+
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"noend2","procedure":"heat-transient","constraints":["cold","hot"],
+            "loads":[],"dt":"1 s"}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"noend2"}"#);
+    assert_eq!(bad.where_.as_deref(), Some("tEnd"));
+
+    ok(&mut e, r#"{"cmd":"step.add","name":"noend","procedure":"explicit","constraints":["cold"],"loads":[]}"#);
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"noend"}"#);
+    assert_eq!(bad.code, ErrorCode::Schema);
+    assert_eq!(bad.where_.as_deref(), Some("tEnd"));
+}
+
+/// A transient Step keeps a history the Result summary reports, and its amplitude may be a sine
+/// or a table; a malformed table is refused when the Command is dispatched, not when it is run.
+#[test]
+fn a_transient_heat_step_reports_its_history_and_validates_its_amplitude() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    // Kelvin above the initial state, which is how a driven-boundary transient is stated.
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm","time":"s"}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"driven","on":"bar.xmax","value":"100 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["driven","cold"],
+            "loads":[],"output":["temperature"],"dt":"2 s","tEnd":"20 s","theta":1.0,"initial":"0 K",
+            "outputEvery":5,"amplitude":{"kind":"table","t":["0 s","10 s"],"value":[0.0,1.0]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
+    let summary = result_of(&mut e, Some("warm"));
+    // Rows at t = 0, 10 and 20 s: the initial state and every fifth of the ten steps.
+    assert_eq!(summary.history.len(), 3);
+    assert_eq!(summary.history[0].time.value, 0.0);
+    assert_eq!(summary.history[2].time.value, 20.0);
+    assert_eq!(summary.history[0].max.value, 0.0, "nothing is warm before the ramp starts");
+    // The driven node is the hottest, at 100 K times the table: zero, then full from t = 10 s on.
+    assert!((summary.history[1].max.value - 100.0).abs() < 1e-9, "{:?}", summary.history[1].max);
+    assert!((summary.history[2].max.value - 100.0).abs() < 1e-9, "{:?}", summary.history[2].max);
+    // A consistent capacity undershoots when the step is far below h^2 rho c / 6k, which it is
+    // here; the undershoot recovers, and the history is where a user would see it.
+    assert!(summary.history[1].min.value < -1.0 && summary.history[2].min.value > summary.history[1].min.value);
+    assert_eq!(summary.history[0].time.unit, "s");
+
+    // A sine amplitude needs a period, and a table needs two arrays of the same, non-zero length.
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"bad","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"1 s","tEnd":"2 s","amplitude":{"kind":"sine","amplitude":1.0,"period":"0 s"}}"#,
+    );
+    assert_eq!(bad.where_.as_deref(), Some("amplitude.period"));
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"bad","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"1 s","tEnd":"2 s","amplitude":{"kind":"table","t":["0 s"],"value":[]}}"#,
+    );
+    assert_eq!(bad.where_.as_deref(), Some("amplitude.t"));
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"bad","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"1 s","tEnd":"2 s","amplitude":{"kind":"table","t":["0 zork"],"value":[1.0]}}"#,
+    );
+    assert_eq!(bad.where_.as_deref(), Some("amplitude.t[0]"));
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"bad","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"1 zork","tEnd":"2 s"}"#,
+    );
+    assert_eq!(bad.where_.as_deref(), Some("dt"));
+    // A sine amplitude that is well formed is accepted and runs.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"cycled","procedure":"heat-transient","constraints":["driven","cold"],
+            "loads":[],"output":["temperature"],"dt":"4 s","tEnd":"8 s","initial":"0 K",
+            "amplitude":{"kind":"sine","amplitude":1.0,"period":"80 s"}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"cycled"}"#);
+    assert_eq!(result_of(&mut e, Some("cycled")).history.len(), 3);
+}
+
+/// A modal Step reports its frequencies in hertz, and a host fetches mode `k`'s shape by name.
+#[test]
+fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"modal"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","50 mm","50 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":12,"ny":1,"nz":1}},"order":2}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root"],"loads":[],
+            "output":["displacement"],"nModes":2,"shift":-1000.0}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    let summary = result_of(&mut e, Some("modes"));
+    assert_eq!(summary.frequencies.len(), 2);
+    assert_eq!(summary.frequencies[0].unit, "Hz");
+    // A square section: the first two modes are the same bending frequency in two planes.
+    let (f1, f2) = (summary.frequencies[0].value, summary.frequencies[1].value);
+    assert!((f1 - f2).abs() <= 1e-6 * f1, "{f1} and {f2}");
+    assert!((f1 - 41.9107).abs() <= 0.015 * 41.9107, "first bending mode {f1} Hz");
+
+    // Mode shapes are fields named `mode:k`, and mode 1 is also the Result's displacement.
+    let first = e.field_named(Some("modes"), "mode:1").expect("mode 1").data.clone();
+    assert_eq!(e.field_named(Some("modes"), "displacement").expect("displacement").data, first);
+    assert!(e.field_named(Some("modes"), "mode:2").is_ok());
+    let missing = e.field_named(Some("modes"), "mode:3").expect_err("only two modes were asked for");
+    assert_eq!(missing.code, ErrorCode::NotFound);
+    let missing = e.field_named(Some("modes"), "mode:0").expect_err("modes count from one");
+    assert_eq!(missing.code, ErrorCode::NotFound);
+    let bad = e.field_named(Some("modes"), "wobble").expect_err("not a field");
+    assert_eq!(bad.code, ErrorCode::Schema);
+}
+
+/// A Step that names an earlier one with `after` reads its temperature field: the
+/// thermal-to-structural chain. Running it before the Step it continues is a `not-found`.
+#[test]
+fn a_static_step_after_a_heat_step_turns_temperature_into_stress() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","temperature":"degC"}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"left","on":"bar.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"right","on":"bar.xmax","dofs":["ux"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"load.temperature","name":"reference","bodies":["bar"],"value":"0 degC","reference":"0 degC"}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold","hot"],
+            "loads":[],"output":["temperature"]}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"conduct",
+            "constraints":["left","right"],"loads":["reference"]}"#,
+    );
+    // The chain needs the Step it continues to have been solved.
+    let early = err(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert_eq!(early.code, ErrorCode::NotFound);
+    assert!(early.cause.contains("no Result to continue from"), "{}", early.cause);
+    // And `after` must name a Step that exists at all.
+    let unknown = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"orphan","procedure":"static","after":"nowhere","constraints":[],"loads":[]}"#,
+    );
+    assert_eq!(unknown.code, ErrorCode::NotFound);
+
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    // A bar held at both ends against a temperature rise ΔT carries σ = −E α ΔT: at the middle
+    // ΔT is 50 K, so σ_xx is −210 GPa × 1.2e-5 × 50 = −126 MPa.
+    let sigma = probe_at(&mut e, "stress", Field::Stress, Some(0), ["500 mm", "50 mm", "50 mm"]);
+    assert!((sigma + 126.0).abs() <= 0.02 * 126.0, "σ_xx = {sigma} MPa");
+}
+
+/// An explicit Step falls under gravity by exactly `g t²/2`, which is what central differences
+/// give for a constant acceleration, and a Step that names no `tEnd` says so.
+#[test]
+fn an_explicit_step_drops_a_free_block_by_g_t_squared_over_two() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"drop"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm","time":"s"}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["100 mm","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":2,"nz":2}}}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],
+            "output":["displacement"],"tEnd":"1 ms","dtFactor":0.9,"outputEvery":10}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+    let uz = probe_at(&mut e, "fall", Field::Displacement, Some(2), ["50 mm", "50 mm", "50 mm"]);
+    let want = -0.5 * 9.81 * 1e-6 * 1e3;
+    assert!((uz - want).abs() <= 0.01 * want.abs(), "u_z = {uz} mm, want {want} mm");
+    let summary = result_of(&mut e, Some("fall"));
+    assert_eq!(summary.solver, "cpu-explicit");
+    assert!(summary.iterations > 100, "{}", summary.iterations);
+}
+
+/// Every procedure refuses a Model whose Body has no material, and says which Body.
+#[test]
+fn every_procedure_runs_the_well_posedness_checks_first() {
+    let cases = [
+        (r#""modal","nModes":2"#, "modal"),
+        (r#""heat-steady""#, "heat"),
+        (r#""heat-transient","dt":"1 s","tEnd":"2 s""#, "transient"),
+        (r#""explicit","tEnd":"1 ms""#, "explicit"),
+    ];
+    for (procedure, name) in cases {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"bare"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+        ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"block.xmin"}"#);
+        ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"block.xmin","value":"0 degC"}"#);
+        let step = format!(
+            r#"{{"cmd":"step.add","name":"{name}","procedure":{procedure},
+                "constraints":["root","cold"],"loads":[]}}"#
+        );
+        ok(&mut e, &step);
+        let bad = err(&mut e, &format!(r#"{{"cmd":"solve.run","step":"{name}"}}"#));
+        assert_eq!(bad.code, ErrorCode::ModelNoMaterial, "{name}: {bad:?}");
+    }
+}
+
+/// Every new Command validates its name, its Set or Bodies, and every quantity it takes, in the
+/// same order and with the same error codes the older ones use.
+#[test]
+fn the_heat_commands_validate_their_names_sets_and_units() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    let cases: [(&str, ErrorCode, &str); 12] = [
+        (r#"{"cmd":"constraint.temperature","name":"","on":"bar.xmin","value":"0 degC"}"#, ErrorCode::Schema, "name"),
+        (r#"{"cmd":"constraint.temperature","name":"t","on":"nowhere","value":"0 degC"}"#, ErrorCode::NotFound, "on"),
+        (
+            r#"{"cmd":"constraint.temperature","name":"t","on":"bar.xmin","value":"3 m"}"#,
+            ErrorCode::UnitDimension,
+            "value",
+        ),
+        (
+            r#"{"cmd":"load.convection","name":"","on":"bar.xmin","h":"1 W/(m^2 K)","tInf":"0 degC"}"#,
+            ErrorCode::Schema,
+            "name",
+        ),
+        (
+            r#"{"cmd":"load.convection","name":"c","on":"nowhere","h":"1 W/(m^2 K)","tInf":"0 degC"}"#,
+            ErrorCode::NotFound,
+            "on",
+        ),
+        (
+            r#"{"cmd":"load.convection","name":"c","on":"bar.xmin","h":"1 m","tInf":"0 degC"}"#,
+            ErrorCode::UnitDimension,
+            "h",
+        ),
+        (
+            r#"{"cmd":"load.convection","name":"c","on":"bar.xmin","h":"1 W/(m^2 K)","tInf":"1 m"}"#,
+            ErrorCode::UnitDimension,
+            "tInf",
+        ),
+        (r#"{"cmd":"load.heatFlux","name":"","on":"bar.xmin","q":"1 kW/m^2"}"#, ErrorCode::Schema, "name"),
+        (r#"{"cmd":"load.heatFlux","name":"f","on":"nowhere","q":"1 kW/m^2"}"#, ErrorCode::NotFound, "on"),
+        (r#"{"cmd":"load.heatFlux","name":"f","on":"bar.xmin","q":"1 m"}"#, ErrorCode::UnitDimension, "q"),
+        (r#"{"cmd":"load.heatSource","name":"","bodies":["bar"],"q":"1 kW/m^3"}"#, ErrorCode::Schema, "name"),
+        (r#"{"cmd":"load.heatSource","name":"s","bodies":["bar"],"q":"1 m"}"#, ErrorCode::UnitDimension, "q"),
+    ];
+    for (json, code, _field) in cases {
+        let got = err(&mut e, json);
+        assert_eq!(got.code, code, "{json}: {got:?}");
+    }
+    let missing = err(&mut e, r#"{"cmd":"load.heatSource","name":"s","bodies":["nowhere"],"q":"1 kW/m^3"}"#);
+    assert_eq!(missing.code, ErrorCode::NotFound);
+
+    // step.add's own quantities are checked the same way.
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+    let bad_end = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"s","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"1 s","tEnd":"1 m"}"#,
+    );
+    assert_eq!(bad_end.where_.as_deref(), Some("tEnd"));
+    let bad_initial = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"s","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"1 s","tEnd":"2 s","initial":"1 m"}"#,
+    );
+    assert_eq!(bad_initial.where_.as_deref(), Some("initial"));
+    let bad_period = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"s","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"1 s","tEnd":"2 s","amplitude":{"kind":"sine","amplitude":1.0,"period":"1 m"}}"#,
+    );
+    assert_eq!(bad_period.where_.as_deref(), Some("amplitude.period"));
+
+    // A mode shape asked for before anything has been solved is a not-found, like any Result.
+    assert_eq!(e.field_named(None, "mode:1").expect_err("nothing solved").code, ErrorCode::NotFound);
+}

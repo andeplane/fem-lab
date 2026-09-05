@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::units::{
-    Acceleration, Conductivity, Density, Force, Length, SpecificHeat, Stress, Temperature, ThermalExpansion, UnitSet, Q,
+    Acceleration, Conductivity, Density, Force, HeatFlux, HeatSource, HeatTransfer, Length, SpecificHeat, Stress,
+    Temperature, ThermalExpansion, Time, UnitSet, Q,
 };
 
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
@@ -85,6 +86,29 @@ impl ObjectKind {
 pub enum Procedure {
     /// Linear static equilibrium.
     Static,
+    /// Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.
+    Modal,
+    /// Steady heat conduction with convection, flux and source boundaries; needs `k`.
+    HeatSteady,
+    /// Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.
+    HeatTransient,
+    /// Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.
+    Explicit,
+}
+
+/// A scalar `g(t)` that scales every prescribed temperature of a transient Step.
+///
+/// Commands are replayed from the Journal, so a time function is data, never a closure: it is
+/// either a sine or a piecewise-linear table, and nothing else.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AmplitudeSpec {
+    /// `amplitude · sin(2π t / period)`. NAFEMS T3's `100 sin(π t / 40)` is a prescribed
+    /// temperature of "100 K" with `amplitude: 1` and `period: "80 s"`.
+    Sine { amplitude: f64, period: Q<Time> },
+    /// Piecewise-linear through the points `(t[i], value[i])`, held flat outside the table.
+    /// `t` must be ascending and the two arrays the same length.
+    Table { t: Vec<Q<Time>>, value: Vec<f64> },
 }
 
 /// Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations
@@ -816,6 +840,13 @@ pub enum Command {
     #[serde(rename = "constraint.symmetry", rename_all = "camelCase")]
     ConstraintSymmetry { name: String, on: SetRef, normal: Axis },
 
+    /// Hold a Set at a fixed temperature in a heat Step (the Dirichlet boundary of conduction).
+    /// A heat Step needs either one of these or a convection boundary, or the temperature is
+    /// only defined up to a constant and the solve is singular. In a transient Step the value is
+    /// multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driven end.
+    #[serde(rename = "constraint.temperature", rename_all = "camelCase")]
+    ConstraintTemperature { name: String, on: SetRef, value: Q<Temperature> },
+
     /// Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without
     /// it first. Removing a constraint makes existing Results of that Step stale.
     #[serde(rename = "constraint.remove", rename_all = "camelCase")]
@@ -852,6 +883,22 @@ pub enum Command {
         reference: Option<Q<Temperature>>,
     },
 
+    /// Newton cooling on a face Set: heat `h (T − tInf)` leaves the surface per unit area. This
+    /// is the usual "exposed to air" boundary and, unlike a flux, it also stiffens the system,
+    /// so a heat Step with a convection face needs no fixed temperature to be well posed.
+    #[serde(rename = "load.convection", rename_all = "camelCase")]
+    LoadConvection { name: String, on: SetRef, h: Q<HeatTransfer>, t_inf: Q<Temperature> },
+
+    /// A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated
+    /// face needs no Command at all: zero flux is what a face with no boundary condition does.
+    #[serde(rename = "load.heatFlux", rename_all = "camelCase")]
+    LoadHeatFlux { name: String, on: SetRef, q: Q<HeatFlux> },
+
+    /// A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
+    /// It is a density, not a total: the heat delivered is `q` times each Body's volume.
+    #[serde(rename = "load.heatSource", rename_all = "camelCase")]
+    LoadHeatSource { name: String, bodies: Vec<String>, q: Q<HeatSource> },
+
     /// Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it
     /// first. Removing a load makes existing Results of that Step stale.
     #[serde(rename = "load.remove", rename_all = "camelCase")]
@@ -859,7 +906,12 @@ pub enum Command {
 
     /// Define an analysis Step: the procedure, and which Constraints and Loads are active in
     /// it. `output` lists the fields to compute (default displacement, stress, von Mises and
-    /// reactions). Steps run in the order given by step.reorder.
+    /// reactions). Steps run in the order given by step.reorder, and `after` names an earlier
+    /// Step whose Result this one continues — a static Step after a heat Step picks up its
+    /// temperature field and turns it into thermal stress. The remaining fields belong to one
+    /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
+    /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
+    /// `dtFactor` and `outputEvery` to explicit.
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -868,6 +920,26 @@ pub enum Command {
         loads: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<Vec<Field>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        n_modes: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shift: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dt: Option<Q<Time>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        t_end: Option<Q<Time>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        theta: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_every: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dt_factor: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        amplitude: Option<AmplitudeSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial: Option<Q<Temperature>>,
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced

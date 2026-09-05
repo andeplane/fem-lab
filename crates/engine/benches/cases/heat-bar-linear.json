@@ -1,0 +1,127 @@
+{
+  "name": "heat-bar-linear",
+  "reference": "Benchmark E1: a bar held at 0 degC at one end and 100 degC at the other conducts the linear profile T(x) = 100 x / L exactly, so the mid-point is at 50 degC and the quarter point at 25 degC. The oracle is the closed form of one-dimensional conduction with no source, which every element family has to reproduce to machine precision.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "heat-bar"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "temperature": "degC"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "bar",
+      "size": [
+        "1 m",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "k": "45 W/(m K)",
+      "cp": "460 J/(kg K)",
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "bar"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "100 mm"
+      }
+    },
+    {
+      "cmd": "constraint.temperature",
+      "name": "cold",
+      "on": "bar.xmin",
+      "value": "0 degC"
+    },
+    {
+      "cmd": "constraint.temperature",
+      "name": "hot",
+      "on": "bar.xmax",
+      "value": "100 degC"
+    },
+    {
+      "cmd": "step.add",
+      "name": "conduct",
+      "procedure": "heat-steady",
+      "constraints": [
+        "cold",
+        "hot"
+      ],
+      "loads": [],
+      "output": [
+        "temperature"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "conduct"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": [
+          "500 mm",
+          "50 mm",
+          "50 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 50.0,
+      "tol": 1e-09,
+      "note": "the mid-point of a linear profile"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": [
+          "250 mm",
+          "50 mm",
+          "50 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 25.0,
+      "tol": 1e-09,
+      "note": "and the quarter point"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "the heat that enters at the hot end leaves at the cold one"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

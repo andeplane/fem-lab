@@ -43,7 +43,7 @@ plane-stress sheet and an axisymmetric ring. A8's numerics half is
 | B1 | Cantilever, tip force, Euler–Bernoulli + Timoshenko shear correction | δ = PL³/3EI + PL/κGA = 0.1919619 mm | hex20 within 1 %; hex8 with incompatible modes within 2 %; full integration recorded | bending; full-integration hex8 shows shear locking, the improved hex8 does not | green |
 | B2 | MacNeal–Harder straight cantilever, in-plane shear, regular / trapezoidal / parallelogram meshes | 0.1081 in (regular) | quad8/hex20 ≤ 1 %; quad4/hex8 error recorded and shown, not gated | mesh-distortion sensitivity | |
 | B3 | MacNeal–Harder twisted beam (90° twist, 12 elements) | 0.005424 in (in-plane), 0.001754 in (out-of-plane) — **verify against the paper** | 2 % | warped elements | |
-| B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (mode 3, Timoshenko drift) | mass matrix, eigen solver | |
+| B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (modes 2 and 3, Timoshenko drift) | mass matrix, eigen solver | engine test + green |
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
 
@@ -65,44 +65,74 @@ at 50 mm.
 
 ## C. Two-dimensional and axisymmetric (phase 3)
 
-| # | Case | Reference | Tolerance | Proves |
-|---|---|---|---|---|
-| C1 | Kirsch plate with a hole, plane stress | K_t = 3.00 (infinite plate); 3.018 for the Ansys VM142 finite geometry | 2 % at p=2 with refinement | stress concentration, local refinement, symmetry (quarter model equals full) |
-| C2 | Lamé thick cylinder, plane strain and 3D | u_r(a) = 5.90e-5 m, σθθ(a) = 100 MPa, σrr(a) = −60 MPa (SimScale/SSLV04 data) | 1 % disp, 2 % stress at p=2 | axisymmetric and 3D agree |
-| C3 | Near-incompressible cylinder, ν = 0.49, 0.499, 0.4999 | regenerated from Lamé | monotone; < 2 % for a locking-free element | volumetric locking exposed and fixed (B-bar / mixed) |
-| C4 | Cook's membrane | 21.520 (ν = 1/3, arXiv 1806.07500) vs 23.9 (plane-stress classic) — **resolve** | 1 % at fine mesh + Richardson extrapolation | bending-dominated distorted mesh |
-| C5 | NAFEMS LE1 elliptic membrane, plane stress | σyy(D) = 92.7 MPa | 2 % (p=2), 5 % (p=1) | curved boundaries, pressure load |
-| C6 | NAFEMS FV32 cantilevered tapered membrane, modal | 44.623, 130.03, 162.70, 246.05, 379.90, 391.44 Hz | 1 % | 2D eigen |
-| C7 | NAFEMS T4 steady conduction + convection | T(E) = 18.3 °C (converged 18.25) | 0.5 °C | convection BC |
-| C8 | NAFEMS T1 membrane with hot spot | σyy(D) = 50.0 MPa | 2 % | thermal → structural coupling |
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| C1 | Kirsch plate with a hole, plane stress | K_t = 3.00 (infinite plate); 3.018 for the Ansys VM142 finite geometry | 2 % at p=2 with refinement | stress concentration, local refinement, symmetry (quarter model equals full) | |
+| C2 | Lamé thick cylinder, plane strain and 3D | u_r(a) = 5.90e-5 m, σθθ(a) = 100 MPa, σrr(a) = −60 MPa (SimScale/SSLV04 data) | 1 % disp, 2 % stress at p=2 | axisymmetric and 3D agree | |
+| C3 | Near-incompressible cylinder, ν = 0.49, 0.499, 0.4999 | regenerated from Lamé | monotone; < 2 % for a locking-free element | volumetric locking exposed and fixed (B-bar / mixed) | |
+| C4 | Cook's membrane | 21.520 (ν = 1/3, arXiv 1806.07500) vs 23.9 (plane-stress classic) — **resolve** | 1 % at fine mesh + Richardson extrapolation | bending-dominated distorted mesh | |
+| C5 | NAFEMS LE1 elliptic membrane, plane stress | σyy(D) = 92.7 MPa | 2 % (p=2), 5 % (p=1) | curved boundaries, pressure load | |
+| C6 | NAFEMS FV32 cantilevered tapered membrane, modal | 44.623, 130.03, 162.70, 246.05, 379.90, 391.44 Hz | 1 % | 2D eigen | engine test |
+| C7 | NAFEMS T4 steady conduction + convection | T(E) = 18.3 °C (converged 18.25) | 0.5 °C | convection BC | engine test + green |
+| C8 | Thermal → structural chain, restrained plate (**substitute for NAFEMS T1**) | σxx = −E α ΔT/(1−ν) = −150 MPa at mid-height | 2 % | thermal → structural coupling | green |
 
 ## D. Three-dimensional solids (phase 2–3)
 
 | # | Case | Reference | Tolerance | Proves |
 |---|---|---|---|---|
 | D1 | NAFEMS LE10 thick plate under pressure | σyy(D) = −5.38 MPa | 2 % (hex20/tet10); hex8 error (~−29 %) recorded and shown as the element-order lesson | 3D solid benchmark |
-| D2 | NAFEMS LE11 solid cylinder/taper/sphere, thermal stress | σzz(A) = −105 MPa | 3 % | thermal stress in 3D / axisymmetric |
+| D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen |
 | D4 | Manufactured solution, elasticity and Poisson, hex/tet p=1,2 | prescribed u(x); L2 rate p+1, H1 rate p | rate ± 0.1 | convergence machinery, body loads |
 | D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale |
 
 ## E. Heat transfer (phase 2)
 
-| # | Case | Reference | Tolerance | Proves |
-|---|---|---|---|---|
-| E1 | 1D bar, fixed temperatures | linear profile | 1e-10 | conduction |
-| E2 | Ansys VM97 fin, conduction + convection | tip 416 °F | 1 % | convection with analytical fin solution |
-| E3 | NAFEMS T3 1D transient, sinusoidal boundary | T(x = 0.08 m, t = 32 s) = 36.60 °C | 0.5 °C | transient integrator |
-| E4 | NAFEMS T2 conduction + radiation | T(B) = 927 K | 1 % | radiation BC (if/when added) |
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| E1 | 1D bar, fixed temperatures, hex8/tet4/quad4/tri3 | linear profile | 1e-10 | conduction | engine test + green |
+| E2 | Ansys VM97 fin, conduction + convection | 1D fin with a convective tip, `θ(L)/θ₀ = 1/[cosh mL + (h/mk) sinh mL]` | 2 % (see below) | convection with an analytical fin solution | engine test |
+| E3 | NAFEMS T3 1D transient, sinusoidal boundary | T = 36.60 °C, 20 mm inside the driven face at t = 32 s | 0.5 °C | transient integrator, θ-method order | engine test + green |
+| E4 | NAFEMS T2 conduction + radiation | T(B) = 927 K | 1 % | radiation BC (if/when added) | |
+
+E1 runs the four element families on the same bar and checks every node, not just a probe: the
+profile is linear to 1e-10 for all of them, and the heat that enters at the hot end leaves at
+the cold one to 1e-9. A volumetric source in a slab held at both faces is checked against its
+own closed form `T = T_s + q(Lx − x²)/2k` in the same commit, which is the oracle for
+`load.heatSource`.
+
+**E2's tolerance is 2 %, not 1 %, and the reason is physics.** The published fin formula is
+one-dimensional; the model is the real two-dimensional slab, whose mid-plane has to conduct
+across the half-thickness before the film can take the heat away. That resistance keeps the fin
+hotter than the 1D formula by 1.65 % at VM97's proportions (Biot number `h(t/2)/k` = 0.042).
+The case pins this down rather than widening a tolerance and hoping: the two meshes agree to
+0.1 %, so the gap is not discretisation, and the same fin at a tenth of the Biot number and the
+same `mL` lands inside 0.3 %, so the gap really is the transverse gradient.
+
+E3's published probe is stated as "x = 0.08 m" measured from the held-cold end of the 0.1 m
+bar, which is 20 mm inside the driven face; at the driven face's own 80 mm the temperature is
+0.07 K, four diffusion lengths away. The Step runs in kelvin above the initial state, which is
+the same problem the published case states in °C: linear conduction is invariant under a shift
+of the whole temperature. The temporal rate study is in
+`the_theta_method_converges_at_its_own_order_in_time`: Crank–Nicolson ≥ 1.8, backward Euler
+≥ 0.8, against the same problem at Δt = 0.0625 s.
 
 ## F. Dynamics and explicit (phase 2, 6)
 
-| # | Case | Reference | Tolerance | Proves |
-|---|---|---|---|---|
-| F1 | Linear momentum conservation, free body, 2000 explicit steps | Δp = 0 | 1e-6 | explicit integrator symmetry (Blast Wall's test) |
-| F2 | Critical time step | 0.9 Δt_crit stable, 1.25 Δt_crit diverges | as stated | Δt estimator really is critical |
-| F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) |
-| F4 | Two-block tie / bonded contact patch test | continuous stress across the tie | 1e-8 | constraints between bodies (phase 6) |
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| F1 | Linear momentum conservation, free body, 2000 explicit steps | Δp = 0, energy drift = 0 | 1e-6 | explicit integrator symmetry (Blast Wall's test) | engine test |
+| F2 | Critical time step | 0.9 Δt_crit stable for 5000 steps, 1.25 Δt_crit is `explicit.unstable` | as stated | Δt estimator really is critical | engine test |
+| F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
+| F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) | |
+| F4 | Two-block tie / bonded contact patch test | continuous stress across the tie | 1e-8 | constraints between bodies (phase 6) | |
+
+F1's initial velocity is `v₀ + ω × (x − c)`, which is in the null space of `K`, so a correct
+integrator translates and spins the block and never strains it: momentum and energy are
+conserved to roundoff and the total momentum is the block's mass times `v₀`. F2's instability
+monitor is an energy balance — for a linear undamped system the energy in the model can never
+exceed the work the loads have done, so `E > 1e3 · max(E₀, |W|)` is the test — which is what
+lets a Step that starts from rest under a load be watched at all.
 
 ## G. Shells and plates (phase 8)
 
@@ -129,6 +159,31 @@ at 50 mm.
 | # | Case | Method |
 |---|---|---|
 | I1 | Export B1, C5, D1 as Abaqus `.inp`, run in CalculiX, compare nodal displacements | within 1e-6 relative for identical mesh and element type; documented run, not CI |
+
+## Substituted cases
+
+Two rows above are **substitutes**, marked as such, and this is what happened. C8 (NAFEMS T1
+membrane with a hot spot) and D2 (NAFEMS LE11 solid cylinder/taper/sphere) both need published
+data the session that implemented the procedures did not have: T1's hot-spot geometry and
+temperature table, and LE11's `(r, z)` profile coordinates. Plan A §9 says to use its fallback
+recipe and say what was used, and hard-coding a printed answer for a geometry guessed from
+memory would be a benchmark that proves nothing. So both were replaced by cases that exercise
+the same code path — a heat Step chained into a static Step through `step.add { after }` —
+against a *closed form* rather than a printed number:
+
+- **C8 substitute**, `thermal-stress-plate`: a 1 m plane-strain square is conducted to a linear
+  temperature field, then held against x displacement on both vertical edges and left free in
+  y. The exact answer is `σ_xx = −E α ΔT/(1 − ν)` with `σ_yy = 0`, so at mid-height
+  (ΔT = 50 K, α = 1e-5) it is −150 MPa and at quarter height −75 MPa. The engine reproduces all
+  three to 1e-11.
+- **D2 substitute**, `axisymmetric-thermal-stress`: a solid cylinder with a uniform volumetric
+  source and its curved surface held cold conducts the parabolic field
+  `ΔT = A(1 − (r/a)²)`, `A = qa²/4k`; a static Step after it holds both flat ends axially, which
+  is the plane-strain thermal-stress problem of Timoshenko §151, and `σ_zz` on the axis is
+  −58.654 MPa for E = 210 GPa, ν = 0.3, α = 2.3e-4 and A = 1 K.
+
+Both rows revert to the NAFEMS cases the moment the published data is at hand; the chaining they
+prove is the same either way.
 
 ## Where the reference values are published
 

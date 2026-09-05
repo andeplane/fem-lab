@@ -133,6 +133,13 @@ export interface Fem {
      */
     symmetry(args: Omit<Extract<Command, { cmd: 'constraint.symmetry' }>, 'cmd'>): Promise<Ack>;
     /**
+     * Hold a Set at a fixed temperature in a heat Step (the Dirichlet boundary of conduction).
+     * A heat Step needs either one of these or a convection boundary, or the temperature is
+     * only defined up to a constant and the solve is singular. In a transient Step the value is
+     * multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driven end.
+     */
+    temperature(args: Omit<Extract<Command, { cmd: 'constraint.temperature' }>, 'cmd'>): Promise<Ack>;
+    /**
      * Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without
      * it first. Removing a constraint makes existing Results of that Step stale.
      */
@@ -165,6 +172,22 @@ export interface Fem {
      */
     temperature(args: Omit<Extract<Command, { cmd: 'load.temperature' }>, 'cmd'>): Promise<Ack>;
     /**
+     * Newton cooling on a face Set: heat `h (T − tInf)` leaves the surface per unit area. This
+     * is the usual "exposed to air" boundary and, unlike a flux, it also stiffens the system,
+     * so a heat Step with a convection face needs no fixed temperature to be well posed.
+     */
+    convection(args: Omit<Extract<Command, { cmd: 'load.convection' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated
+     * face needs no Command at all: zero flux is what a face with no boundary condition does.
+     */
+    heatFlux(args: Omit<Extract<Command, { cmd: 'load.heatFlux' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
+     * It is a density, not a total: the heat delivered is `q` times each Body's volume.
+     */
+    heatSource(args: Omit<Extract<Command, { cmd: 'load.heatSource' }>, 'cmd'>): Promise<Ack>;
+    /**
      * Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it
      * first. Removing a load makes existing Results of that Step stale.
      */
@@ -174,7 +197,12 @@ export interface Fem {
     /**
      * Define an analysis Step: the procedure, and which Constraints and Loads are active in
      * it. `output` lists the fields to compute (default displacement, stress, von Mises and
-     * reactions). Steps run in the order given by step.reorder.
+     * reactions). Steps run in the order given by step.reorder, and `after` names an earlier
+     * Step whose Result this one continues — a static Step after a heat Step picks up its
+     * temperature field and turns it into thermal stress. The remaining fields belong to one
+     * procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
+     * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
+     * `dtFactor` and `outputEvery` to explicit.
      */
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**

@@ -282,10 +282,26 @@ pub struct ResultSummary {
     pub extremes: Vec<Extreme>,
     pub reactions: Vec<ReactionRow>,
     pub applied_total: [Valued; 3],
+    /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
+    /// shape is the Result field named `mode:k`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frequencies: Vec<Valued>,
+    /// One row per output time of a transient Step: when, and the range the field covered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<HistoryRow>,
     /// |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
     /// by a prescribed displacement — where both totals are zero — still reports a meaningful
     /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
     pub balance: f64,
+}
+
+/// One time of a transient Step's history: the extremes of the field at that instant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryRow {
+    pub time: Valued,
+    pub min: Valued,
+    pub max: Valued,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
