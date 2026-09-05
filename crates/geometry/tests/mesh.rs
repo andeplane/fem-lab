@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use femlab_geometry::{
-    annulus, elliptic_annulus, extrude, mapped, perturb_interior, revolve, split_to_simplices, Curve, ElementBlock,
-    ElementKind, Face, FaceKind, Mesh, QuadBlock, Structured,
+    annulus, elliptic_annulus, extrude, free, mapped, perturb_interior, revolve, split_to_simplices, Curve,
+    ElementBlock, ElementKind, Face, FaceKind, Mesh, QuadBlock, RefineBox, Segment, Structured,
 };
 use proptest::prelude::*;
 
@@ -1234,4 +1234,117 @@ fn sweeps_refuse_what_they_cannot_sweep() {
     assert!(revolve(&base, 1, 0.0).unwrap_err().0.contains("in (0, 360]"));
     // the base touches x = 0, which a revolution about z cannot mesh
     assert!(revolve(&base, 4, 90.0).unwrap_err().0.contains("butterfly block set"));
+}
+
+// ---- free 2D triangles -----------------------------------------------------------------------
+
+/// A 10 x 10 plate with a circular hole of radius `r` at its centre, every edge tagged.
+fn plate_with_hole(r: f64) -> Sketch {
+    let mut s = Sketch::rect(10.0, 10.0);
+    s.holes.push(Sketch::circle([5.0, 5.0], r, "hole"));
+    s
+}
+
+/// The area of the polygon the mesher actually triangulates: the sampled loops, not the arcs.
+fn sampled_area(sketch: &Sketch, chord_tol: f64) -> f64 {
+    sketch.loops(chord_tol).unwrap().iter().map(|l| l.signed_area()).sum()
+}
+
+#[test]
+fn the_free_mesher_fills_a_plate_with_a_hole_and_keeps_every_tag() {
+    let sketch = plate_with_hole(1.0);
+    for quadratic in [false, true] {
+        let m = free(&sketch, 1.0, quadratic, &[]).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.blocks[0].kind, if quadratic { ElementKind::Tri6 } else { ElementKind::Tri3 });
+        assert!(min_element_measure(&m) > 0.0, "every triangle is counter-clockwise");
+        // the mesh is exactly the sampled polygon, hole carved
+        assert!((measure(&m) - sampled_area(&sketch, 0.1)).abs() < 1e-12, "{}", measure(&m));
+        assert_eq!(m.elem_sets["all"].len(), m.n_elems());
+        assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["hole", "xmax", "xmin", "ymax", "ymin"]);
+        for (name, faces) in &m.face_sets {
+            assert!(!faces.is_empty(), "{name}");
+        }
+        // the tagged edges are exactly the boundary of the mesh, and nothing else
+        assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+        assert!(face_set_nodes(&m, "xmin").iter().all(|&n| m.node(n)[0] == 0.0));
+        assert!(face_set_nodes(&m, "hole").iter().all(|&n| {
+            let p = m.node(n);
+            (libm::hypot(p[0] - 5.0, p[1] - 5.0) - 1.0).abs() < 0.1
+        }));
+    }
+    // tri6 mid-nodes are the midpoints of the Abaqus edges, in the Abaqus order
+    let m = free(&sketch, 2.0, true, &[]).unwrap();
+    assert!(mid_nodes_are_midpoints(&m), "weka's edge_nodes are permuted to [e2, e0, e1]");
+    // the same input twice is the same mesh, to the last bit
+    assert_eq!(free(&sketch, 2.0, true, &[]).unwrap(), m);
+}
+
+#[test]
+fn a_refine_box_makes_smaller_triangles_where_it_covers() {
+    let sketch = plate_with_hole(1.0);
+    let box_ = RefineBox { min: [3.0, 3.0], max: [7.0, 7.0], size: 0.4 };
+    let m = free(&sketch, 2.0, false, std::slice::from_ref(&box_)).unwrap();
+    m.validate().unwrap();
+    assert!(min_element_measure(&m) > 0.0);
+    assert!((measure(&m) - sampled_area(&sketch, 0.2)).abs() < 1e-12);
+    let inside = |e: u32| {
+        let c = mean(&corners(&m, e));
+        (3.0..=7.0).contains(&c[0]) && (3.0..=7.0).contains(&c[1])
+    };
+    let area = |e: u32| corner_measure(m.kind_of(e), &corners(&m, e));
+    let biggest_in = (0..m.n_elems() as u32).filter(|&e| inside(e)).map(area).fold(0.0, f64::max);
+    let biggest_out = (0..m.n_elems() as u32).filter(|&e| !inside(e)).map(area).fold(0.0, f64::max);
+    let mean = |f: fn(bool) -> bool| {
+        let es: Vec<u32> = (0..m.n_elems() as u32).filter(|&e| f(inside(e))).collect();
+        es.iter().map(|&e| area(e)).sum::<f64>() / es.len() as f64
+    };
+    let (mean_in, mean_out) = (mean(|i| i), mean(|i| !i));
+    // The bound is imposed on the coarse triangles whose centroid was in the box, so a child of
+    // a coarse triangle centred just outside can still straddle the wall: the average holds the
+    // box's own bound, the largest single triangle need not.
+    assert!(mean_in < 2.0 * 0.5 * 0.4 * 0.4, "inside averages near the box's area bound: {mean_in}");
+    assert!(mean_out > 4.0 * mean_in, "outside stays coarse: {mean_out} vs {mean_in}");
+    assert!(biggest_out > 2.0 * biggest_in, "and so does the largest: {biggest_out} vs {biggest_in}");
+    assert!(free(&sketch, 2.0, false, &[]).unwrap().n_elems() < m.n_elems());
+}
+
+#[test]
+fn a_hole_whose_centroid_lies_outside_it_is_still_carved() {
+    // an L-shaped hole: the mean of its corners falls in the notch, outside the hole
+    let mut s = Sketch::rect(6.0, 6.0);
+    s.holes.push(vec![
+        Segment::Line { to: [4.0, 1.0], tag: Some("ell".into()) },
+        Segment::Line { to: [4.0, 2.0], tag: Some("ell".into()) },
+        Segment::Line { to: [2.0, 2.0], tag: Some("ell".into()) },
+        Segment::Line { to: [2.0, 4.0], tag: Some("ell".into()) },
+        Segment::Line { to: [1.0, 4.0], tag: Some("ell".into()) },
+        Segment::Line { to: [1.0, 1.0], tag: Some("ell".into()) },
+    ]);
+    let l = &s.loops(0.1).unwrap()[1];
+    let n = l.pts.len() as f64;
+    let c = [l.pts.iter().map(|p| p[0]).sum::<f64>() / n, l.pts.iter().map(|p| p[1]).sum::<f64>() / n];
+    assert!(!l.contains(c), "the centroid {c:?} is in the notch, so the seed comes off an edge");
+    let m = free(&s, 1.0, false, &[]).unwrap();
+    m.validate().unwrap();
+    assert!((measure(&m) - sampled_area(&s, 0.1)).abs() < 1e-12, "the L is carved out exactly");
+    assert!(!m.face_sets["ell"].is_empty());
+}
+
+#[test]
+fn the_free_mesher_refuses_a_bad_size_or_a_bad_sketch() {
+    let s = plate_with_hole(1.0);
+    assert!(free(&s, 0.0, false, &[]).unwrap_err().0.contains("must be finite and positive"));
+    assert!(free(&s, f64::NAN, false, &[]).unwrap_err().0.contains("must be finite and positive"));
+    let bad = RefineBox { min: [0.0, 0.0], max: [1.0, 1.0], size: -1.0 };
+    assert!(free(&s, 1.0, false, &[bad]).unwrap_err().0.contains("refine box 0 has size -1"));
+    let one = Sketch { outer: vec![Segment::Line { to: [1.0, 0.0], tag: None }], holes: vec![] };
+    assert!(free(&one, 1.0, false, &[]).unwrap_err().0.contains("two segments"));
+    // a hole that covers the whole outer loop carves everything: no triangle, and the refine
+    // pass has nothing to refine, so weka's own failure comes back as a GeomError
+    let mut all_hole = Sketch::rect(4.0, 4.0);
+    all_hole.holes.push(Sketch::rect(4.0, 4.0).outer);
+    assert!(free(&all_hole, 1.0, false, &[]).unwrap_err().0.contains("produced no triangle"));
+    let box_ = RefineBox { min: [0.0, 0.0], max: [4.0, 4.0], size: 0.5 };
+    assert!(free(&all_hole, 1.0, false, &[box_]).unwrap_err().0.contains("3 input points"));
 }

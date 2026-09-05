@@ -1517,3 +1517,157 @@ fn a_sweep_validates_its_own_fields_and_refuses_a_lattice_base() {
     );
     assert!(e.query(Query::Mesh {}).unwrap_err().cause.contains("2D base mesh"));
 }
+
+/// C §7 C1's free row: the full Kirsch plate as a Sheet with a circular hole.
+const PLATE: &str = r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+    {"kind":"line","to":["10 m","0 m"],"tag":"ymin"},
+    {"kind":"line","to":["10 m","10 m"],"tag":"xmax"},
+    {"kind":"line","to":["0 m","10 m"],"tag":"ymax"},
+    {"kind":"line","to":["0 m","0 m"],"tag":"xmin"}],
+    "holes":[[{"kind":"arc","center":["5 m","5 m"],"to":["4 m","5 m"],"ccw":true,"tag":"hole"},
+              {"kind":"arc","center":["5 m","5 m"],"to":["6 m","5 m"],"ccw":true,"tag":"hole"}]]}}}"#;
+
+#[test]
+fn the_free_mesher_fills_a_sheet_body_with_triangles() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"kirsch-free"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 mm"}}"#);
+    ok(&mut e, PLATE);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"1 m"}}"#);
+    let m = mesh_summary(&mut e);
+    assert_eq!(m.element_kind, "tri3");
+    assert!(m.elements > 100, "{} elements", m.elements);
+    assert_eq!(m.dofs, 2 * m.nodes);
+    assert_eq!(
+        m.sets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["plate.hole", "plate.xmax", "plate.xmin", "plate.ymax", "plate.ymin"]
+    );
+    // the plate is 10 x 10 less a hole of radius 1, to the chord error of the sampled circle
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"all","where":{"kind":"body","name":"plate"}}"#);
+    let all = set_info(&mut e, "all");
+    assert_eq!(all.measure.unit, "m^2");
+    // the hole is sampled to a chord tolerance of a tenth of the element size, so a finer mesh
+    // gets a rounder hole and the area converges on 100 - pi from above
+    let exact = 100.0 - std::f64::consts::PI;
+    let coarse = all.measure.value - exact;
+    assert!((0.0..0.4).contains(&coarse), "{:?} vs {exact}", all.measure);
+    assert!(set_info(&mut e, "plate.hole").count >= 8, "one face per sampled chord, at least");
+    assert!((set_info(&mut e, "plate.xmin").measure.value - 10.0).abs() < 1e-9);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"plate.xmin"}"#);
+
+    // order 2 gives tri6, and a refine box around the hole adds elements
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"1 m",
+            "refine":[{"min":["3 m","3 m"],"max":["7 m","7 m"],"size":"0.4 m"}]},"order":2}"#,
+    );
+    let refined = mesh_summary(&mut e);
+    assert_eq!(refined.element_kind, "tri6");
+    assert!(refined.elements * 2 > 3 * m.elements, "{} vs {}", refined.elements, m.elements);
+    let all = set_info(&mut e, "all");
+    assert!((all.measure.value - exact - coarse).abs() < 1e-9, "the same sampling as the coarse run");
+
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"0.25 m"}}"#);
+    let fine = set_info(&mut e, "all").measure.value - exact;
+    assert!(fine > 0.0 && fine < 0.4 * coarse, "a rounder hole at a smaller size: {fine} vs {coarse}");
+}
+
+#[test]
+fn the_free_mesher_validates_its_body_its_size_and_its_boxes() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"bad"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    ok(&mut e, PLATE);
+    assert_eq!(
+        where_(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"1 kg"}}"#),
+        "mesher.size"
+    );
+    assert_eq!(
+        where_(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"0 m"}}"#),
+        "mesher.size"
+    );
+    let with_box = |b: &str| {
+        format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"free","of":"plate","size":"1 m","refine":[{b}]}}}}"#)
+    };
+    assert_eq!(
+        where_(&mut e, &with_box(r#"{"min":["0 s","0 m"],"max":["1 m","1 m"],"size":"0.5 m"}"#)),
+        "mesher.refine[0].min[0]"
+    );
+    assert_eq!(
+        where_(&mut e, &with_box(r#"{"min":["0 m","0 m"],"max":["1 m","1 A"],"size":"0.5 m"}"#)),
+        "mesher.refine[0].max[1]"
+    );
+    assert_eq!(
+        where_(&mut e, &with_box(r#"{"min":["0 m","0 m"],"max":["1 m","1 m"],"size":"1 N"}"#)),
+        "mesher.refine[0].size"
+    );
+    assert_eq!(
+        where_(&mut e, &with_box(r#"{"min":["0 m","0 m"],"max":["1 m","1 m"],"size":"0 m"}"#)),
+        "mesher.refine[0].size"
+    );
+    assert_eq!(
+        where_(&mut e, &with_box(r#"{"min":["2 m","0 m"],"max":["1 m","1 m"],"size":"0.5 m"}"#)),
+        "mesher.refine[0].min"
+    );
+    // a Body that is not a sheet, and one that is not there at all
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"solid3d"}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"blk","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"blk","size":"1 m"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("mesher.of")));
+    assert!(er.cause.contains("is not a sheet"), "{}", er.cause);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"nope","size":"1 m"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::NotFound, Some("mesher.of")));
+    // a size the mesher itself cannot use is a mesh failure
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"inside-out","shape":{"kind":"sheet","sketch":{"outer":[
+          {"kind":"line","to":["4 m","0 m"],"tag":"a"},{"kind":"line","to":["4 m","4 m"],"tag":"b"},
+          {"kind":"line","to":["0 m","4 m"],"tag":"c"},{"kind":"line","to":["0 m","0 m"],"tag":"d"}],
+          "holes":[[{"kind":"line","to":["4 m","0 m"],"tag":"h"},{"kind":"line","to":["4 m","4 m"],"tag":"h"},
+          {"kind":"line","to":["0 m","4 m"],"tag":"h"},{"kind":"line","to":["0 m","0 m"],"tag":"h"}]]}}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"inside-out","size":"1 m"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("mesher.size")));
+    assert!(er.cause.contains("produced no triangle"), "{}", er.cause);
+}
+
+#[test]
+fn a_triangle_section_cannot_be_swept_into_hexes() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"swept-free"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"ring","shape":{"kind":"sheet","sketch":{"outer":[
+          {"kind":"line","to":["2 m","0 m"],"tag":"zmin"},{"kind":"line","to":["2 m","1 m"],"tag":"outer"},
+          {"kind":"line","to":["1 m","1 m"],"tag":"zmax"},{"kind":"line","to":["1 m","0 m"],"tag":"inner"}]}}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"sweep","base":{"kind":"free","of":"ring","size":"0.5 m"},
+            "sweep":{"kind":"revolve","segments":6,"angleDeg":90}}}"#,
+    );
+    // a swept triangle is a wedge, which is not one of the eight element kinds
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("mesher.sweep")));
+    assert!(er.cause.contains("quad4 or quad8 base mesh"), "{}", er.cause);
+    // the same section as one mapped block sweeps fine
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"sweep","base":{"kind":"mapped","body":"ring","blocks":[
+            {"corners":[["1 m","0 m"],["2 m","0 m"],["2 m","1 m"],["1 m","1 m"]],"n":[2,2],
+             "tags":["zmin","outer","zmax","inner"]}]},
+            "sweep":{"kind":"revolve","segments":6,"angleDeg":90}}}"#,
+    );
+    let m = mesh_summary(&mut e);
+    assert_eq!(m.element_kind, "hex8");
+    assert_eq!(m.elements, 4 * 6);
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"all","where":{"kind":"body","name":"ring"}}"#);
+    // a quarter of the tube pi (2^2 - 1^2) 1 / 4, less the chord error of six flat facets
+    let exact = std::f64::consts::PI * 3.0 / 4.0;
+    let all = set_info(&mut e, "all");
+    assert!((all.measure.value - exact).abs() < 0.05 * exact, "{:?} vs {exact}", all.measure);
+}

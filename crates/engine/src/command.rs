@@ -186,6 +186,17 @@ pub struct QuadBlockSpec {
     pub tags: Option<[Option<String>; 4]>,
 }
 
+/// A box in which the free mesher uses a smaller element size than elsewhere, for a stress
+/// concentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a
+/// triangle is refined when its centroid falls inside it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RefineBoxSpec {
+    pub min: [Q<Length>; 2],
+    pub max: [Q<Length>; 2],
+    pub size: Q<Length>,
+}
+
 /// How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -223,11 +234,23 @@ pub enum MesherSpec {
         body: Option<String>,
         blocks: Vec<QuadBlockSpec>,
     },
+    /// Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a
+    /// 30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and
+    /// each entry of `refine` asks for a smaller size inside its box. Use it when the domain is
+    /// too awkward to cover with mapped blocks; prefer mapped blocks when it is not, because
+    /// they are exact and grade smoothly. The idealisation must be 2D, as the Body is.
+    Free {
+        of: String,
+        size: Q<Length>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refine: Option<Vec<RefineBoxSpec>>,
+    },
     /// A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`
     /// extrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes
     /// on the swept curve). The base's edge face Sets become the side faces of the solid, so a
     /// Set named on the section is still there in 3D, and the ends get their own. The
-    /// idealisation must be 3D, and the base must be a 2D mesher: mapped, not lattice.
+    /// idealisation must be 3D, and the base must make quadrilaterals, so it is the mapped
+    /// mesher: sweeping free triangles would need wedge elements, which the engine has not got.
     Sweep { base: Box<MesherSpec>, sweep: SweepSpec },
 }
 

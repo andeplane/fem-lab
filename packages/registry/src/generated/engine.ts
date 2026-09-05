@@ -1038,6 +1038,20 @@ export type MesherSpec =
       kind: "mapped";
     }
   | {
+      of: string;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      size:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      refine?: RefineBoxSpec[] | null;
+      kind: "free";
+    }
+  | {
       base: MesherSpec;
       sweep: SweepSpec;
       kind: "sweep";
@@ -1440,6 +1454,12 @@ export type MesherSettings =
       body: string;
       blocks: QuadBlock[];
       kind: "mapped";
+    }
+  | {
+      of: string;
+      size: number;
+      refine: RefineBox[];
+      kind: "free";
     }
   | {
       base: MesherSettings;
@@ -2682,6 +2702,66 @@ export interface QuadBlockSpec {
   tags?: [string | null, string | null, string | null, string | null] | null;
 }
 /**
+ * A box in which the free mesher uses a smaller element size than elsewhere, for a stress
+ * concentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a
+ * triangle is refined when its centroid falls inside it.
+ */
+export interface RefineBoxSpec {
+  /**
+   * @minItems 2
+   * @maxItems 2
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  min: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  max: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+  /**
+   * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  size:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+}
+/**
  * `query.model` response.
  */
 export interface ModelSummary {
@@ -2801,6 +2881,22 @@ export interface QuadBlock {
    * @maxItems 4
    */
   tags: [string | null, string | null, string | null, string | null];
+}
+/**
+ * A local element size inside an axis-aligned box, for the free mesher's `refine` pass.
+ */
+export interface RefineBox {
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  min: [number, number];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  max: [number, number];
+  size: number;
 }
 /**
  * A check that did not stop the run but the user should see.

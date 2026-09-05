@@ -1836,7 +1836,37 @@
             ]
           },
           {
-            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must be a 2D mesher: mapped, not lattice.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "refine": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/RefineBoxSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size"
+            ]
+          },
+          {
+            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must make quadrilaterals, so it is the mapped\nmesher: sweeping free triangles would need wedge elements, which the engine has not got.",
             "type": "object",
             "properties": {
               "base": {
@@ -2034,6 +2064,36 @@
               "semiAxes"
             ]
           }
+        ]
+      },
+      "RefineBoxSpec": {
+        "description": "A box in which the free mesher uses a smaller element size than elsewhere, for a stress\nconcentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a\ntriangle is refined when its centroid falls inside it.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "$ref": "#/$defs/Q_length"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
         ]
       },
       "SweepSpec": {
@@ -3138,6 +3198,35 @@
             ]
           },
           {
+            "description": "Free triangles inside the sketch of the Body `of`.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "type": "number",
+                "format": "double"
+              },
+              "refine": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/RefineBox"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size",
+              "refine"
+            ]
+          },
+          {
             "description": "A 2D mesher swept into 3D.",
             "type": "object",
             "properties": {
@@ -3301,6 +3390,39 @@
               "semi_axes"
             ]
           }
+        ]
+      },
+      "RefineBox": {
+        "description": "A local element size inside an axis-aligned box, for the free mesher's `refine` pass.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
         ]
       },
       "Sweep": {
@@ -5604,7 +5726,37 @@
             ]
           },
           {
-            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must be a 2D mesher: mapped, not lattice.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "refine": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/RefineBoxSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size"
+            ]
+          },
+          {
+            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must make quadrilaterals, so it is the mapped\nmesher: sweeping free triangles would need wedge elements, which the engine has not got.",
             "type": "object",
             "properties": {
               "base": {
@@ -5802,6 +5954,36 @@
               "semiAxes"
             ]
           }
+        ]
+      },
+      "RefineBoxSpec": {
+        "description": "A box in which the free mesher uses a smaller element size than elsewhere, for a stress\nconcentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a\ntriangle is refined when its centroid falls inside it.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "$ref": "#/$defs/Q_length"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
         ]
       },
       "SweepSpec": {
@@ -8081,6 +8263,35 @@
             ]
           },
           {
+            "description": "Free triangles inside the sketch of the Body `of`.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "type": "number",
+                "format": "double"
+              },
+              "refine": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/RefineBox"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size",
+              "refine"
+            ]
+          },
+          {
             "description": "A 2D mesher swept into 3D.",
             "type": "object",
             "properties": {
@@ -8244,6 +8455,39 @@
               "semi_axes"
             ]
           }
+        ]
+      },
+      "RefineBox": {
+        "description": "A local element size inside an axis-aligned box, for the free mesher's `refine` pass.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
         ]
       },
       "Sweep": {
@@ -10145,7 +10389,37 @@
             ]
           },
           {
-            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must be a 2D mesher: mapped, not lattice.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "refine": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/RefineBoxSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size"
+            ]
+          },
+          {
+            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must make quadrilaterals, so it is the mapped\nmesher: sweeping free triangles would need wedge elements, which the engine has not got.",
             "type": "object",
             "properties": {
               "base": {
@@ -10343,6 +10617,36 @@
               "semiAxes"
             ]
           }
+        ]
+      },
+      "RefineBoxSpec": {
+        "description": "A box in which the free mesher uses a smaller element size than elsewhere, for a stress\nconcentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a\ntriangle is refined when its centroid falls inside it.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "$ref": "#/$defs/Q_length"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
         ]
       },
       "SweepSpec": {

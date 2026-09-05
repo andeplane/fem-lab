@@ -6,10 +6,11 @@
 use std::collections::BTreeMap;
 
 use femlab_geometry::{
-    extrude, face_centroid_normal, lattice, mapped, nearest_boundary_face, resolve_face_set, resolve_region, revolve,
-    Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, Solid,
+    extrude, face_centroid_normal, free, lattice, mapped, nearest_boundary_face, resolve_face_set, resolve_region,
+    revolve, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox, Shape, Solid,
 };
 
+use crate::command::ObjectKind;
 use crate::command::{CurveSpec, LatticeSize, MesherSpec, QuadBlockSpec, SweepSpec};
 use crate::engine::display;
 use crate::error::{Error, ErrorCode};
@@ -87,7 +88,7 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
         MesherSettings::Lattice { size, counts } => lattice_bodies(model, solids, dim, quadratic, *size, *counts)?,
         m => {
-            let (body, part, mesher) = planar_or_swept(m, quadratic)?;
+            let (body, part, mesher) = planar_or_swept(model, m, quadratic)?;
             one_body(&body, part, dim, mesher)?
         }
     };
@@ -134,7 +135,7 @@ type Meshed = (Mesh, Vec<String>, BTreeMap<String, Vec<Face>>);
 ///
 /// A sweep meshes its base the same way and then extrudes or revolves it, so the Body of a
 /// swept mesh is the base's.
-fn planar_or_swept(m: &MesherSettings, quadratic: bool) -> Result<(String, Mesh, &'static str), Error> {
+fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result<(String, Mesh, &'static str), Error> {
     match m {
         MesherSettings::Lattice { .. } => Err(Error::new(
             ErrorCode::MeshFailed,
@@ -151,8 +152,30 @@ fn planar_or_swept(m: &MesherSettings, quadratic: bool) -> Result<(String, Mesh,
             })?;
             Ok((body.clone(), part, "mapped"))
         }
+        MesherSettings::Free { of, size, refine } => {
+            let sketch = match model.body(of).map(|b| &b.shape) {
+                Some(Shape::Sheet { sketch }) => sketch,
+                Some(_) => {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("body '{of}' is not a sheet, and the free mesher meshes a 2D sketch"),
+                    )
+                    .at("mesher.of")
+                    .suggest("geometry.add with a sheet shape, or mesh.set with the lattice mesher"))
+                }
+                None => {
+                    return Err(Error::not_found("body", of, &model.names(ObjectKind::Body)).at("mesher.of"));
+                }
+            };
+            let part = free(sketch, *size, quadratic, refine).map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.0)
+                    .at("mesher.size")
+                    .suggest("mesh.set with a different element size, or a sketch whose holes lie inside it")
+            })?;
+            Ok((of.clone(), part, "free"))
+        }
         MesherSettings::Sweep { base, sweep } => {
-            let (body, section, _) = planar_or_swept(base, quadratic)?;
+            let (body, section, _) = planar_or_swept(model, base, quadratic)?;
             let swept = match *sweep {
                 Sweep::Extrude { layers, height } => extrude(&section, layers, height),
                 Sweep::Revolve { segments, angle_deg } => revolve(&section, segments, angle_deg),
@@ -271,6 +294,29 @@ pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
                 out.push(quad_block(b, i)?);
             }
             Ok(MesherSettings::Mapped { body: body.clone().unwrap_or_else(|| "sheet".to_string()), blocks: out })
+        }
+        MesherSpec::Free { of, size, refine } => {
+            let s = size.si().map_err(|e| e.at("mesher.size"))?;
+            if s <= 0.0 {
+                return Err(Error::schema("element size must be positive").at("mesher.size"));
+            }
+            let mut boxes = Vec::new();
+            for (i, b) in refine.iter().flatten().enumerate() {
+                let at = |field: &str| format!("mesher.refine[{i}].{field}");
+                let r = RefineBox {
+                    min: xy(&b.min, &at("min"))?,
+                    max: xy(&b.max, &at("max"))?,
+                    size: b.size.si().map_err(|e| e.at(at("size")))?,
+                };
+                if r.size <= 0.0 {
+                    return Err(Error::schema("a refine box needs a positive element size").at(at("size")));
+                }
+                if r.min[0] >= r.max[0] || r.min[1] >= r.max[1] {
+                    return Err(Error::schema("a refine box needs min below max in both directions").at(at("min")));
+                }
+                boxes.push(r);
+            }
+            Ok(MesherSettings::Free { of: of.clone(), size: s, refine: boxes })
         }
         MesherSpec::Sweep { base, sweep } => {
             Ok(MesherSettings::Sweep { base: Box::new(mesher_settings(base)?), sweep: sweep_settings(sweep)? })

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use femlab_geometry::{FacePredicate, QuadBlock, RegionPredicate, Shape};
+use femlab_geometry::{FacePredicate, QuadBlock, RefineBox, RegionPredicate, Shape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -165,6 +165,12 @@ pub enum MesherSettings {
         body: String,
         blocks: Vec<QuadBlock>,
     },
+    /// Free triangles inside the sketch of the Body `of`.
+    Free {
+        of: String,
+        size: f64,
+        refine: Vec<RefineBox>,
+    },
     /// A 2D mesher swept into 3D.
     Sweep {
         base: Box<MesherSettings>,
@@ -186,6 +192,7 @@ impl MesherSettings {
         match self {
             MesherSettings::Lattice { .. } => None,
             MesherSettings::Mapped { body, .. } => Some(body),
+            MesherSettings::Free { .. } => None,
             MesherSettings::Sweep { base, .. } => base.implicit_body(),
         }
     }
