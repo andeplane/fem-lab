@@ -11,7 +11,9 @@ pub mod error;
 pub mod fem;
 pub mod gpu;
 pub mod hash;
+pub mod io;
 pub mod journal;
+pub mod mesh;
 pub mod model;
 pub mod par;
 pub mod queries;
@@ -23,6 +25,7 @@ pub use engine::{Engine, Host, NoClock, OnProgress, Progress};
 pub use error::{Error, ErrorCode, Warning};
 pub use gpu::Gpu;
 pub use journal::{Journal, JournalEntry, ModelFile};
+pub use mesh::{BuiltMesh, ResolvedSet, SetKind};
 pub use model::Model;
 pub use query::{Ack, Output, Query, QueryResult};
 

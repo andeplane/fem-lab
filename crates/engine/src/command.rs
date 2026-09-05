@@ -155,6 +155,14 @@ pub enum MesherSpec {
     Lattice { size: LatticeSize },
 }
 
+/// A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportFormat {
+    /// VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.
+    Vtu,
+}
+
 /// A quantity of interest for convergence studies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -648,6 +656,17 @@ pub enum Command {
         order: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         formulation: Option<Formulation>,
+    },
+
+    /// Write the current Mesh out as text the host saves; the Mesh is built first if it is
+    /// stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
+    /// id and the Body index as cell data. Naming a `step` to include that Step's result
+    /// fields is not supported yet: it returns unsupported until solving lands.
+    #[serde(rename = "mesh.export", rename_all = "camelCase")]
+    MeshExport {
+        format: ExportFormat,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
     },
 
     /// Fix displacement components to zero on a Set (default: all components, a clamped

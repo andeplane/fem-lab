@@ -220,6 +220,28 @@ pub struct MeshSummary {
     pub min_edge: Valued,
     pub max_edge: Valued,
     pub sets: Vec<SetRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<QualitySummary>,
+}
+
+/// Mesh quality inside `query.mesh`: worst-case ratios and the elements that set them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QualitySummary {
+    /// Smallest corner `min(det J) / max(det J)`; 1 is perfect, 0 degenerate, negative inverted.
+    pub min_det_j_ratio: f64,
+    /// Largest longest-edge over shortest-edge ratio.
+    pub max_aspect: f64,
+    /// Smallest angle at any element corner, in degrees.
+    pub min_angle_deg: f64,
+    pub worst: Vec<QualityRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityRow {
+    pub element: u32,
+    pub value: f64,
 }
 
 /// `query.set` response.
@@ -400,6 +422,13 @@ pub enum Output {
     },
     Study {
         report: StudyReport,
+    },
+    /// A file `mesh.export` produced, for the host to save.
+    Export {
+        format: crate::command::ExportFormat,
+        filename: String,
+        mime: String,
+        text: String,
     },
     Undo {
         steps: u32,

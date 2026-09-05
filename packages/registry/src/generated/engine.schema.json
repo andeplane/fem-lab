@@ -457,6 +457,29 @@
         ]
       },
       {
+        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Naming a `step` to include that Step's result\nfields is not supported yet: it returns unsupported until solving lands.",
+        "type": "object",
+        "properties": {
+          "format": {
+            "$ref": "#/$defs/ExportFormat"
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cmd": {
+            "type": "string",
+            "const": "mesh.export"
+          }
+        },
+        "required": [
+          "cmd",
+          "format"
+        ]
+      },
+      {
         "description": "Fix displacement components to zero on a Set (default: all components, a clamped\nsupport). For a roller give only the normal component. Fixing every node of a Body\nmakes the solve trivial; fix faces, not bodies.",
         "type": "object",
         "properties": {
@@ -1836,6 +1859,16 @@
           }
         ]
       },
+      "ExportFormat": {
+        "description": "A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.",
+        "oneOf": [
+          {
+            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.",
+            "type": "string",
+            "const": "vtu"
+          }
+        ]
+      },
       "Dof": {
         "description": "A displacement component.",
         "type": "string",
@@ -2916,6 +2949,16 @@
             "items": {
               "$ref": "#/$defs/SetRow"
             }
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QualitySummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -2927,6 +2970,57 @@
           "minEdge",
           "maxEdge",
           "sets"
+        ]
+      },
+      "QualitySummary": {
+        "description": "Mesh quality inside `query.mesh`: worst-case ratios and the elements that set them.",
+        "type": "object",
+        "properties": {
+          "minDetJRatio": {
+            "description": "Smallest corner `min(det J) / max(det J)`; 1 is perfect, 0 degenerate, negative inverted.",
+            "type": "number",
+            "format": "double"
+          },
+          "maxAspect": {
+            "description": "Largest longest-edge over shortest-edge ratio.",
+            "type": "number",
+            "format": "double"
+          },
+          "minAngleDeg": {
+            "description": "Smallest angle at any element corner, in degrees.",
+            "type": "number",
+            "format": "double"
+          },
+          "worst": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/QualityRow"
+            }
+          }
+        },
+        "required": [
+          "minDetJRatio",
+          "maxAspect",
+          "minAngleDeg",
+          "worst"
+        ]
+      },
+      "QualityRow": {
+        "type": "object",
+        "properties": {
+          "element": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "element",
+          "value"
         ]
       },
       "SetInfo": {
@@ -3699,6 +3793,29 @@
             "required": [
               "cmd",
               "mesher"
+            ]
+          },
+          {
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Naming a `step` to include that Step's result\nfields is not supported yet: it returns unsupported until solving lands.",
+            "type": "object",
+            "properties": {
+              "format": {
+                "$ref": "#/$defs/ExportFormat"
+              },
+              "step": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "mesh.export"
+              }
+            },
+            "required": [
+              "cmd",
+              "format"
             ]
           },
           {
@@ -5012,6 +5129,16 @@
           }
         ]
       },
+      "ExportFormat": {
+        "description": "A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.",
+        "oneOf": [
+          {
+            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.",
+            "type": "string",
+            "const": "vtu"
+          }
+        ]
+      },
       "Dof": {
         "description": "A displacement component.",
         "type": "string",
@@ -5457,6 +5584,35 @@
             ]
           },
           {
+            "description": "A file `mesh.export` produced, for the host to save.",
+            "type": "object",
+            "properties": {
+              "format": {
+                "$ref": "#/$defs/ExportFormat"
+              },
+              "filename": {
+                "type": "string"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "const": "export"
+              }
+            },
+            "required": [
+              "type",
+              "format",
+              "filename",
+              "mime",
+              "text"
+            ]
+          },
+          {
             "type": "object",
             "properties": {
               "steps": {
@@ -5717,6 +5873,16 @@
           "dofs",
           "value",
           "timeMs"
+        ]
+      },
+      "ExportFormat": {
+        "description": "A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.",
+        "oneOf": [
+          {
+            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.",
+            "type": "string",
+            "const": "vtu"
+          }
         ]
       }
     }
@@ -7688,6 +7854,29 @@
             ]
           },
           {
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Naming a `step` to include that Step's result\nfields is not supported yet: it returns unsupported until solving lands.",
+            "type": "object",
+            "properties": {
+              "format": {
+                "$ref": "#/$defs/ExportFormat"
+              },
+              "step": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "mesh.export"
+              }
+            },
+            "required": [
+              "cmd",
+              "format"
+            ]
+          },
+          {
             "description": "Fix displacement components to zero on a Set (default: all components, a clamped\nsupport). For a roller give only the normal component. Fixing every node of a Body\nmakes the solve trivial; fix faces, not bodies.",
             "type": "object",
             "properties": {
@@ -8995,6 +9184,16 @@
               "ny",
               "nz"
             ]
+          }
+        ]
+      },
+      "ExportFormat": {
+        "description": "A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.",
+        "oneOf": [
+          {
+            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.",
+            "type": "string",
+            "const": "vtu"
           }
         ]
       },

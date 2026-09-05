@@ -176,7 +176,7 @@ fn bench_runs_the_committed_cases_and_reports() {
         .args(["bench", "--markdown", "--filter", "cantilever"])
         .assert()
         .success()
-        .stdout(contains("| cantilever-model | 4/4 | green |"));
+        .stdout(contains("| cantilever-model | 11/11 | green |"));
     femlab().args(["bench", "--json"]).assert().success().stdout(contains("\"pass\": true"));
     femlab().args(["bench", "--filter", "nothing-matches"]).assert().success();
     let dir = scratch("bench");
