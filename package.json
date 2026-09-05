@@ -5,6 +5,8 @@
   "scripts": {
     "codegen": "node tools/codegen.mjs",
     "codegen:check": "node tools/codegen.mjs --check",
+    "dev": "npm run dev -w packages/app",
+    "build": "npm run build -w packages/app",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   }
