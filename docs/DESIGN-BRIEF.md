@@ -204,8 +204,13 @@ Bring-your-own API key, stored locally, with a plain notice about cost.
   project: bodies, faces, sets, materials, constraints, loads, steps, results, Journal entries,
   project files. `@bracket.top` or `@result:static-1` inserts a chip; the AI receives the
   object's summary (a Query result), so "make @top thicker" or "why is @vonMises high near
-  @hole" need no further explanation. Chips are also drag targets from the model tree and the
-  viewer (click a face, drag it into the chat).
+  @hole" need no further explanation. Three more ways to point: `@selection` (or a short
+  alias the design chooses) inserts whatever is currently selected in the viewer or tree, and
+  stays live until sent; clicking an object in the viewer while the chat input is focused
+  inserts its chip; and a selected object can be copied with ⌘C (from the viewer or the tree)
+  and pasted into the chat as a chip (the clipboard carries a plain-text form such as
+  `@face:bracket.top`, so the paste also works in any other text field). Chips are also drag
+  targets from the model tree and the viewer.
 - **Skills**: reusable instruction packs the AI can invoke, shown as a `/` menu in the chat
   (built-in: "verify against beam theory", "mesh convergence study", "write report", "NAFEMS
   benchmark"; user skills come from the project folder). A skill card shows name, one-line
