@@ -5,11 +5,15 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod mesh;
+pub mod mesher;
 pub mod predicate;
 pub mod shape;
 pub mod sketch;
 pub mod solid;
 
+pub use mesh::{Adjacency, ElementBlock, ElementKind, Face, FaceKind, Mesh, Surface};
+pub use mesher::{annulus, elliptic_annulus, perturb_interior, split_to_simplices, Structured};
 pub use predicate::{FacePredicate, RegionPredicate};
 pub use shape::{Affine3, Shape};
 pub use sketch::{Segment, Sketch};
