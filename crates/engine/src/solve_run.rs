@@ -149,6 +149,7 @@ impl Engine {
             solver: solver.unwrap_or_default(),
             rel_tol: tolerance.unwrap_or(SolveOptions::default().rel_tol),
             max_iterations: max_iterations.map_or(SolveOptions::default().max_iterations, |n| n as usize),
+            ..SolveOptions::default()
         };
         let procedure_step = match step.procedure {
             Procedure::Static => procedure::Step::Static { solver: opts },

@@ -1742,6 +1742,27 @@ fn solving_the_cantilever_reports_the_tip_deflection_and_balanced_reactions() {
     assert!(m.steps[0].solved);
 }
 
+/// B1 again, through `solve.run { solver: 'cpu-pcg' }`: the iterative path is a Command away
+/// and lands on the direct answer, because the refinement loop measures itself in f64.
+#[test]
+fn the_conjugate_gradient_is_one_command_away_and_agrees_with_the_direct_solver() {
+    let mesh = r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"25 mm"},"order":1}"#;
+    let mut e = engine();
+    solved_cantilever(&mut e, mesh);
+    let direct = tip_uz(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"cpu-pcg"}"#);
+    let r = result(&mut e);
+    assert_eq!(r.solver, "cpu-pcg");
+    assert!(r.residual < 1e-10, "the refinement loop reached {}", r.residual);
+    assert!(r.balance <= 1e-9, "reactions must still balance: {}", r.balance);
+    let pcg = tip_uz(&mut e);
+    assert!((pcg - direct).abs() <= 1e-9 * direct.abs(), "cpu-pcg {pcg} mm vs cpu-direct {direct} mm");
+    // and a GPU the host never granted is refused by name, with the solvers that do exist
+    let err = err(&mut e, r#"{"cmd":"solve.run","step":"static","solver":"gpu-pcg"}"#);
+    assert_eq!(err.code, ErrorCode::Unsupported);
+    assert!(err.cause.contains("no GPU adapter"), "{}", err.cause);
+}
+
 /// The locking lesson: the fully integrated linear hexahedron is much stiffer than the
 /// incompatible-modes one on the same mesh, and the ratio is what the Benchmark records.
 #[test]

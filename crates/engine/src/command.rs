@@ -87,8 +87,11 @@ pub enum Procedure {
     Static,
 }
 
-/// Linear solver choice. `auto` picks the direct solver for small systems and the GPU
-/// conjugate gradient with f64 refinement for large ones when a GPU is present.
+/// Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations
+/// (100 000 in the browser, where the heap is smaller) and above that a conjugate gradient
+/// inside an f64 iterative-refinement loop — on the GPU when the host granted one, on the CPU
+/// otherwise. `cpu-direct` is exact and is what to fall back to when a solve reports
+/// `solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum Solver {

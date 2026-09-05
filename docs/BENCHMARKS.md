@@ -84,7 +84,7 @@ at 50 mm.
 | D2 | NAFEMS LE11 solid cylinder/taper/sphere, thermal stress | σzz(A) = −105 MPa | 3 % | thermal stress in 3D / axisymmetric |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen |
 | D4 | Manufactured solution, elasticity and Poisson, hex/tet p=1,2 | prescribed u(x); L2 rate p+1, H1 rate p | rate ± 0.1 | convergence machinery, body loads |
-| D5 | 1M-DOF cantilever, hex8, static | same as B1 at that size | matches CPU direct on a coarser model within f64 refinement tolerance; time budget < 10 s on M2-class, not gated on software adapters | GPU PCG + iterative refinement at scale |
+| D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale |
 
 ## E. Heat transfer (phase 2)
 

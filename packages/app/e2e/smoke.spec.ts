@@ -93,4 +93,32 @@ test.describe('@gpu on SwiftShader', () => {
     // Σ i for i in 1..=1000
     expect(await page.evaluate(() => window.fem.gpuSelfTest(1000))).toBe(500500);
   });
+
+  // Benchmark B1 through the whole browser stack: wasm engine, WebGPU device, f32 conjugate
+  // gradient inside the f64 refinement loop. SwiftShader is slow, so this one is `test.slow()`.
+  test('solves the cantilever on the GPU and lands on the beam formula', async ({ page }) => {
+    test.slow();
+    await page.goto('./');
+    await ready(page);
+    const uz = await page.evaluate(async () => {
+      await window.fem.model.new({ name: 'gpu-cantilever' });
+      await window.fem.model.setUnits({ units: { length: 'mm', stress: 'MPa', force: 'kN' } });
+      await window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] });
+      await window.fem.material.add({ name: 'steel', E: '210 GPa', nu: 0.3 });
+      await window.fem.material.assign({ material: 'steel', bodies: ['beam'] });
+      await window.fem.mesh.set({ mesher: { kind: 'lattice', size: '25 mm' }, order: 1 });
+      await window.fem.constraint.fix({ name: 'root', on: 'beam.xmin' });
+      await window.fem.load.traction({ name: 'tip', on: 'beam.xmax', total: ['0 N', '0 N', '-1 kN'] });
+      await window.fem.step.add({ name: 'static', procedure: 'static', constraints: ['root'], loads: ['tip'] });
+      await window.fem.solve.run({ step: 'static', solver: 'gpu-pcg' });
+      const result = (await window.fem.query.result({})) as unknown as { solver: string };
+      if (result.solver !== 'gpu-pcg') throw new Error(`solved with ${result.solver}, not the GPU`);
+      const probe = (await window.fem.query.probe({ field: 'displacement', component: 2, at: ['1 m', '50 mm', '50 mm'] })) as unknown as {
+        value: { value: number };
+      };
+      return probe.value.value;
+    });
+    // δ = PL³/(3EI) + PL/(κGA) = 0.1919619 mm; the hexahedron is within 2 % of it at 25 mm.
+    expect(Math.abs(Math.abs(uz) - 0.1919619) / 0.1919619).toBeLessThan(0.02);
+  });
 });

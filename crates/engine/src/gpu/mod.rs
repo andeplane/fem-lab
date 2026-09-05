@@ -4,14 +4,21 @@
 //! pass the result to `Engine::new`. Every function that touches the device is `async`; on
 //! native the readback is driven by `device.poll`, in the browser by the event loop.
 
+pub mod cg;
+
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use wgpu::util::DeviceExt;
 
 use crate::error::{Error, ErrorCode};
 
 /// Every WGSL file, once: `(name, source)`. Validated by naga in a test and compiled here.
-pub const SHADERS: &[(&str, &str)] = &[("dot.wgsl", include_str!("../../shaders/dot.wgsl"))];
+pub const SHADERS: &[(&str, &str)] = &[
+    ("dot.wgsl", include_str!("../../shaders/dot.wgsl")),
+    ("spmv_csr.wgsl", include_str!("../../shaders/spmv_csr.wgsl")),
+    ("cg_vec.wgsl", include_str!("../../shaders/cg_vec.wgsl")),
+];
 
 /// Threads per workgroup in every kernel.
 pub const WORKGROUP: u32 = 256;
@@ -26,7 +33,10 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     pub limits: wgpu::Limits,
     pub adapter: String,
-    pipelines: BTreeMap<(&'static str, &'static str), wgpu::ComputePipeline>,
+    /// Compiled once per entry point. Behind a `Mutex` because the solvers hold a `&Gpu` — the
+    /// device reaches them through `procedure::run`, which shares it — and a `ComputePipeline`
+    /// is a cheap handle to clone out of it.
+    pipelines: Mutex<BTreeMap<(&'static str, &'static str), wgpu::ComputePipeline>>,
 }
 
 impl std::fmt::Debug for Gpu {
@@ -73,7 +83,7 @@ impl Gpu {
             queue,
             limits,
             adapter: format!("{} ({:?})", info.name, info.backend),
-            pipelines: BTreeMap::new(),
+            pipelines: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -92,11 +102,7 @@ impl Gpu {
     /// Compile (once) and fetch the pipeline for an entry point of a shader in [`SHADERS`].
     /// A shader that fails to compile is reported as `gpu.shader` with the compiler's message;
     /// an adapter whose workgroup limit is below [`WORKGROUP`] as `gpu.too-large`.
-    pub async fn pipeline(
-        &mut self,
-        shader: &'static str,
-        entry: &'static str,
-    ) -> Result<&wgpu::ComputePipeline, Error> {
+    pub async fn pipeline(&self, shader: &'static str, entry: &'static str) -> Result<wgpu::ComputePipeline, Error> {
         if self.limits.max_compute_invocations_per_workgroup < WORKGROUP {
             return Err(Error::new(
                 ErrorCode::GpuTooLarge,
@@ -107,26 +113,29 @@ impl Gpu {
             )
             .suggest("use solver: 'cpu-direct'"));
         }
-        if !self.pipelines.contains_key(&(shader, entry)) {
-            let src = SHADERS
-                .iter()
-                .find(|(n, _)| *n == shader)
-                .map(|(_, s)| *s)
-                .ok_or_else(|| Error::internal(format!("unknown shader {shader}")))?;
-            let p = self.compile(shader, src, entry).await?;
-            self.pipelines.insert((shader, entry), p);
+        if let Some(p) = self.cache().get(&(shader, entry)) {
+            return Ok(p.clone());
         }
-        Ok(&self.pipelines[&(shader, entry)])
+        let src = SHADERS
+            .iter()
+            .find(|(n, _)| *n == shader)
+            .map(|(_, s)| *s)
+            .ok_or_else(|| Error::internal(format!("unknown shader {shader}")))?;
+        let p = self.compile(shader, src, entry).await?;
+        self.cache().insert((shader, entry), p.clone());
+        Ok(p)
+    }
+
+    /// The pipeline cache. The lock is never held across an `await`, so it never blocks.
+    fn cache(&self) -> std::sync::MutexGuard<'_, BTreeMap<(&'static str, &'static str), wgpu::ComputePipeline>> {
+        self.pipelines.lock().expect("nothing panics while holding the pipeline cache")
     }
 
     /// [`Gpu::pipeline`] for several entry points at once (one error path for a kernel's set).
-    pub async fn pipelines(
-        &mut self,
-        keys: &[(&'static str, &'static str)],
-    ) -> Result<Vec<wgpu::ComputePipeline>, Error> {
+    pub async fn pipelines(&self, keys: &[(&'static str, &'static str)]) -> Result<Vec<wgpu::ComputePipeline>, Error> {
         let mut out = Vec::with_capacity(keys.len());
         for (shader, entry) in keys {
-            out.push(self.pipeline(shader, entry).await?.clone());
+            out.push(self.pipeline(shader, entry).await?);
         }
         Ok(out)
     }
