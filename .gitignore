@@ -1,4 +1,8 @@
+.DS_Store
+target/
 node_modules/
 dist/
 coverage/
-.DS_Store
+lcov.info
+packages/app/src/generated/wasm/
+tools/wasm-node/

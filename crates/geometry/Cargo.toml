@@ -1,0 +1,16 @@
+[package]
+name = "femlab-geometry"
+description = "Geometry, meshes and meshers for FEM Lab: a standalone, I/O-free library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+schemars.workspace = true
+libm.workspace = true
+
+[dev-dependencies]
+proptest = "1.11"
+serde_json.workspace = true
