@@ -107,10 +107,40 @@ jobs:
       - run: cargo test --workspace
 
   # TypeScript side: generated types are fresh, the registry type-checks, and vitest holds 100 % on
-  # all four metrics. No Rust toolchain: the schema document is committed.
+  # all four metrics. No Rust toolchain: the schema document is committed, and the wasm module the
+  # app bundles comes from the `wasm-hash` job's artifact.
   web:
-    name: web (codegen, typecheck, registry tests)
+    name: web (codegen, typecheck, tests, app build)
     runs-on: ubuntu-latest
+    needs: wasm-hash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+      - run: npm ci
+      - run: npm run codegen:check
+      - run: npm run typecheck
+      - run: npm run test -w packages/registry
+      - run: npm run test -w packages/app
+      # `postbuild` fails the job if an API key ever reaches dist/; the build prints the gzipped
+      # size of every chunk, which is the budget size-limit will gate on later.
+      - run: npm run build -w packages/app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: packages/app/dist
+
+  # The built app in a real Chromium (ADR 0014): the CPU path, the service-worker isolation path
+  # without server headers, and WebGPU on SwiftShader.
+  smoke:
+    name: browser smoke (cpu, sw, gpu)
+    runs-on: ubuntu-latest
+    needs: web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -118,6 +148,27 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run codegen:check
-      - run: npm run typecheck
-      - run: npm run test -w packages/registry
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: packages/app/dist
+      - name: playwright version
+        id: pw
+        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.v }}
+      - run: npx playwright install --with-deps chromium
+        working-directory: packages/app
+      - run: xvfb-run -a npx playwright test --project=cpu --project=sw
+        working-directory: packages/app
+      - name: webgpu on swiftshader
+        continue-on-error: true
+        run: xvfb-run -a npx playwright test --project=gpu
+        working-directory: packages/app
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: packages/app/playwright-report
