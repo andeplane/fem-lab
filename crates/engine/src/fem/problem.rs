@@ -12,6 +12,7 @@ use femlab_geometry::Mesh;
 use crate::command::Formulation;
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::{ElementCtx, Material};
+use crate::fem::loads::Load;
 use crate::mesh::ResolvedSet;
 use crate::model::Idealisation;
 
@@ -31,7 +32,7 @@ pub struct Constraint {
 }
 
 /// Everything a procedure needs about one analysis: the Mesh, its Sets, the material of every
-/// block, and the resolved Constraints.
+/// block, and the resolved Constraints and Loads.
 pub struct Problem<'a> {
     pub mesh: &'a Mesh,
     /// Every Set of the built Mesh, by name.
@@ -44,6 +45,7 @@ pub struct Problem<'a> {
     pub idealisation: Idealisation,
     pub formulation: Formulation,
     pub constraints: Vec<Constraint>,
+    pub loads: Vec<Load>,
     /// Nodal temperature and the reference temperature; `None` is no thermal strain.
     pub temperature: Option<(Vec<f64>, f64)>,
 }

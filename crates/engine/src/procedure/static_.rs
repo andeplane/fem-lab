@@ -7,7 +7,7 @@ use crate::command::Field;
 use crate::engine::OnProgress;
 use crate::error::Error;
 use crate::fem::problem::Problem;
-use crate::fem::{assembly, checks};
+use crate::fem::{assembly, checks, loads};
 use crate::post::{FieldData, Per};
 use crate::procedure::{report, StepResult};
 use crate::solve::{solve, SolveOptions};
@@ -26,8 +26,13 @@ pub async fn run(
     report(&mut progress, "assemble", 0.1, "building the sparsity pattern")?;
     let dpn = p.dofs_per_node();
     let pat = assembly::pattern(p.mesh, dpn);
-    let a = assembly::assemble_stiffness(p, &pat)?;
-    let f = a.f_thermal.clone();
+    // One `?`: the loads and the stiffness fail on the same materials and the same Sets, both
+    // of which `checks::all` has already looked at, so a second one would be an arm no test
+    // could take.
+    let (a, applied, f) = assembly::assemble_stiffness(p, &pat).and_then(|a| {
+        let mut f = a.f_thermal.clone();
+        loads::assemble_loads(p, &mut f).map(|applied| (a, applied, f))
+    })?;
     // `checks::all` has already resolved these and found no conflict.
     let rc = assembly::resolve(p).expect("the checks resolved the constraints");
     let red = assembly::reduce(&a.k, &f, &rc);
@@ -41,6 +46,9 @@ pub async fn run(
     fields.insert(Field::Reaction, vector_field(&r, dpn));
     let mut scalars = BTreeMap::new();
     scalars.insert("min_det_j".to_string(), a.min_det_j);
+    for (c, axis) in ["x", "y", "z"].iter().enumerate() {
+        scalars.insert(format!("applied_total_{axis}"), applied.force[c]);
+    }
     scalars.insert("rel_residual".to_string(), solver.rel_residual);
     Ok(StepResult { fields, scalars, solver, warnings: Vec::new() })
 }

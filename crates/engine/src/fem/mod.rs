@@ -10,6 +10,7 @@
 pub mod assembly;
 pub mod checks;
 pub mod element;
+pub mod loads;
 pub mod material;
 pub mod problem;
 pub mod quadrature;

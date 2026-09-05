@@ -13,6 +13,7 @@ use femlab_engine::fem::assembly::{
 };
 use femlab_engine::fem::checks;
 use femlab_engine::fem::element::{element_for, Element, ElementCtx, FaceLoad, Iso, Material};
+use femlab_engine::fem::loads::{assemble_loads, face_set_area, Load, LoadTotals};
 use femlab_engine::fem::material::{
     builtin_law, check_batch, isotropic_d, plane_stress_condense, LinearElastic, MaterialBatch, MaterialLaw,
     MaterialOut, VOIGT,
@@ -34,7 +35,7 @@ use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, So
 use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
 use femlab_engine::{OnProgress, Progress};
 use femlab_geometry::mesh::{ElementKind, FaceKind};
-use femlab_geometry::{perturb_interior, Mesh, Structured};
+use femlab_geometry::{annulus, perturb_interior, Mesh, Structured};
 
 // ---------------------------------------------------------------- quadrature
 
@@ -1452,6 +1453,7 @@ fn problem<'a>(
         idealisation: id,
         formulation: form,
         constraints,
+        loads: Vec::new(),
         temperature: None,
     }
 }
@@ -1738,7 +1740,11 @@ fn run_static(p: &Problem<'_>, progress: OnProgress<'_>) -> Result<StepResult, E
 }
 
 /// A7: the reactions must balance the applied load, on every structural case.
-fn reaction_balance(res: &StepResult, applied: [f64; 3]) {
+///
+/// `scale` is the characteristic force of the case. A case driven by a prescribed displacement
+/// or by a temperature has no applied load at all, and "1e-9 relative to zero" is not a test;
+/// the forces that actually flow through the model are what the residual is measured against.
+fn reaction_balance(res: &StepResult, applied: [f64; 3], scale: f64) {
     let r = &res.fields[&Field::Reaction];
     let mut sum = [0.0; 3];
     for i in 0..r.len() {
@@ -1746,9 +1752,7 @@ fn reaction_balance(res: &StepResult, applied: [f64; 3]) {
             *s += r.data[i * 3 + c];
         }
     }
-    // the balance is meaningful against the forces that actually flow, so the scale is the
-    // largest single reaction when there is no applied load to compare with
-    let scale = r.data.iter().chain(applied.iter()).fold(1.0f64, |m, x| m.max(x.abs()));
+    let scale = applied.iter().fold(scale.abs(), |m, x| m.max(x.abs()));
     for (c, s) in sum.iter().enumerate() {
         assert!((s + applied[c]).abs() <= 1e-9 * scale, "component {c}: reactions {s}, applied {}", applied[c]);
     }
@@ -1925,7 +1929,7 @@ fn the_uniaxial_bar_gives_f_over_a_and_balanced_reactions_for_every_kind() {
         let per = reactions_per_constraint(&p, &rc, &res.fields[&Field::Reaction]);
         let root = per.iter().find(|(n, _)| n == "root").expect("the root constraint").1;
         assert!((root[0] + force).abs() <= 1e-8 * force, "{kind:?}: root reaction {} vs {}", root[0], -force);
-        reaction_balance(&res, [0.0; 3]);
+        reaction_balance(&res, [0.0; 3], force);
         assert!(res.scalars["min_det_j"] > 0.0);
         assert_eq!(res.solver.solver, "cpu-direct");
         assert!(res.warnings.is_empty());
@@ -2186,4 +2190,199 @@ fn field_data_slices_by_component_and_extremes_carry_their_location() {
     let per = [Per::Node, Per::ElemGp, Per::ElemNode];
     assert_eq!(format!("{per:?}"), "[Node, ElemGp, ElemNode]");
     assert_ne!(Per::Node, Per::ElemNode);
+}
+
+// ---------------------------------------------------------------------- loads
+
+/// A quarter annulus in the xy plane, `a ≤ r ≤ b`, meshed with `kind`.
+fn quarter_annulus(kind: ElementKind, a: f64, b: f64) -> Mesh {
+    annulus(kind, 3, 8, a, b, [0.0, std::f64::consts::FRAC_PI_2])
+}
+
+fn apply(p: &Problem<'_>) -> (Vec<f64>, LoadTotals) {
+    let mut f = vec![0.0; p.n_dofs()];
+    let totals = assemble_loads(p, &mut f).expect("the loads assemble");
+    (f, totals)
+}
+
+/// A pressure on a curved face integrates to `p × projected area`, exactly: the sum of the
+/// outward normals over any closed-or-open face chain telescopes to the chord between its ends.
+#[test]
+fn a_pressure_on_a_curved_face_totals_the_projected_area() {
+    let a = 1.0;
+    let mesh = quarter_annulus(ElementKind::Quad8, a, 2.0);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["ring".to_string()];
+    let press = 3e6;
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::PlaneStrain, Formulation::Full, Vec::new());
+    p.loads = vec![Load::Pressure { faces: "inner".into(), p: press }];
+    let (f, totals) = apply(&p);
+    // the inner face's outward normal points at the axis, so the pressure pushes the ring out
+    for c in 0..2 {
+        assert!((totals.force[c] - press * a).abs() <= 1e-12 * press * a, "component {c}: {}", totals.force[c]);
+    }
+    assert_eq!(totals.force[2], 0.0);
+    let summed: f64 = f.iter().step_by(2).sum();
+    assert!((summed - totals.force[0]).abs() <= 1e-9, "the vector and the total agree");
+    // the face measure the "total force" form divides by is the arc, not the chord sum
+    let arc = face_set_area(&p, "inner").expect("the inner face set");
+    let exact = a * std::f64::consts::FRAC_PI_2;
+    assert!((arc - exact).abs() <= 1e-4 * exact, "quadratic arc length {arc} vs {exact}");
+}
+
+/// Gravity totals `ρ g V`, and a traction totals `t · A`, on a box where both are exact.
+#[test]
+fn gravity_totals_rho_g_v_and_a_traction_totals_t_times_area() {
+    let size = [2.0, 0.5, 0.25];
+    let mesh = Structured { kind: ElementKind::Hex8, n: [4, 2, 2] }.box_(size);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["block".to_string()];
+    let volume = size[0] * size[1] * size[2];
+    let g = [0.0, 0.0, -9.81];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.loads = vec![Load::Gravity { g }];
+    let (_, totals) = apply(&p);
+    let weight = DENSITY * volume * g[2];
+    assert!((totals.force[2] - weight).abs() <= 1e-9 * weight.abs(), "{} vs {weight}", totals.force[2]);
+    assert_eq!([totals.force[0], totals.force[1]], [0.0, 0.0]);
+
+    let t = [1e5, -2e5, 3e5];
+    let area = size[1] * size[2];
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t }];
+    let (_, totals) = apply(&p);
+    for (c, &tc) in t.iter().enumerate() {
+        assert!((totals.force[c] - tc * area).abs() <= 1e-9 * (tc * area).abs(), "component {c}");
+    }
+    assert!((face_set_area(&p, "xmax").expect("xmax") - area).abs() <= 1e-12 * area);
+
+    // a nodal force is per node of the Set
+    p.loads = vec![Load::NodalForce { nodes: "xmax".into(), f: [7.0, 0.0, 0.0] }];
+    let (_, totals) = apply(&p);
+    assert_eq!(totals.force[0], 7.0 * sets["xmax"].nodes.len() as f64);
+    assert_eq!(Load::Gravity { g }.set(), None);
+    assert_eq!(Load::NodalForce { nodes: "xmax".into(), f: [0.0; 3] }.set(), Some("xmax"));
+    assert_eq!(Load::Pressure { faces: "xmax".into(), p: 1.0 }.set(), Some("xmax"));
+    assert_eq!(Load::Traction { faces: "xmax".into(), t }.set(), Some("xmax"));
+}
+
+/// A6: a body free to expand under a uniform temperature rise strains by `α ΔT` and carries no
+/// stress, for a solid, a quadratic solid, a plane-stress sheet and an axisymmetric ring.
+#[test]
+fn free_thermal_expansion_is_alpha_delta_t_with_no_stress() {
+    let dt = 100.0;
+    let cases: [(ElementKind, Idealisation); 4] = [
+        (ElementKind::Hex8, Idealisation::Solid3d),
+        (ElementKind::Hex20, Idealisation::Solid3d),
+        (ElementKind::Quad4, Idealisation::PlaneStress { thickness: 0.1 }),
+        (ElementKind::Quad4, Idealisation::Axisymmetric),
+    ];
+    for (kind, id) in cases {
+        let axi = matches!(id, Idealisation::Axisymmetric);
+        let n = if kind.dim() == 3 { [4, 4, 4] } else { [4, 4, 1] };
+        // the axisymmetric ring sits away from the axis; everything else is a unit block
+        let mesh = Structured { kind, n }.build(|q| [if axi { 1.0 } else { 0.0 } + q[0], q[1], q[2]]);
+        let sets = sets_of(&mesh);
+        let bodies = vec!["block".to_string()];
+        // symmetry planes only: the body expands freely away from them
+        let mut constraints = vec![fix("sym_y", "ymin", [false, true, false], 0.0)];
+        if !axi {
+            constraints.push(fix("sym_x", "xmin", [true, false, false], 0.0));
+        }
+        if kind.dim() == 3 {
+            constraints.push(fix("sym_z", "zmin", [false, false, true], 0.0));
+        }
+        let mut p = problem(&mesh, &sets, &bodies, id.clone(), Formulation::IncompatibleModes, constraints);
+        p.temperature = Some((vec![dt; mesh.n_nodes()], 0.0));
+        let res = run_static(&p, &mut nop).expect("free expansion solves");
+        let u = &res.fields[&Field::Displacement];
+        // u = α ΔT x: the symmetry planes sit at x = 0 and the ring's radius stretches from the
+        // axis, which is also x = 0
+        for node in 0..mesh.n_nodes() {
+            let x = mesh.node(node as u32);
+            let want = [EXPANSION * dt * x[0], EXPANSION * dt * x[1], EXPANSION * dt * x[2]];
+            for (c, &wc) in want.iter().enumerate().take(mesh.dim) {
+                let got = u.data[node * 3 + c];
+                assert!(
+                    (got - wc).abs() <= 1e-10 * EXPANSION * dt,
+                    "{kind:?} {id:?} node {node} component {c}: {got} vs {wc}"
+                );
+            }
+        }
+        // and every Gauss point is stress free
+        let el = element_for(kind);
+        let (nn, n_gp) = (kind.n_nodes(), el.n_gp());
+        let mut coords = vec![0.0; nn * 3];
+        let bound = 1e-10 * YOUNG * EXPANSION * dt;
+        for elem in 0..mesh.n_elems() as u32 {
+            mesh.elem_coords(elem, &mut coords);
+            let mut ue = Vec::with_capacity(nn * mesh.dim);
+            for &node in mesh.elem_nodes(elem) {
+                for c in 0..mesh.dim {
+                    ue.push(u.data[node as usize * 3 + c]);
+                }
+            }
+            let t = vec![dt; nn];
+            let mut c = ctx(&coords, &p.materials[0], id.clone(), Formulation::IncompatibleModes);
+            c.temperature = Some(&t);
+            let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
+            el.recover(&c, &ue, &mut sig, &mut eps).expect("recover");
+            for (i, s) in sig.iter().enumerate() {
+                assert!(s.abs() <= bound, "{kind:?} {id:?} element {elem} stress {i} = {s}");
+            }
+            // plane stress does not carry ε₃₃: the law condenses it away, so the recovered
+            // array leaves it zero. Every other normal component is the free expansion.
+            let carried = if let Idealisation::PlaneStress { .. } = id { 2 } else { 3 };
+            for (i, e) in eps.iter().enumerate() {
+                let want = if i % VOIGT < carried { EXPANSION * dt } else { 0.0 };
+                assert!((e - want).abs() <= 1e-10 * EXPANSION * dt, "{kind:?} {id:?} strain {i} = {e}");
+            }
+        }
+        // the thermal load is what flows here: E α ΔT over the unit section
+        reaction_balance(&res, [0.0; 3], YOUNG * EXPANSION * dt);
+    }
+}
+
+/// A Load on a Set that matched nothing is a `set.empty`, like a Constraint on one.
+#[test]
+fn a_load_on_an_empty_set_is_reported_by_the_checks() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let mut sets = sets_of(&mesh);
+    sets.insert(
+        "void".to_string(),
+        ResolvedSet { kind: SetKind::Face, faces: Vec::new(), nodes: Vec::new(), elems: Vec::new() },
+    );
+    let bodies = vec!["c".to_string()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.loads = vec![Load::Pressure { faces: "void".into(), p: 1.0 }];
+    assert_eq!(checks::all(&p)[0].code, ErrorCode::SetEmpty);
+    p.loads = vec![Load::Pressure { faces: "nowhere".into(), p: 1.0 }];
+    let e = assemble_loads(&p, &mut vec![0.0; p.n_dofs()]).expect_err("no such set");
+    assert_eq!(e.code, ErrorCode::SetEmpty);
+    assert_eq!(face_set_area(&p, "nowhere").expect_err("no such set").code, ErrorCode::SetEmpty);
+}
+
+/// Every Load that integrates over the mesh needs a material to know the idealisation's scale
+/// and its density; only a nodal force does not.
+#[test]
+fn a_load_over_a_body_without_a_material_says_so() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["block".to_string()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.material_of_block = vec![None];
+    let each = [
+        Load::Pressure { faces: "xmax".into(), p: 1.0 },
+        Load::Traction { faces: "xmax".into(), t: [1.0, 0.0, 0.0] },
+        Load::Gravity { g: [0.0, 0.0, -9.81] },
+    ];
+    for load in each {
+        p.loads = vec![load.clone()];
+        let e = assemble_loads(&p, &mut vec![0.0; p.n_dofs()]).expect_err("no material");
+        assert_eq!(e.code, ErrorCode::ModelNoMaterial, "{load:?}");
+    }
+    assert_eq!(face_set_area(&p, "xmax").expect_err("no material").code, ErrorCode::ModelNoMaterial);
+    // a nodal force needs no material, only its Set
+    p.loads = vec![Load::NodalForce { nodes: "nowhere".into(), f: [1.0; 3] }];
+    let e = assemble_loads(&p, &mut vec![0.0; p.n_dofs()]).expect_err("no such set");
+    assert_eq!(e.code, ErrorCode::SetEmpty);
 }
