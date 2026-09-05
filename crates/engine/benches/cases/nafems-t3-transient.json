@@ -1,0 +1,137 @@
+{
+  "name": "nafems-t3-transient",
+  "reference": "Benchmark E3 (NAFEMS T3): a 0.1 m bar of k = 35 W/mK, rho = 7200 kg/m^3 and cp = 440.5 J/kgK starts at zero, is driven by 100 sin(pi t / 40) at one face and held at zero at the other. Crank-Nicolson at dt = 0.5 s reaches 36.60 degC 20 mm inside the driven face after 32 s, which is the published probe (the published \"x = 0.08 m\" is measured from the held end). The Step runs in kelvin above the initial state, which is the same problem: linear conduction is invariant under a shift of the whole temperature.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "nafems-t3"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "bar",
+      "size": [
+        "0.1 m",
+        "5 mm",
+        "5 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "slab",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7200 kg/m^3",
+      "k": "35 W/(m K)",
+      "cp": "440.5 J/(kg K)",
+      "source": "NAFEMS T3"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "slab",
+      "bodies": [
+        "bar"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 20,
+          "ny": 1,
+          "nz": 1
+        }
+      }
+    },
+    {
+      "cmd": "constraint.temperature",
+      "name": "driven",
+      "on": "bar.xmax",
+      "value": "100 K"
+    },
+    {
+      "cmd": "constraint.temperature",
+      "name": "cold",
+      "on": "bar.xmin",
+      "value": "0 K"
+    },
+    {
+      "cmd": "step.add",
+      "name": "transient",
+      "procedure": "heat-transient",
+      "constraints": [
+        "driven",
+        "cold"
+      ],
+      "loads": [],
+      "output": [
+        "temperature"
+      ],
+      "dt": "0.5 s",
+      "tEnd": "32 s",
+      "theta": 0.5,
+      "initial": "0 K",
+      "outputEvery": 16,
+      "amplitude": {
+        "kind": "sine",
+        "amplitude": 1.0,
+        "period": "80 s"
+      }
+    },
+    {
+      "cmd": "solve.run",
+      "step": "transient"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": [
+          "80 mm",
+          "2.5 mm",
+          "2.5 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 36.6,
+      "tol": 0.5,
+      "note": "T 20 mm inside the driven face at 32 s"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/history/0/time/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "the history starts at t = 0"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/history/4/time/value",
+      "expect": 32.0,
+      "tol": 1e-12,
+      "note": "and ends at tEnd, every sixteenth step"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/history/0/max/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "nothing is hot at t = 0"
+    }
+  ]
+}

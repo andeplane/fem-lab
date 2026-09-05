@@ -1,0 +1,110 @@
+{
+  "name": "cantilever-modal",
+  "reference": "Benchmark B4: the first bending frequency of a slender clamped-free steel beam, L = 1 m, 50 x 50 mm, against Euler-Bernoulli f1 = (1.8751^2 / 2 pi) sqrt(EI / rho A L^4) = 41.91 Hz. The square section makes every bending mode a degenerate pair, so modes 1 and 2 are the same frequency in two planes; the gate is the published 1.5 %.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "cantilever-modal"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "beam",
+      "size": [
+        "1 m",
+        "50 mm",
+        "50 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3",
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "beam"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 20,
+          "ny": 2,
+          "nz": 2
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.xmin"
+    },
+    {
+      "cmd": "step.add",
+      "name": "modes",
+      "procedure": "modal",
+      "constraints": [
+        "root"
+      ],
+      "loads": [],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 4
+    },
+    {
+      "cmd": "solve.run",
+      "step": "modes"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/frequencies/0/value",
+      "expect": 41.9107,
+      "tol": 0.015,
+      "rel": true,
+      "note": "first bending mode, Euler-Bernoulli"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/frequencies/1/value",
+      "expect": 41.9107,
+      "tol": 0.015,
+      "rel": true,
+      "note": "its twin in the other plane: a square section"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/frequencies/0/unit",
+      "expect": "Hz"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}
