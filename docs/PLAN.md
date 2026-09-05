@@ -219,6 +219,7 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 | 4.12 | **Skills**: `skills/<name>/SKILL.md` (frontmatter: name, description, when) from the app's built-ins and from the project folder; `/` menu in the chat; a skill is prepended to the turn when invoked, and the AI may invoke one itself from its description | built-in skills: beam-theory check, convergence study, report, NAFEMS benchmark; a project skill overrides a built-in of the same name |
 | 4.13 | **Project folder**: open a directory via the File System Access API (Chromium, ADR 0014); the Journal, scripts, plugins and exports live in it; `AGENTS.md`/`CLAUDE.md` in the folder is read into the system prompt with a visible badge; the AI gets `file.read`/`file.write` scoped to that folder | a project rule ("all stresses in MPa, S355 yield 355 MPa") is followed without being repeated in the chat |
 | 4.14 | **Export** Commands: `file.exportVTU` (mesh + fields), `file.exportMsh` (Gmsh 4.1), `file.exportInp` (Abaqus/CalculiX), `file.exportSTL` (geometry surface), `file.exportCSV` (any table/probe/path), `file.exportPNG`/`SVG` (viewer, legend burned in), `file.exportScript`, `file.exportReport` (Markdown; PDF via print); STEP when B-rep lands (7.2) | each exporter has a round-trip or reference-file test; the UI Export menu enumerates the registry |
+| 4.15 | **Images in the chat**: paste, drop or pick images (PNG/JPEG/WebP, downscaled client-side to ≤ 1568 px on the long edge, ≤ 5 MB), shown as chips with optional captions, sent as `image` content blocks (base64) alongside the text; "attach current view" adds a `query.screenshot` PNG; images live in the conversation store, never in the Journal or a Model file; the eval suite gains "build from this drawing" tasks with hand-drawn inputs | an eval task whose only geometry description is a drawing produces a Model within tolerance of the intended one |
 | 4.10 | `femlab mcp`: the CLI host serves the registry's tool definitions plus `run_script` over stdio with the MCP SDK; a running engine, headless, with dawn.node if a GPU exists (ADR 0011) | Claude Code builds and solves a cantilever through `femlab mcp` with no browser; the eval suite of 4.6 runs against both hosts |
 
 ## 7. Phase 5: post-processing and reporting
@@ -378,6 +379,7 @@ Phase numbers refer to §2–§10. "Out" means deliberately out of scope with th
 | J4.9 sets survive remesh | 1 (design), 3.2 | J8.5 animation | 5.4 | J13.9 @-mentions | 4.11 |
 | | | | | J13.10 skills | 4.12 |
 | | | | | J13.11 project AGENTS.md | 4.13 |
+| | | | | J13.12 images to the AI | 4.15 |
 | | | | | J15.4 export formats | 4.14, 3.8, 7.2 (STEP) |
 
 Every job has a phase or an explicit Out. The Outs: frictional contact and topology

@@ -17,7 +17,7 @@ impl Host for Clock {
 }
 
 fn engine() -> Engine {
-    Engine::new(Box::new(NoClock), 2)
+    Engine::new(None, Box::new(NoClock), 2)
 }
 
 fn run(e: &mut Engine, json: &str) -> Result<femlab_engine::Ack, Error> {
@@ -92,7 +92,7 @@ fn builds_a_cantilever_and_reports_it() {
     assert!(!c.gpu && c.threads == 2 && c.schema_version == "1");
     assert_eq!(e.threads(), 2);
     assert_eq!(e.now_ms(), 0.0);
-    assert_eq!(Engine::new(Box::new(Clock(5.0)), 1).now_ms(), 5.0);
+    assert_eq!(Engine::new(None, Box::new(Clock(5.0)), 1).now_ms(), 5.0);
 }
 
 #[test]
@@ -589,7 +589,9 @@ fn geometry_add_and_subtract_shapes_and_sheets() {
     ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric"}}"#);
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
     assert_eq!(m.idealisation, "axisymmetric");
-    let QueryResult::Model(m0) = Engine::new(Box::new(NoClock), 1).query(Query::Model {}).unwrap() else { panic!() };
+    let QueryResult::Model(m0) = Engine::new(None, Box::new(NoClock), 1).query(Query::Model {}).unwrap() else {
+        panic!()
+    };
     assert!(m0.warnings.iter().any(|w| w.code == "model.empty"));
 }
 

@@ -47,6 +47,9 @@ enum Cmd {
         /// CPU threads for the engine (default: all cores).
         #[arg(long)]
         threads: Option<usize>,
+        /// Do not request a GPU.
+        #[arg(long)]
+        cpu: bool,
     },
     /// Run the Benchmark cases (Journal + checks) and report.
     Bench {
@@ -64,6 +67,9 @@ enum Cmd {
         markdown: bool,
         #[arg(long)]
         threads: Option<usize>,
+        /// Do not request a GPU.
+        #[arg(long)]
+        cpu: bool,
     },
     /// Print the schema document (Commands, Queries, responses) as JSON.
     Schema {
@@ -98,11 +104,11 @@ fn main() {
             );
             0
         }
-        Cmd::Run { file, hashes, skip_solves, verify, as_script, journal, json, threads } => {
-            run::run(&file, run::RunOptions { hashes, skip_solves, verify, as_script, journal, json, threads })
+        Cmd::Run { file, hashes, skip_solves, verify, as_script, journal, json, threads, cpu } => {
+            run::run(&file, run::RunOptions { hashes, skip_solves, verify, as_script, journal, json, threads, cpu })
         }
-        Cmd::Bench { cases, filter, json, markdown, threads } => {
-            bench::bench(cases.as_deref(), filter.as_deref(), json, markdown, threads)
+        Cmd::Bench { cases, filter, json, markdown, threads, cpu } => {
+            bench::bench(cases.as_deref(), filter.as_deref(), json, markdown, threads, cpu)
         }
         Cmd::Schema { out, check } => run::schema(out.as_deref(), check),
         Cmd::Serve { port } => {

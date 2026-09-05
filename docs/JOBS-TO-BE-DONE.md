@@ -180,6 +180,7 @@ reason for the "everything is a Command" rule (see the glossary and ADR 0003).
 | J13.5 | I want the script API to be discoverable and typed so I (or the AI) can find the right call without reading a manual | API reference; autocomplete |
 | J13.9 | When I talk to the AI, I want to point at things (`@top`, `@steel`, `@result`) instead of describing them, so it acts on exactly what I mean | none; screenshots pasted into chat |
 | J13.10 | I want reusable instruction packs (skills: "verify against beam theory", "write the report our way") that I or the AI can invoke | none; prompt copy-paste |
+| J13.12 | I want to show the AI a picture (a drawing of the part, a photo of my sketch or hand calculation, a screenshot from a report) and have it build or check the model from it | none; re-describing the drawing in words |
 | J13.11 | I want the AI to respect my project's standing rules (an `AGENTS.md` in the project folder: material limits, units, naming, report template) and my project's own skills | none |
 
 ## J14 Learn and teach

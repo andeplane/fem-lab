@@ -8,6 +8,7 @@
 pub mod command;
 pub mod engine;
 pub mod error;
+pub mod gpu;
 pub mod hash;
 pub mod journal;
 pub mod model;
@@ -19,6 +20,7 @@ pub mod units;
 pub use command::Command;
 pub use engine::{Engine, Host, NoClock, OnProgress, Progress};
 pub use error::{Error, ErrorCode, Warning};
+pub use gpu::Gpu;
 pub use journal::{Journal, JournalEntry, ModelFile};
 pub use model::Model;
 pub use query::{Ack, Output, Query, QueryResult};

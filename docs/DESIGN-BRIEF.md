@@ -227,6 +227,14 @@ Bring-your-own API key, stored locally, with a plain notice about cost.
   and pasted into the chat as a chip (the clipboard carries a plain-text form such as
   `@face:bracket.top`, so the paste also works in any other text field). Chips are also drag
   targets from the model tree and the viewer.
+- **Images in**: the chat accepts images by paste, drag-and-drop or a file button: a hand
+  drawing of a geometry, a photo of a sketch or a hand calculation, a screenshot of a drawing
+  or a table from a report, a plot to compare with. The image shows as a thumbnail chip in the
+  composer (removable, with a caption field) and in the sent message; the model receives it as
+  an image block next to the text, so "build this" with a drawing produces geometry Commands,
+  and "does my hand calc agree?" with a photo produces a comparison. Several images per
+  message; the viewer screenshot can be attached with one click ("attach current view").
+  Images are kept with the conversation, never in the Journal.
 - **Skills**: reusable instruction packs the AI can invoke, shown as a `/` menu in the chat
   (built-in: "verify against beam theory", "mesh convergence study", "write report", "NAFEMS
   benchmark"; user skills come from the project folder). A skill card shows name, one-line
@@ -324,7 +332,8 @@ table, then opens the script the AI wrote, changes the load and reruns.
 3. Properties form patterns: quantity field, enum, face/set picker, validation message.
 4. Journal ↔ Script panel and the "AI did this" diff.
 5. AI chat with visible tool calls, a verification card, the `@` mention picker, the `/`
-   skills menu and the AGENTS.md badge.
+   skills menu, image attachments (chips in the composer and the message) and the AGENTS.md
+   badge.
 6. Examples gallery card and the theory-next-to-result view.
 6b. Tutorial mode: the step panel, the highlighted control, "do it for me", progress; the
    first-run tour.

@@ -21,9 +21,16 @@ impl Host for SystemClock {
     }
 }
 
-pub fn new_engine(threads: Option<usize>) -> Engine {
+/// A native engine; `cpu` skips the GPU request. A missing adapter is not an error here:
+/// the CPU solvers work without one and `query.capabilities` says so.
+pub fn new_engine(threads: Option<usize>, cpu: bool) -> Engine {
     let n = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    Engine::new(Box::new(SystemClock::default()), n)
+    let gpu = if cpu {
+        None
+    } else {
+        pollster::block_on(femlab_engine::Gpu::request(femlab_engine::Gpu::default_backends())).ok()
+    };
+    Engine::new(gpu, Box::new(SystemClock::default()), n)
 }
 
 pub struct RunOptions {
@@ -34,6 +41,7 @@ pub struct RunOptions {
     pub journal: bool,
     pub json: bool,
     pub threads: Option<usize>,
+    pub cpu: bool,
 }
 
 /// What a file may contain.
@@ -89,7 +97,7 @@ pub fn run(file: &Path, opts: RunOptions) -> i32 {
     };
     let (entries, has_hashes) = entries_of(input);
     let verify = opts.verify && has_hashes;
-    let mut engine = new_engine(opts.threads);
+    let mut engine = new_engine(opts.threads, opts.cpu);
     let hashes = match pollster::block_on(engine.replay(&entries, opts.skip_solves, verify)) {
         Ok(h) => h,
         Err(e) => {

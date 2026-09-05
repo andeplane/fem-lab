@@ -71,9 +71,9 @@ pub fn compare(got: &serde_json::Value, expect: &serde_json::Value, tol: f64, re
     }
 }
 
-pub fn run_case(case: &Case, threads: Option<usize>) -> CaseResult {
+pub fn run_case(case: &Case, threads: Option<usize>, cpu: bool) -> CaseResult {
     let start = std::time::Instant::now();
-    let mut engine = new_engine(threads);
+    let mut engine = new_engine(threads, cpu);
     let mut checks = Vec::new();
     for cmd in &case.journal {
         if let Err(e) = dispatch(&mut engine, cmd.clone()) {
@@ -138,7 +138,14 @@ pub fn markdown(results: &[CaseResult]) -> String {
     s
 }
 
-pub fn bench(cases_dir: Option<&Path>, filter: Option<&str>, json: bool, md: bool, threads: Option<usize>) -> i32 {
+pub fn bench(
+    cases_dir: Option<&Path>,
+    filter: Option<&str>,
+    json: bool,
+    md: bool,
+    threads: Option<usize>,
+    cpu: bool,
+) -> i32 {
     let dir = cases_dir.map(Path::to_path_buf).unwrap_or_else(default_cases_dir);
     let cases = match load_cases(&dir, filter) {
         Ok(c) => c,
@@ -147,7 +154,7 @@ pub fn bench(cases_dir: Option<&Path>, filter: Option<&str>, json: bool, md: boo
             return 1;
         }
     };
-    let results: Vec<CaseResult> = cases.iter().map(|c| run_case(c, threads)).collect();
+    let results: Vec<CaseResult> = cases.iter().map(|c| run_case(c, threads, cpu)).collect();
     if json {
         println!("{}", serde_json::to_string_pretty(&results).unwrap_or_default());
     } else if md {

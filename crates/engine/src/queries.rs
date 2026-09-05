@@ -43,8 +43,8 @@ impl Engine {
             }
             Query::Objects { kinds } => Ok(QueryResult::Objects(self.query_objects(kinds.as_deref()))),
             Query::Capabilities {} => Ok(QueryResult::Capabilities(Capabilities {
-                gpu: false,
-                adapter: None,
+                gpu: self.gpu.is_some(),
+                adapter: crate::gpu::adapter_name(self.gpu.as_ref()),
                 threads: self.threads() as u32,
                 engine_version: crate::version().into(),
                 schema_version: crate::SCHEMA_VERSION.into(),

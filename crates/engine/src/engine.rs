@@ -52,12 +52,14 @@ pub struct Engine {
     redo: Vec<(Command, Model)>,
     pub(crate) host: Box<dyn Host>,
     pub(crate) pool: Pool,
+    pub(crate) gpu: Option<crate::gpu::Gpu>,
     /// Evaluated body shapes, keyed by body name; cleared on any geometry change.
     pub(crate) solids: BTreeMap<String, Solid>,
 }
 
 impl Engine {
-    pub fn new(host: Box<dyn Host>, threads: usize) -> Engine {
+    /// `gpu` is the host's device (or `None` for CPU only); `threads` sizes the CPU pool.
+    pub fn new(gpu: Option<crate::gpu::Gpu>, host: Box<dyn Host>, threads: usize) -> Engine {
         Engine {
             model: Model::new("untitled"),
             journal: Journal::default(),
@@ -65,8 +67,16 @@ impl Engine {
             redo: vec![],
             host,
             pool: Pool::new(threads),
+            gpu,
             solids: BTreeMap::new(),
         }
+    }
+
+    pub fn gpu(&self) -> Option<&crate::gpu::Gpu> {
+        self.gpu.as_ref()
+    }
+    pub fn gpu_mut(&mut self) -> Option<&mut crate::gpu::Gpu> {
+        self.gpu.as_mut()
     }
 
     pub fn model(&self) -> &Model {

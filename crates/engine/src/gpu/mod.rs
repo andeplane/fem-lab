@@ -277,3 +277,9 @@ impl Gpu {
         self.read_back(&partials, 4).await.map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 }
+
+/// The adapter name of an optional device, for `query.capabilities` (kept here so the
+/// device-dependent branch lives under `src/gpu/`, which the gpu job covers).
+pub fn adapter_name(gpu: Option<&Gpu>) -> Option<String> {
+    gpu.map(|g| g.adapter.clone())
+}
