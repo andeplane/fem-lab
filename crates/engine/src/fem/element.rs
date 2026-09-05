@@ -647,6 +647,22 @@ fn recover_of(
     constitutive(c, kin.n_gp, &mech, stress, &mut tangent)
 }
 
+/// The smallest Gauss-point `det J` of one element's coordinates, or `None` when the element
+/// is folded at one of them. The well-posedness check screens a whole Mesh with this before
+/// any material is looked at, and it is the same Jacobian the integrals use.
+pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
+    let (nn, dim) = (kind.n_nodes(), kind.dim());
+    let rule = rule_of(kind);
+    let v_ref: f64 = rule.weights.iter().sum();
+    let mut dn = vec![[0.0; 3]; nn];
+    let mut min = f64::INFINITY;
+    for &xi in rule.points {
+        dshape_of(kind, xi, &mut dn);
+        min = min.min(jac_inv(dim, coords, &dn, v_ref)?.1);
+    }
+    Some(min)
+}
+
 fn inverse_map_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]> {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
     let rule = rule_of(kind);

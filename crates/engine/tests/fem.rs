@@ -7,9 +7,11 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use femlab_engine::command::Formulation;
+use femlab_engine::command::{Field, Solver};
 use femlab_engine::fem::assembly::{
-    assemble_stiffness, expand, pattern, reactions, reduce, resolve, Assembled, Csr, Pattern,
+    assemble_stiffness, expand, pattern, reactions, reduce, resolve, Assembled, Csr, Pattern, ResolvedConstraints,
 };
+use femlab_engine::fem::checks;
 use femlab_engine::fem::element::{element_for, Element, ElementCtx, FaceLoad, Iso, Material};
 use femlab_engine::fem::material::{
     builtin_law, check_batch, isotropic_d, plane_stress_condense, LinearElastic, MaterialBatch, MaterialLaw,
@@ -26,9 +28,13 @@ use femlab_engine::fem::shape::{
 };
 use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
+use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
+use femlab_engine::procedure::{self, Step, StepResult};
+use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
 use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
+use femlab_engine::{OnProgress, Progress};
 use femlab_geometry::mesh::{ElementKind, FaceKind};
-use femlab_geometry::{Mesh, Structured};
+use femlab_geometry::{perturb_interior, Mesh, Structured};
 
 // ---------------------------------------------------------------- quadrature
 
@@ -939,23 +945,25 @@ fn patch_modes(id: &Idealisation) -> Vec<[f64; VOIGT]> {
     }
 }
 
-/// `u = ε · x` for one constant-strain mode (engineering shear halved).
+/// `u = ε · x` at one point for one constant-strain mode (engineering shear halved).
+fn patch_u(id: &Idealisation, three: bool, e: &[f64; VOIGT], x: [f64; 3]) -> [f64; 3] {
+    if three {
+        [
+            e[0] * x[0] + 0.5 * e[3] * x[1] + 0.5 * e[4] * x[2],
+            0.5 * e[3] * x[0] + e[1] * x[1] + 0.5 * e[5] * x[2],
+            0.5 * e[4] * x[0] + 0.5 * e[5] * x[1] + e[2] * x[2],
+        ]
+    } else if let Idealisation::Axisymmetric = id {
+        [e[0] * x[0], e[1] * x[1] + e[3] * x[0], 0.0]
+    } else {
+        [e[0] * x[0] + 0.5 * e[3] * x[1], 0.5 * e[3] * x[0] + e[1] * x[1], 0.0]
+    }
+}
+
+/// `u = ε · x` on one element's nodes.
 fn patch_displacement(kind: ElementKind, id: &Idealisation, coords: &[f64], e: &[f64; VOIGT]) -> Vec<f64> {
-    let axi = matches!(id, Idealisation::Axisymmetric);
     let three = kind.dim() == 3;
-    nodal_field(kind, coords, &|x: [f64; 3]| {
-        if three {
-            [
-                e[0] * x[0] + 0.5 * e[3] * x[1] + 0.5 * e[4] * x[2],
-                0.5 * e[3] * x[0] + e[1] * x[1] + 0.5 * e[5] * x[2],
-                0.5 * e[4] * x[0] + 0.5 * e[5] * x[1] + e[2] * x[2],
-            ]
-        } else if axi {
-            [e[0] * x[0], e[1] * x[1] + e[3] * x[0], 0.0]
-        } else {
-            [e[0] * x[0] + 0.5 * e[3] * x[1], 0.5 * e[3] * x[0] + e[1] * x[1], 0.0]
-        }
-    })
+    nodal_field(kind, coords, &|x: [f64; 3]| patch_u(id, three, e, x))
 }
 
 /// The stress a constant strain produces: the 3D law, or the condensed plane-stress law.
@@ -1655,7 +1663,7 @@ fn a_block_without_a_material_names_its_body_and_a_temperature_reaches_the_eleme
     let bodies = vec!["beam".to_string()];
     let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, vec![]);
     p.material_of_block = vec![None];
-    let e = p.material_of(0).err().expect("no material");
+    let e = p.material_of(0).map(|_| ()).expect_err("no material");
     assert_eq!(e.code, ErrorCode::ModelNoMaterial);
     assert_eq!(e.where_.as_deref(), Some("body 'beam'"));
     let pat = pattern(&mesh, 3);
@@ -1707,4 +1715,475 @@ fn the_assembly_chunk_shrinks_with_the_element_and_the_faer_view_is_the_same_arr
     assert_eq!(f.nrows(), a.k.n);
     assert_eq!(f.ncols(), a.k.n);
     assert_eq!(f.val().len(), a.k.nnz());
+}
+
+// ---------------------------------------------------- solvers, checks, procedures
+
+fn nop(_p: Progress) -> bool {
+    true
+}
+
+/// A progress callback that cancels on call `at` and accepts every other call.
+fn cancel_on(at: usize) -> impl FnMut(Progress) -> bool {
+    let mut i = 0;
+    move |_p| {
+        i += 1;
+        i - 1 != at
+    }
+}
+
+fn run_static(p: &Problem<'_>, progress: OnProgress<'_>) -> Result<StepResult, Error> {
+    let step = Step::Static { solver: SolveOptions::default() };
+    pollster::block_on(procedure::run(p, &step, None, None, progress))
+}
+
+/// A7: the reactions must balance the applied load, on every structural case.
+fn reaction_balance(res: &StepResult, applied: [f64; 3]) {
+    let r = &res.fields[&Field::Reaction];
+    let mut sum = [0.0; 3];
+    for i in 0..r.len() {
+        for (c, s) in sum.iter_mut().enumerate() {
+            *s += r.data[i * 3 + c];
+        }
+    }
+    // the balance is meaningful against the forces that actually flow, so the scale is the
+    // largest single reaction when there is no applied load to compare with
+    let scale = r.data.iter().chain(applied.iter()).fold(1.0f64, |m, x| m.max(x.abs()));
+    for (c, s) in sum.iter().enumerate() {
+        assert!((s + applied[c]).abs() <= 1e-9 * scale, "component {c}: reactions {s}, applied {}", applied[c]);
+    }
+}
+
+/// The mesh every patch test runs on: a 2 × 2 × 2 lattice of the kind with its interior nodes
+/// pushed off the grid, so the element must reproduce a linear field on a distorted shape.
+/// `x` starts at 1 so the axisymmetric radius is never zero.
+fn patch_mesh(kind: ElementKind) -> Mesh {
+    let n = if kind.dim() == 3 { [2, 2, 2] } else { [2, 2, 1] };
+    let mut m = Structured { kind, n }.build(|p| [1.0 + p[0], p[1], p[2]]);
+    perturb_interior(&mut m, 0.075, 7);
+    straighten(&mut m);
+    m
+}
+
+/// Put every mid-edge node back at the midpoint of its (possibly moved) corners.
+///
+/// A quadratic element with curved edges has a non-constant Jacobian, and its quadrature rule
+/// is exact only to the rule's degree, so the *patch* identity `Σ_e ∫ ∂N_a/∂x dV = 0` no longer
+/// holds exactly at an interior node. Straight-sided elements are what the patch test is
+/// about, and both hexahedra and tetrahedra keep their distorted corners.
+fn straighten(m: &mut Mesh) {
+    let blocks = m.blocks.clone();
+    for blk in &blocks {
+        let (nn, nc) = (blk.kind.n_nodes(), blk.kind.n_corners());
+        if nn == nc {
+            continue;
+        }
+        for en in blk.conn.chunks_exact(nn) {
+            for (i, &[a, b]) in blk.kind.edges().iter().enumerate() {
+                let (pa, pb) = (m.node(en[a as usize]), m.node(en[b as usize]));
+                let mid = en[nc + i] as usize;
+                for k in 0..3 {
+                    m.coords[3 * mid + k] = 0.5 * (pa[k] + pb[k]);
+                }
+            }
+        }
+    }
+}
+
+/// `u = ε · x` on every node of a mesh.
+fn patch_mesh_field(mesh: &Mesh, id: &Idealisation, e: &[f64; VOIGT]) -> Vec<f64> {
+    let three = mesh.dim == 3;
+    let mut v = vec![0.0; mesh.n_nodes() * mesh.dim];
+    for n in 0..mesh.n_nodes() {
+        let d = patch_u(id, three, e, mesh.node(n as u32));
+        for i in 0..mesh.dim {
+            v[n * mesh.dim + i] = d[i];
+        }
+    }
+    v
+}
+
+/// Every DOF of every boundary node, with the value the exact field takes there.
+fn boundary_constraints(mesh: &Mesh, exact: &[f64]) -> ResolvedConstraints {
+    let mut nodes: Vec<u32> = mesh.boundary_faces().iter().flat_map(|&f| mesh.face_nodes(f)).collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    let fixed: Vec<(u32, f64)> = nodes
+        .iter()
+        .flat_map(|&n| (0..mesh.dim).map(move |c| (n * mesh.dim as u32 + c as u32, 0.0)))
+        .map(|(d, _)| (d, exact[d as usize]))
+        .collect();
+    let owner = vec![0; fixed.len()];
+    ResolvedConstraints { fixed, owner }
+}
+
+/// A1: every kind reproduces every constant-strain state exactly on a distorted mesh — the
+/// interior displacements and every Gauss-point stress.
+#[test]
+fn the_patch_test_passes_for_every_kind_and_every_constant_strain_mode() {
+    for kind in ALL_KINDS {
+        let mesh = patch_mesh(kind);
+        let sets = sets_of(&mesh);
+        let bodies = vec!["patch".to_string()];
+        for id in idealisations(kind) {
+            // In axisymmetry a constant γ_rz is not an equilibrium state — it needs the body
+            // force σ_rz/r — so the mesh patch test drops it; the single-element test, where
+            // every node is prescribed, still covers it.
+            let axi = matches!(id, Idealisation::Axisymmetric);
+            let modes: Vec<[f64; VOIGT]> =
+                patch_modes(&id).into_iter().enumerate().filter(|(i, _)| !(axi && *i == 2)).map(|(_, e)| e).collect();
+            for e in modes {
+                let p = problem(
+                    &mesh,
+                    &sets,
+                    &bodies,
+                    id.clone(),
+                    Formulation::IncompatibleModes,
+                    vec![fix("edge", "all", [true, true, true], 0.0)],
+                );
+                let pat = pattern(&mesh, mesh.dim);
+                let a = assemble_stiffness(&p, &pat).expect("a patch mesh assembles");
+                let exact = patch_mesh_field(&mesh, &id, &e);
+                let rc = boundary_constraints(&mesh, &exact);
+                let red = reduce(&a.k, &vec![0.0; a.k.n], &rc);
+                let (u_f, info) =
+                    pollster::block_on(solve(&red.k_ff, &red.f_f, &SolveOptions::default(), None, &mut nop))
+                        .expect("the patch system is positive definite");
+                assert!(info.rel_residual < 1e-10, "{kind:?}: residual {}", info.rel_residual);
+                let u = expand(&red, &u_f);
+                let scale = exact.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+                for (i, (got, want)) in u.iter().zip(&exact).enumerate() {
+                    assert!((got - want).abs() <= 1e-10 * scale, "{kind:?} {id:?} dof {i}: {got} vs {want}");
+                }
+                // and the stress at every Gauss point is D ε
+                let want = expected_stress(&id, &e);
+                let sscale = want.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+                let el = element_for(kind);
+                let (nn, n_gp) = (kind.n_nodes(), el.n_gp());
+                let mut coords = vec![0.0; nn * 3];
+                for elem in 0..mesh.n_elems() as u32 {
+                    mesh.elem_coords(elem, &mut coords);
+                    let mut ue: Vec<f64> = Vec::with_capacity(nn * mesh.dim);
+                    for &n in mesh.elem_nodes(elem) {
+                        for c in 0..mesh.dim {
+                            ue.push(u[n as usize * mesh.dim + c]);
+                        }
+                    }
+                    let c = ctx(&coords, &p.materials[0], id.clone(), Formulation::IncompatibleModes);
+                    let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
+                    el.recover(&c, &ue, &mut sig, &mut eps).expect("recover");
+                    for g in 0..n_gp {
+                        for i in 0..VOIGT {
+                            let got = sig[g * VOIGT + i];
+                            assert!(
+                                (got - want[i]).abs() <= 1e-10 * sscale,
+                                "{kind:?} {id:?} element {elem} gp {g} component {i}: {got} vs {}",
+                                want[i]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The bar of Benchmark A5 for one kind: 1 m long, 0.1 × 0.1 in section, stretched by a
+/// prescribed end displacement against three symmetry planes.
+fn uniaxial_bar(kind: ElementKind) -> (Mesh, Idealisation, f64) {
+    let n = [10, 1, 1];
+    let mesh = Structured { kind, n }.box_([1.0, 0.1, 0.1]);
+    let id = if kind.dim() == 3 { Idealisation::Solid3d } else { Idealisation::PlaneStress { thickness: 0.1 } };
+    (mesh, id, 0.01)
+}
+
+/// A5 and A7: `σ = F/A`, `δ = F L / (E A)` and reactions that balance, for all eight kinds.
+#[test]
+fn the_uniaxial_bar_gives_f_over_a_and_balanced_reactions_for_every_kind() {
+    let delta = 2e-4;
+    for kind in ALL_KINDS {
+        let (mesh, id, area) = uniaxial_bar(kind);
+        let sets = sets_of(&mesh);
+        let bodies = vec!["bar".to_string()];
+        let mut constraints: Vec<Constraint> = vec![
+            fix("root", "xmin", [true, false, false], 0.0),
+            fix("sym_y", "ymin", [false, true, false], 0.0),
+            fix("pull", "xmax", [true, false, false], delta),
+        ];
+        if kind.dim() == 3 {
+            constraints.push(fix("sym_z", "zmin", [false, false, true], 0.0));
+        }
+        let p = problem(&mesh, &sets, &bodies, id, Formulation::IncompatibleModes, constraints);
+        let res = run_static(&p, &mut nop).expect("the bar solves");
+        // δ = F L / (E A) with L = 1, so F = E A δ
+        let force = YOUNG * area * delta;
+        let u = &res.fields[&Field::Displacement];
+        for &n in &sets["xmax"].nodes {
+            assert!((u.data[n as usize * 3] - delta).abs() <= 1e-12, "{kind:?}");
+        }
+        let rc = resolve(&p).expect("no conflict");
+        let per = reactions_per_constraint(&p, &rc, &res.fields[&Field::Reaction]);
+        let root = per.iter().find(|(n, _)| n == "root").expect("the root constraint").1;
+        assert!((root[0] + force).abs() <= 1e-8 * force, "{kind:?}: root reaction {} vs {}", root[0], -force);
+        reaction_balance(&res, [0.0; 3]);
+        assert!(res.scalars["min_det_j"] > 0.0);
+        assert_eq!(res.solver.solver, "cpu-direct");
+        assert!(res.warnings.is_empty());
+    }
+}
+
+/// A2 at the assembled level: nothing but the Constraints removes a rigid mode, and the check
+/// names the one a single fixed node leaves free.
+#[test]
+fn the_rigid_mode_check_names_the_rotation_a_single_fixed_node_leaves_free() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [4, 2, 2] }.box_([1.0, 0.1, 0.1]);
+    // the node at the centre of the root face: rotation about x leaves it exactly where it is
+    let node = (0..mesh.n_nodes() as u32)
+        .find(|&n| mesh.node(n) == [0.0, 0.05, 0.05])
+        .expect("the [4,2,2] grid has a node at the centre of xmin");
+    let mut sets = sets_of(&mesh);
+    sets.insert(
+        "pin".to_string(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![node], elems: Vec::new() },
+    );
+    let bodies = vec!["bar".to_string()];
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("pin", "pin", [true, true, true], 0.0)],
+    );
+    let e = run_static(&p, &mut nop).expect_err("a pinned bar still spins");
+    assert_eq!(e.code, ErrorCode::ConstraintRigidModes);
+    assert!(e.cause.contains("rotation about x"), "{}", e.cause);
+    assert_eq!(e.suggestion.as_deref(), Some("constraint.fix on a Set that removes it"));
+    // nothing constrained at all: every mode is free, translations included
+    let free = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, vec![]);
+    let e = run_static(&free, &mut nop).expect_err("nothing holds it");
+    assert!(e.cause.contains("translation x") && e.cause.contains("rotation about z"), "{}", e.cause);
+}
+
+/// The 2D rigid basis is two translations and the rotation about z.
+#[test]
+fn a_plane_model_has_three_rigid_modes() {
+    let mesh = Structured { kind: ElementKind::Quad4, n: [2, 2, 1] }.box_([1.0, 1.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["sheet".to_string()];
+    let free = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        Formulation::Full,
+        vec![fix("edge", "xmin", [true, false, false], 0.0)],
+    );
+    let e = run_static(&free, &mut nop).expect_err("a sheet held only in x still slides");
+    assert_eq!(e.code, ErrorCode::ConstraintRigidModes);
+    // holding a whole edge in x removes the x translation and the rotation with it
+    assert_eq!(e.cause, "the model can still move as a rigid body: translation y");
+
+    // one node held in both components leaves exactly the rotation about z
+    let node = (0..mesh.n_nodes() as u32).find(|&n| mesh.node(n) == [0.5, 0.5, 0.0]).expect("the centre node");
+    let mut pinned = sets.clone();
+    pinned.insert(
+        "pin".to_string(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![node], elems: Vec::new() },
+    );
+    let p = problem(
+        &mesh,
+        &pinned,
+        &bodies,
+        Idealisation::PlaneStrain,
+        Formulation::Full,
+        vec![fix("pin", "pin", [true, true, false], 0.0)],
+    );
+    let e = run_static(&p, &mut nop).expect_err("a sheet on a pin still turns");
+    assert_eq!(e.cause, "the model can still move as a rigid body: rotation about z");
+}
+
+#[test]
+fn every_well_posedness_check_has_a_failing_input() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let mut sets = sets_of(&mesh);
+    sets.insert(
+        "void".to_string(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: Vec::new(), elems: Vec::new() },
+    );
+    let bodies = vec!["bar".to_string()];
+    let held = || {
+        vec![
+            fix("root", "xmin", [true, true, true], 0.0),
+            fix("sym", "ymin", [false, true, false], 0.0),
+            fix("top", "zmin", [false, false, true], 0.0),
+        ]
+    };
+    // a well-posed Problem passes every check
+    let good = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held());
+    assert!(checks::all(&good).is_empty());
+
+    let mut no_mat = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held());
+    no_mat.material_of_block = vec![None];
+    assert_eq!(checks::all(&no_mat)[0].code, ErrorCode::ModelNoMaterial);
+
+    let mut empty = held();
+    empty.push(fix("nothing", "void", [true, false, false], 0.0));
+    let empty = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, empty);
+    assert_eq!(checks::all(&empty)[0].code, ErrorCode::SetEmpty);
+
+    let mut clash = held();
+    clash.push(fix("other", "xmin", [true, false, false], 1e-3));
+    let clash = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, clash);
+    let codes: Vec<ErrorCode> = checks::all(&clash).iter().map(|e| e.code).collect();
+    assert_eq!(codes, [ErrorCode::ConstraintConflict], "a conflict hides the rigid-mode test");
+
+    let mut folded = mesh.clone();
+    for &n in &folded.node_sets["xmax"].clone() {
+        folded.coords[3 * n as usize] = -1.0;
+    }
+    let fsets = sets_of(&folded);
+    let bad = problem(&folded, &fsets, &bodies, Idealisation::Solid3d, Formulation::Full, held());
+    let e = checks::all(&bad).into_iter().find(|e| e.code == ErrorCode::MeshInverted).expect("folded");
+    assert!(e.cause.contains("det J is not positive"), "{}", e.cause);
+    assert_eq!(e.where_.as_deref(), Some("element 1"));
+    // an empty mesh has no worst element to report
+    let bare = Mesh {
+        dim: 3,
+        coords: Vec::new(),
+        blocks: Vec::new(),
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let bsets = sets_of(&bare);
+    let none = problem(&bare, &bsets, &[], Idealisation::Solid3d, Formulation::Full, Vec::new());
+    assert!(checks::all(&none).iter().all(|e| e.code != ErrorCode::MeshInverted));
+}
+
+#[test]
+fn a_host_that_says_stop_cancels_at_every_phase() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![
+            fix("root", "xmin", [true, true, true], 0.0),
+            fix("sym", "ymin", [false, true, false], 0.0),
+            fix("top", "zmin", [false, false, true], 0.0),
+        ],
+    );
+    for at in 0..3 {
+        let mut stop = cancel_on(at);
+        let e = run_static(&p, &mut stop).expect_err("cancelled");
+        assert_eq!(e.code, ErrorCode::Cancelled, "phase {at}");
+    }
+    let mut go = cancel_on(99);
+    assert!(run_static(&p, &mut go).is_ok());
+}
+
+#[test]
+fn only_the_direct_solver_and_the_static_procedure_exist_so_far() {
+    let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![2.0] };
+    for solver in [Solver::CpuPcg, Solver::GpuPcg] {
+        let opts = SolveOptions { solver, ..SolveOptions::default() };
+        let e = pollster::block_on(solve(&k, &[1.0], &opts, None, &mut nop)).expect_err("not built yet");
+        assert_eq!(e.code, ErrorCode::Unsupported);
+        assert!(e.cause.contains(&solver_name(solver)), "{}", e.cause);
+    }
+    assert_eq!(resolve_solver(Solver::Auto), Solver::CpuDirect);
+    assert_eq!(resolve_solver(Solver::GpuPcg), Solver::GpuPcg);
+    assert_eq!(solver_name(Solver::CpuDirect), "cpu-direct");
+
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["c".to_string()];
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    for step in [Step::Modal, Step::HeatSteady, Step::HeatTransient, Step::Explicit] {
+        let e = pollster::block_on(procedure::run(&p, &step, None, None, &mut nop)).expect_err("only static so far");
+        assert_eq!(e.code, ErrorCode::Unsupported);
+        assert!(e.cause.contains(step.name()), "{}", e.cause);
+    }
+    assert_eq!(Step::Static { solver: SolveOptions::default() }.name(), "static");
+}
+
+/// The checks pass but the material does not: a law given the wrong number of properties
+/// fails inside the element integral, and the procedure reports it as it is.
+#[test]
+fn a_material_the_checks_cannot_see_still_stops_the_procedure() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["bar".to_string()];
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![
+            fix("root", "xmin", [true, true, true], 0.0),
+            fix("sym", "ymin", [false, true, false], 0.0),
+            fix("top", "zmin", [false, false, true], 0.0),
+        ],
+    );
+    assert!(checks::all(&p).is_empty(), "the well-posedness checks never look at the props");
+    p.materials[0].props = vec![YOUNG];
+    let e = run_static(&p, &mut nop).expect_err("a law with one prop instead of two");
+    assert_eq!(e.code, ErrorCode::MaterialProps);
+}
+
+#[test]
+fn an_indefinite_matrix_is_not_positive_definite() {
+    // [[1, 2], [2, 1]] is symmetric but indefinite: Cholesky hits a non-positive pivot
+    let k = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![1.0, 2.0, 2.0, 1.0] };
+    let e =
+        pollster::block_on(solve(&k, &[1.0, 1.0], &SolveOptions::default(), None, &mut nop)).expect_err("indefinite");
+    assert_eq!(e.code, ErrorCode::SolveNotPositiveDefinite);
+    assert_eq!(e.suggestion.as_deref(), Some("constraint.fix"));
+    assert_eq!(e.where_.as_deref(), Some("solve"));
+}
+
+#[test]
+fn the_cost_estimate_matches_the_pattern_it_came_from() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 2, 2] }.box_([1.0, 1.0, 1.0]);
+    let pat = pattern(&mesh, 3);
+    for solver in [Solver::Auto, Solver::CpuDirect, Solver::CpuPcg, Solver::GpuPcg] {
+        let c = cost_estimate(&mesh, 3, solver);
+        assert_eq!(c.dofs, pat.csr.n as u64);
+        assert_eq!(c.nnz, pat.csr.nnz() as u64);
+        assert_eq!(c.bytes, c.nnz * 12 + c.dofs * 32);
+        assert!(c.feasible, "a 2 x 2 x 2 box fits anywhere");
+        assert!(c.note.contains(&c.nnz.to_string()));
+    }
+    assert!(cost_estimate(&mesh, 3, Solver::Auto).note.starts_with("cpu-direct"));
+}
+
+#[test]
+fn field_data_slices_by_component_and_extremes_carry_their_location() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 2.0, 3.0]);
+    let data: Vec<f64> = (0..mesh.n_nodes()).flat_map(|n| [n as f64, -(n as f64), 0.5]).collect();
+    let f = FieldData::new(Per::Node, 3, data);
+    assert_eq!(f.len(), mesh.n_nodes());
+    assert!(!f.is_empty());
+    assert_eq!(f.component(1), (0..8).map(|n| -(n as f64)).collect::<Vec<_>>());
+    let ex = extremes(&f, &mesh);
+    assert_eq!(ex.len(), 3);
+    assert_eq!(ex[0].min, 0.0);
+    assert_eq!(ex[0].min_at, mesh.node(0));
+    assert_eq!(ex[0].max, 7.0);
+    assert_eq!(ex[0].max_at, mesh.node(7));
+    assert_eq!(ex[1].min, -7.0);
+    assert_eq!(ex[1].max, 0.0);
+    // a constant component reports the lowest index at both ends
+    assert_eq!(ex[2].min_at, mesh.node(0));
+    assert_eq!(ex[2].max_at, mesh.node(0));
+    assert!(FieldData::new(Per::ElemGp, 6, Vec::new()).is_empty());
+    let per = [Per::Node, Per::ElemGp, Per::ElemNode];
+    assert_eq!(format!("{per:?}"), "[Node, ElemGp, ElemNode]");
+    assert_ne!(Per::Node, Per::ElemNode);
 }

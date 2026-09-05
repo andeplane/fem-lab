@@ -16,8 +16,11 @@ pub mod journal;
 pub mod mesh;
 pub mod model;
 pub mod par;
+pub mod post;
+pub mod procedure;
 pub mod queries;
 pub mod query;
+pub mod solve;
 pub mod units;
 
 pub use command::Command;

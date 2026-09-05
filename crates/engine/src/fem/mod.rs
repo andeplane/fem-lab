@@ -8,6 +8,7 @@
 //! built-in route.
 
 pub mod assembly;
+pub mod checks;
 pub mod element;
 pub mod material;
 pub mod problem;
