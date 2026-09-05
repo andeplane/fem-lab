@@ -15,7 +15,9 @@
     "postbuild": "node scripts/check-no-secrets.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
     "@femlab/registry": "*",
+    "openai": "^7.10.0",
     "preact": "^10.29.8",
     "sucrase": "^3.35.1",
     "three": "^0.185.1",

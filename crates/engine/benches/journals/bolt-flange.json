@@ -1,0 +1,204 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "bolt-flange"
+    },
+    "hashAfter": "17591d8ddb7301802cb032b0027659aec69a34f205ea42ca76b6260cda470be3"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "dc75d04bbfaec812028cf4bc71f5c4d9a8f06adbbdd888b4e701b5cc79683de5"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.add",
+      "name": "flange",
+      "shape": {
+        "kind": "subtract",
+        "from": {
+          "kind": "cylinder",
+          "radius": "80 mm",
+          "height": "20 mm"
+        },
+        "cut": [
+          {
+            "kind": "cylinder",
+            "radius": "30 mm",
+            "height": "20 mm"
+          },
+          {
+            "kind": "transform",
+            "shape": {
+              "kind": "cylinder",
+              "radius": "6 mm",
+              "height": "20 mm"
+            },
+            "at": {
+              "translate": [
+                "60.000 mm",
+                "0.000 mm",
+                "0 mm"
+              ]
+            }
+          },
+          {
+            "kind": "transform",
+            "shape": {
+              "kind": "cylinder",
+              "radius": "6 mm",
+              "height": "20 mm"
+            },
+            "at": {
+              "translate": [
+                "30.000 mm",
+                "51.962 mm",
+                "0 mm"
+              ]
+            }
+          },
+          {
+            "kind": "transform",
+            "shape": {
+              "kind": "cylinder",
+              "radius": "6 mm",
+              "height": "20 mm"
+            },
+            "at": {
+              "translate": [
+                "-30.000 mm",
+                "51.962 mm",
+                "0 mm"
+              ]
+            }
+          },
+          {
+            "kind": "transform",
+            "shape": {
+              "kind": "cylinder",
+              "radius": "6 mm",
+              "height": "20 mm"
+            },
+            "at": {
+              "translate": [
+                "-60.000 mm",
+                "0.000 mm",
+                "0 mm"
+              ]
+            }
+          },
+          {
+            "kind": "transform",
+            "shape": {
+              "kind": "cylinder",
+              "radius": "6 mm",
+              "height": "20 mm"
+            },
+            "at": {
+              "translate": [
+                "-30.000 mm",
+                "-51.962 mm",
+                "0 mm"
+              ]
+            }
+          },
+          {
+            "kind": "transform",
+            "shape": {
+              "kind": "cylinder",
+              "radius": "6 mm",
+              "height": "20 mm"
+            },
+            "at": {
+              "translate": [
+                "30.000 mm",
+                "-51.962 mm",
+                "0 mm"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "hashAfter": "13919e40e5477eb44e5d13a51008bf65eb7887e1392db8b1641768d6b1a900f2"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025"
+    },
+    "hashAfter": "52ea28de9f30a9a28f191b84b8be59a8d037a911fa1271fbf72db76783564b53"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "flange"
+      ]
+    },
+    "hashAfter": "37ec0df46a0009edd7c0a0c1ab69e7ba8dd14c4ce43dd7a2c62c05b226a53e2e"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "4 mm"
+      },
+      "order": 1
+    },
+    "hashAfter": "3298152756e4a6855499f7c16b4931da79ffaf6100226a5820730f59d48a7790"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "bore",
+      "on": "flange.bottom"
+    },
+    "hashAfter": "5efb32a56c6cf47a25c1ff326724bc5f57ea27f423682217f4b97e25ad5a10b4"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "seat",
+      "on": "flange.top",
+      "value": "5 MPa"
+    },
+    "hashAfter": "2e953264b1ea9a0f469bd3c075b6c76bcbe5d5220c5a80aa7e8a4d383bb94f7d"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "bore"
+      ],
+      "loads": [
+        "seat"
+      ]
+    },
+    "hashAfter": "8802e9afa5a7f9dfb44fd066c92a1ca37f905df6f20f2cd46561aaac7c598d7d"
+  }
+]

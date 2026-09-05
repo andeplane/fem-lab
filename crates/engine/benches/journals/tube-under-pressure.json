@@ -1,0 +1,142 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "tube-under-pressure"
+    },
+    "hashAfter": "864417dcef292ed3df68edb2bedff3d2c2a64cf262a8b48efbdafd3150db0420"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "9f245ee2e16798e393f79351927ea5663b9b769c9f6c9343c5d9580c111a0dde"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.add",
+      "name": "tube",
+      "shape": {
+        "kind": "revolve",
+        "sketch": {
+          "outer": [
+            {
+              "kind": "line",
+              "to": [
+                "50.0 mm",
+                "0 mm"
+              ],
+              "tag": "bottom"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "50.0 mm",
+                "200.0 mm"
+              ],
+              "tag": "outer"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "45.0 mm",
+                "200.0 mm"
+              ],
+              "tag": "top"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "45.0 mm",
+                "0 mm"
+              ],
+              "tag": "inner"
+            }
+          ]
+        },
+        "angle": 360.0,
+        "segments": 32
+      }
+    },
+    "hashAfter": "b73faaaa060b34459d92a14bab3e590c975d15df2b20e536412b444fbe6e3547"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "source": "EN 10025"
+    },
+    "hashAfter": "aafc6fc2da6f1c6a14c80bc97b0ec8dbcd2eb20abc00705f4a66101e97dd40fe"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "tube"
+      ]
+    },
+    "hashAfter": "d400fa42eca1d339799400a9d38bcb7bc6720631b483fe8d48671e2c3557fbe7"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "5 mm"
+      },
+      "order": 1
+    },
+    "hashAfter": "1027011ae015105f4dca52111c4986983f0dae470e78358811e2606f94cc5ed4"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "base",
+      "on": "tube.bottom",
+      "dofs": [
+        "uz"
+      ]
+    },
+    "hashAfter": "0c47ff48eb431bf1d7a16ffe03a855812575db74f2bae51862262f0ff9f0121a"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "internal",
+      "on": "tube.inner",
+      "value": "8 MPa"
+    },
+    "hashAfter": "c947091cbceb57172b674f7580ef354021b83fcc492ba4b677093d626a81f82f"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "base"
+      ],
+      "loads": [
+        "internal"
+      ]
+    },
+    "hashAfter": "b176459eddb7aa45f50495f825998925b2f193b10abbaf586856d8c8f39895d6"
+  }
+]

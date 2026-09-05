@@ -1,0 +1,8 @@
+{
+  "title": "Heated fin",
+  "tag": "everyday",
+  "sentence": "An aluminium fin fixed at its root and uniformly heated \u2014 thermal strain with no mechanical load at all.",
+  "theory": "A uniform temperature change \u0394T produces a free thermal strain \u03b1\u00b7\u0394T in every direction; restraining the root is what turns that strain into stress.",
+  "tutorial": "thermal-bar",
+  "thumbnail": null
+}

@@ -1,0 +1,11 @@
+{
+  "title": "MacNeal\u2013Harder beam",
+  "tag": "NAFEMS",
+  "sentence": "A short cantilever meshed as six regular quad elements \u2014 the classic shear-locking sensitivity check.",
+  "reference": {
+    "label": "tip deflection",
+    "value": "0.1081 in (regular mesh)"
+  },
+  "theory": "MacNeal & Harder (1985): a straight beam in shear-dominated bending, used to show that linear (quad4) elements lock while quadratic (quad8) elements stay within 1 %.",
+  "thumbnail": null
+}

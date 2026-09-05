@@ -1,0 +1,11 @@
+{
+  "title": "NAFEMS LE1 elliptic membrane",
+  "tag": "NAFEMS",
+  "sentence": "An elliptical plate with an elliptical hole under outward pressure \u2014 the standard curved-boundary benchmark.",
+  "reference": {
+    "label": "\u03c3yy(D)",
+    "value": "92.7 MPa"
+  },
+  "theory": "NAFEMS Standard Benchmark LE1: quadratic elements on curved (elliptical) mapped-block edges converge to \u03c3yy(D) = 92.7 MPa within 2 %.",
+  "thumbnail": null
+}

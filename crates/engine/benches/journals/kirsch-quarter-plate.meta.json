@@ -1,0 +1,12 @@
+{
+  "title": "Kirsch plate (quarter model)",
+  "tag": "NAFEMS",
+  "sentence": "A quarter-symmetry model of a plate with a circular hole, two graded mapped blocks meeting at the hole.",
+  "reference": {
+    "label": "K_t = \u03c3xx(0,a)/\u03c3",
+    "value": "3.00 (infinite plate)"
+  },
+  "theory": "Kirsch (1898): the stress concentration at the edge of a small circular hole in an infinite plate in uniaxial tension is exactly 3\u00d7 the far-field stress.",
+  "tutorial": "plate-with-hole",
+  "thumbnail": null
+}
