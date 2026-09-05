@@ -8,13 +8,18 @@
 pub mod mesh;
 pub mod mesher;
 pub mod predicate;
+pub mod quality;
 pub mod shape;
 pub mod sketch;
 pub mod solid;
 
 pub use mesh::{Adjacency, ElementBlock, ElementKind, Face, FaceKind, Mesh, Surface};
-pub use mesher::{annulus, elliptic_annulus, perturb_interior, split_to_simplices, Structured};
-pub use predicate::{FacePredicate, RegionPredicate};
+pub use mesher::{annulus, elliptic_annulus, lattice, perturb_interior, split_to_simplices, Structured};
+pub use predicate::{
+    elem_centroid, face_centroid_normal, nearest_boundary_face, resolve_face_set, resolve_region, FacePredicate,
+    RegionPredicate,
+};
+pub use quality::{quality, Quality};
 pub use shape::{Affine3, Shape};
 pub use sketch::{Segment, Sketch};
 pub use solid::{Solid, TriMesh};
