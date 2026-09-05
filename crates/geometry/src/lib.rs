@@ -14,7 +14,10 @@ pub mod sketch;
 pub mod solid;
 
 pub use mesh::{Adjacency, ElementBlock, ElementKind, Face, FaceKind, Mesh, Surface};
-pub use mesher::{annulus, elliptic_annulus, lattice, perturb_interior, split_to_simplices, Structured};
+pub use mesher::{
+    annulus, elliptic_annulus, extrude, free, lattice, mapped, perturb_interior, revolve, split_to_simplices, Curve,
+    QuadBlock, RefineBox, Structured,
+};
 pub use predicate::{
     elem_centroid, face_centroid_normal, nearest_boundary_face, resolve_face_set, resolve_region, FacePredicate,
     RegionPredicate,

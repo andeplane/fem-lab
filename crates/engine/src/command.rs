@@ -146,6 +146,76 @@ pub enum LatticeSize {
     Counts { nx: u32, ny: u32, nz: u32 },
 }
 
+/// The shape of one edge of a mapped block, between the two corners it joins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CurveSpec {
+    /// The straight segment between the edge's two corners; the default when `edges` is omitted.
+    Line,
+    /// The circular arc about `center`, counter-clockwise when `ccw` is true, else clockwise.
+    /// Both corners must lie at the same distance from `center` or the block is rejected.
+    Arc { center: [Q<Length>; 2], ccw: bool },
+    /// The arc of the axis-aligned ellipse with these semi-axes about `center`, taken the short
+    /// way between the corners' parametric angles. Both corners must lie on the ellipse.
+    Ellipse {
+        center: [Q<Length>; 2],
+        #[serde(rename = "semiAxes")]
+        semi_axes: [Q<Length>; 2],
+    },
+}
+
+/// One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
+///
+/// `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
+/// corner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so
+/// edges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape
+/// (straight by default). `n` is the number of elements along u and v, `grading` the ratio
+/// between successive element sizes along each (1.0 uniform, above 1 packs elements toward the
+/// u = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes
+/// `<body>.<tag>`. Blocks that share an edge must divide and grade it identically.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuadBlockSpec {
+    pub corners: [[Q<Length>; 2]; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edges: Option<[CurveSpec; 4]>,
+    pub n: [u32; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grading: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<[Option<String>; 4]>,
+}
+
+/// A box in which the free mesher uses a smaller element size than elsewhere, for a stress
+/// concentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a
+/// triangle is refined when its centroid falls inside it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RefineBoxSpec {
+    pub min: [Q<Length>; 2],
+    pub max: [Q<Length>; 2],
+    pub size: Q<Length>,
+}
+
+/// How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SweepSpec {
+    /// Extrude along z into `layers` layers of equal thickness, `height` in total. Use an even
+    /// number of layers when a Set has to land on the mid-plane. The ends become the face sets
+    /// `<body>.bottom` (z = 0) and `<body>.top`.
+    Extrude { layers: u32, height: Q<Length> },
+    /// Revolve the base, read as an (r, z) section with x the radius and y the axis, about the
+    /// z axis through `angleDeg` in `segments` steps. Below a full turn the ends become the
+    /// face sets `<body>.theta0` and `<body>.theta1`; a full turn merges its seam instead. A
+    /// base node at r = 0 is refused: mesh a solid section as blocks and extrude it.
+    Revolve {
+        segments: u32,
+        #[serde(rename = "angleDeg")]
+        angle_deg: f64,
+    },
+}
+
 /// The mesher and its settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -153,6 +223,35 @@ pub enum MesherSpec {
     /// Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering
     /// every Body; exact for box geometry, stair-stepped for curved bodies.
     Lattice { size: LatticeSize },
+    /// Structured quadrilaterals on one or more mapped blocks, merged where they touch. The
+    /// blocks *are* the geometry: no geometry.add is needed, and the Body they make is named by
+    /// `body` (default "sheet"), so each block edge tag becomes the face Set `<body>.<tag>`.
+    /// This is the mesher for the classic 2D benchmarks: it is exact, has no quality surprises,
+    /// grades toward a stress concentration, and puts quadratic mid-nodes on the real curve.
+    /// The idealisation must be 2D (model.setIdealisation) because the mesh is.
+    Mapped {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        blocks: Vec<QuadBlockSpec>,
+    },
+    /// Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a
+    /// 30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and
+    /// each entry of `refine` asks for a smaller size inside its box. Use it when the domain is
+    /// too awkward to cover with mapped blocks; prefer mapped blocks when it is not, because
+    /// they are exact and grade smoothly. The idealisation must be 2D, as the Body is.
+    Free {
+        of: String,
+        size: Q<Length>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refine: Option<Vec<RefineBoxSpec>>,
+    },
+    /// A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`
+    /// extrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes
+    /// on the swept curve). The base's edge face Sets become the side faces of the solid, so a
+    /// Set named on the section is still there in 3D, and the ends get their own. The
+    /// idealisation must be 3D, and the base must make quadrilaterals, so it is the mapped
+    /// mesher: sweeping free triangles would need wedge elements, which the engine has not got.
+    Sweep { base: Box<MesherSpec>, sweep: SweepSpec },
 }
 
 /// A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.

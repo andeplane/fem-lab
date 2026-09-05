@@ -1808,6 +1808,83 @@
               "kind",
               "size"
             ]
+          },
+          {
+            "description": "Structured quadrilaterals on one or more mapped blocks, merged where they touch. The\nblocks *are* the geometry: no geometry.add is needed, and the Body they make is named by\n`body` (default \"sheet\"), so each block edge tag becomes the face Set `<body>.<tag>`.\nThis is the mesher for the classic 2D benchmarks: it is exact, has no quality surprises,\ngrades toward a stress concentration, and puts quadratic mid-nodes on the real curve.\nThe idealisation must be 2D (model.setIdealisation) because the mesh is.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlockSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "blocks"
+            ]
+          },
+          {
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "refine": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/RefineBoxSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size"
+            ]
+          },
+          {
+            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must make quadrilaterals, so it is the mapped\nmesher: sweeping free triangles would need wedge elements, which the engine has not got.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSpec"
+              },
+              "sweep": {
+                "$ref": "#/$defs/SweepSpec"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
           }
         ]
       },
@@ -1840,6 +1917,233 @@
               "nx",
               "ny",
               "nz"
+            ]
+          }
+        ]
+      },
+      "QuadBlockSpec": {
+        "description": "One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.\n\n`corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to\ncorner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so\nedges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape\n(straight by default). `n` is the number of elements along u and v, `grading` the ratio\nbetween successive element sizes along each (1.0 uniform, above 1 packs elements toward the\nu = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes\n`<body>.<tag>`. Blocks that share an edge must divide and grade it identically.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/CurveSpec"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "n"
+        ]
+      },
+      "CurveSpec": {
+        "description": "The shape of one edge of a mapped block, between the two corners it joins.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the edge's two corners; the default when `edges` is omitted.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw` is true, else clockwise.\nBoth corners must lie at the same distance from `center` or the block is rejected.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse with these semi-axes about `center`, taken the short\nway between the corners' parametric angles. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semiAxes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semiAxes"
+            ]
+          }
+        ]
+      },
+      "RefineBoxSpec": {
+        "description": "A box in which the free mesher uses a smaller element size than elsewhere, for a stress\nconcentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a\ntriangle is refined when its centroid falls inside it.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "$ref": "#/$defs/Q_length"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
+        ]
+      },
+      "SweepSpec": {
+        "description": "How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.",
+        "oneOf": [
+          {
+            "description": "Extrude along z into `layers` layers of equal thickness, `height` in total. Use an even\nnumber of layers when a Set has to land on the mid-plane. The ends become the face sets\n`<body>.bottom` (z = 0) and `<body>.top`.",
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "height": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "description": "Revolve the base, read as an (r, z) section with x the radius and y the axis, about the\nz axis through `angleDeg` in `segments` steps. Below a full turn the ends become the\nface sets `<body>.theta0` and `<body>.theta1`; a full turn merges its seam instead. A\nbase node at r = 0 is refused: mesh a solid section as blocks and extrude it.",
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angleDeg"
             ]
           }
         ]
@@ -2867,6 +3171,307 @@
             },
             "required": [
               "kind"
+            ]
+          },
+          {
+            "description": "Mapped blocks, which are their own geometry: `body` is the implicit Body they make.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlock"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "body",
+              "blocks"
+            ]
+          },
+          {
+            "description": "Free triangles inside the sketch of the Body `of`.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "type": "number",
+                "format": "double"
+              },
+              "refine": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/RefineBox"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size",
+              "refine"
+            ]
+          },
+          {
+            "description": "A 2D mesher swept into 3D.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSettings"
+              },
+              "sweep": {
+                "$ref": "#/$defs/Sweep"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
+          }
+        ]
+      },
+      "QuadBlock": {
+        "description": "One mapped block: a curvilinear quadrilateral meshed as a structured grid.\n\n`corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 → c1`\nalong u and `c0 → c3` along v. Edge `k` joins `c_k → c_{k+1}` (edges 0 and 2 run along u,\n1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio\nbetween successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /\nv = 0 side). `tags` names the face set each edge contributes to.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Curve"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "edges",
+          "n",
+          "grading",
+          "tags"
+        ]
+      },
+      "Curve": {
+        "description": "The shape of one block edge between its two corners.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the corners.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw`. Both corners must lie at\nthe same distance from `center`.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse `((x - cx)/a)² + ((y - cy)/b)² = 1` between the\ncorners' parametric angles, the short way round. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semi_axes": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semi_axes"
+            ]
+          }
+        ]
+      },
+      "RefineBox": {
+        "description": "A local element size inside an axis-aligned box, for the free mesher's `refine` pass.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
+        ]
+      },
+      "Sweep": {
+        "description": "How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "height": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "angle_deg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angle_deg"
             ]
           }
         ]
@@ -5093,6 +5698,83 @@
               "kind",
               "size"
             ]
+          },
+          {
+            "description": "Structured quadrilaterals on one or more mapped blocks, merged where they touch. The\nblocks *are* the geometry: no geometry.add is needed, and the Body they make is named by\n`body` (default \"sheet\"), so each block edge tag becomes the face Set `<body>.<tag>`.\nThis is the mesher for the classic 2D benchmarks: it is exact, has no quality surprises,\ngrades toward a stress concentration, and puts quadratic mid-nodes on the real curve.\nThe idealisation must be 2D (model.setIdealisation) because the mesh is.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlockSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "blocks"
+            ]
+          },
+          {
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "refine": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/RefineBoxSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size"
+            ]
+          },
+          {
+            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must make quadrilaterals, so it is the mapped\nmesher: sweeping free triangles would need wedge elements, which the engine has not got.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSpec"
+              },
+              "sweep": {
+                "$ref": "#/$defs/SweepSpec"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
           }
         ]
       },
@@ -5125,6 +5807,233 @@
               "nx",
               "ny",
               "nz"
+            ]
+          }
+        ]
+      },
+      "QuadBlockSpec": {
+        "description": "One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.\n\n`corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to\ncorner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so\nedges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape\n(straight by default). `n` is the number of elements along u and v, `grading` the ratio\nbetween successive element sizes along each (1.0 uniform, above 1 packs elements toward the\nu = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes\n`<body>.<tag>`. Blocks that share an edge must divide and grade it identically.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/CurveSpec"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "n"
+        ]
+      },
+      "CurveSpec": {
+        "description": "The shape of one edge of a mapped block, between the two corners it joins.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the edge's two corners; the default when `edges` is omitted.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw` is true, else clockwise.\nBoth corners must lie at the same distance from `center` or the block is rejected.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse with these semi-axes about `center`, taken the short\nway between the corners' parametric angles. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semiAxes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semiAxes"
+            ]
+          }
+        ]
+      },
+      "RefineBoxSpec": {
+        "description": "A box in which the free mesher uses a smaller element size than elsewhere, for a stress\nconcentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a\ntriangle is refined when its centroid falls inside it.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "$ref": "#/$defs/Q_length"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
+        ]
+      },
+      "SweepSpec": {
+        "description": "How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.",
+        "oneOf": [
+          {
+            "description": "Extrude along z into `layers` layers of equal thickness, `height` in total. Use an even\nnumber of layers when a Set has to land on the mid-plane. The ends become the face sets\n`<body>.bottom` (z = 0) and `<body>.top`.",
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "height": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "description": "Revolve the base, read as an (r, z) section with x the radius and y the axis, about the\nz axis through `angleDeg` in `segments` steps. Below a full turn the ends become the\nface sets `<body>.theta0` and `<body>.theta1`; a full turn merges its seam instead. A\nbase node at r = 0 is refused: mesh a solid section as blocks and extrude it.",
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angleDeg"
             ]
           }
         ]
@@ -7328,6 +8237,307 @@
             "required": [
               "kind"
             ]
+          },
+          {
+            "description": "Mapped blocks, which are their own geometry: `body` is the implicit Body they make.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlock"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "body",
+              "blocks"
+            ]
+          },
+          {
+            "description": "Free triangles inside the sketch of the Body `of`.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "type": "number",
+                "format": "double"
+              },
+              "refine": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/RefineBox"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size",
+              "refine"
+            ]
+          },
+          {
+            "description": "A 2D mesher swept into 3D.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSettings"
+              },
+              "sweep": {
+                "$ref": "#/$defs/Sweep"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
+          }
+        ]
+      },
+      "QuadBlock": {
+        "description": "One mapped block: a curvilinear quadrilateral meshed as a structured grid.\n\n`corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 → c1`\nalong u and `c0 → c3` along v. Edge `k` joins `c_k → c_{k+1}` (edges 0 and 2 run along u,\n1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio\nbetween successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /\nv = 0 side). `tags` names the face set each edge contributes to.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Curve"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "edges",
+          "n",
+          "grading",
+          "tags"
+        ]
+      },
+      "Curve": {
+        "description": "The shape of one block edge between its two corners.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the corners.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw`. Both corners must lie at\nthe same distance from `center`.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse `((x - cx)/a)² + ((y - cy)/b)² = 1` between the\ncorners' parametric angles, the short way round. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semi_axes": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semi_axes"
+            ]
+          }
+        ]
+      },
+      "RefineBox": {
+        "description": "A local element size inside an axis-aligned box, for the free mesher's `refine` pass.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
+        ]
+      },
+      "Sweep": {
+        "description": "How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "height": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "angle_deg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angle_deg"
+            ]
           }
         ]
       },
@@ -9151,6 +10361,83 @@
               "kind",
               "size"
             ]
+          },
+          {
+            "description": "Structured quadrilaterals on one or more mapped blocks, merged where they touch. The\nblocks *are* the geometry: no geometry.add is needed, and the Body they make is named by\n`body` (default \"sheet\"), so each block edge tag becomes the face Set `<body>.<tag>`.\nThis is the mesher for the classic 2D benchmarks: it is exact, has no quality surprises,\ngrades toward a stress concentration, and puts quadratic mid-nodes on the real curve.\nThe idealisation must be 2D (model.setIdealisation) because the mesh is.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlockSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "blocks"
+            ]
+          },
+          {
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "size": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "refine": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/$defs/RefineBoxSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "free"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "size"
+            ]
+          },
+          {
+            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must make quadrilaterals, so it is the mapped\nmesher: sweeping free triangles would need wedge elements, which the engine has not got.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSpec"
+              },
+              "sweep": {
+                "$ref": "#/$defs/SweepSpec"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
           }
         ]
       },
@@ -9183,6 +10470,233 @@
               "nx",
               "ny",
               "nz"
+            ]
+          }
+        ]
+      },
+      "QuadBlockSpec": {
+        "description": "One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.\n\n`corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to\ncorner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so\nedges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape\n(straight by default). `n` is the number of elements along u and v, `grading` the ratio\nbetween successive element sizes along each (1.0 uniform, above 1 packs elements toward the\nu = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes\n`<body>.<tag>`. Blocks that share an edge must divide and grade it identically.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/CurveSpec"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "n"
+        ]
+      },
+      "CurveSpec": {
+        "description": "The shape of one edge of a mapped block, between the two corners it joins.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the edge's two corners; the default when `edges` is omitted.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw` is true, else clockwise.\nBoth corners must lie at the same distance from `center` or the block is rejected.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse with these semi-axes about `center`, taken the short\nway between the corners' parametric angles. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semiAxes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semiAxes"
+            ]
+          }
+        ]
+      },
+      "RefineBoxSpec": {
+        "description": "A box in which the free mesher uses a smaller element size than elsewhere, for a stress\nconcentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a\ntriangle is refined when its centroid falls inside it.",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "max": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "size": {
+            "$ref": "#/$defs/Q_length"
+          }
+        },
+        "required": [
+          "min",
+          "max",
+          "size"
+        ]
+      },
+      "SweepSpec": {
+        "description": "How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.",
+        "oneOf": [
+          {
+            "description": "Extrude along z into `layers` layers of equal thickness, `height` in total. Use an even\nnumber of layers when a Set has to land on the mid-plane. The ends become the face sets\n`<body>.bottom` (z = 0) and `<body>.top`.",
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "height": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "description": "Revolve the base, read as an (r, z) section with x the radius and y the axis, about the\nz axis through `angleDeg` in `segments` steps. Below a full turn the ends become the\nface sets `<body>.theta0` and `<body>.theta1`; a full turn merges its seam instead. A\nbase node at r = 0 is refused: mesh a solid section as blocks and extrude it.",
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angleDeg"
             ]
           }
         ]

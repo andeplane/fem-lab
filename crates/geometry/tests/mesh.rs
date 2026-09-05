@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use femlab_geometry::{
-    annulus, elliptic_annulus, perturb_interior, split_to_simplices, ElementBlock, ElementKind, Face, FaceKind, Mesh,
-    Structured,
+    annulus, elliptic_annulus, extrude, free, mapped, perturb_interior, revolve, split_to_simplices, Curve,
+    ElementBlock, ElementKind, Face, FaceKind, Mesh, QuadBlock, RefineBox, Segment, Structured,
 };
 use proptest::prelude::*;
 
@@ -810,4 +810,541 @@ fn quality_is_perfect_on_a_lattice_and_zero_on_a_degenerate_element() {
     // an empty mesh has nothing to be wrong with
     let empty = Mesh { blocks: vec![], coords: vec![], ..flat };
     assert_eq!(quality(&empty, 5).worst, []);
+}
+
+// ---- mapped quad blocks ----------------------------------------------------------------------
+
+fn block(corners: [[f64; 2]; 4], edges: [Curve; 4], n: [usize; 2], grading: [f64; 2], tags: [&str; 4]) -> QuadBlock {
+    QuadBlock { corners, edges, n, grading, tags: tags.map(|t| (!t.is_empty()).then(|| t.to_string())) }
+}
+
+const LINES: [Curve; 4] = [Curve::Line, Curve::Line, Curve::Line, Curve::Line];
+
+fn unit_block(n: [usize; 2]) -> QuadBlock {
+    block([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], LINES, n, [1.0, 1.0], ["ymin", "xmax", "ymax", "xmin"])
+}
+
+#[test]
+fn a_mapped_unit_block_is_the_structured_box() {
+    for kind in [ElementKind::Quad4, ElementKind::Quad8, ElementKind::Tri3, ElementKind::Tri6] {
+        let m = mapped(&[unit_block([2, 3])], kind).unwrap();
+        let s = Structured { kind, n: [2, 3, 1] }.box_([1.0, 1.0, 1.0]);
+        m.validate().unwrap();
+        assert_eq!((m.n_nodes(), m.n_elems()), (s.n_nodes(), s.n_elems()), "{kind:?}");
+        assert_eq!(m.blocks[0].conn, s.blocks[0].conn, "{kind:?}");
+        for (a, b) in m.coords.iter().zip(&s.coords) {
+            assert!((a - b).abs() < 1e-15, "{kind:?}: {a} vs {b}");
+        }
+        for name in ["xmin", "xmax", "ymin", "ymax"] {
+            assert_eq!(m.face_sets[name], s.face_sets[name], "{kind:?} {name}");
+        }
+        assert_eq!(m.elem_sets["all"], s.elem_sets["all"]);
+        assert!(min_element_measure(&m) > 0.0, "{kind:?}");
+    }
+    // grading > 1 packs cells toward the u = 0 / v = 0 side, geometrically
+    let graded = block([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], LINES, [4, 1], [2.0, 1.0], ["", "", "", ""]);
+    let g = mapped(&[graded], ElementKind::Quad4).unwrap();
+    assert!(g.face_sets.is_empty(), "an untagged block names nothing");
+    let mut xs: Vec<f64> = g.coords.chunks_exact(3).filter(|p| p[1].abs() < 1e-12).map(|p| p[0]).collect();
+    xs.sort_by(f64::total_cmp);
+    assert_eq!(xs.len(), 5);
+    for i in 0..3 {
+        assert!(((xs[i + 2] - xs[i + 1]) / (xs[i + 1] - xs[i]) - 2.0).abs() < 1e-12, "{xs:?}");
+    }
+    assert!((xs[1] - 1.0 / 15.0).abs() < 1e-15, "u_1 = (1 - r)/(1 - r^n)");
+}
+
+/// C §7 C1: the two-block quarter plate with a circular hole of radius `a` in a `w` square.
+fn kirsch(a: f64, w: f64, n: usize, grading: f64) -> Vec<QuadBlock> {
+    let d = a / 2.0f64.sqrt();
+    let arc = Curve::Arc { center: [0.0, 0.0], ccw: false };
+    vec![
+        block(
+            [[a, 0.0], [w, 0.0], [w, w], [d, d]],
+            [Curve::Line, Curve::Line, Curve::Line, arc.clone()],
+            [n, n],
+            [grading, 1.0],
+            ["ymin", "xmax", "", "hole"],
+        ),
+        block(
+            [[d, d], [w, w], [0.0, w], [0.0, a]],
+            [Curve::Line, Curve::Line, Curve::Line, arc],
+            [n, n],
+            [grading, 1.0],
+            ["", "ymax", "xmin", "hole"],
+        ),
+    ]
+}
+
+#[test]
+fn the_kirsch_two_block_plate_merges_its_diagonal_and_names_the_hole() {
+    let (a, w, n) = (1.0, 10.0, 4);
+    let m = mapped(&kirsch(a, w, n, 1.15), ElementKind::Quad8).unwrap();
+    m.validate().unwrap();
+    // two quad8 blocks of (2n+1)^2 - n^2 nodes, sharing the 2n+1 nodes of the diagonal
+    assert_eq!(m.n_nodes(), 2 * (9 * 9 - n * n) - (2 * n + 1));
+    assert_eq!(m.n_elems(), 2 * n * n);
+    assert!(min_element_measure(&m) > 0.0);
+    assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["hole", "xmax", "xmin", "ymax", "ymin"]);
+    // the hole is a quarter circle: every node of it, mid-edge nodes included, is at radius a
+    assert_eq!(m.face_sets["hole"].len(), 2 * n);
+    let hole = face_set_nodes(&m, "hole");
+    assert_eq!(hole.len(), 4 * n + 1, "shared node in the middle of the quarter");
+    assert!(hole.iter().all(|&i| (radius(m.node(i)) - a).abs() < 1e-12));
+    let angles: Vec<f64> = hole.iter().map(|&i| libm::atan2(m.node(i)[1], m.node(i)[0])).collect();
+    assert!(angles.iter().copied().fold(f64::INFINITY, f64::min).abs() < 1e-12);
+    assert!((angles.iter().copied().fold(0.0, f64::max) - FRAC_PI_2).abs() < 1e-12);
+    // every face centroid sits just inside radius a, by the chord error of a 2n-sided quarter
+    let chord = a * (1.0 - libm::cos(FRAC_PI_2 / (4.0 * n as f64)));
+    for &f in &m.face_sets["hole"] {
+        let c = mean(&m.face_nodes(f).take(2).map(|i| m.node(i)).collect::<Vec<_>>());
+        assert!(a - radius(c) > 0.0 && a - radius(c) < chord + 1e-12, "{}", radius(c));
+    }
+    // the radial spacing is graded by 1.15 from the hole outwards along y = 0
+    let mut xs: Vec<f64> = m.coords.chunks_exact(3).filter(|p| p[1].abs() < 1e-12).map(|p| p[0]).collect();
+    xs.sort_by(f64::total_cmp);
+    let corner: Vec<f64> = xs.iter().copied().step_by(2).collect();
+    assert_eq!(corner.len(), n + 1);
+    for i in 0..n - 1 {
+        let r = (corner[i + 2] - corner[i + 1]) / (corner[i + 1] - corner[i]);
+        assert!((r - 1.15).abs() < 1e-12, "{corner:?}");
+    }
+    // a tag on the shared diagonal names nothing: the merge leaves no boundary face there
+    let mut tagged = kirsch(a, w, n, 1.0);
+    tagged[0].tags[2] = Some("diag".to_string());
+    tagged[1].tags[0] = Some("diag".to_string());
+    let d = mapped(&tagged, ElementKind::Quad4).unwrap();
+    assert!(!d.face_sets.contains_key("diag"), "{:?}", d.face_sets.keys().collect::<Vec<_>>());
+    // the same blocks in every 2D kind, each conforming across the shared diagonal
+    for kind in [ElementKind::Quad4, ElementKind::Tri3, ElementKind::Tri6] {
+        let t = mapped(&kirsch(a, w, n, 1.15), kind).unwrap();
+        t.validate().unwrap();
+        assert!(min_element_measure(&t) > 0.0, "{kind:?}");
+        assert_eq!(t.boundary_faces().len(), t.face_sets.values().map(Vec::len).sum::<usize>(), "{kind:?}");
+    }
+}
+
+#[test]
+fn cooks_membrane_is_one_block_of_the_exact_trapezoid_area() {
+    let cook = |n: usize| {
+        block(
+            [[0.0, 0.0], [48.0, 44.0], [48.0, 60.0], [0.0, 44.0]],
+            LINES,
+            [n, n],
+            [1.0, 1.0],
+            ["bottom", "right", "top", "left"],
+        )
+    };
+    // the trapezoid has parallel vertical sides of 44 and 16 a distance 48 apart
+    let exact = 0.5 * (44.0 + 16.0) * 48.0;
+    for kind in [ElementKind::Quad4, ElementKind::Quad8, ElementKind::Tri3] {
+        let m = mapped(&[cook(4)], kind).unwrap();
+        m.validate().unwrap();
+        assert!((measure(&m) - exact).abs() < 1e-9 * exact, "{kind:?}: {}", measure(&m));
+    }
+    let m = mapped(&[cook(4)], ElementKind::Quad4).unwrap();
+    assert_eq!(m.face_sets["left"].len(), 4);
+    assert!(face_set_nodes(&m, "left").iter().all(|&i| m.node(i)[0].abs() < 1e-13));
+    assert!(face_set_nodes(&m, "right").iter().all(|&i| (m.node(i)[0] - 48.0).abs() < 1e-13));
+}
+
+/// C §7 C5: the NAFEMS LE1 elliptic membrane as one block with two elliptic edges.
+fn le1(n: usize) -> Vec<QuadBlock> {
+    vec![block(
+        [[2.0, 0.0], [3.25, 0.0], [0.0, 2.75], [0.0, 1.0]],
+        [
+            Curve::Line,
+            Curve::Ellipse { center: [0.0, 0.0], semi_axes: [3.25, 2.75] },
+            Curve::Line,
+            Curve::Ellipse { center: [0.0, 0.0], semi_axes: [2.0, 1.0] },
+        ],
+        [n, n],
+        [1.0, 1.0],
+        ["y0", "outer", "x0", "inner"],
+    )]
+}
+
+#[test]
+fn le1_puts_every_node_on_its_two_ellipses_and_converges_in_area() {
+    let m = mapped(&le1(3), ElementKind::Quad8).unwrap();
+    m.validate().unwrap();
+    assert!(min_element_measure(&m) > 0.0);
+    assert!(face_set_nodes(&m, "outer").iter().all(|&i| on_ellipse(m.node(i), [3.25, 2.75]).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "inner").iter().all(|&i| on_ellipse(m.node(i), [2.0, 1.0]).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "y0").iter().all(|&i| m.node(i)[1].abs() < 1e-15));
+    assert!(face_set_nodes(&m, "x0").iter().all(|&i| m.node(i)[0].abs() < 1e-15));
+    let exact = PI / 4.0 * (3.25 * 2.75 - 2.0 * 1.0);
+    let err = |n: usize| (measure(&mapped(&le1(n), ElementKind::Quad8).unwrap()) - exact).abs();
+    assert!(err(8) < 1e-2 * exact && err(4) / err(8) > 3.5, "errors {} {}", err(4), err(8));
+}
+
+#[test]
+fn mapped_refuses_what_it_cannot_mesh() {
+    let bad = |b: Vec<QuadBlock>| mapped(&b, ElementKind::Quad4).unwrap_err().0;
+    assert!(mapped(&[unit_block([1, 1])], ElementKind::Hex8).unwrap_err().0.contains("2D elements"));
+    assert!(mapped(&[], ElementKind::Quad4).unwrap_err().0.contains("at least one block"));
+    assert!(bad(vec![unit_block([0, 1])]).contains("both must be at least 1"));
+    assert!(bad(vec![unit_block([1, 0])]).contains("both must be at least 1"));
+    let mut g = unit_block([1, 1]);
+    g.grading = [1.0, 0.0];
+    assert!(bad(vec![g.clone()]).contains("grading[1] is 0"));
+    g.grading = [f64::NAN, 1.0];
+    assert!(bad(vec![g]).contains("grading[0] is NaN"));
+    let mut d = unit_block([1, 1]);
+    d.corners[1] = [0.0, 0.0];
+    assert!(bad(vec![d]).contains("four distinct corners"));
+    let mut arc = unit_block([1, 1]);
+    arc.edges[1] = Curve::Arc { center: [0.0, 0.0], ccw: true };
+    assert!(bad(vec![arc.clone()]).contains("they must be equal"));
+    arc.edges[1] = Curve::Arc { center: [1.0, 0.0], ccw: true };
+    assert!(bad(vec![arc]).contains("radius 0"));
+    let mut el = unit_block([1, 1]);
+    el.edges[1] = Curve::Ellipse { center: [0.0, 0.0], semi_axes: [0.0, 1.0] };
+    assert!(bad(vec![el.clone()]).contains("both must be positive"));
+    el.edges[1] = Curve::Ellipse { center: [0.0, 0.0], semi_axes: [1.0, 1.0] };
+    assert!(bad(vec![el]).contains("is not on it"));
+    // two blocks sharing an edge they divide, or grade, differently
+    let mut k = kirsch(1.0, 10.0, 4, 1.0);
+    k[1].n = [8, 4];
+    let e = mapped(&k, ElementKind::Quad4).unwrap_err().0;
+    assert!(e.contains("block 0 edge 2 and block 1 edge 0") && e.contains("same division count"), "{e}");
+    let mut k = kirsch(1.0, 10.0, 4, 1.0);
+    k[1].grading = [1.2, 1.0];
+    let e = mapped(&k, ElementKind::Quad4).unwrap_err().0;
+    assert!(e.contains("same grading"), "{e}");
+    let ok = mapped(&kirsch(1.0, 10.0, 2, 1.0), ElementKind::Quad4).unwrap();
+    assert_eq!(ok.n_elems(), 8);
+}
+
+#[test]
+fn an_elliptic_edge_takes_the_short_way_across_the_negative_x_axis() {
+    let (i, o) = (0.5 / 2.0f64.sqrt(), 1.0 / 2.0f64.sqrt());
+    let sector = |n: usize| {
+        vec![block(
+            [[-i, i], [-o, o], [-o, -o], [-i, -i]],
+            [
+                Curve::Line,
+                Curve::Ellipse { center: [0.0, 0.0], semi_axes: [1.0, 1.0] },
+                Curve::Line,
+                Curve::Ellipse { center: [0.0, 0.0], semi_axes: [0.5, 0.5] },
+            ],
+            [n, n],
+            [1.0, 1.0],
+            ["", "outer", "", "inner"],
+        )]
+    };
+    let m = mapped(&sector(4), ElementKind::Quad8).unwrap();
+    m.validate().unwrap();
+    assert!(min_element_measure(&m) > 0.0, "the arc runs counter-clockwise through (-1, 0)");
+    assert!(face_set_nodes(&m, "outer").iter().all(|&j| (radius(m.node(j)) - 1.0).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "inner").iter().all(|&j| (radius(m.node(j)) - 0.5).abs() < 1e-12));
+    assert!(m.coords.chunks_exact(3).any(|p| p[0] < -0.9), "the block reaches past (-1, 0)");
+    let exact = PI / 4.0 * (1.0 - 0.25);
+    let err = |n: usize| (measure(&mapped(&sector(n), ElementKind::Quad8).unwrap()) - exact).abs();
+    assert!(err(4) / err(8) > 3.5, "errors {} {}", err(4), err(8));
+}
+
+// ---- sweep: extrude and revolve --------------------------------------------------------------
+
+/// Serendipity shape function `i` of a hex8 or hex20 at the reference point `x`.
+fn hex_shape(kind: ElementKind, i: usize, x: [f64; 3]) -> f64 {
+    if i < 8 {
+        let r = HEX_REF[i];
+        let p = (0..3).map(|k| 1.0 + x[k] * r[k]).product::<f64>() / 8.0;
+        match kind {
+            ElementKind::Hex8 => p,
+            _ => p * ((0..3).map(|k| x[k] * r[k]).sum::<f64>() - 2.0),
+        }
+    } else {
+        let [a, b] = kind.edges()[i - 8];
+        let r = mean(&[HEX_REF[a as usize], HEX_REF[b as usize]]);
+        let z = (0..3).find(|&k| r[k] == 0.0).expect("a mid-edge node is centred on one axis");
+        0.25 * (1.0 - x[z] * x[z]) * (0..3).filter(|&k| k != z).map(|k| 1.0 + x[k] * r[k]).product::<f64>()
+    }
+}
+
+/// Volume by 3×3×3 Gauss quadrature of the isoparametric map, so a hex20's curved faces count.
+/// The Jacobian is a central difference of the map, good to about 1e-10 of the volume.
+fn iso_volume(m: &Mesh) -> f64 {
+    let g = [-libm::sqrt(0.6), 0.0, libm::sqrt(0.6)];
+    let w = [5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0];
+    let h = 1e-5;
+    let mut vol = 0.0;
+    for e in 0..m.n_elems() as u32 {
+        let kind = m.kind_of(e);
+        let nodes: Vec<[f64; 3]> = m.elem_nodes(e).iter().map(|&n| m.node(n)).collect();
+        let map = |x: [f64; 3]| {
+            let mut p = [0.0; 3];
+            for (i, xi) in nodes.iter().enumerate() {
+                let n = hex_shape(kind, i, x);
+                for k in 0..3 {
+                    p[k] += n * xi[k];
+                }
+            }
+            p
+        };
+        for a in 0..3 {
+            for b in 0..3 {
+                for c in 0..3 {
+                    let x = [g[a], g[b], g[c]];
+                    let mut j = [[0.0; 3]; 3];
+                    for d in 0..3 {
+                        let (mut xp, mut xm) = (x, x);
+                        xp[d] += h;
+                        xm[d] -= h;
+                        let (pp, pm) = (map(xp), map(xm));
+                        for k in 0..3 {
+                            j[k][d] = (pp[k] - pm[k]) / (2.0 * h);
+                        }
+                    }
+                    vol += w[a] * w[b] * w[c] * det3(j);
+                }
+            }
+        }
+    }
+    vol
+}
+
+/// Every mid-edge node of a quadratic element is the midpoint of its two corners.
+fn mid_nodes_are_midpoints(m: &Mesh) -> bool {
+    (0..m.n_elems() as u32).all(|e| {
+        let kind = m.kind_of(e);
+        let n: Vec<[f64; 3]> = m.elem_nodes(e).iter().map(|&i| m.node(i)).collect();
+        kind.edges().iter().enumerate().all(|(i, &[a, b])| {
+            let mid = mean(&[n[a as usize], n[b as usize]]);
+            (0..3).all(|k| (n[kind.n_corners() + i][k] - mid[k]).abs() < 1e-12)
+        })
+    })
+}
+
+fn plate(kind: ElementKind, n: [usize; 3]) -> Mesh {
+    Structured { kind, n }.build(|p| [2.0 * p[0], 3.0 * p[1], 0.0])
+}
+
+#[test]
+fn extruding_a_quad_mesh_gives_an_exact_box_of_hexes() {
+    let base = plate(ElementKind::Quad4, [2, 3, 1]);
+    let m = extrude(&base, 4, 5.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.blocks[0].kind, ElementKind::Hex8);
+    assert_eq!((m.n_nodes(), m.n_elems()), (base.n_nodes() * 5, 6 * 4));
+    assert!(min_element_measure(&m) > 0.0);
+    assert!((measure(&m) - 30.0).abs() < 1e-12, "{}", measure(&m));
+    assert!((iso_volume(&m) - 30.0).abs() < 1e-7, "{}", iso_volume(&m));
+    assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["bottom", "top", "xmax", "xmin", "ymax", "ymin"]);
+    assert_eq!((m.face_sets["bottom"].len(), m.face_sets["top"].len()), (6, 6));
+    assert_eq!(m.face_sets["xmin"].len(), 3 * 4);
+    assert_eq!(m.face_sets["ymin"].len(), 2 * 4);
+    assert!(face_set_nodes(&m, "bottom").iter().all(|&i| m.node(i)[2] == 0.0));
+    assert!(face_set_nodes(&m, "top").iter().all(|&i| (m.node(i)[2] - 5.0).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "xmin").iter().all(|&i| m.node(i)[0] == 0.0));
+    assert_eq!(m.elem_sets["all"].len(), 24);
+    assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+
+    // quad8 gives hex20: the mid-edge nodes of the base on the whole layers, the corner nodes
+    // alone on the half layers, and no face-centre node anywhere
+    let base8 = plate(ElementKind::Quad8, [2, 3, 1]);
+    let m = extrude(&base8, 2, 5.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.blocks[0].kind, ElementKind::Hex20);
+    assert_eq!((base8.n_nodes(), m.n_nodes(), m.n_elems()), (29, 3 * 29 + 2 * 12, 12));
+    assert!(min_element_measure(&m) > 0.0);
+    assert!((iso_volume(&m) - 30.0).abs() < 1e-7, "{}", iso_volume(&m));
+    assert!(mid_nodes_are_midpoints(&m), "a straight extrusion is affine in every direction");
+    assert_eq!(m.face_sets["bottom"].len(), 6);
+    assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+}
+
+/// A meridian section of the Lamé cylinder: `x = r` from `a` to `b`, `y = z` from 0 to `h`.
+fn section(kind: ElementKind, n: [usize; 3], a: f64, b: f64, h: f64) -> Mesh {
+    Structured { kind, n }.build(|p| [a + p[0] * (b - a), p[1] * h, 0.0])
+}
+
+#[test]
+fn revolving_a_section_converges_to_the_cylinder_volume() {
+    let (a, b, h) = (0.1, 0.2, 0.1);
+    let quarter = PI * (b * b - a * a) * h / 4.0;
+    let err = |kind, n: usize| {
+        let m = revolve(&section(kind, [2, 1, 1], a, b, h), n, 90.0).unwrap();
+        assert!(min_element_measure(&m) > 0.0, "a revolved counter-clockwise section stays positive");
+        (iso_volume(&m) - quarter).abs()
+    };
+    let (e2, e4) = (err(ElementKind::Quad4, 2), err(ElementKind::Quad4, 4));
+    assert!(e4 < 0.03 * quarter && e2 / e4 > 3.5, "hex8 errors {e2} {e4}");
+    let (q2, q4) = (err(ElementKind::Quad8, 2), err(ElementKind::Quad8, 4));
+    assert!(q4 < 1e-4 * quarter && q2 / q4 > 10.0, "hex20 errors {q2} {q4}");
+    assert!(q4 < e4 / 100.0, "mid-nodes on the arc beat straight chords by two orders");
+
+    let m = revolve(&section(ElementKind::Quad8, [2, 1, 1], a, b, h), 4, 90.0).unwrap();
+    m.validate().unwrap();
+    // every node sits on the cylinder radius its base node had, mid-nodes at the half angle
+    for i in 0..m.n_nodes() as u32 {
+        let r = radius(m.node(i));
+        assert!(r > a - 1e-12 && r < b + 1e-12, "{r}");
+    }
+    assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["theta0", "theta1", "xmax", "xmin", "ymax", "ymin"]);
+    assert_eq!((m.face_sets["theta0"].len(), m.face_sets["theta1"].len()), (2, 2));
+    assert!(face_set_nodes(&m, "theta0").iter().all(|&i| m.node(i)[1].abs() < 1e-12));
+    assert!(face_set_nodes(&m, "theta1").iter().all(|&i| m.node(i)[0].abs() < 1e-12));
+    assert!(face_set_nodes(&m, "xmax").iter().all(|&i| (radius(m.node(i)) - b).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "xmin").iter().all(|&i| (radius(m.node(i)) - a).abs() < 1e-12));
+    assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+}
+
+#[test]
+fn a_full_revolution_merges_its_seam() {
+    let (a, b, h) = (0.1, 0.2, 0.1);
+    let base = section(ElementKind::Quad4, [2, 1, 1], a, b, h);
+    let m = revolve(&base, 8, 360.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.n_nodes(), 8 * base.n_nodes(), "the last slice is the first one again");
+    assert_eq!(m.n_elems(), 8 * base.n_elems());
+    assert!(min_element_measure(&m) > 0.0);
+    assert!(!m.face_sets.contains_key("theta0") && !m.face_sets.contains_key("theta1"));
+    assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["xmax", "xmin", "ymax", "ymin"]);
+    // a closed tube has no free end: every boundary face is named
+    assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+    let exact = PI * (b * b - a * a) * h;
+    // eight straight-chord slices under-fill the tube by (1 - (n/2pi) sin(2pi/n)) = 10 %
+    assert!((iso_volume(&m) / exact - 0.9003).abs() < 1e-3, "{}", iso_volume(&m) / exact);
+    let base8 = section(ElementKind::Quad8, [2, 1, 1], a, b, h);
+    let q = revolve(&base8, 6, 360.0).unwrap();
+    q.validate().unwrap();
+    assert_eq!(
+        q.n_nodes(),
+        6 * (base8.n_nodes() + 3 * 2),
+        "whole slices carry the base's mid-nodes, half slices only its corners"
+    );
+    assert!((iso_volume(&q) - exact).abs() < 3e-3 * exact, "{}", iso_volume(&q) / exact);
+}
+
+#[test]
+fn sweeps_refuse_what_they_cannot_sweep() {
+    let base = plate(ElementKind::Quad4, [1, 1, 1]);
+    assert!(extrude(&cube(ElementKind::Hex8, [1, 1, 1]), 1, 1.0).unwrap_err().0.contains("2D base mesh"));
+    let mut two = plate(ElementKind::Quad4, [1, 1, 1]);
+    two.blocks.push(ElementBlock { kind: ElementKind::Quad4, conn: two.blocks[0].conn.clone(), first_elem: 1 });
+    assert!(extrude(&two, 1, 1.0).unwrap_err().0.contains("one element kind"));
+    assert!(extrude(&plate(ElementKind::Tri3, [1, 1, 1]), 1, 1.0).unwrap_err().0.contains("quad4 or quad8"));
+    assert!(extrude(&base, 0, 1.0).unwrap_err().0.contains("at least one layer"));
+    assert!(extrude(&base, 1, 0.0).unwrap_err().0.contains("must be finite and positive"));
+    assert!(revolve(&cube(ElementKind::Hex8, [1, 1, 1]), 1, 90.0).unwrap_err().0.contains("2D base mesh"));
+    assert!(revolve(&base, 0, 90.0).unwrap_err().0.contains("at least one segment"));
+    assert!(revolve(&base, 1, 400.0).unwrap_err().0.contains("in (0, 360]"));
+    assert!(revolve(&base, 1, 0.0).unwrap_err().0.contains("in (0, 360]"));
+    // the base touches x = 0, which a revolution about z cannot mesh
+    assert!(revolve(&base, 4, 90.0).unwrap_err().0.contains("butterfly block set"));
+}
+
+// ---- free 2D triangles -----------------------------------------------------------------------
+
+/// A 10 x 10 plate with a circular hole of radius `r` at its centre, every edge tagged.
+fn plate_with_hole(r: f64) -> Sketch {
+    let mut s = Sketch::rect(10.0, 10.0);
+    s.holes.push(Sketch::circle([5.0, 5.0], r, "hole"));
+    s
+}
+
+/// The area of the polygon the mesher actually triangulates: the sampled loops, not the arcs.
+fn sampled_area(sketch: &Sketch, chord_tol: f64) -> f64 {
+    sketch.loops(chord_tol).unwrap().iter().map(|l| l.signed_area()).sum()
+}
+
+#[test]
+fn the_free_mesher_fills_a_plate_with_a_hole_and_keeps_every_tag() {
+    let sketch = plate_with_hole(1.0);
+    for quadratic in [false, true] {
+        let m = free(&sketch, 1.0, quadratic, &[]).unwrap();
+        m.validate().unwrap();
+        assert_eq!(m.blocks[0].kind, if quadratic { ElementKind::Tri6 } else { ElementKind::Tri3 });
+        assert!(min_element_measure(&m) > 0.0, "every triangle is counter-clockwise");
+        // the mesh is exactly the sampled polygon, hole carved
+        assert!((measure(&m) - sampled_area(&sketch, 0.1)).abs() < 1e-12, "{}", measure(&m));
+        assert_eq!(m.elem_sets["all"].len(), m.n_elems());
+        assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["hole", "xmax", "xmin", "ymax", "ymin"]);
+        for (name, faces) in &m.face_sets {
+            assert!(!faces.is_empty(), "{name}");
+        }
+        // the tagged edges are exactly the boundary of the mesh, and nothing else
+        assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+        assert!(face_set_nodes(&m, "xmin").iter().all(|&n| m.node(n)[0] == 0.0));
+        assert!(face_set_nodes(&m, "hole").iter().all(|&n| {
+            let p = m.node(n);
+            (libm::hypot(p[0] - 5.0, p[1] - 5.0) - 1.0).abs() < 0.1
+        }));
+    }
+    // tri6 mid-nodes are the midpoints of the Abaqus edges, in the Abaqus order
+    let m = free(&sketch, 2.0, true, &[]).unwrap();
+    assert!(mid_nodes_are_midpoints(&m), "weka's edge_nodes are permuted to [e2, e0, e1]");
+    // the same input twice is the same mesh, to the last bit
+    assert_eq!(free(&sketch, 2.0, true, &[]).unwrap(), m);
+}
+
+#[test]
+fn a_refine_box_makes_smaller_triangles_where_it_covers() {
+    let sketch = plate_with_hole(1.0);
+    let box_ = RefineBox { min: [3.0, 3.0], max: [7.0, 7.0], size: 0.4 };
+    let m = free(&sketch, 2.0, false, std::slice::from_ref(&box_)).unwrap();
+    m.validate().unwrap();
+    assert!(min_element_measure(&m) > 0.0);
+    assert!((measure(&m) - sampled_area(&sketch, 0.2)).abs() < 1e-12);
+    let inside = |e: u32| {
+        let c = mean(&corners(&m, e));
+        (3.0..=7.0).contains(&c[0]) && (3.0..=7.0).contains(&c[1])
+    };
+    let area = |e: u32| corner_measure(m.kind_of(e), &corners(&m, e));
+    let biggest_in = (0..m.n_elems() as u32).filter(|&e| inside(e)).map(area).fold(0.0, f64::max);
+    let biggest_out = (0..m.n_elems() as u32).filter(|&e| !inside(e)).map(area).fold(0.0, f64::max);
+    let mean = |f: fn(bool) -> bool| {
+        let es: Vec<u32> = (0..m.n_elems() as u32).filter(|&e| f(inside(e))).collect();
+        es.iter().map(|&e| area(e)).sum::<f64>() / es.len() as f64
+    };
+    let (mean_in, mean_out) = (mean(|i| i), mean(|i| !i));
+    // The bound is imposed on the coarse triangles whose centroid was in the box, so a child of
+    // a coarse triangle centred just outside can still straddle the wall: the average holds the
+    // box's own bound, the largest single triangle need not.
+    assert!(mean_in < 2.0 * 0.5 * 0.4 * 0.4, "inside averages near the box's area bound: {mean_in}");
+    assert!(mean_out > 4.0 * mean_in, "outside stays coarse: {mean_out} vs {mean_in}");
+    assert!(biggest_out > 2.0 * biggest_in, "and so does the largest: {biggest_out} vs {biggest_in}");
+    assert!(free(&sketch, 2.0, false, &[]).unwrap().n_elems() < m.n_elems());
+}
+
+#[test]
+fn a_hole_whose_centroid_lies_outside_it_is_still_carved() {
+    // an L-shaped hole: the mean of its corners falls in the notch, outside the hole
+    let mut s = Sketch::rect(6.0, 6.0);
+    s.holes.push(vec![
+        Segment::Line { to: [4.0, 1.0], tag: Some("ell".into()) },
+        Segment::Line { to: [4.0, 2.0], tag: Some("ell".into()) },
+        Segment::Line { to: [2.0, 2.0], tag: Some("ell".into()) },
+        Segment::Line { to: [2.0, 4.0], tag: Some("ell".into()) },
+        Segment::Line { to: [1.0, 4.0], tag: Some("ell".into()) },
+        Segment::Line { to: [1.0, 1.0], tag: Some("ell".into()) },
+    ]);
+    let l = &s.loops(0.1).unwrap()[1];
+    let n = l.pts.len() as f64;
+    let c = [l.pts.iter().map(|p| p[0]).sum::<f64>() / n, l.pts.iter().map(|p| p[1]).sum::<f64>() / n];
+    assert!(!l.contains(c), "the centroid {c:?} is in the notch, so the seed comes off an edge");
+    let m = free(&s, 1.0, false, &[]).unwrap();
+    m.validate().unwrap();
+    assert!((measure(&m) - sampled_area(&s, 0.1)).abs() < 1e-12, "the L is carved out exactly");
+    assert!(!m.face_sets["ell"].is_empty());
+}
+
+#[test]
+fn the_free_mesher_refuses_a_bad_size_or_a_bad_sketch() {
+    let s = plate_with_hole(1.0);
+    assert!(free(&s, 0.0, false, &[]).unwrap_err().0.contains("must be finite and positive"));
+    assert!(free(&s, f64::NAN, false, &[]).unwrap_err().0.contains("must be finite and positive"));
+    let bad = RefineBox { min: [0.0, 0.0], max: [1.0, 1.0], size: -1.0 };
+    assert!(free(&s, 1.0, false, &[bad]).unwrap_err().0.contains("refine box 0 has size -1"));
+    let one = Sketch { outer: vec![Segment::Line { to: [1.0, 0.0], tag: None }], holes: vec![] };
+    assert!(free(&one, 1.0, false, &[]).unwrap_err().0.contains("two segments"));
+    // a hole that covers the whole outer loop carves everything: no triangle, and the refine
+    // pass has nothing to refine, so weka's own failure comes back as a GeomError
+    let mut all_hole = Sketch::rect(4.0, 4.0);
+    all_hole.holes.push(Sketch::rect(4.0, 4.0).outer);
+    assert!(free(&all_hole, 1.0, false, &[]).unwrap_err().0.contains("produced no triangle"));
+    let box_ = RefineBox { min: [0.0, 0.0], max: [4.0, 4.0], size: 0.5 };
+    assert!(free(&all_hole, 1.0, false, &[box_]).unwrap_err().0.contains("3 input points"));
 }

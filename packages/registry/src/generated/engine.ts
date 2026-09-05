@@ -1027,10 +1027,35 @@ export type RegionPredicate =
 /**
  * The mesher and its settings.
  */
-export type MesherSpec = {
-  size: LatticeSize;
-  kind: "lattice";
-};
+export type MesherSpec =
+  | {
+      size: LatticeSize;
+      kind: "lattice";
+    }
+  | {
+      body?: string | null;
+      blocks: QuadBlockSpec[];
+      kind: "mapped";
+    }
+  | {
+      of: string;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      size:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      refine?: RefineBoxSpec[] | null;
+      kind: "free";
+    }
+  | {
+      base: MesherSpec;
+      sweep: SweepSpec;
+      kind: "sweep";
+    };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
  */
@@ -1046,6 +1071,108 @@ export type LatticeSize =
       nx: number;
       ny: number;
       nz: number;
+    };
+/**
+ * The shape of one edge of a mapped block, between the two corners it joins.
+ */
+export type CurveSpec =
+  | {
+      kind: "line";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      ccw: boolean;
+      kind: "arc";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * @minItems 2
+       * @maxItems 2
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      semiAxes: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      kind: "ellipse";
+    };
+/**
+ * How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.
+ */
+export type SweepSpec =
+  | {
+      layers: number;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      height:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "extrude";
+    }
+  | {
+      segments: number;
+      angleDeg: number;
+      kind: "revolve";
     };
 /**
  * Element formulation for linear hexahedra and quadrilaterals.
@@ -1313,15 +1440,75 @@ export type QueryResult =
 /**
  * Mesher settings, SI.
  */
-export type MesherSettings = {
-  size?: number | null;
-  /**
-   * @minItems 3
-   * @maxItems 3
-   */
-  counts?: [number, number, number] | null;
-  kind: "lattice";
-};
+export type MesherSettings =
+  | {
+      size?: number | null;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      counts?: [number, number, number] | null;
+      kind: "lattice";
+    }
+  | {
+      body: string;
+      blocks: QuadBlock[];
+      kind: "mapped";
+    }
+  | {
+      of: string;
+      size: number;
+      refine: RefineBox[];
+      kind: "free";
+    }
+  | {
+      base: MesherSettings;
+      sweep: Sweep;
+      kind: "sweep";
+    };
+/**
+ * The shape of one block edge between its two corners.
+ */
+export type Curve =
+  | {
+      kind: "line";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      ccw: boolean;
+      kind: "arc";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      semi_axes: [number, number];
+      kind: "ellipse";
+    };
+/**
+ * How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
+ */
+export type Sweep =
+  | {
+      layers: number;
+      height: number;
+      kind: "extrude";
+    }
+  | {
+      segments: number;
+      angle_deg: number;
+      kind: "revolve";
+    };
 /**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  */
@@ -2412,6 +2599,169 @@ export interface Placement {
   scale?: [number, number, number] | null;
 }
 /**
+ * One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
+ *
+ * `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
+ * corner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so
+ * edges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape
+ * (straight by default). `n` is the number of elements along u and v, `grading` the ratio
+ * between successive element sizes along each (1.0 uniform, above 1 packs elements toward the
+ * u = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes
+ * `<body>.<tag>`. Blocks that share an edge must divide and grade it identically.
+ */
+export interface QuadBlockSpec {
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  corners: [
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ]
+  ];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  edges?: [CurveSpec, CurveSpec, CurveSpec, CurveSpec] | null;
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  n: [number, number];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  grading?: [number, number] | null;
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  tags?: [string | null, string | null, string | null, string | null] | null;
+}
+/**
+ * A box in which the free mesher uses a smaller element size than elsewhere, for a stress
+ * concentration a uniform mesh would smear out. The box is axis-aligned in the xy plane and a
+ * triangle is refined when its centroid falls inside it.
+ */
+export interface RefineBoxSpec {
+  /**
+   * @minItems 2
+   * @maxItems 2
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  min: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   *
+   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  max: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
+  /**
+   * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+   */
+  size:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+}
+/**
  * `query.model` response.
  */
 export interface ModelSummary {
@@ -2495,6 +2845,58 @@ export interface MeshSettings {
   mesher: MesherSettings;
   order: number;
   formulation: Formulation;
+}
+/**
+ * One mapped block: a curvilinear quadrilateral meshed as a structured grid.
+ *
+ * `corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 → c1`
+ * along u and `c0 → c3` along v. Edge `k` joins `c_k → c_{k+1}` (edges 0 and 2 run along u,
+ * 1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio
+ * between successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /
+ * v = 0 side). `tags` names the face set each edge contributes to.
+ */
+export interface QuadBlock {
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  corners: [[number, number], [number, number], [number, number], [number, number]];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  edges: [Curve, Curve, Curve, Curve];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  n: [number, number];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  grading: [number, number];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  tags: [string | null, string | null, string | null, string | null];
+}
+/**
+ * A local element size inside an axis-aligned box, for the free mesher's `refine` pass.
+ */
+export interface RefineBox {
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  min: [number, number];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  max: [number, number];
+  size: number;
 }
 /**
  * A check that did not stop the run but the user should see.
