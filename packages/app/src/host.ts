@@ -4,6 +4,7 @@
 import { FemError, type HostContext, type HostDef, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
+import type { ScriptHost } from './script-host';
 import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
@@ -24,7 +25,7 @@ async function fetchExample(name: string): Promise<string> {
   return res.text();
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps): HostContext {
+export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost): HostContext {
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -71,9 +72,21 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     },
     panels: { toggle: (panel, open) => store.togglePanel(panel, open) },
     script: {
-      run: soon('script.run', 'call window.fem from the console until the script Worker lands'),
-      stop: soon('script.stop', 'no script Worker runs yet'),
-      setSource: soon('script.setSource', 'the Script tab is read-only until the script Worker lands'),
+      // A script's Commands are the AI's, not the person's: the Journal's `who` column says so.
+      run: async (code, timeoutMs) => {
+        if (!scripts) throw new FemError('unsupported', 'no script Worker is available in this host', 'script.run', 'run the app, not the test harness');
+        store.set({ scriptRunning: true, scriptOut: [], source: 'ai', tab: 'script' });
+        try {
+          const out = await scripts.run(code, timeoutMs);
+          store.set({ scriptOut: [...out.console, ...(out.error ? [`✕ ${out.error}`] : [`› ${out.result === null ? 'done' : JSON.stringify(out.result)}`])] });
+          if (out.error) store.log('error', `script: ${out.error}`);
+          return out;
+        } finally {
+          store.set({ scriptRunning: false, source: 'you' });
+        }
+      },
+      stop: () => scripts?.stop(),
+      setSource: (code, append) => store.set({ scriptDraft: append === true ? `${store.state.scriptDraft ?? store.state.script}${code}` : code, tab: 'script' }),
     },
     chat: {
       send: soon('the AI assistant', 'drive the registry with window.fem for now'),
@@ -122,10 +135,11 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
 }
 
 /**
- * Two Commands the design's shell needs that `@femlab/registry` does not declare: the display
- * mode segmented control, and opening a bundled example that is a Journal rather than a saved
- * `femlab/1` file. They go in through `Registry`'s `hostCommands` option, so `registry.list()`
- * still covers every `[data-cmd]` in the DOM.
+ * Three Commands the design's shell needs that `@femlab/registry` does not declare: the display
+ * mode segmented control, opening a bundled example that is a Journal rather than a saved
+ * `femlab/1` file, and putting a Command into the Properties form without running it (every
+ * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
+ * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
 export function appHostCommands(store: Store, transport: WorkerTransport, viewer: ViewerRef, refresh: () => Promise<void>): HostDef[] {
   return [
@@ -138,6 +152,16 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         const { mode } = input as { mode: ViewMode };
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
+      },
+    },
+    {
+      name: 'form.open',
+      description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
+      schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional() }),
+      tool: true,
+      run: (input) => {
+        const { command, args, keepInitial } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean };
+        store.openForm(command, args ?? {}, keepInitial === true);
       },
     },
     {

@@ -29,7 +29,7 @@ test.describe('@cpu the shell', () => {
     expect(model.revision).toBe(2);
 
     // The Journal panel shows the same two lines.
-    const journal = page.locator('.log');
+    const journal = page.locator('.bottom-body');
     await expect(journal).toContainText('model.new');
     await expect(journal).toContainText('geometry.addBox');
     await expect(page.locator('canvas')).toBeVisible();
