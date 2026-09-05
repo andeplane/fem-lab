@@ -1,0 +1,213 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "nafems-le10-plate"
+    },
+    "hashAfter": "9baef805953184bf86ecb68856a20de46330c73030b75f0b2d89e514f4fcca6a"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "force": "N",
+        "stress": "Pa"
+      }
+    },
+    "hashAfter": "0e2a8feac8554fa14c24c617336f552a60d2eb2e4a27a38491d5c02c586d8b2c"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "source": "NAFEMS LE10"
+    },
+    "hashAfter": "611236c4aeae15699183f1f2dd3ef815bb0ef7f74d14662a47993f2ab991da8b"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "sweep",
+        "base": {
+          "kind": "mapped",
+          "body": "plate",
+          "blocks": [
+            {
+              "corners": [
+                [
+                  "2 m",
+                  "0 m"
+                ],
+                [
+                  "3.25 m",
+                  "0 m"
+                ],
+                [
+                  "0 m",
+                  "2.75 m"
+                ],
+                [
+                  "0 m",
+                  "1 m"
+                ]
+              ],
+              "edges": [
+                {
+                  "kind": "line"
+                },
+                {
+                  "kind": "ellipse",
+                  "center": [
+                    "0 m",
+                    "0 m"
+                  ],
+                  "semiAxes": [
+                    "3.25 m",
+                    "2.75 m"
+                  ]
+                },
+                {
+                  "kind": "line"
+                },
+                {
+                  "kind": "ellipse",
+                  "center": [
+                    "0 m",
+                    "0 m"
+                  ],
+                  "semiAxes": [
+                    "2 m",
+                    "1 m"
+                  ]
+                }
+              ],
+              "n": [
+                6,
+                6
+              ],
+              "tags": [
+                "y0",
+                "outer",
+                "x0",
+                "inner"
+              ]
+            }
+          ]
+        },
+        "sweep": {
+          "kind": "extrude",
+          "layers": 2,
+          "height": "0.6 m"
+        }
+      },
+      "order": 2
+    },
+    "hashAfter": "c8204d11c868a5262af2eafbd0f20077bdac8649068d2fabd8818229f5894d85"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "symx",
+      "on": "plate.x0",
+      "dofs": [
+        "ux"
+      ]
+    },
+    "hashAfter": "ed46091203102b962ea1e6598ab76ff63201d29004d778b343e845457ccb8c7d"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "symy",
+      "on": "plate.y0",
+      "dofs": [
+        "uy"
+      ]
+    },
+    "hashAfter": "516402db8d564f55ec06fef4b753750715d77d987ad2639b91104f826704201b"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "edge",
+      "on": "plate.outer",
+      "dofs": [
+        "ux",
+        "uy"
+      ]
+    },
+    "hashAfter": "5c5ab9ac0a233716d23057df1d33e5d101ad7edc4a50b31729c9b8eb631cd5e1"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "geometry.nameRegion",
+      "name": "midOuter",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-0.01 m",
+          "-0.01 m",
+          "0.29 m"
+        ],
+        "max": [
+          "4 m",
+          "4 m",
+          "0.31 m"
+        ]
+      }
+    },
+    "hashAfter": "f47d9cf76d0de283b95472aac27f2b520e370ec40b929c941c81f1a3f7349902"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "midz",
+      "on": "midOuter",
+      "dofs": [
+        "uz"
+      ]
+    },
+    "hashAfter": "976a93435483d89db1413a443ad6b21848672af1b14eae7a57fd9cd51feff5ec"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "top",
+      "on": "plate.top",
+      "value": "1 MPa"
+    },
+    "hashAfter": "80113ca7a643d1e98bd39784da35f0eab615c4e5862772726b4f36c8925f4edc"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "symx",
+        "symy",
+        "edge",
+        "midz"
+      ],
+      "loads": [
+        "top"
+      ]
+    },
+    "hashAfter": "8faff4f96dfd7a79fdc9dd6af30089f0e1fdf67965d0377dd18302e1e90f2a81"
+  }
+]

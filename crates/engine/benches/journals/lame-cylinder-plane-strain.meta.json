@@ -1,0 +1,11 @@
+{
+  "title": "Lam\u00e9 thick cylinder",
+  "tag": "NAFEMS",
+  "sentence": "A thick-walled cylinder under internal pressure, modelled as a plane-strain quarter section.",
+  "reference": {
+    "label": "\u03c3\u03b8\u03b8(a), \u03c3rr(a)",
+    "value": "100 MPa, \u221260 MPa"
+  },
+  "theory": "Lam\u00e9's closed-form solution for a thick cylinder under internal pressure gives the hoop and radial stress at the bore directly from a, b and p.",
+  "thumbnail": null
+}

@@ -1,0 +1,12 @@
+{
+  "title": "Cantilever, hex20",
+  "tag": "P1 \u00b7 verify",
+  "sentence": "The same cantilever at quadratic order (hex20) \u2014 bending accuracy from one lattice mesh setting.",
+  "reference": {
+    "label": "\u03b4 = PL\u00b3/3EI",
+    "value": "0.667 mm"
+  },
+  "theory": "Quadratic (serendipity) hexahedra add mid-edge nodes, curing the shear locking that a linear hex8 shows in bending.",
+  "tutorial": "cantilever",
+  "thumbnail": null
+}
