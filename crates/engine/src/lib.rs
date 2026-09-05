@@ -7,6 +7,7 @@
 
 pub mod error;
 pub mod par;
+pub mod units;
 
 pub use error::{Error, ErrorCode, Warning};
 
