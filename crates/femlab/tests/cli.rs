@@ -132,6 +132,31 @@ fn run_replays_the_cantilever_journal_in_every_form() {
 }
 
 #[test]
+fn every_bundled_journal_replays_green_against_its_committed_hashes() {
+    // The examples gallery (docs/EXAMPLES.md) ships every `*.json` here (its `.meta.json`
+    // sidecar is not a Journal); each one must replay to the hashes committed beside it, so an
+    // engine change that silently reorders or renumbers a Model breaks this test, not a demo.
+    let dir = engine_dir().join("benches").join("journals");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if !file_name.ends_with(".json") || file_name.ends_with(".meta.json") {
+            continue;
+        }
+        let hashes_path = path.with_extension("hashes");
+        assert!(hashes_path.exists(), "{file_name} has no committed .hashes file");
+        femlab().args(["run", path.to_str().unwrap(), "--verify"]).assert().success();
+        let out = femlab().args(["run", path.to_str().unwrap(), "--hashes"]).assert().success();
+        let hashes = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+        let committed = std::fs::read_to_string(&hashes_path).unwrap();
+        assert_eq!(hashes.trim(), committed.trim(), "{file_name} hashes have drifted");
+        checked += 1;
+    }
+    assert!(checked >= 16, "expected at least 16 bundled journals, found {checked}");
+}
+
+#[test]
 fn schema_prints_writes_and_checks() {
     let out = femlab().arg("schema").assert().success();
     let text = String::from_utf8(out.get_output().stdout.clone()).unwrap();
