@@ -1,0 +1,31 @@
+{
+  "name": "cantilever-hex8-im",
+  "reference": "Benchmark B1. Cantilever L = 1 m, b = h = 100 mm, P = 1 kN as a uniform shear traction on the free end, root fully fixed, steel E = 210 GPa, nu = 0.3. Timoshenko: delta = PL^3/(3EI) + PL/(kappa G A) with kappa = 5/6, I = bh^3/12, giving 0.1919619 mm. Linear hexahedra with Wilson-Taylor incompatible modes (the default) at a 25 mm lattice give 0.1901125 mm, 0.96 % below the beam formula; about 0.7 % of that is the beam formula itself, since a fully clamped three-dimensional root suppresses the cross-section warping and the Poisson contraction that beam theory allows (see cantilever-hex20).",
+  "journal": [
+    { "cmd": "model.new", "name": "cantilever" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "stress": "MPa", "force": "kN" } },
+    { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "100 mm", "100 mm"] },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] },
+    { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "25 mm" }, "order": 1 },
+    { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" },
+    { "cmd": "load.traction", "name": "tip", "on": "beam.xmax", "total": ["0 N", "0 N", "-1 kN"] },
+    { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["root"], "loads": ["tip"] },
+    { "cmd": "solve.run", "step": "static" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 2, "at": ["1 m", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": -0.1919619,
+      "tol": 0.02,
+      "rel": true,
+      "note": "tip deflection in mm, within 2 % of Timoshenko"
+    },
+    { "query": { "query": "query.result" }, "path": "/balance", "expect": 0.0, "tol": 1e-9, "note": "A7: reactions balance the applied load" },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false },
+    { "query": { "query": "query.result" }, "path": "/solver", "expect": "cpu-direct" },
+    { "query": { "query": "query.result" }, "path": "/appliedTotal/2/value", "expect": -1.0, "tol": 1e-9, "rel": true, "note": "the tip traction totals -1 kN" },
+    { "query": { "query": "query.result" }, "path": "/reactions/0/total/2/value", "expect": 1.0, "tol": 1e-9, "rel": true, "note": "and the root carries it" }
+  ]
+}

@@ -2,12 +2,22 @@
 
 use femlab_geometry::{face_centroid_normal, Face, Mesh};
 
-use crate::command::ObjectKind;
+use crate::command::{Field, ObjectKind};
 use crate::engine::{display, Engine};
-use crate::error::Error;
+use crate::error::{Error, ErrorCode};
 use crate::model::{ConstraintKind, Idealisation, LoadKind, SetSource};
+use crate::post::FieldData;
 use crate::query::*;
-use crate::units::{self, Acceleration, Density, Dim, Dimension, Force, Length, Mass, Stress, Temperature};
+use crate::units::{self, Acceleration, Density, Dim, Dimension, Force, Length, Mass, Stress, Temperature, Q};
+
+/// Three lengths in SI, with the field path an error names.
+fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
+    let mut out = [0.0; 3];
+    for (k, v) in q.iter().enumerate() {
+        out[k] = v.si().map_err(|e| e.at(format!("[{k}]")))?;
+    }
+    Ok(out)
+}
 
 fn bbox6(model: &crate::model::Model, lo: [f64; 3], hi: [f64; 3]) -> [Valued; 6] {
     let d = Length::DIM;
@@ -53,10 +63,17 @@ impl Engine {
             })),
             Query::Mesh {} => self.query_mesh().map(QueryResult::Mesh),
             Query::Set { name } => self.query_set(&name).map(QueryResult::Set),
-            Query::Result { .. } => Err(Error::unsupported("query.result (solving lands in a later commit)")),
-            Query::Probe { .. } => Err(Error::unsupported("query.probe (solving lands in a later commit)")),
-            Query::Path { .. } => Err(Error::unsupported("query.path (solving lands in a later commit)")),
-            Query::Cost { .. } => Err(Error::unsupported("query.cost (meshing lands in a later commit)")),
+            Query::Result { step } => {
+                let name = self.stored(step.as_deref())?.0.to_string();
+                Ok(QueryResult::Result(self.result_summary(&name)))
+            }
+            Query::Probe { step, field, component, at } => {
+                self.query_probe(step.as_deref(), field, component, at).map(QueryResult::Probe)
+            }
+            Query::Path { step, field, component, from, to, n } => {
+                self.query_path(step.as_deref(), field, component, from, to, n).map(QueryResult::Path)
+            }
+            Query::Cost { step } => self.query_cost(&step).map(QueryResult::Cost),
         }
     }
 
@@ -178,7 +195,7 @@ impl Engine {
                 procedure: format!("{:?}", s.procedure).to_lowercase(),
                 constraints: s.constraints.clone(),
                 loads: s.loads.clone(),
-                solved: false,
+                solved: self.results.contains_key(&s.name),
             })
             .collect();
         Ok(ModelSummary {
@@ -289,6 +306,86 @@ impl Engine {
                 display(m, centroid[2], Length::DIM),
             ],
         })
+    }
+
+    /// The nodal field a probe or a path samples, plus its display unit, refusing a Result
+    /// whose Mesh is no longer the one it was solved on.
+    fn sampled(&mut self, step: Option<&str>, field: Field) -> Result<(FieldData, String), Error> {
+        let f = self.field(step, field)?.clone();
+        if f.per != crate::post::Per::Node {
+            return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal field"))
+                .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
+        }
+        let unit = display(&self.model, 0.0, crate::solve_run::field_dimension(field)).unit;
+        self.mesh()?;
+        let nodes = self.mesh.as_ref().expect("built above").mesh.n_nodes();
+        if f.len() != nodes {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                format!("the Result has {} nodes but the Mesh now has {nodes}", f.len()),
+            )
+            .suggest("solve.run again: the Mesh changed under the Result"));
+        }
+        Ok((f, unit))
+    }
+
+    /// One component of a sampled value: the named one, or the magnitude of a vector.
+    fn pick(v: &[f64], component: Option<u8>) -> f64 {
+        match component {
+            Some(c) => v[(c as usize).min(v.len() - 1)],
+            None => v.iter().map(|x| x * x).sum::<f64>().sqrt(),
+        }
+    }
+
+    /// `query.probe`: a field interpolated at a point.
+    fn query_probe(
+        &mut self,
+        step: Option<&str>,
+        field: Field,
+        component: Option<u8>,
+        at: [Q<Length>; 3],
+    ) -> Result<ProbeResult, Error> {
+        let (f, unit) = self.sampled(step, field)?;
+        let x = si3(&at)?;
+        let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
+        let (elem, v) = crate::post::probe::probe(mesh, &f, x).ok_or_else(|| {
+            Error::new(ErrorCode::NotFound, "the point is outside the mesh").at("at").suggest("query.mesh reports bbox")
+        })?;
+        let value = display(&self.model, Engine::pick(&v, component), crate::solve_run::field_dimension(field));
+        Ok(ProbeResult { value: Valued { value: value.value, unit }, element: elem, interpolated: true })
+    }
+
+    /// `query.path`: a field sampled along a line.
+    fn query_path(
+        &mut self,
+        step: Option<&str>,
+        field: Field,
+        component: Option<u8>,
+        from: [Q<Length>; 3],
+        to: [Q<Length>; 3],
+        n: u32,
+    ) -> Result<PathResult, Error> {
+        let (f, unit) = self.sampled(step, field)?;
+        let (a, b) = (si3(&from)?, si3(&to)?);
+        let dim = crate::solve_run::field_dimension(field);
+        let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
+        let samples = crate::post::probe::path(mesh, &f, a, b, n as usize);
+        Ok(PathResult {
+            s: samples.iter().map(|(s, _)| *s).collect(),
+            values: samples
+                .iter()
+                .map(|(_, v)| v.as_ref().map(|v| display(&self.model, Engine::pick(v, component), dim).value))
+                .collect(),
+            unit,
+        })
+    }
+
+    /// `query.cost`: what solving this Step would take, from the sparsity alone.
+    fn query_cost(&mut self, step: &str) -> Result<CostEstimate, Error> {
+        self.model.step(step).ok_or_else(|| Error::not_found("step", step, &self.model.names(ObjectKind::Step)))?;
+        self.mesh()?;
+        let built = self.mesh.as_ref().expect("built above");
+        Ok(crate::solve::cost_estimate(&built.mesh, built.mesh.dim, crate::command::Solver::Auto))
     }
 
     fn query_objects(&self, kinds: Option<&[ObjectKind]>) -> ObjectList {

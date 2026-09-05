@@ -10,29 +10,58 @@ mesh size is not a Benchmark; every case with a rate carries a convergence study
 Values and sources are from research note 04 §5 unless stated. Items marked **resolve** have
 conflicting published values and must be settled before the number is hard-coded.
 
+The **Status** column has three states. `engine test` means a Rust test in
+`crates/engine/tests/` asserts it; `green` means the Command-level form in
+`crates/engine/benches/cases/*.json` passes under `femlab bench`, which is what makes a row a
+Benchmark in the sense of PLAN rule 8; blank means not implemented yet.
+
 ## A. Element-level (phase 1)
 
-| # | Case | Reference | Tolerance | Proves |
-|---|---|---|---|---|
-| A1 | Patch tests, all six constant-strain modes, hex8/hex20/tet4/tet10/quad4/quad8/tri3/tri6 | exact constant stress | 1e-10 rel | conforming, complete elements |
-| A2 | Rigid-body modes of a single element (3 translations, 3 rotations) | zero internal force | 1e-12 | no spurious stiffness |
-| A3 | Eigenvalues of a single hex8 stiffness matrix | 6 zeros, 18 positive | 1e-9 | K symmetric PSD (also a fast-check property over random element shapes) |
-| A4 | Symmetry of the assembled operator, `⟨Ku,v⟩ = ⟨u,Kv⟩` for random u,v | 0 | 1e-12 (f64), f32 rounding (GPU) | assembly and GPU operator agree with themselves |
-| A5 | Uniaxial bar under end force | σ = F/A, δ = FL/EA | 1e-8 | loads, constraints, stress recovery |
-| A6 | Free thermal expansion of a block | ε = αΔT, σ = 0 | 1e-10 | thermal strain path |
-| A7 | Reaction balance, every case | Σ reactions = −Σ applied loads | 1e-9 rel | Dirichlet handling and reaction recovery |
-| A8 | Journal replay, every case | Model hash identical after replay | exact | the engine is deterministic and scriptable |
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| A1 | Patch tests, all six constant-strain modes, hex8/hex20/tet4/tet10/quad4/quad8/tri3/tri6 | exact constant stress | 1e-10 rel | conforming, complete elements | engine test |
+| A2 | Rigid-body modes of a single element (3 translations, 3 rotations) | zero internal force | 1e-12 | no spurious stiffness | engine test |
+| A3 | Eigenvalues of a single hex8 stiffness matrix | 6 zeros, 18 positive | 1e-9 | K symmetric PSD (also a fast-check property over random element shapes) | engine test |
+| A4 | Symmetry of the assembled operator, `⟨Ku,v⟩ = ⟨u,Kv⟩` for random u,v | 0 | 1e-12 (f64), f32 rounding (GPU) | assembly and GPU operator agree with themselves | engine test (f64) |
+| A5 | Uniaxial bar under end force | σ = F/A, δ = FL/EA | 1e-8 | loads, constraints, stress recovery | engine test |
+| A6 | Free thermal expansion of a block | ε = αΔT, σ = 0 | 1e-10 | thermal strain path | engine test |
+| A7 | Reaction balance, every case | Σ reactions = −Σ applied loads | 1e-9 rel | Dirichlet handling and reaction recovery | engine test + green |
+| A8 | Journal replay, every case | Model hash identical after replay | exact | the engine is deterministic and scriptable | engine test |
+
+A5 is run for all eight element kinds, driven by a prescribed end displacement so the reaction
+*is* `F`; A7's scale is the largest force that flows through the model, because a Step driven by
+a displacement or a temperature has no applied total to be relative to. A6 covers hex8, hex20, a
+plane-stress sheet and an axisymmetric ring. A8's numerics half is
+`a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
+`StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
+`LLᵀ` included.
 
 ## B. Beams and locking (phase 1–2)
 
-| # | Case | Reference | Tolerance | Proves |
-|---|---|---|---|---|
-| B1 | Cantilever, tip force, Euler–Bernoulli + Timoshenko shear correction | δ = PL³/3EI + PL/κGA | h-convergence at the theoretical rate; hex20 within 0.5 % | bending; full-integration hex8 shows shear locking, the improved hex8 does not |
-| B2 | MacNeal–Harder straight cantilever, in-plane shear, regular / trapezoidal / parallelogram meshes | 0.1081 in (regular) | quad8/hex20 ≤ 1 %; quad4/hex8 error recorded and shown, not gated | mesh-distortion sensitivity |
-| B3 | MacNeal–Harder twisted beam (90° twist, 12 elements) | 0.005424 in (in-plane), 0.001754 in (out-of-plane) — **verify against the paper** | 2 % | warped elements |
-| B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (mode 3, Timoshenko drift) | mass matrix, eigen solver |
-| B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) |
-| B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) |
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| B1 | Cantilever, tip force, Euler–Bernoulli + Timoshenko shear correction | δ = PL³/3EI + PL/κGA = 0.1919619 mm | hex20 within 1 %; hex8 with incompatible modes within 2 %; full integration recorded | bending; full-integration hex8 shows shear locking, the improved hex8 does not | green |
+| B2 | MacNeal–Harder straight cantilever, in-plane shear, regular / trapezoidal / parallelogram meshes | 0.1081 in (regular) | quad8/hex20 ≤ 1 %; quad4/hex8 error recorded and shown, not gated | mesh-distortion sensitivity | |
+| B3 | MacNeal–Harder twisted beam (90° twist, 12 elements) | 0.005424 in (in-plane), 0.001754 in (out-of-plane) — **verify against the paper** | 2 % | warped elements | |
+| B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (mode 3, Timoshenko drift) | mass matrix, eigen solver | |
+| B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
+| B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
+
+B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
+tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
+formula), `cantilever-hex20` (0.1904070 mm, 0.81 %) and `cantilever-hex8-full` (0.1837801 mm,
+4.26 %, recorded not gated). Two things are worth knowing before reading those numbers.
+
+**The last 0.7 % is the formula, not the mesh.** Refining hex20 to 12.5 mm moves the answer only
+from 0.1904070 to 0.1905657 mm. A fully clamped three-dimensional root holds the cross-section
+flat and stops it contracting, which Timoshenko theory does not, and that makes the solid about
+0.7 % stiffer than the formula. The hex20 gate is therefore 1 %, not the plan's 0.5 %, which this
+fixture cannot meet for a reason that is physics rather than error.
+
+**The locking ratio needs a coarse mesh to be dramatic.** At 25 mm there are four elements through
+the depth and full integration is 4.4× worse than incompatible modes; at 50 mm it is 9.8× and at
+100 mm 24×. `the_fully_integrated_hexahedron_locks` in `tests/registry.rs` asserts the > 5× ratio
+at 50 mm.
 
 ## C. Two-dimensional and axisymmetric (phase 3)
 

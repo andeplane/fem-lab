@@ -7,7 +7,11 @@
 //! TypeScript, WGSL or wasm from the schema and the doc string alone; there is no privileged
 //! built-in route.
 
+pub mod assembly;
+pub mod checks;
 pub mod element;
+pub mod loads;
 pub mod material;
+pub mod problem;
 pub mod quadrature;
 pub mod shape;

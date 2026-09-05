@@ -153,6 +153,25 @@ impl Engine {
         Ok(out.into())
     }
 
+    /// One Result field as a fresh `Float32Array`: the whole thing component-fastest, or one
+    /// component when `component` is given. `step` defaults to the last solved Step and
+    /// `field` is the Query's own spelling (`displacement`, `stress`, `vonMises`, ...).
+    pub fn field(
+        &self,
+        step: Option<String>,
+        field: String,
+        component: Option<u8>,
+    ) -> Result<js_sys::Float32Array, JsValue> {
+        let which: femlab_engine::command::Field = serde_json::from_str(&format!("\"{field}\"")).map_err(schema_err)?;
+        let data = self.inner.field(step.as_deref(), which).map_err(|e| throw(&e))?;
+        let values = match component {
+            Some(c) => data.component(c as usize),
+            None => data.data.clone(),
+        };
+        let out: Vec<f32> = values.iter().map(|v| *v as f32).collect();
+        Ok(js_sys::Float32Array::from(&out[..]))
+    }
+
     /// The saved file (`femlab/1`) as JSON text.
     pub fn export_file(&self) -> String {
         serde_json::to_string(&self.inner.export_file()).unwrap_or_default()
