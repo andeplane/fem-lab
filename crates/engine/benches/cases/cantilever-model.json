@@ -1,0 +1,21 @@
+{
+  "name": "cantilever-model",
+  "reference": "Model-level checks: box volume and mass are exact (1 m × 0.1 m × 0.1 m of steel at 7850 kg/m^3).",
+  "journal": [
+    { "cmd": "model.new", "name": "cantilever" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "stress": "MPa", "force": "kN" } },
+    { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "100 mm", "100 mm"] },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] },
+    { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "25 mm" }, "order": 1 },
+    { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" },
+    { "cmd": "load.traction", "name": "tip", "on": "beam.xmax", "total": ["0 N", "0 N", "-1 kN"] },
+    { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["root"], "loads": ["tip"] }
+  ],
+  "checks": [
+    { "query": { "query": "query.model" }, "path": "/bodies/0/measure/value", "expect": 1e7, "tol": 1e-9, "rel": true, "note": "volume in mm^3" },
+    { "query": { "query": "query.model" }, "path": "/bodies/0/mass/value", "expect": 78.5, "tol": 1e-12, "rel": true, "note": "mass in kg" },
+    { "query": { "query": "query.model" }, "path": "/bodies/0/faces/1", "expect": "beam.xmin" },
+    { "query": { "query": "query.model" }, "path": "/warnings", "expect": [] }
+  ]
+}

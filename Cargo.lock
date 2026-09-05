@@ -337,7 +337,9 @@ dependencies = [
  "clap",
  "femlab-engine",
  "femlab-geometry",
+ "pollster",
  "predicates",
+ "serde",
  "serde_json",
 ]
 

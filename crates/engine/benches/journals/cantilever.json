@@ -1,0 +1,108 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "cantilever"
+    },
+    "hashAfter": "1de472125c38d1d681f888df06023c175df0da4f8e0dd359d38f468c29ff58e0"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "kN",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "5303ee22c4c47947feecffde05eab238ad810881fc286c222a49ed13c3ab6dfa"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addBox",
+      "name": "beam",
+      "size": [
+        "1 m",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    "hashAfter": "79b600561cab843d71ccd3a826ff5ed4e6a78f4d3b59844d76fb0bd677084e85"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025"
+    },
+    "hashAfter": "4cbd7f04ddac8b679defa6f340bdc70fe47105b8d5d43b9db04242ae88cd2b0f"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "beam"
+      ]
+    },
+    "hashAfter": "f2d3d88a084386f3089cdebc3c8d4bb8857c606663b3d2c891a35ba0ae7f27a6"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "25 mm"
+      },
+      "order": 1
+    },
+    "hashAfter": "eb654f6805e36d08862f33df1ed81c64c80c7ea89f03ff266b4c2ad53717b9c7"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.xmin"
+    },
+    "hashAfter": "b38d703fbe2d36550ef97bd809f169a5a133fc561692ecb9a29288d8c072ab67"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "load.traction",
+      "name": "tip",
+      "on": "beam.xmax",
+      "total": [
+        "0 N",
+        "0 N",
+        "-1 kN"
+      ]
+    },
+    "hashAfter": "2977b6b990596d0cc5ec8b1899ecf824547ac7905c8a67abf2d44703da933458"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "tip"
+      ]
+    },
+    "hashAfter": "c5ef88a1d88fc1de0255d83a25b7dadc1df9e093c91a2df5b47373c70f83f67e"
+  }
+]
