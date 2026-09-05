@@ -1,0 +1,293 @@
+{
+  "name": "macneal-harder-parallelogram-quad8",
+  "reference": "Benchmark B2. MacNeal-Harder straight cantilever under in-plane tip shear: length 6, depth 0.2, thickness 0.1, E = 1e7, nu = 0.3, six elements along the length, root fully fixed, a total shear force of 1 on the tip edge. The reference tip deflection is 0.1081 (Euler-Bernoulli plus the Timoshenko shear term). Three meshes of the same six elements: regular rectangles, trapezoids whose interior nodes alternate +/-0.1 top and bottom, and parallelograms whose whole top row is shifted 0.2 (45 degree edges, so the specimen itself is a parallelogram and its own converged answer is 0.1061). This row is parallelogram quad8, tip deflection 0.0878413, 18.7 % from 0.1081, recorded against its own value rather than gated: this is the distortion sensitivity the benchmark exists to show. Refining each mesh to 4 x 4 elements per block recovers 0.10791, 0.10791 and 0.10428 respectively, so nothing here is a formulation defect, only distortion at six elements.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "macneal-harder"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "Pa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "0.1 m"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "generic",
+      "E": "1e7 Pa",
+      "nu": 0.3
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "beam",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0 m",
+                "0 m"
+              ],
+              [
+                "1 m",
+                "0 m"
+              ],
+              [
+                "1.2 m",
+                "0.2 m"
+              ],
+              [
+                "0.2 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              "root"
+            ]
+          },
+          {
+            "corners": [
+              [
+                "1 m",
+                "0 m"
+              ],
+              [
+                "2 m",
+                "0 m"
+              ],
+              [
+                "2.2 m",
+                "0.2 m"
+              ],
+              [
+                "1.2 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "2 m",
+                "0 m"
+              ],
+              [
+                "3 m",
+                "0 m"
+              ],
+              [
+                "3.2 m",
+                "0.2 m"
+              ],
+              [
+                "2.2 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "3 m",
+                "0 m"
+              ],
+              [
+                "4 m",
+                "0 m"
+              ],
+              [
+                "4.2 m",
+                "0.2 m"
+              ],
+              [
+                "3.2 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "4 m",
+                "0 m"
+              ],
+              [
+                "5 m",
+                "0 m"
+              ],
+              [
+                "5.2 m",
+                "0.2 m"
+              ],
+              [
+                "4.2 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "5 m",
+                "0 m"
+              ],
+              [
+                "6 m",
+                "0 m"
+              ],
+              [
+                "6.2 m",
+                "0.2 m"
+              ],
+              [
+                "5.2 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              "tip",
+              null,
+              null
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "generic",
+      "bodies": [
+        "beam"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.root"
+    },
+    {
+      "cmd": "load.traction",
+      "name": "tip",
+      "on": "beam.tip",
+      "total": [
+        "0 N",
+        "1 N",
+        "0 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "tip"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 1,
+        "at": [
+          "6.1 m",
+          "0.1 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.08784127603362153,
+      "tol": 0.01,
+      "rel": true,
+      "note": "tip deflection recorded, not gated against 0.1081"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "A7: reactions balance the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

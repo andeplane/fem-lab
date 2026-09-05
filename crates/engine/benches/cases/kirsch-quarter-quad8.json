@@ -1,0 +1,240 @@
+{
+  "name": "kirsch-quarter-quad8",
+  "reference": "Benchmark C1. Kirsch's plate with a circular hole under uniaxial tension: hole radius a = 1 m, half-width W = 20 m (so the hole diameter is 1/20 of the full width and Howland's finite-width correction is about 0.2 %), plane stress, E = 210 GPa, nu = 0.3, sigma = 100 MPa applied as a negative pressure on the far edge. The quarter model is two mapped quad8 blocks sharing the (a/sqrt(2), a/sqrt(2))-(W, W) diagonal, graded 1.25 toward the hole, with symmetry on x = 0 and y = 0. K_t = sigma_xx(0, a)/sigma; the mesh sequence n = 8, 16, 32 gives 2.577, 2.991 and 3.0219, Richardson-extrapolating to 3.0244, 0.8 % above the infinite-plate 3.00. Plan C's half-width of 10 m was measured too and does not meet the 2 % gate: there K_t extrapolates to 3.094, a 3.1 % finite-width effect rather than the plan's estimated 1.6 %.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "kirsch"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "1 m"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "plate",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "1 m",
+                "0 m"
+              ],
+              [
+                "20 m",
+                "0 m"
+              ],
+              [
+                "20 m",
+                "20 m"
+              ],
+              [
+                "0.7071067811865476 m",
+                "0.7071067811865476 m"
+              ]
+            ],
+            "edges": [
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 m",
+                  "0 m"
+                ],
+                "ccw": false
+              }
+            ],
+            "n": [
+              32,
+              32
+            ],
+            "grading": [
+              1.25,
+              1
+            ],
+            "tags": [
+              "ymin",
+              "xmax",
+              null,
+              "hole"
+            ]
+          },
+          {
+            "corners": [
+              [
+                "0.7071067811865476 m",
+                "0.7071067811865476 m"
+              ],
+              [
+                "20 m",
+                "20 m"
+              ],
+              [
+                "0 m",
+                "20 m"
+              ],
+              [
+                "0 m",
+                "1 m"
+              ]
+            ],
+            "edges": [
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 m",
+                  "0 m"
+                ],
+                "ccw": false
+              }
+            ],
+            "n": [
+              32,
+              32
+            ],
+            "grading": [
+              1.25,
+              1
+            ],
+            "tags": [
+              null,
+              "ymax",
+              "xmin",
+              "hole"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symx",
+      "on": "plate.xmin",
+      "normal": "x"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symy",
+      "on": "plate.ymin",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "tension",
+      "on": "plate.xmax",
+      "value": "-100 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "symx",
+        "symy"
+      ],
+      "loads": [
+        "tension"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "0 m",
+          "1 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 300,
+      "tol": 0.02,
+      "rel": true,
+      "note": "K_t = sigma_xx(0, a)/sigma = 3.00 within 2 %"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 1,
+        "at": [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -100,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_theta(a, 0) = -sigma, the compressive end of Kirsch"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "A7: reactions balance the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

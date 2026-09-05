@@ -6969,6 +6969,13 @@
               }
             ]
           },
+          "mesherMaterial": {
+            "description": "The material of the mesher's implicit Body. The mapped mesher *is* its own geometry, so\nthere is no [`Body`] record to carry the assignment; `material.assign` names that Body\nlike any other and the name lands here.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "plugins": {
             "type": "array",
             "items": {

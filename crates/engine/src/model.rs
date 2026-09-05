@@ -241,6 +241,11 @@ pub struct Model {
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<MeshSettings>,
+    /// The material of the mesher's implicit Body. The mapped mesher *is* its own geometry, so
+    /// there is no [`Body`] record to carry the assignment; `material.assign` names that Body
+    /// like any other and the name lands here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesher_material: Option<String>,
     #[serde(default)]
     pub plugins: Vec<PluginRecord>,
 }
@@ -260,6 +265,7 @@ impl Model {
             loads: vec![],
             steps: vec![],
             mesh: None,
+            mesher_material: None,
             plugins: vec![],
         }
     }
@@ -278,6 +284,20 @@ impl Model {
     }
     pub fn step(&self, name: &str) -> Option<&Step> {
         self.steps.iter().find(|s| s.name == name)
+    }
+
+    /// The Body the current mesher invents, if it is one that is its own geometry.
+    pub fn implicit_body(&self) -> Option<&str> {
+        self.mesh.as_ref().and_then(|m| m.mesher.implicit_body())
+    }
+
+    /// The material assigned to a Body, whether that is a [`Body`] record or the mesher's
+    /// implicit Body, whose assignment lives in [`Model::mesher_material`].
+    pub fn material_of_body(&self, body: &str) -> Option<&str> {
+        match self.body(body) {
+            Some(b) => b.material.as_deref(),
+            None => self.mesher_material.as_deref().filter(|_| self.implicit_body() == Some(body)),
+        }
     }
 
     /// The effective shape of a Body: its shape minus its cuts, with names for auto face tags.

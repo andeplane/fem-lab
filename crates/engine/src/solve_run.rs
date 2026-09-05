@@ -5,19 +5,22 @@
 //! Results are kept per Step with the Model hash they were solved at, so an edit does not throw
 //! them away — it makes them *stale*, which `query.result` says out loud.
 
-use crate::command::{Field, ObjectKind, Procedure, Solver};
+use femlab_geometry::Mesh;
+
+use crate::command::{Field, ObjectKind, Procedure, QuantityOfInterest, Solver};
 use crate::engine::{display, Engine, OnProgress};
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::Material;
 use crate::fem::loads::{face_set_area, Load};
 use crate::fem::problem::{Constraint, Problem};
-use crate::mesh::BuiltMesh;
-use crate::model::{ConstraintKind, LoadKind, Model, Step};
+use crate::mesh::{scale_mesher, BuiltMesh};
+use crate::model::{ConstraintKind, LoadKind, MeshSettings, Model, Step};
+use crate::post::convergence::{observed_rate, richardson};
 use crate::post::Extremum;
-use crate::procedure::{self, StepResult};
-use crate::query::{Extreme, Output, ReactionRow, ResultSummary, Valued};
+use crate::procedure::{self, report, StepResult};
+use crate::query::{Extreme, Output, ReactionRow, ResultSummary, StudyReport, StudyRow, Valued};
 use crate::solve::SolveOptions;
-use crate::units::{Dim, Dimension, Force, Length, Stress, Temperature};
+use crate::units::{Dim, Dimension, Force, Length, Stress, Temperature, Q};
 
 /// The material law every Model material resolves to for now; plugins add their own later.
 const LAW: &str = "linear-elastic";
@@ -60,7 +63,7 @@ pub fn build_problem<'a>(model: &Model, built: &'a BuiltMesh, step: &Step) -> Re
         .body_of_block
         .iter()
         .map(|body| {
-            let name = model.body(body).and_then(|b| b.material.as_deref())?;
+            let name = model.material_of_body(body)?;
             model.materials.iter().position(|m| m.name == name)
         })
         .collect();
@@ -164,6 +167,141 @@ impl Engine {
         let hash = self.model_hash();
         self.results.insert(step.name.clone(), (hash, result));
         Ok(Output::Solve { summary: self.result_summary(&step.name) })
+    }
+
+    /// `study.converge`: re-mesh at every size, re-solve the Step, and report the trend
+    /// (plan B §2.2).
+    ///
+    /// The sizes are handed to the mesher by [`crate::mesh::scale_mesher`], whose doc string
+    /// says what a size means to each one; the first size names the mesh as it already stands
+    /// for the meshers that count divisions rather than measure elements. The rate is the
+    /// least-squares slope of the error against `h`, with the Richardson limit over the three
+    /// finest meshes standing in for the exact answer, so the two numbers a Benchmark asserts
+    /// and the two this Command reports come from one implementation (`post::convergence`).
+    ///
+    /// The previous mesh settings come back afterwards unless `restore` is false, and with them
+    /// whatever Result the Step already had: a study reports a table, it does not silently
+    /// replace the Result you were looking at. With `restore: false` the finest run's Result
+    /// stays, on the mesh that produced it.
+    pub(crate) async fn study_converge(
+        &mut self,
+        step_name: &str,
+        sizes: &[Q<Length>],
+        quantity: &QuantityOfInterest,
+        restore: Option<bool>,
+        on_progress: OnProgress<'_>,
+    ) -> Result<Output, Error> {
+        let step = self
+            .model
+            .step(step_name)
+            .ok_or_else(|| Error::not_found("step", step_name, &self.model.names(ObjectKind::Step)))?
+            .clone();
+        let settings = self.model.mesh.clone().ok_or_else(|| {
+            Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
+                .suggest("mesh.set { mesher: { kind: \"lattice\", size: \"25 mm\" } }")
+        })?;
+        if sizes.len() < 2 {
+            return Err(
+                Error::schema(format!("a convergence study needs at least two sizes, got {}", sizes.len())).at("sizes")
+            );
+        }
+        let mut h = Vec::with_capacity(sizes.len());
+        for (i, q) in sizes.iter().enumerate() {
+            let s = q.si().map_err(|e| e.at(format!("sizes[{i}]")))?;
+            if !(s.is_finite() && s > 0.0) {
+                return Err(Error::schema(format!("size {s} must be finite and positive")).at(format!("sizes[{i}]")));
+            }
+            h.push(s);
+        }
+        let mut progress = on_progress;
+        let mut rows = Vec::with_capacity(h.len());
+        let mut values = Vec::with_capacity(h.len());
+        let mut unit = String::new();
+        let mut last = None;
+        for (i, &size) in h.iter().enumerate() {
+            let where_ = display(&self.model, size, Length::DIM);
+            report(
+                &mut progress,
+                "study",
+                i as f64 / h.len() as f64,
+                &format!("size {} {} ({} of {})", crate::units::fmt_sig(where_.value, 4), where_.unit, i + 1, h.len()),
+            )?;
+            self.model.mesh = Some(MeshSettings { mesher: scale_mesher(&settings.mesher, h[0], size), ..settings });
+            self.mesh = None;
+            self.mesh()?;
+            let started = self.host.now_ms();
+            let mut result = {
+                let built = self.mesh.as_ref().expect("built above");
+                let p = build_problem(&self.model, built, &step)?;
+                let procedure_step = procedure::Step::Static { solver: SolveOptions::default() };
+                procedure::run(&p, &procedure_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?
+            };
+            result.solver.time_ms = self.host.now_ms() - started;
+            let built = self.mesh.as_ref().expect("built above");
+            let (value, u) = self.quantity_of(&result, &built.mesh, quantity)?;
+            rows.push(StudyRow {
+                size: where_,
+                dofs: (built.mesh.n_nodes() * built.mesh.dim) as u64,
+                value,
+                time_ms: result.solver.time_ms,
+            });
+            values.push(value);
+            unit = u;
+            last = Some(result);
+        }
+        let (extrapolated, _) = richardson(&h, &values);
+        let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
+        let rate = observed_rate(&h, &err);
+        if restore == Some(false) {
+            let hash = self.model_hash();
+            self.results.insert(step.name, (hash, last.expect("at least two sizes ran")));
+        } else {
+            self.model.mesh = Some(settings);
+            self.mesh = None;
+        }
+        Ok(Output::Study {
+            report: StudyReport {
+                rows,
+                observed_rate: Some(rate).filter(|r| r.is_finite()),
+                extrapolated: Some(extrapolated).filter(|x| x.is_finite()),
+                unit,
+            },
+        })
+    }
+
+    /// One [`QuantityOfInterest`] read off a Result, in the Model's display units.
+    fn quantity_of(&self, res: &StepResult, mesh: &Mesh, q: &QuantityOfInterest) -> Result<(f64, String), Error> {
+        let (field, component) = match q {
+            QuantityOfInterest::Max { field, component }
+            | QuantityOfInterest::Min { field, component }
+            | QuantityOfInterest::Probe { field, component, .. } => (*field, *component),
+        };
+        let f = res.fields.get(&field).ok_or_else(|| {
+            Error::new(ErrorCode::NotFound, format!("the Step produced no {} field", field_name(field)))
+                .at("quantity.field")
+                .suggest("query.result lists the fields that were computed")
+        })?;
+        if f.per != crate::post::Per::Node {
+            return Err(Error::new(ErrorCode::Unsupported, format!("{} is not a nodal field", field_name(field)))
+                .at("quantity.field")
+                .suggest("a quantity of interest over displacement, stress, vonMises, principal, strain or reaction"));
+        }
+        let at = |i: usize| Engine::pick(&f.data[i * f.comps..(i + 1) * f.comps], component);
+        let raw = match q {
+            QuantityOfInterest::Max { .. } => (0..f.len()).map(at).fold(f64::NEG_INFINITY, f64::max),
+            QuantityOfInterest::Min { .. } => (0..f.len()).map(at).fold(f64::INFINITY, f64::min),
+            QuantityOfInterest::Probe { at: x, .. } => {
+                let point = crate::queries::si3(x).map_err(|e| e.at("quantity.at"))?;
+                let (_, v) = crate::post::probe::probe(mesh, f, point).ok_or_else(|| {
+                    Error::new(ErrorCode::NotFound, "the point is outside the mesh")
+                        .at("quantity.at")
+                        .suggest("query.mesh reports bbox")
+                })?;
+                Engine::pick(&v, component)
+            }
+        };
+        let d = display(&self.model, raw, field_dimension(field));
+        Ok((d.value, d.unit))
     }
 
     /// The Step a Result Query means by default: the last solved Step in Model order.

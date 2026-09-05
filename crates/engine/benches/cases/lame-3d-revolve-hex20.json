@@ -1,0 +1,200 @@
+{
+  "name": "lame-3d-revolve-hex20",
+  "reference": "Benchmark C2. Lame thick cylinder, a = 0.1 m, b = 0.2 m, internal pressure p = 60 MPa, E = 200 GPa, nu = 0.3. A = p a^2/(b^2 - a^2) = 20 MPa, B = p a^2 b^2/(b^2 - a^2) = 8e5 Pa m^2; sigma_r = A - B/r^2, sigma_theta = A + B/r^2, so sigma_theta(a) = 100 MPa and sigma_rr(a) = -60 MPa whatever the idealisation. The displacement is not idealisation-free: with eps_z = 0 (plane strain, and an axisymmetric or 3D ring held at both ends) u_r(a) = (1+nu)/E (A(1-2nu)a + B/a) = 5.72e-5 m, while free ends (sigma_z = 0) give 5.90e-5 m, which is BENCHMARKS.md's SimScale number. Every row here holds eps_z = 0. This row revolves the axisymmetric strip 90 degrees into 8 x 2 x 16 hex20, with u_y = 0 on theta0, u_x = 0 on theta1 and u_z = 0 on both end faces. Because the (r, theta) division matches the plane-strain block's 8 x 16 and the axial direction is resolved exactly, the 3D answer is the plane-strain answer to roundoff, not merely to 0.5 %: sigma_theta(a) = 99.81673 MPa, sigma_rr(a) = -59.65060 MPa, u_r(a) = 5.7199847e-5 m, every digit of lame-plane-strain-quad8 (the equality is asserted to 1e-10 in tests/registry.rs).",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "lame-3d"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "sweep",
+        "base": {
+          "kind": "mapped",
+          "body": "tube",
+          "blocks": [
+            {
+              "corners": [
+                [
+                  "0.1 m",
+                  "0 m"
+                ],
+                [
+                  "0.2 m",
+                  "0 m"
+                ],
+                [
+                  "0.2 m",
+                  "0.1 m"
+                ],
+                [
+                  "0.1 m",
+                  "0.1 m"
+                ]
+              ],
+              "n": [
+                8,
+                2
+              ],
+              "tags": [
+                "zmin",
+                "outer",
+                "zmax",
+                "inner"
+              ]
+            }
+          ]
+        },
+        "sweep": {
+          "kind": "revolve",
+          "segments": 16,
+          "angleDeg": 90
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "tube"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "theta0",
+      "on": "tube.theta0",
+      "normal": "y"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "theta1",
+      "on": "tube.theta1",
+      "normal": "x"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "zmin",
+      "on": "tube.zmin",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "zmax",
+      "on": "tube.zmax",
+      "dofs": [
+        "uz"
+      ]
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "inside",
+      "on": "tube.inner",
+      "value": "60 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "theta0",
+        "theta1",
+        "zmin",
+        "zmax"
+      ],
+      "loads": [
+        "inside"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 1,
+        "at": [
+          "0.1 m",
+          "0 m",
+          "0.05 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 100,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_theta(a) on the theta = 0 face is sigma_yy"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "0.1 m",
+          "0 m",
+          "0.05 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -60,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_rr(a) is sigma_xx there"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "0.1 m",
+          "0 m",
+          "0.05 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0000572,
+      "tol": 0.01,
+      "rel": true,
+      "note": "u_r(a) with eps_z = 0"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "A7: reactions balance the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

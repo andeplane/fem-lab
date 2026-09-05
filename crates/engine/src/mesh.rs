@@ -324,6 +324,38 @@ pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
     }
 }
 
+/// The same mesher asked for element size `h`, for one row of a `study.converge` (plan B §2.2).
+///
+/// A size means what it means to the mesher in hand. The lattice mesher given a size, and the
+/// free mesher, take an element size, so `h` is set on them directly. Divisions are counts, so
+/// a lattice's explicit counts, a mapped block's `n`, an extrusion's layers and a revolution's
+/// segments scale by `h0 / h` (rounded, at least 1) with `h0` the study's *first* size, which
+/// therefore names the mesh as it already stands. Either way, halving the size doubles the
+/// divisions.
+pub fn scale_mesher(m: &MesherSettings, h0: f64, h: f64) -> MesherSettings {
+    let k = |n: usize| ((n as f64 * h0 / h).round() as usize).max(1);
+    match m {
+        MesherSettings::Lattice { size: Some(_), .. } => MesherSettings::Lattice { size: Some(h), counts: None },
+        MesherSettings::Lattice { counts, .. } => {
+            MesherSettings::Lattice { size: None, counts: counts.map(|c| c.map(|n| k(n as usize) as u32)) }
+        }
+        MesherSettings::Free { of, refine, .. } => {
+            MesherSettings::Free { of: of.clone(), size: h, refine: refine.clone() }
+        }
+        MesherSettings::Mapped { body, blocks } => MesherSettings::Mapped {
+            body: body.clone(),
+            blocks: blocks.iter().map(|b| QuadBlock { n: [k(b.n[0]), k(b.n[1])], ..b.clone() }).collect(),
+        },
+        MesherSettings::Sweep { base, sweep } => MesherSettings::Sweep {
+            base: Box::new(scale_mesher(base, h0, h)),
+            sweep: match *sweep {
+                Sweep::Extrude { layers, height } => Sweep::Extrude { layers: k(layers), height },
+                Sweep::Revolve { segments, angle_deg } => Sweep::Revolve { segments: k(segments), angle_deg },
+            },
+        },
+    }
+}
+
 /// How far and in how many steps a sweep goes, in SI.
 fn sweep_settings(spec: &SweepSpec) -> Result<Sweep, Error> {
     match spec {

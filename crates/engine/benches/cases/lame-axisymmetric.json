@@ -1,0 +1,171 @@
+{
+  "name": "lame-axisymmetric",
+  "reference": "Benchmark C2. Lame thick cylinder, a = 0.1 m, b = 0.2 m, internal pressure p = 60 MPa, E = 200 GPa, nu = 0.3. A = p a^2/(b^2 - a^2) = 20 MPa, B = p a^2 b^2/(b^2 - a^2) = 8e5 Pa m^2; sigma_r = A - B/r^2, sigma_theta = A + B/r^2, so sigma_theta(a) = 100 MPa and sigma_rr(a) = -60 MPa whatever the idealisation. The displacement is not idealisation-free: with eps_z = 0 (plane strain, and an axisymmetric or 3D ring held at both ends) u_r(a) = (1+nu)/E (A(1-2nu)a + B/a) = 5.72e-5 m, while free ends (sigma_z = 0) give 5.90e-5 m, which is BENCHMARKS.md's SimScale number. Every row here holds eps_z = 0. This row is the (r, z) strip r in [0.1, 0.2] m, z in [0, 0.1] m as 8 by 8 quad8 under the axisymmetric idealisation, with u_z = 0 on both z edges so eps_z = 0 and the plane-strain closed form applies unchanged. Measured: sigma_theta(a) = 99.5883 MPa (0.41 %), sigma_rr(a) = -59.4205 MPa (0.97 %), u_r(a) = 5.719976e-5 m (0.0004 %).",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "lame-axisymmetric"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "axisymmetric"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "tube",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0.1 m",
+                "0 m"
+              ],
+              [
+                "0.2 m",
+                "0 m"
+              ],
+              [
+                "0.2 m",
+                "0.1 m"
+              ],
+              [
+                "0.1 m",
+                "0.1 m"
+              ]
+            ],
+            "n": [
+              8,
+              8
+            ],
+            "tags": [
+              "zmin",
+              "outer",
+              "zmax",
+              "inner"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "tube"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "zmin",
+      "on": "tube.zmin",
+      "normal": "y"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "zmax",
+      "on": "tube.zmax",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "inside",
+      "on": "tube.inner",
+      "value": "60 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "zmin",
+        "zmax"
+      ],
+      "loads": [
+        "inside"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 2,
+        "at": [
+          "0.1 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 100,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_theta(a): Voigt 33 is the hoop under axisymmetry"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "0.1 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -60,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_rr(a) = -p"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "0.1 m",
+          "0.05 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0000572,
+      "tol": 0.01,
+      "rel": true,
+      "note": "u_r(a) with eps_z = 0"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

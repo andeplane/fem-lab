@@ -5,6 +5,7 @@ use femlab_engine::command::{
     Axis, Dof, FacePredicate, Field, IdealisationSpec, LatticeSize, MesherSpec, ObjectKind, Procedure, RegionPredicate,
     Solver,
 };
+use femlab_engine::post::convergence::richardson;
 use femlab_engine::query::{Output, Query, QueryResult};
 use femlab_engine::units::{Quantity, Q};
 use femlab_engine::{Command, Engine, Error, ErrorCode, Host, NoClock, Progress};
@@ -280,7 +281,7 @@ fn transactional_dispatch_and_structured_errors() {
             r#"{"cmd":"study.converge","step":"static","sizes":["50 mm"],"quantity":{"kind":"max","field":"vonMises"}}"#
         )
         .code,
-        ErrorCode::Unsupported
+        ErrorCode::Schema
     );
     assert_eq!(
         err(&mut e, r#"{"cmd":"plugin.load","name":"p","kind":"materialLaw","language":"ts","source":{"inline":"x"}}"#)
@@ -2058,4 +2059,804 @@ fn result_queries_refuse_what_they_cannot_answer() {
         at: [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")],
     };
     assert_eq!(e.query(q).expect_err("a 3D body in a 2D idealisation").code, ErrorCode::ModelIllPosed);
+}
+
+// ------------------------------------------------------------------ phase 3: the 2D, axisymmetric and 3D Benchmarks
+//
+// Every case below also exists as a Journal with checks in `benches/cases`, which is what
+// `femlab bench` runs; the tests here are the half a case file cannot hold — the mesh
+// sequences, the Richardson extrapolations and the two models that must agree with each other.
+
+/// One component of a nodal field at a point of the last solved Step, in display units.
+fn probe_value(e: &mut Engine, field: Field, component: u8, at: [&str; 3]) -> f64 {
+    let q = Query::Probe {
+        step: None,
+        field,
+        component: Some(component),
+        at: [Q::text(at[0]), Q::text(at[1]), Q::text(at[2])],
+    };
+    let QueryResult::Probe(p) = e.query(q).unwrap_or_else(|err| panic!("{err:?}")) else { panic!("a ProbeResult") };
+    p.value.value
+}
+
+/// Relative error against a reference value.
+fn rel(got: f64, want: f64) -> f64 {
+    (got - want).abs() / want.abs()
+}
+
+/// `h = 1/n` for a mesh sequence, which is all `richardson` and `observed_rate` need.
+fn inv(ns: &[usize]) -> Vec<f64> {
+    ns.iter().map(|&n| 1.0 / n as f64).collect()
+}
+
+// ---------------------------------------------------------------- C4 Cook's membrane
+
+/// Cook's membrane at one mesh: u_y at C = (48, 52), the midpoint of the loaded edge.
+fn cook(idealisation: &str, n: usize) -> f64 {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"cook"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"Pa","force":"N"}}"#);
+    ok(&mut e, &format!(r#"{{"cmd":"model.setIdealisation","idealisation":{idealisation}}}"#));
+    ok(&mut e, r#"{"cmd":"material.add","name":"soft","E":"1 Pa","nu":0.3333333333333333}"#);
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"mesh.set","mesher":{{"kind":"mapped","body":"membrane","blocks":[{{
+               "corners":[["0 m","0 m"],["48 m","44 m"],["48 m","60 m"],["0 m","44 m"]],
+               "n":[{n},{n}],"tags":["bottom","right","top","left"]}}]}},"order":2}}"#
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"soft","bodies":["membrane"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"clamp","on":"membrane.left"}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"shear","on":"membrane.right","total":["0 N","1 N","0 N"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["clamp"],"loads":["shear"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    probe_value(&mut e, Field::Displacement, 1, ["48 m", "52 m", "0 m"])
+}
+
+/// C4's **resolve**: 23.9 and 21.52 are not rival answers to one problem, they are the two
+/// idealisations of it. Richardson over n = 4, 8, 16, 32 quad8 confirms each against its own
+/// literature value, and the monitored point is C = (48, 52), the midpoint of the loaded edge:
+/// the top corner (48, 60) that plans A and C name is a different quantity, 25.18 and 22.63.
+#[test]
+fn cooks_membrane_extrapolates_to_both_of_its_published_values() {
+    let ns = [4usize, 8, 16, 32];
+    let h = inv(&ns);
+    for (idealisation, literature) in
+        [(r#"{"kind":"planeStress","thickness":"1 m"}"#, 23.9), (r#"{"kind":"planeStrain"}"#, 21.52)]
+    {
+        let q: Vec<f64> = ns.iter().map(|&n| cook(idealisation, n)).collect();
+        assert!(q.windows(2).all(|w| w[0] < w[1]), "monotone from below: {q:?}");
+        let (limit, rate) = richardson(&h, &q);
+        assert!(rate > 1.0 && rate < 3.0, "a plausible rate on a corner-singular domain: {rate}");
+        assert!(rel(limit, literature) < 0.01, "extrapolated {limit} vs the published {literature}");
+        assert!(rel(*q.last().expect("n = 32"), limit) < 0.01, "the finest mesh is within 1 % of the limit");
+    }
+}
+
+// ---------------------------------------------------------------- C1 Kirsch
+
+/// Half-width of the Kirsch plate, in hole radii: the hole is 1/20 of the full width, where
+/// Howland's finite-width correction is about 0.2 %.
+const KIRSCH_W: f64 = 20.0;
+
+/// `(x, y)` turned by `q` right angles. The quarter plate's two blocks are mirror images of
+/// each other about the diagonal, so its four rotations tile the full plate with exactly the
+/// nodes four mirrored quarters would have — and a rotation, unlike a reflection, keeps every
+/// block counter-clockwise and every hole arc turning the same way.
+fn turn(q: usize, p: [f64; 2]) -> [f64; 2] {
+    match q % 4 {
+        0 => p,
+        1 => [-p[1], p[0]],
+        2 => [-p[0], -p[1]],
+        _ => [p[1], -p[0]],
+    }
+}
+
+/// One mapped block of the Kirsch plate: `which` is 0 for the block below the diagonal and 1
+/// for the one above it, turned by `q` right angles, with the hole arc always on edge 3.
+fn kirsch_block(which: usize, q: usize, n: usize, tags: [&str; 4]) -> String {
+    let (w, d) = (KIRSCH_W, std::f64::consts::FRAC_1_SQRT_2);
+    let corners: [[f64; 2]; 4] =
+        if which == 0 { [[1.0, 0.0], [w, 0.0], [w, w], [d, d]] } else { [[d, d], [w, w], [0.0, w], [0.0, 1.0]] };
+    let c: Vec<String> = corners
+        .iter()
+        .map(|&p| {
+            let r = turn(q, p);
+            format!(r#"["{} m","{} m"]"#, r[0], r[1])
+        })
+        .collect();
+    let t: Vec<String> =
+        tags.iter().map(|s| if s.is_empty() { "null".to_string() } else { format!("\"{s}\"") }).collect();
+    format!(
+        r#"{{"corners":[{}],"edges":[{{"kind":"line"}},{{"kind":"line"}},{{"kind":"line"}},
+           {{"kind":"arc","center":["0 m","0 m"],"ccw":false}}],
+           "n":[{n},{n}],"grading":[1.25,1.0],"tags":[{}]}}"#,
+        c.join(","),
+        t.join(",")
+    )
+}
+
+/// The plate, its material and the tension on it; `blocks` is the mesher's block list.
+fn kirsch_model(e: &mut Engine, blocks: &str) {
+    ok(e, r#"{"cmd":"model.new","name":"kirsch"}"#);
+    ok(e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"MPa","force":"N"}}"#);
+    ok(e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(
+        e,
+        &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"mapped","body":"plate","blocks":[{blocks}]}},"order":2}}"#),
+    );
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["plate"]}"#);
+}
+
+/// The quarter model at one mesh: `sigma_xx(0, a)` in MPa, so `K_t` is that over 100.
+fn kirsch_quarter(n: usize) -> f64 {
+    let mut e = engine();
+    let blocks = format!(
+        "{},{}",
+        kirsch_block(0, 0, n, ["ymin", "xmax", "", "hole"]),
+        kirsch_block(1, 0, n, ["", "", "xmin", "hole"])
+    );
+    kirsch_model(&mut e, &blocks);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"symx","on":"plate.xmin","normal":"x"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"symy","on":"plate.ymin","normal":"y"}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"tension","on":"plate.xmax","value":"-100 MPa"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["symx","symy"],"loads":["tension"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    probe_value(&mut e, Field::Stress, 0, ["0 m", "1 m", "0 m"])
+}
+
+/// C1: the stress concentration itself. n = 8, 16, 32 rises monotonically and Richardson lands
+/// within 2 % of Kirsch's infinite-plate 3.00.
+#[test]
+fn the_kirsch_plate_reaches_a_stress_concentration_of_three() {
+    let ns = [8usize, 16, 32];
+    let k: Vec<f64> = ns.iter().map(|&n| kirsch_quarter(n) / 100.0).collect();
+    assert!(k.windows(2).all(|w| w[0] < w[1]), "monotone from below: {k:?}");
+    let (limit, _) = richardson(&inv(&ns), &k);
+    assert!(rel(limit, 3.0) < 0.02, "extrapolated K_t = {limit}, more than 2 % from 3.00");
+    assert!(rel(k[1], 3.0) < 0.02 && rel(k[2], 3.0) < 0.02, "the two finest against 3.00: {k:?}");
+    // the discretisation error is what must fall; measured against 3.00 it crosses zero, because
+    // the plate is finite and the mesh is converging to 3.024 rather than to Kirsch's 3.00
+    let err: Vec<f64> = k.iter().map(|&v| rel(v, limit)).collect();
+    assert!(err.windows(2).all(|w| w[1] < w[0]), "the error must not grow: {err:?}");
+}
+
+/// C1's symmetry half: the same plate as a full model of eight blocks, held only on its two
+/// centre lines, gives the quarter model's stress at the shared point to roundoff. The two
+/// meshes are different systems — four times the elements, a different elimination order — so
+/// this is the discretisation agreeing with itself, not one solve compared with a copy.
+#[test]
+fn the_kirsch_full_plate_equals_the_quarter_model_at_the_hole() {
+    let n = 4;
+    let mut e = engine();
+    let mut blocks = Vec::new();
+    for q in 0..4 {
+        // Only the two ends carry the tension; every other outer edge is free and every edge on
+        // a centre line is interior to the full plate.
+        blocks.push(kirsch_block(
+            0,
+            q,
+            n,
+            [
+                "",
+                if q == 0 {
+                    "xmax"
+                } else if q == 2 {
+                    "xmin"
+                } else {
+                    ""
+                },
+                "",
+                "hole",
+            ],
+        ));
+        blocks.push(kirsch_block(
+            1,
+            q,
+            n,
+            [
+                "",
+                if q == 1 {
+                    "xmin"
+                } else if q == 3 {
+                    "xmax"
+                } else {
+                    ""
+                },
+                "",
+                "hole",
+            ],
+        ));
+    }
+    kirsch_model(&mut e, &blocks.join(","));
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"axis-x","where":{"kind":"bbox",
+           "min":["-1e-9 m","-30 m","-1 m"],"max":["1e-9 m","30 m","1 m"]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"axis-y","where":{"kind":"bbox",
+           "min":["-30 m","-1e-9 m","-1 m"],"max":["30 m","1e-9 m","1 m"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold-x","on":"axis-x","dofs":["ux"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold-y","on":"axis-y","dofs":["uy"]}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"pull-right","on":"plate.xmax","value":"-100 MPa"}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"pull-left","on":"plate.xmin","value":"-100 MPa"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["hold-x","hold-y"],
+           "loads":["pull-right","pull-left"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let full = probe_value(&mut e, Field::Stress, 0, ["0 m", "1 m", "0 m"]);
+    let quarter = kirsch_quarter(n);
+    assert!(rel(full, quarter) < 1e-10, "full {full} MPa vs quarter {quarter} MPa");
+    // the full plate really is four times the model, and its two end tractions cancel: it is
+    // held only against rigid motion, so the reactions are zero rather than balancing a total
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).expect("meshed") else { panic!("a MeshSummary") };
+    assert_eq!(m.elements, 8 * (n * n) as u32);
+    let r = result(&mut e);
+    // 2e9 N flows through each end, so a residual of 1e-3 N is 5e-13 of the load that is there
+    assert!(r.applied_total.iter().all(|v| v.value.abs() < 1e-3), "{:?}", r.applied_total);
+    assert!(r.reactions.iter().flat_map(|x| &x.total).all(|v| v.value.abs() < 1e-3), "{:?}", r.reactions);
+}
+
+// ---------------------------------------------------------------- C5 LE1 and D1 LE10
+
+/// LE1's elliptic-annulus block at `n × n` divisions.
+fn le1_block(n: usize) -> String {
+    format!(
+        r#"{{"corners":[["2 m","0 m"],["3.25 m","0 m"],["0 m","2.75 m"],["0 m","1 m"]],
+           "edges":[{{"kind":"line"}},{{"kind":"ellipse","center":["0 m","0 m"],"semiAxes":["3.25 m","2.75 m"]}},
+                    {{"kind":"line"}},{{"kind":"ellipse","center":["0 m","0 m"],"semiAxes":["2 m","1 m"]}}],
+           "n":[{n},{n}],"tags":["y0","outer","x0","inner"]}}"#
+    )
+}
+
+/// NAFEMS LE1 at one mesh and one element order: `sigma_yy(D)` in MPa at D = (2, 0).
+fn le1(order: u8, n: usize) -> f64 {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"le1"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"MPa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"0.1 m"}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"mesh.set","mesher":{{"kind":"mapped","body":"plate","blocks":[{}]}},"order":{order}}}"#,
+            le1_block(n)
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["plate"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"symx","on":"plate.x0","normal":"x"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"symy","on":"plate.y0","normal":"y"}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"outward","on":"plate.outer","value":"-10 MPa"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["symx","symy"],"loads":["outward"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    probe_value(&mut e, Field::Stress, 1, ["2 m", "0 m", "0 m"])
+}
+
+/// C5: the elliptic membrane's 92.7 MPa, by the point-value rule — the two finest meshes inside
+/// the tolerance and the error never growing — at both element orders.
+#[test]
+fn the_nafems_le1_membrane_reaches_its_target_stress() {
+    for (order, tol) in [(2u8, 0.02), (1, 0.05)] {
+        let s: Vec<f64> = [6usize, 12, 24].iter().map(|&n| le1(order, n)).collect();
+        let err: Vec<f64> = s.iter().map(|&v| rel(v, 92.7)).collect();
+        assert!(err.windows(2).all(|w| w[1] <= w[0]), "error must not grow at order {order}: {s:?}");
+        assert!(err[1] < tol && err[2] < tol, "order {order}: {s:?} against 92.7 MPa");
+    }
+}
+
+/// NAFEMS LE10 at one in-plane mesh: `sigma_yy(D)` in MPa on the loaded surface above D.
+fn le10_stress(n: usize) -> f64 {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"le10"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"MPa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"mesh.set","mesher":{{"kind":"sweep","base":{{"kind":"mapped","body":"plate","blocks":[{}]}},
+               "sweep":{{"kind":"extrude","layers":4,"height":"0.6 m"}}}},"order":2}}"#,
+            le1_block(n)
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["plate"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"symx","on":"plate.x0","normal":"x"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"symy","on":"plate.y0","normal":"y"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"rim","on":"plate.outer"}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"top","on":"plate.top","value":"1 MPa"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["symx","symy","rim"],"loads":["top"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    probe_value(&mut e, Field::Stress, 1, ["2 m", "0 m", "0.6 m"])
+}
+
+/// D1: the thick plate's −5.38 MPa, hex20, by the same point-value rule over two meshes.
+#[test]
+fn the_nafems_le10_thick_plate_reaches_its_target_stress() {
+    let coarse = rel(le10_stress(6), -5.38);
+    let fine = rel(le10_stress(12), -5.38);
+    assert!(fine < 0.02, "hex20 at n = 12 is {:.2} % from -5.38 MPa", fine * 100.0);
+    assert!(fine < coarse, "the error must fall with the mesh: {coarse} then {fine}");
+}
+
+// ---------------------------------------------------------------- C2 and C3 Lamé
+
+/// The Lamé quarter annulus, meshed and solved; `blocks` chooses the polar block, `extra` the
+/// mesher's element order and formulation.
+fn lame_quarter(nu: f64, nr: usize, nt: usize, extra: &str) -> f64 {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"lame"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"MPa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    ok(&mut e, &format!(r#"{{"cmd":"material.add","name":"steel","E":"200 GPa","nu":{nu}}}"#));
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"mesh.set","mesher":{{"kind":"mapped","body":"tube","blocks":[{{
+               "corners":[["0.1 m","0 m"],["0.2 m","0 m"],["0 m","0.2 m"],["0 m","0.1 m"]],
+               "edges":[{{"kind":"line"}},{{"kind":"arc","center":["0 m","0 m"],"ccw":true}},
+                        {{"kind":"line"}},{{"kind":"arc","center":["0 m","0 m"],"ccw":false}}],
+               "n":[{nr},{nt}],"tags":["ymin","outer","xmin","inner"]}}]}},{extra}}}"#
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["tube"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"symy","on":"tube.ymin","normal":"y"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"symx","on":"tube.xmin","normal":"x"}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"inside","on":"tube.inner","value":"60 MPa"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["symx","symy"],"loads":["inside"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    probe_value(&mut e, Field::Displacement, 0, ["0.1 m", "0 m", "0 m"])
+}
+
+/// C2's closed form for `u_r(a)` with `eps_z = 0`: A = 20 MPa, B = 8e5 Pa·m², a = 0.1 m.
+fn lame_ur(nu: f64) -> f64 {
+    (1.0 + nu) / 200e9 * (20e6 * (1.0 - 2.0 * nu) * 0.1 + 8e5 / 0.1)
+}
+
+/// C3: at nu = 0.4999 the fully integrated quadrilateral locks solid, and both cures — the
+/// Wilson–Taylor incompatible modes and the quadratic element — stay inside 2 %. That is why
+/// no B-bar formulation was written: nothing in C3 needs one.
+#[test]
+fn volumetric_locking_is_cured_by_incompatible_modes_and_by_quadratic_elements() {
+    for nu in [0.49, 0.499, 0.4999] {
+        let exact = lame_ur(nu);
+        let full = lame_quarter(nu, 8, 16, r#""order":1,"formulation":"full""#);
+        let im = lame_quarter(nu, 8, 16, r#""order":1,"formulation":"incompatible-modes""#);
+        let quad8 = lame_quarter(nu, 8, 16, r#""order":2"#);
+        assert!(rel(im, exact) < 0.02, "quad4 incompatible modes at nu = {nu}: {im} vs {exact}");
+        assert!(rel(quad8, exact) < 0.02, "quad8 at nu = {nu}: {quad8} vs {exact}");
+        assert!(rel(full, exact) > 2.0 * rel(im, exact), "full integration must lock at nu = {nu}: {full}");
+    }
+}
+
+/// C2's third row: revolving the axisymmetric strip through 90° with the same radial and
+/// circumferential divisions the plane-strain block has, and holding both ends, gives the
+/// plane-strain answer digit for digit — 3D and 2D agree far inside the plan's 0.5 %.
+#[test]
+fn the_revolved_lame_ring_reproduces_the_plane_strain_answer() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"lame-3d"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"MPa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"sweep","base":{"kind":"mapped","body":"tube","blocks":[
+           {"corners":[["0.1 m","0 m"],["0.2 m","0 m"],["0.2 m","0.1 m"],["0.1 m","0.1 m"]],
+            "n":[8,2],"tags":["zmin","outer","zmax","inner"]}]},
+           "sweep":{"kind":"revolve","segments":16,"angleDeg":90}},"order":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["tube"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"theta0","on":"tube.theta0","normal":"y"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"theta1","on":"tube.theta1","normal":"x"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"zmin","on":"tube.zmin","dofs":["uz"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"zmax","on":"tube.zmax","dofs":["uz"]}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"inside","on":"tube.inner","value":"60 MPa"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static",
+           "constraints":["theta0","theta1","zmin","zmax"],"loads":["inside"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let ur_3d = probe_value(&mut e, Field::Displacement, 0, ["0.1 m", "0 m", "0.05 m"]);
+    let sig_3d = probe_value(&mut e, Field::Stress, 1, ["0.1 m", "0 m", "0.05 m"]);
+    let ur_2d = lame_quarter(0.3, 8, 16, r#""order":2"#);
+    assert!(rel(ur_3d, ur_2d) < 1e-10, "u_r(a): 3D {ur_3d} vs plane strain {ur_2d}");
+    assert!(rel(ur_3d, lame_ur(0.3)) < 0.01, "u_r(a) = {ur_3d} m against the closed form");
+    assert!(rel(sig_3d, 100.0) < 0.02, "sigma_theta(a) = {sig_3d} MPa against 100 MPa");
+}
+
+// ---------------------------------------------------------------- B2 MacNeal–Harder
+
+/// One of MacNeal–Harder's three six-element meshes of the straight cantilever, as the mapped
+/// mesher's block list: `kind` is 0 for rectangles, 1 for the alternating trapezoids and 2 for
+/// the 45° parallelograms.
+fn macneal_blocks(kind: usize) -> String {
+    let end = |i: usize| i == 0 || i == 6;
+    let sign = |i: usize| if i % 2 == 1 { -0.1 } else { 0.1 };
+    let bottom = |i: usize| if kind == 1 && !end(i) { i as f64 + sign(i) } else { i as f64 };
+    let top = |i: usize| match kind {
+        2 => i as f64 + 0.2,
+        1 if !end(i) => i as f64 - sign(i),
+        _ => i as f64,
+    };
+    let one = |i: usize| {
+        let tag = |t: &str| if t.is_empty() { "null".to_string() } else { format!("\"{t}\"") };
+        format!(
+            r#"{{"corners":[["{} m","0 m"],["{} m","0 m"],["{} m","0.2 m"],["{} m","0.2 m"]],
+               "n":[1,1],"tags":[null,{},null,{}]}}"#,
+            bottom(i),
+            bottom(i + 1),
+            top(i + 1),
+            top(i),
+            tag(if i == 5 { "tip" } else { "" }),
+            tag(if i == 0 { "root" } else { "" })
+        )
+    };
+    (0..6).map(one).collect::<Vec<_>>().join(",")
+}
+
+/// The MacNeal–Harder beam at one mesh and order: the tip deflection at the neutral axis.
+fn macneal(kind: usize, order: u8) -> f64 {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"macneal-harder"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"Pa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"0.1 m"}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"generic","E":"1e7 Pa","nu":0.3}"#);
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"mesh.set","mesher":{{"kind":"mapped","body":"beam","blocks":[{}]}},"order":{order}}}"#,
+            macneal_blocks(kind)
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"generic","bodies":["beam"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.root"}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"beam.tip","total":["0 N","1 N","0 N"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":["tip"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let x = if kind == 2 { "6.1 m" } else { "6 m" };
+    probe_value(&mut e, Field::Displacement, 1, [x, "0.1 m", "0 m"])
+}
+
+/// B2: 0.1081 in on the regular mesh at both orders, and the distortion sensitivity the
+/// benchmark exists to expose everywhere else. The trapezoid is what breaks the incompatible
+/// modes (5 % of the answer), and the parallelogram is what breaks the quadratic element — the
+/// two failures are of different mechanisms, which is why both meshes are in the set.
+#[test]
+fn the_macneal_harder_beam_shows_its_distortion_sensitivity() {
+    const REFERENCE: f64 = 0.1081;
+    let quad4: Vec<f64> = (0..3).map(|k| macneal(k, 1)).collect();
+    let quad8: Vec<f64> = (0..3).map(|k| macneal(k, 2)).collect();
+    assert!(rel(quad4[0], REFERENCE) < 0.02, "quad4 regular: {}", quad4[0]);
+    assert!(rel(quad8[0], REFERENCE) < 0.02, "quad8 regular: {}", quad8[0]);
+    // incompatible modes survive a parallelogram (its Jacobian is constant) and not a trapezoid
+    assert!(rel(quad4[2], REFERENCE) < 0.02, "quad4 parallelogram: {}", quad4[2]);
+    assert!(quad4[1] < 0.1 * REFERENCE, "quad4 trapezoid must collapse: {}", quad4[1]);
+    // the quadratic element is the other way round: the trapezoid costs it 10 %, the 45° skew 19 %
+    assert!(rel(quad8[1], REFERENCE) > 0.05 && rel(quad8[1], REFERENCE) < 0.15, "quad8 trapezoid: {}", quad8[1]);
+    assert!(rel(quad8[2], REFERENCE) > 0.15, "quad8 parallelogram: {}", quad8[2]);
+    // and every one of them is a real number, not a NaN from a folded element
+    assert!(quad4.iter().chain(&quad8).all(|v| v.is_finite() && *v > 0.0), "{quad4:?} {quad8:?}");
+}
+
+// ---------------------------------------------------------------- study.converge
+
+fn study(e: &mut Engine, json: &str) -> femlab_engine::query::StudyReport {
+    let Output::Study { report } = ok(e, json).output else { panic!("a StudyReport") };
+    report
+}
+
+/// The tip-deflection quantity of the cantilever fixture.
+const TIP_UZ: &str = r#"{"kind":"probe","field":"displacement","component":2,"at":["1 m","50 mm","50 mm"]}"#;
+
+/// `study.converge` re-meshes, re-solves and reports the trend. The lattice mesher takes an
+/// element size, so each size is set on it directly, and the mesh settings the study borrowed
+/// come back afterwards.
+///
+/// The rate is about 1, not the 2 plan A hoped for: a fully clamped three-dimensional root is a
+/// re-entrant corner, and a point quantity measured over a singular corner converges at first
+/// order however good the element is. (The same study over 100, 50 and 25 mm is not even in the
+/// asymptotic range yet — its differences grow, so `richardson` reports a negative rate.) What
+/// the extrapolation does reach is the beam formula, inside 1 %.
+#[test]
+fn a_convergence_study_reports_a_rate_and_restores_the_mesh() {
+    let mut e = engine();
+    cantilever(&mut e);
+    let r = study(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"study.converge","step":"static","sizes":["50 mm","25 mm","12.5 mm"],"quantity":{TIP_UZ}}}"#
+        ),
+    );
+    assert_eq!(r.rows.len(), 3);
+    assert_eq!(r.unit, "mm");
+    assert_eq!(r.rows[0].size.unit, "mm");
+    assert!((r.rows[0].size.value - 50.0).abs() < 1e-9, "{:?}", r.rows[0].size);
+    assert!(r.rows.windows(2).all(|w| w[0].dofs < w[1].dofs), "the mesh must grow: {:?}", r.rows);
+    assert_eq!(r.rows[1].dofs, 3075, "the middle row is the 25 mm lattice");
+    assert!(r.rows.iter().all(|row| row.value < 0.0 && row.time_ms >= 0.0), "{:?}", r.rows);
+    let rate = r.observed_rate.expect("three sizes give a rate");
+    assert!((0.8..1.5).contains(&rate), "a point quantity over a clamped corner converges at about 1: {rate}");
+    let limit = r.extrapolated.expect("three sizes give a limit");
+    assert!(rel(limit, -B1_THEORY_MM) < 0.01, "extrapolated {limit} mm against Timoshenko's {B1_THEORY_MM}");
+    // the Model's own mesh settings are back, and no Result was left behind
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).expect("meshed") else { panic!("a MeshSummary") };
+    assert_eq!(m.nodes, 1025);
+    assert_eq!(e.query(Query::Result { step: None }).expect_err("no Result").code, ErrorCode::NotFound);
+}
+
+/// A mapped block counts divisions rather than measuring elements, so the study scales its `n`
+/// by `sizes[0] / size`: Cook's membrane at n = 4 asked for 1, 1/2 and 1/4 m gives 4, 8 and 16.
+/// With `restore: false` the finest mesh and its Result stay.
+#[test]
+fn a_convergence_study_scales_a_mapped_mesh_and_can_keep_the_finest() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"cook"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"Pa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"soft","E":"1 Pa","nu":0.3333333333333333}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"mapped","body":"membrane","blocks":[
+           {"corners":[["0 m","0 m"],["48 m","44 m"],["48 m","60 m"],["0 m","44 m"]],
+            "n":[4,4],"tags":["bottom","right","top","left"]}]},"order":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"soft","bodies":["membrane"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"clamp","on":"membrane.left"}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"shear","on":"membrane.right","total":["0 N","1 N","0 N"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["clamp"],"loads":["shear"]}"#);
+    let r = study(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"static","sizes":["1 m","0.5 m","0.25 m"],
+           "quantity":{"kind":"probe","field":"displacement","component":1,"at":["48 m","52 m","0 m"]},
+           "restore":false}"#,
+    );
+    assert_eq!(r.rows.len(), 3);
+    assert_eq!(r.unit, "m");
+    assert!(rel(r.extrapolated.expect("a limit"), 23.9) < 0.02, "Cook's membrane: {:?}", r.extrapolated);
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).expect("meshed") else { panic!("a MeshSummary") };
+    assert_eq!(m.elements, 16 * 16, "restore: false leaves the finest mesh in place");
+    assert!(!result(&mut e).stale, "and its Result with it");
+}
+
+/// The extremes a study can follow instead of a point, and what two sizes alone can say: a
+/// slope needs an error to measure and Richardson needs three meshes, so both come back empty.
+#[test]
+fn a_convergence_study_can_follow_an_extreme_and_says_when_it_cannot_extrapolate() {
+    let mut e = engine();
+    cantilever(&mut e);
+    let sizes = r#""sizes":["100 mm","50 mm"]"#;
+    let max = study(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"study.converge","step":"static",{sizes},"quantity":{{"kind":"max","field":"vonMises"}}}}"#
+        ),
+    );
+    assert_eq!(max.rows.len(), 2);
+    assert_eq!(max.unit, "MPa");
+    assert!(max.rows.iter().all(|r| r.value > 0.0), "{:?}", max.rows);
+    assert_eq!((max.observed_rate, max.extrapolated), (None, None), "two meshes cannot extrapolate");
+    let min = study(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"study.converge","step":"static",{sizes},
+               "quantity":{{"kind":"min","field":"displacement","component":2}}}}"#
+        ),
+    );
+    assert!(min.rows.iter().all(|r| r.value < 0.0), "the tip goes down: {:?}", min.rows);
+}
+
+/// Every way a study can be asked for something it cannot do, each naming its own field.
+#[test]
+fn a_convergence_study_refuses_what_it_cannot_run() {
+    let mut e = engine();
+    cantilever(&mut e);
+    let study_json = |step: &str, sizes: &str, quantity: &str| {
+        format!(r#"{{"cmd":"study.converge","step":"{step}","sizes":{sizes},"quantity":{quantity}}}"#)
+    };
+    let two = r#"["100 mm","50 mm"]"#;
+    assert_eq!(code(&mut e, &study_json("nope", two, TIP_UZ)), ErrorCode::NotFound);
+    let one = err(&mut e, &study_json("static", r#"["50 mm"]"#, TIP_UZ));
+    assert_eq!((one.code, one.where_.as_deref()), (ErrorCode::Schema, Some("sizes")));
+    assert_eq!(where_(&mut e, &study_json("static", r#"["100 mm","1 kg"]"#, TIP_UZ)), "sizes[1]");
+    assert_eq!(code(&mut e, &study_json("static", r#"["100 mm","1 kg"]"#, TIP_UZ)), ErrorCode::UnitDimension);
+    let neg = err(&mut e, &study_json("static", r#"["100 mm","-50 mm"]"#, TIP_UZ));
+    assert_eq!((neg.code, neg.where_.as_deref()), (ErrorCode::Schema, Some("sizes[1]")));
+    // a field the static procedure never produces, and one that is not nodal
+    let absent = err(&mut e, &study_json("static", two, r#"{"kind":"max","field":"temperature"}"#));
+    assert_eq!((absent.code, absent.where_.as_deref()), (ErrorCode::NotFound, Some("quantity.field")));
+    let raw = err(&mut e, &study_json("static", two, r#"{"kind":"max","field":"stressUnaveraged"}"#));
+    assert_eq!((raw.code, raw.where_.as_deref()), (ErrorCode::Unsupported, Some("quantity.field")));
+    // a probe point outside the mesh, and one in the wrong dimension
+    let outside = r#"{"kind":"probe","field":"displacement","component":2,"at":["9 m","0 m","0 m"]}"#;
+    let out = err(&mut e, &study_json("static", two, outside));
+    assert_eq!((out.code, out.where_.as_deref()), (ErrorCode::NotFound, Some("quantity.at")));
+    let mass = r#"{"kind":"probe","field":"displacement","component":2,"at":["1 kg","0 m","0 m"]}"#;
+    let bad = err(&mut e, &study_json("static", two, mass));
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::UnitDimension, Some("quantity.at")));
+    // a host that says stop, at the first size
+    let mut stop = |_: Progress| false;
+    let cmd: Command = serde_json::from_str(&study_json("static", two, TIP_UZ)).expect("valid JSON");
+    let cancelled = pollster::block_on(e.dispatch(cmd, &mut stop)).expect_err("cancelled");
+    assert_eq!(cancelled.code, ErrorCode::Cancelled);
+    // the failures were transactional: the mesh settings never moved
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).expect("meshed") else { panic!("a MeshSummary") };
+    assert_eq!(m.nodes, 1025);
+    // and a Model with no mesh settings at all cannot be studied
+    let mut f = engine();
+    ok(&mut f, r#"{"cmd":"model.new","name":"bare"}"#);
+    ok(&mut f, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut f, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(&mut f, r#"{"cmd":"material.assign","material":"steel","bodies":["b"]}"#);
+    ok(&mut f, r#"{"cmd":"constraint.fix","name":"root","on":"b.xmin"}"#);
+    ok(&mut f, r#"{"cmd":"load.pressure","name":"p","on":"b.xmax","value":"1 MPa"}"#);
+    ok(&mut f, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["p"]}"#);
+    assert_eq!(code(&mut f, &study_json("s", two, r#"{"kind":"max","field":"vonMises"}"#)), ErrorCode::ModelIllPosed);
+
+    // The three ways a size can fail after the study has already started: a Set the coarser
+    // mesh cannot hold, a Load whose face the Mesh never makes, and a Step that is not held.
+    let mut g = engine();
+    ok(&mut g, r#"{"cmd":"model.new","name":"vanishing"}"#);
+    ok(&mut g, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut g, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(&mut g, r#"{"cmd":"material.assign","material":"steel","bodies":["b"]}"#);
+    ok(&mut g, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"250 mm"},"order":1}"#);
+    ok(&mut g, r#"{"cmd":"constraint.fix","name":"root","on":"b.xmin"}"#);
+    ok(&mut g, r#"{"cmd":"load.pressure","name":"p","on":"b.xmax","value":"1 MPa"}"#);
+    ok(&mut g, r#"{"cmd":"load.traction","name":"nowhere","on":"b.side","total":["1 N","0 N","0 N"]}"#);
+    ok(&mut g, r#"{"cmd":"step.add","name":"held","procedure":"static","constraints":["root"],"loads":["p"]}"#);
+    ok(&mut g, r#"{"cmd":"step.add","name":"lost","procedure":"static","constraints":["root"],"loads":["nowhere"]}"#);
+    ok(&mut g, r#"{"cmd":"step.add","name":"loose","procedure":"static","constraints":[],"loads":["p"]}"#);
+    let vm = r#"{"kind":"max","field":"vonMises"}"#;
+    let coarse = r#"["500 mm","250 mm"]"#;
+    assert_eq!(code(&mut g, &study_json("lost", coarse, vm)), ErrorCode::SetEmpty, "the Load has no face");
+    assert_eq!(code(&mut g, &study_json("loose", coarse, vm)), ErrorCode::ConstraintRigidModes);
+    // a named Set that the coarsest mesh in the sequence cannot hold: one element has no
+    // node and no element centroid anywhere near the corner this box asks for
+    ok(
+        &mut g,
+        r#"{"cmd":"geometry.nameRegion","name":"corner","where":{"kind":"bbox",
+           "min":["0.1 m","0.1 m","0.1 m"],"max":["0.2 m","0.2 m","0.2 m"]}}"#,
+    );
+    assert_eq!(code(&mut g, &study_json("held", r#"["250 mm","1 m"]"#, vm)), ErrorCode::SetEmpty, "the Set empties");
+}
+
+/// The other three meshers scale too: a lattice given counts, a free mesh given a size, and a
+/// sweep, which scales its base and its own layers or segments with it.
+#[test]
+fn a_convergence_study_scales_every_mesher() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":4,"ny":1,"nz":1}},"order":1}"#);
+    let counts = study(
+        &mut e,
+        &format!(r#"{{"cmd":"study.converge","step":"static","sizes":["1 m","0.5 m"],"quantity":{TIP_UZ}}}"#),
+    );
+    assert_eq!(counts.rows[0].dofs, 3 * 5 * 2 * 2, "4 x 1 x 1 hexahedra");
+    assert_eq!(counts.rows[1].dofs, 3 * 9 * 3 * 3, "and 8 x 2 x 2 at half the size");
+
+    // a free 2D mesh: the size goes straight to the mesher
+    let mut f = engine();
+    ok(&mut f, r#"{"cmd":"model.new","name":"sheet"}"#);
+    ok(&mut f, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(
+        &mut f,
+        r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+           {"kind":"line","to":["4 m","0 m"],"tag":"bottom"},{"kind":"line","to":["4 m","1 m"],"tag":"right"},
+           {"kind":"line","to":["0 m","1 m"],"tag":"top"},{"kind":"line","to":["0 m","0 m"],"tag":"left"}]}}}"#,
+    );
+    ok(&mut f, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(&mut f, r#"{"cmd":"material.assign","material":"steel","bodies":["plate"]}"#);
+    ok(&mut f, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"1 m"},"order":1}"#);
+    ok(&mut f, r#"{"cmd":"constraint.fix","name":"root","on":"plate.left"}"#);
+    ok(&mut f, r#"{"cmd":"load.traction","name":"tip","on":"plate.right","total":["0 N","-1 kN","0 N"]}"#);
+    ok(&mut f, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["tip"]}"#);
+    let free = study(
+        &mut f,
+        r#"{"cmd":"study.converge","step":"s","sizes":["1 m","0.5 m"],
+           "quantity":{"kind":"min","field":"displacement","component":1}}"#,
+    );
+    assert!(free.rows[0].dofs < free.rows[1].dofs, "a smaller size is a bigger mesh: {:?}", free.rows);
+
+    // a sweep: the base's divisions and the extrusion's layers both scale
+    let mut g = engine();
+    ok(&mut g, r#"{"cmd":"model.new","name":"bar"}"#);
+    ok(&mut g, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(
+        &mut g,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"sweep","base":{"kind":"mapped","body":"bar","blocks":[
+           {"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]],
+            "n":[2,2],"tags":["ymin","xmax","ymax","xmin"]}]},
+           "sweep":{"kind":"extrude","layers":2,"height":"2 m"}},"order":1}"#,
+    );
+    ok(&mut g, r#"{"cmd":"material.assign","material":"steel","bodies":["bar"]}"#);
+    ok(&mut g, r#"{"cmd":"constraint.fix","name":"root","on":"bar.bottom"}"#);
+    ok(&mut g, r#"{"cmd":"load.pressure","name":"p","on":"bar.top","value":"1 MPa"}"#);
+    ok(&mut g, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root"],"loads":["p"]}"#);
+    let swept = study(
+        &mut g,
+        r#"{"cmd":"study.converge","step":"s","sizes":["1 m","0.5 m"],
+           "quantity":{"kind":"min","field":"displacement","component":2}}"#,
+    );
+    assert_eq!(swept.rows[0].dofs, 3 * 3 * 3 * 3, "2 x 2 x 2 hexahedra");
+    assert_eq!(swept.rows[1].dofs, 3 * 5 * 5 * 5, "and 4 x 4 x 4 at half the size");
+
+    // and a revolution, whose segments scale the same way
+    ok(
+        &mut g,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"sweep","base":{"kind":"mapped","body":"bar","blocks":[
+           {"corners":[["1 m","0 m"],["2 m","0 m"],["2 m","1 m"],["1 m","1 m"]],
+            "n":[2,2],"tags":["zmin","outer","zmax","inner"]}]},
+           "sweep":{"kind":"revolve","segments":2,"angleDeg":90}},"order":1}"#,
+    );
+    ok(&mut g, r#"{"cmd":"constraint.fix","name":"hold","on":"bar.zmin"}"#);
+    ok(&mut g, r#"{"cmd":"load.pressure","name":"push","on":"bar.inner","value":"1 MPa"}"#);
+    ok(&mut g, r#"{"cmd":"step.add","name":"r","procedure":"static","constraints":["hold"],"loads":["push"]}"#);
+    let turned = study(
+        &mut g,
+        r#"{"cmd":"study.converge","step":"r","sizes":["1 m","0.5 m"],
+           "quantity":{"kind":"max","field":"vonMises"}}"#,
+    );
+    assert_eq!(turned.rows[0].dofs, 3 * 3 * 3 * 3, "2 x 2 elements through 2 segments");
+    assert_eq!(turned.rows[1].dofs, 3 * 5 * 5 * 5, "and 4 x 4 through 4 segments");
+}
+
+/// The mapped mesher's implicit Body is a Body: it takes a material like any other, appears in
+/// `query.model` with the extent and area of the Mesh it makes, warns while it has none, and
+/// holds that material against `material.remove`. Without this every 2D Benchmark would be
+/// unsolvable, because the blocks that *are* the geometry have no `geometry.add` to hang a
+/// material on.
+#[test]
+fn the_mapped_meshers_implicit_body_owns_a_material() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"cook"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"soft","E":"1 Pa","nu":0.3}"#);
+    ok(&mut e, COOK);
+    let QueryResult::Model(m) = e.query(Query::Model {}).expect("a model") else { panic!("a ModelSummary") };
+    assert_eq!(m.bodies.len(), 1);
+    assert_eq!(m.bodies[0].name, "sheet");
+    assert_eq!(m.bodies[0].material, None);
+    assert_eq!(m.bodies[0].mass, None, "a sheet has an area, not a mass");
+    assert_eq!(m.bodies[0].faces, ["sheet.bottom", "sheet.left", "sheet.right", "sheet.top"]);
+    assert_eq!(m.bodies[0].measure.unit, "m^2");
+    assert!((m.bodies[0].measure.value - 1440.0).abs() < 1e-9, "{:?}", m.bodies[0].measure);
+    assert!((m.bodies[0].bbox[3].value - 48.0).abs() < 1e-9, "{:?}", m.bodies[0].bbox);
+    // a Model whose only geometry is the mesher's is not empty, and that geometry wants a material
+    assert!(m.warnings.iter().any(|w| w.code == "model.no-material"), "{:?}", m.warnings);
+    assert!(!m.warnings.iter().any(|w| w.code == "model.empty"), "{:?}", m.warnings);
+    // an unknown Body still says so, and lists the implicit one among the ones it knows
+    let miss = err(&mut e, r#"{"cmd":"material.assign","material":"soft","bodies":["nope"]}"#);
+    assert_eq!(miss.code, ErrorCode::NotFound);
+    assert!(miss.suggestion.as_deref().is_some_and(|s| s.contains("sheet")), "{miss:?}");
+    ok(&mut e, r#"{"cmd":"material.assign","material":"soft","bodies":["sheet"]}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).expect("a model") else { panic!("a ModelSummary") };
+    assert_eq!(m.bodies[0].material.as_deref(), Some("soft"));
+    assert_eq!(m.materials[0].assigned_to, ["sheet"]);
+    assert!(!m.warnings.iter().any(|w| w.code == "model.no-material"), "{:?}", m.warnings);
+    // and the material cannot be removed while that Body holds it
+    let used = err(&mut e, r#"{"cmd":"material.remove","name":"soft"}"#);
+    assert_eq!(used.code, ErrorCode::InUse);
+    assert!(used.cause.contains("sheet"), "{}", used.cause);
+    // a mesher whose Mesh will not build has no extent to report, so it has no row either
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"solid3d"}}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).expect("a model") else { panic!("a ModelSummary") };
+    assert!(m.bodies.is_empty(), "{:?}", m.bodies);
 }

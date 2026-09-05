@@ -11,7 +11,7 @@ use crate::query::*;
 use crate::units::{self, Acceleration, Density, Dim, Dimension, Force, Length, Mass, Stress, Temperature, Q};
 
 /// Three lengths in SI, with the field path an error names.
-fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
+pub(crate) fn si3(q: &[Q<Length>; 3]) -> Result<[f64; 3], Error> {
     let mut out = [0.0; 3];
     for (k, v) in q.iter().enumerate() {
         out[k] = v.si().map_err(|e| e.at(format!("[{k}]")))?;
@@ -77,9 +77,34 @@ impl Engine {
         }
     }
 
+    /// The mesher's implicit Body as a row of [`query_model`](Engine::query_model).
+    ///
+    /// It has no Solid — the mapped mesher's blocks *are* its geometry — so its extent, its
+    /// area and its faces come from the Mesh, and it has no row at all until that Mesh builds.
+    fn implicit_body_row(&mut self) -> Option<BodyRow> {
+        let name = self.model.implicit_body()?.to_string();
+        self.mesh().ok()?;
+        let built = self.mesh.as_ref().expect("built above");
+        let (lo, hi) = built.mesh.bbox();
+        let dim = built.mesh.dim as i8;
+        let measure: f64 = (0..built.mesh.n_elems() as u32).map(|e| elem_measure(&built.mesh, e)).sum();
+        let prefix = format!("{name}.");
+        let faces = built.sets.keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+        let m = &self.model;
+        Some(BodyRow {
+            name,
+            material: m.mesher_material.clone(),
+            bbox: bbox6(m, lo, hi),
+            measure: display(m, measure, Dimension([dim, 0, 0, 0])),
+            mass: None,
+            faces,
+        })
+    }
+
     fn query_model(&mut self) -> Result<ModelSummary, Error> {
         let names: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
-        let mut bodies = Vec::with_capacity(names.len());
+        let implicit = self.implicit_body_row();
+        let mut bodies = Vec::with_capacity(names.len() + usize::from(implicit.is_some()));
         for n in &names {
             let solid = self.solid(n)?.clone();
             let m = &self.model;
@@ -106,6 +131,7 @@ impl Engine {
                 faces: solid.tags(),
             });
         }
+        bodies.extend(implicit);
         let m = &self.model;
         let materials = m
             .materials
@@ -120,6 +146,11 @@ impl Engine {
                     .iter()
                     .filter(|b| b.material.as_deref() == Some(&mat.name))
                     .map(|b| b.name.clone())
+                    .chain(
+                        m.implicit_body()
+                            .filter(|_| m.mesher_material.as_deref() == Some(&mat.name))
+                            .map(str::to_string),
+                    )
                     .collect(),
             })
             .collect();
@@ -330,7 +361,7 @@ impl Engine {
     }
 
     /// One component of a sampled value: the named one, or the magnitude of a vector.
-    fn pick(v: &[f64], component: Option<u8>) -> f64 {
+    pub(crate) fn pick(v: &[f64], component: Option<u8>) -> f64 {
         match component {
             Some(c) => v[(c as usize).min(v.len() - 1)],
             None => v.iter().map(|x| x * x).sum::<f64>().sqrt(),
