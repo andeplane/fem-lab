@@ -1,0 +1,77 @@
+{
+  "id": "cantilever",
+  "title": "Cantilever beam",
+  "minutes": 6,
+  "summary": "Build the classic fixed-free beam from nothing: one body, one material, one load, and the theory to check it against.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "Everything in FEM Lab is a Command, and every Command is appended to the Journal — that list is the Model. `model.new` starts an empty one, named whatever you like.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "cantilever" }
+    },
+    {
+      "title": "Choose display units",
+      "explain": "`model.setUnits` only changes how numbers are shown — millimetres and kilonewtons read naturally for a small steel part. The engine always works in SI underneath.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "force": "kN", "stress": "MPa" } }
+    },
+    {
+      "title": "Add the beam",
+      "explain": "`geometry.addBox` makes a Body from a size and an optional corner. A 1 m beam with a 100×100 mm square section is the shape every beam-theory textbook starts with. Its six faces are auto-named `beam.xmin` … `beam.zmax`.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "beam" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "100 mm", "100 mm"] }
+    },
+    {
+      "title": "Define the material",
+      "explain": "`material.add` needs Young's modulus `E` and Poisson's ratio `nu`; `rho` (density) is only needed for gravity or modal analysis, but it costs nothing to record it now. `source` is where the numbers came from — useful in a report six months from now.",
+      "expect": { "cmd": "material.add", "match": { "name": "steel" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" }
+    },
+    {
+      "title": "Assign it to the beam",
+      "explain": "A Material exists independently of any Body until `material.assign` links them — the same Material can cover several Bodies at once.",
+      "expect": { "cmd": "material.assign", "match": { "material": "steel" } },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] }
+    },
+    {
+      "title": "Mesh it",
+      "explain": "`mesh.set` chooses the Mesher and the element order. The lattice Mesher covers every Body with a structured grid — exact for a box like this one. `order: 1` gives linear (hex8) elements; a 25 mm size puts four elements across the 100 mm section.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "25 mm" }, "order": 1 }
+    },
+    {
+      "title": "Fix the root",
+      "explain": "`constraint.fix` fixes displacement to zero on a Set — here, every node on the `beam.xmin` face, the definition of \"cantilever\" (clamped at one end, free at the other).",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "root" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" }
+    },
+    {
+      "title": "Load the tip",
+      "explain": "`load.traction` spreads a total force over a face's area. A downward 1 kN at the free end (`beam.xmax`) is the loading beam theory calls `P` at the tip.",
+      "expect": { "cmd": "load.traction", "match": { "name": "tip" } },
+      "highlight": "load.traction",
+      "doIt": { "cmd": "load.traction", "name": "tip", "on": "beam.xmax", "total": ["0 N", "0 N", "-1 kN"] }
+    },
+    {
+      "title": "Add a Step",
+      "explain": "A Step says which Constraints and Loads are active together and under which procedure — `static` is the only one so far. Nothing solves until you press Solve, but the Model is now complete and well posed.",
+      "expect": { "cmd": "step.add", "match": { "name": "static" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["root"], "loads": ["tip"] }
+    },
+    {
+      "title": "Check it against beam theory",
+      "explain": "Before you trust a solver, know what answer to expect. This is a textbook cantilever, so the closed form gives the tip deflection directly — compare it with the Result once you press Solve.",
+      "expect": null,
+      "theory": "Euler–Bernoulli beam theory: delta = P L^3 / (3 E I), with I = b h^3 / 12 for a rectangular section.\nL = 1 m, P = 1 kN, E = 210 GPa, b = h = 100 mm -> I = 8.333e-6 m^4\ndelta = 1000 * 1^3 / (3 * 2.1e11 * 8.333e-6) ~= 0.667 mm"
+    }
+  ]
+}

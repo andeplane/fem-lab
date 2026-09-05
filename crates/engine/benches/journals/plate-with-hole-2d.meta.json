@@ -1,0 +1,8 @@
+{
+  "title": "Plate with a hole",
+  "tag": "everyday",
+  "sentence": "A plane-stress plate with a circular hole in tension, free-meshed with local refinement around the hole.",
+  "theory": "Stress concentrates at the hole edge; for an infinite plate the theoretical concentration factor is Kt = 3 (Kirsch, 1898).",
+  "tutorial": "plate-with-hole",
+  "thumbnail": null
+}

@@ -1,0 +1,109 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "heated-fin"
+    },
+    "hashAfter": "cf2b1a3138c913f070f9fd26ad599ff88dddc9cf6a0070e68740137140c58362"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "e1407c38360b324af8ee24f465c0677e0c67bd51d27753f99a3a00fc345aec76"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addBox",
+      "name": "fin",
+      "size": [
+        "120 mm",
+        "20 mm",
+        "3 mm"
+      ]
+    },
+    "hashAfter": "c6406319e86c8fac4ecfc13a8edec71d32ca94b27cf85939c944601dd81c650e"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "aluminium",
+      "E": "70 GPa",
+      "nu": 0.33,
+      "rho": "2700 kg/m^3",
+      "alpha": "2.3e-5 1/K",
+      "k": "205 W/(m*K)",
+      "source": "EN 573-3 6061-T6"
+    },
+    "hashAfter": "bdc3e2df5c03e774c9fa86cc3ceed147ddf67f4fef3c3be15e8225fbc333d39c"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "aluminium",
+      "bodies": [
+        "fin"
+      ]
+    },
+    "hashAfter": "f6ceabd1893edb5d9ad43e83fc6bcb838fe2abb709325a438d186c45d460a23f"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "5 mm"
+      },
+      "order": 1
+    },
+    "hashAfter": "f362a579bf81e2e8a9ebda1e84ff9e27859e93fd8457d8a5cf9669083f867a79"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "fin.xmin"
+    },
+    "hashAfter": "a7786e3f21c967210ca784724cc23c6cc09ce989b04e73d4bb3184d378bf8e90"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "load.temperature",
+      "name": "heat",
+      "bodies": [
+        "fin"
+      ],
+      "value": "80 degC",
+      "reference": "20 degC"
+    },
+    "hashAfter": "f8278808701510bce550f1d1b1c54f58c635661882f63a3ee2a91ac71486cefb"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "heat"
+      ]
+    },
+    "hashAfter": "14b8f3a6464f567b260da74ebbc66b9d6bcf919e31b58620220cce59c7f57b60"
+  }
+]

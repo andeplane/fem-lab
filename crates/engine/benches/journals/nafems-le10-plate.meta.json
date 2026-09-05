@@ -1,0 +1,11 @@
+{
+  "title": "NAFEMS LE10 thick plate",
+  "tag": "NAFEMS",
+  "sentence": "LE1's elliptic membrane extruded into a 3D plate under uniform pressure \u2014 a 3D solid benchmark.",
+  "reference": {
+    "label": "\u03c3yy(D)",
+    "value": "\u22125.38 MPa"
+  },
+  "theory": "NAFEMS Standard Benchmark LE10: hex20 or tet10 elements converge to \u03c3yy(D) = \u22125.38 MPa within 2 %; hex8 shows the linear-element bending error the benchmark is known for.",
+  "thumbnail": null
+}

@@ -1,0 +1,126 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "cook-membrane"
+    },
+    "hashAfter": "07038530500dadfdb5d0d8d7991cc1ddbf3575cfb9b27ecbec3d02b4e4aebb4b"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "506c654bc101ab046619de604dc81710b17d8157f0bada21eecb34bfc493c792"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "1 mm"
+      }
+    },
+    "hashAfter": "d20b87948d12728e000f895b6414492edc272a2b47c23971d5c8b402daa54099"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "cook",
+      "E": "1 MPa",
+      "nu": 0.3333333333,
+      "source": "Cook (1974)"
+    },
+    "hashAfter": "b6b9e477074b3160d61affcbd7a3765f9f03a59e2eb1621ddda321a7d6b78516"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "panel",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0 mm",
+                "0 mm"
+              ],
+              [
+                "48 mm",
+                "44 mm"
+              ],
+              [
+                "48 mm",
+                "60 mm"
+              ],
+              [
+                "0 mm",
+                "44 mm"
+              ]
+            ],
+            "n": [
+              16,
+              16
+            ],
+            "tags": [
+              null,
+              "right",
+              null,
+              "left"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    "hashAfter": "6a2c2d3744203953e1f0b446430e991497f21a9e54a84fc8ed8eadf03268d97d"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "left",
+      "on": "panel.left"
+    },
+    "hashAfter": "25f3a64d4b54675a3dadf0e9f992409cd77b45dab1ad61de1bde99a512fe1c6d"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "load.traction",
+      "name": "shear",
+      "on": "panel.right",
+      "total": [
+        "0 N",
+        "1 N",
+        "0 N"
+      ]
+    },
+    "hashAfter": "0fa5e11b8848fbbaf84d9d7e4363518157d725b4de03ec8a9437bc467b71c272"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "left"
+      ],
+      "loads": [
+        "shear"
+      ]
+    },
+    "hashAfter": "1b9bf03546cb80900f4668c646e48a4c7136543849337d5da908837ffbd8ecec"
+  }
+]

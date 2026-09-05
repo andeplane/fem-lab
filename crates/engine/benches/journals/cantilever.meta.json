@@ -1,0 +1,12 @@
+{
+  "title": "Cantilever beam",
+  "tag": "P1 \u00b7 verify",
+  "sentence": "A steel cantilever under a tip load \u2014 the first model to build, and the standard check against beam theory.",
+  "reference": {
+    "label": "\u03b4 = PL\u00b3/3EI",
+    "value": "0.667 mm"
+  },
+  "theory": "Euler\u2013Bernoulli beam theory: tip deflection \u03b4 = PL\u00b3/(3EI) for a cantilever of length L, load P at the free end, and flexural rigidity EI.",
+  "tutorial": "cantilever",
+  "thumbnail": null
+}

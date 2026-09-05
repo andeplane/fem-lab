@@ -1,0 +1,276 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "macneal-harder-beam"
+    },
+    "hashAfter": "6aa1ecde4df0cba3170c9047ae0ff7e7011420d5dc59bea96ad9ca4c022a88ee"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "f287cc62d8f3c3d988f3e17557728df51e174942716bf4174c585dc26b696a3f"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "0.1 mm"
+      }
+    },
+    "hashAfter": "25a457870ae2a349c0cf61e35ef72bfeac945d67d8f2a2b5c2e9abb29c917677"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "mh",
+      "E": "10000 MPa",
+      "nu": 0.3,
+      "source": "MacNeal & Harder (1985)"
+    },
+    "hashAfter": "c64aa4b1cf14b84539e381323fc0f00666b504b9b395ee721fc8606190015b4f"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "beam",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0 mm",
+                "0 mm"
+              ],
+              [
+                "1 mm",
+                "0 mm"
+              ],
+              [
+                "1 mm",
+                "0.2 mm"
+              ],
+              [
+                "0 mm",
+                "0.2 mm"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              "root"
+            ]
+          },
+          {
+            "corners": [
+              [
+                "1 mm",
+                "0 mm"
+              ],
+              [
+                "2 mm",
+                "0 mm"
+              ],
+              [
+                "2 mm",
+                "0.2 mm"
+              ],
+              [
+                "1 mm",
+                "0.2 mm"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "2 mm",
+                "0 mm"
+              ],
+              [
+                "3 mm",
+                "0 mm"
+              ],
+              [
+                "3 mm",
+                "0.2 mm"
+              ],
+              [
+                "2 mm",
+                "0.2 mm"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "3 mm",
+                "0 mm"
+              ],
+              [
+                "4 mm",
+                "0 mm"
+              ],
+              [
+                "4 mm",
+                "0.2 mm"
+              ],
+              [
+                "3 mm",
+                "0.2 mm"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "4 mm",
+                "0 mm"
+              ],
+              [
+                "5 mm",
+                "0 mm"
+              ],
+              [
+                "5 mm",
+                "0.2 mm"
+              ],
+              [
+                "4 mm",
+                "0.2 mm"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "5 mm",
+                "0 mm"
+              ],
+              [
+                "6 mm",
+                "0 mm"
+              ],
+              [
+                "6 mm",
+                "0.2 mm"
+              ],
+              [
+                "5 mm",
+                "0.2 mm"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              "tip",
+              null,
+              null
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    "hashAfter": "56a30f9c5e5f593cdb175848f83a2af60adddd0b6e9e8a28bef3d5f66595dca8"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.root"
+    },
+    "hashAfter": "cfebdd1aa5b21c3c76b9824f747b1addf031d2c02a67baa9e43e6e50e3431d8e"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "load.traction",
+      "name": "tip",
+      "on": "beam.tip",
+      "total": [
+        "0 N",
+        "1 N",
+        "0 N"
+      ]
+    },
+    "hashAfter": "09021fb6d0d320d164383314376f8153bfe87f0e61cc232ee351c7f4a99f556c"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "tip"
+      ]
+    },
+    "hashAfter": "8ea5061796c26eacac21bbff9f7a012b5a6c6dbdda0a9b4c0ad9cf2862a02842"
+  }
+]
