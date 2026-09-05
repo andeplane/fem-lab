@@ -44,6 +44,10 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
   coi-serviceworker shim Atomify uses on GitHub Pages; fixed-order reductions so any thread
   count gives bit-identical results, and tests run at 1 and N threads. (ADR 0013)
 
+- **Chromium is the supported browser.** Develop, test and gate against Chromium; detect
+  missing capabilities elsewhere and say so, never degrade silently or spend time on
+  workarounds for other browsers. (ADR 0014)
+
 ## Testing
 
 - **100 % coverage on the engine** is a CI threshold (lines, branches, functions, statements),

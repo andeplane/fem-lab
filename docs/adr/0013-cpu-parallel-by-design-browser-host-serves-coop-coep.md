@@ -38,9 +38,8 @@ still hold.
 - WebGPU on the JS side remains single-threaded; the engine issues GPU work from one thread and
   parallelises CPU work around it.
 - `COEP: credentialless` keeps cross-origin subresources (Google Fonts, CDN scripts) working
-  without CORP headers; anything the wasm fetches itself stays same-origin. Safari's support
-  for `credentialless` must be checked in phase 0; the fallback is `require-corp` with all
-  assets same-origin.
+  without CORP headers; anything the wasm fetches itself stays same-origin. Chromium supports
+  it; other browsers are best-effort (ADR 0014).
 - If isolation fails (an old worker, a browser without support), the app runs single-threaded
   with a visible note, never a crash or a reload loop.
 - The second service worker problem Atomify hit (JupyterLite owning the scope) recurs when
