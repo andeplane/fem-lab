@@ -80,6 +80,12 @@ const jsdoc = (text, indent) =>
   text ? `${indent}/**\n${text.split('\n').map((l) => `${indent} * ${l}`.trimEnd()).join('\n')}\n${indent} */\n` : '';
 
 /**
+ * `new` alone would be a construct signature and a non-identifier would not parse, so those
+ * names are quoted. A quoted member is still reached as `fem.model.new(...)`.
+ */
+const member = (verb) => (verb === 'new' || !/^[A-Za-z_$][\w$]*$/.test(verb) ? JSON.stringify(verb) : verb);
+
+/**
  * One method per Command/Query variant, grouped by namespace:
  * `geometry.addBox` → `fem.geometry.addBox(args): Promise<Ack>`,
  * `query.probe` → `fem.query.probe(args): Promise<ProbeResult>` (`x-returns`).
@@ -96,7 +102,7 @@ export function femDts(doc) {
     const args = props.length === 0 ? '' : `args${required.length === 0 ? '?' : ''}: ${argType}`;
     returns.add(ret);
     if (!groups.has(ns)) groups.set(ns, []);
-    groups.get(ns).push(`${jsdoc(variant.description, '    ')}    ${verb}(${args}): Promise<${ret}>;`);
+    groups.get(ns).push(`${jsdoc(variant.description, '    ')}    ${member(verb)}(${args}): Promise<${ret}>;`);
   };
   for (const v of doc.commands.oneOf) add(v, 'cmd', 'Command', 'Ack');
   for (const v of doc.queries.oneOf) add(v, 'query', 'Query', v['x-returns']);

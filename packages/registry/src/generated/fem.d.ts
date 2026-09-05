@@ -9,7 +9,7 @@ export interface Fem {
      * Results and the undo history; it is the first entry of every Journal, so call it once
      * at the start, never to "reset" mid-way (use journal.undo for that).
      */
-    new(args: Omit<Extract<Command, { cmd: 'model.new' }>, 'cmd'>): Promise<Ack>;
+    "new"(args: Omit<Extract<Command, { cmd: 'model.new' }>, 'cmd'>): Promise<Ack>;
     /**
      * Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage
      * stays SI and every input may still use any unit of the right dimension; this only

@@ -50,5 +50,8 @@ describe('codegen', () => {
     expect(dts).toContain('model(): Promise<ModelSummary>;');
     expect(dts).toContain("undo(args?: Omit<Extract<Command, { cmd: 'journal.undo' }>, 'cmd'>): Promise<Ack>;");
     expect(dts).toContain("addBox(args: Omit<Extract<Command, { cmd: 'geometry.addBox' }>, 'cmd'>): Promise<Ack>;");
+    // `new(args)` alone would be a construct signature, so the member is quoted.
+    expect(dts).toContain('"new"(args: Omit<Extract<Command, { cmd: \'model.new\' }>, \'cmd\'>): Promise<Ack>;');
+    expect(dts).not.toMatch(/^ {4}new\(/m);
   });
 });
