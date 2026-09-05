@@ -55,7 +55,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
       - run: vulkaninfo --summary || true
       - run: cargo install cargo-llvm-cov --locked
-      - run: cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+      - run: cargo llvm-cov --release -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
 
   # The engine is a library with two hosts: the same Journal must hash identically natively and in wasm.
   wasm-hash:
