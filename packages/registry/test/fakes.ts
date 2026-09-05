@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { Ack, ModelFile } from '../src/generated/engine';
+import type { Ack, ModelFile, PathResult, ResultSummary } from '../src/generated/engine';
 import type { HostContext, ProjectInfo } from '../src/host-commands';
 import type { EngineTransport } from '../src/transport';
 
@@ -7,10 +7,36 @@ export const ACK: Ack = { seq: 1, revision: 1, hash: 'h', warnings: [], output: 
 export const MODEL_FILE = { format: 'femlab/1', engineVersion: '0', model: { name: 'beam' }, journal: { entries: [] } } as unknown as ModelFile;
 export const PROJECT: ProjectInfo = { name: 'proj', files: [], agentsMd: 'AGENTS.md', skills: [] };
 
+const kN = (value: number) => ({ value, unit: 'kN' });
+const mm = (value: number) => ({ value, unit: 'mm' });
+
+export const RESULT: ResultSummary = {
+  step: 'static',
+  revision: 10,
+  stale: false,
+  solver: 'cpu-direct',
+  iterations: 1,
+  residual: 0,
+  timeMs: 12,
+  extremes: [{ field: 'displacement', component: 2, min: mm(-0.19), minAt: [mm(1000), mm(50), mm(50)], max: mm(0), maxAt: [mm(0), mm(0), mm(0)] }],
+  reactions: [{ constraint: 'root', total: [kN(0), kN(0), kN(1)] }],
+  appliedTotal: [kN(0), kN(0), kN(-1)],
+  balance: 0,
+};
+export const PATH: PathResult = { s: [0, 0.5, 1], values: [0, null, 2], unit: 'MPa' };
+
+/** One reply per Query the host Commands read; everything else is the capabilities blob. */
+const REPLIES: Record<string, unknown> = {
+  'query.script': { text: 'fem.model.new({ name: "beam" })' },
+  'query.model': { name: 'beam', revision: 10, meshSettings: {}, warnings: [] },
+  'query.result': RESULT,
+  'query.path': PATH,
+};
+
 export function fakeTransport(): EngineTransport {
   return {
     dispatch: vi.fn(async () => ACK),
-    query: vi.fn(async (q) => (q.query === 'query.script' ? { text: 'fem.model.new({ name: "beam" })' } : { gpu: false, threads: 1, engineVersion: '0', schemaVersion: '1' })),
+    query: vi.fn(async (q) => (REPLIES[q.query] ?? { gpu: false, threads: 1, engineVersion: '0', schemaVersion: '1' }) as never),
     surface: vi.fn(),
     field: vi.fn(),
     export: vi.fn(async () => ({ filename: 'beam.vtu', mime: 'application/xml', bytes: new Uint8Array([1, 2]) })),
@@ -38,7 +64,7 @@ export function fakeHost(transport = fakeTransport(), projectOpen = false): Host
       setTheme: vi.fn(),
       animate: vi.fn(),
       camera: vi.fn(() => ({ position: [1, 2, 3] as [number, number, number], target: [0, 0, 0] as [number, number, number] })),
-      screenshot: vi.fn(async () => ({ png: 'iVBOR' })),
+      screenshot: vi.fn(async () => ({ png: 'data:image/png;base64,QUJD' })),
     },
     selection: { set: vi.fn(), clear: vi.fn(), setPickTarget: vi.fn(), get: vi.fn(() => ({ bodies: ['beam'], faces: ['beam.top'], sets: [], refs: ['body:beam', 'face:beam.top'] })) },
     panels: { toggle: vi.fn() },

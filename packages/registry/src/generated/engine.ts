@@ -1179,9 +1179,9 @@ export type SweepSpec =
  */
 export type Formulation = "incompatible-modes" | "full";
 /**
- * A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.
+ * A file format `mesh.export` writes.
  */
-export type ExportFormat = "vtu";
+export type ExportFormat = "vtu" | "msh" | "inp" | "stl";
 /**
  * A displacement component.
  */

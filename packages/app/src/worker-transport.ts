@@ -43,12 +43,22 @@ export class WorkerTransport implements EngineTransport {
   private revision = 0;
   /** Set while `cancel()` is tearing the worker down, so in-flight calls reject as `cancelled`. */
   private cancelling = false;
+  /**
+   * One sink for every progress message. Calls are serialised, so at most one Command can be
+   * reporting at a time and the app needs no per-call plumbing to drive `Solving n %`.
+   */
+  private sink: ((p: Progress) => void) | null = null;
 
   constructor(
     private readonly spawn: () => Worker,
     private readonly opts: EngineOptions,
   ) {
     this.worker = this.wire(spawn());
+  }
+
+  /** Where every Command's progress goes; the app renders the last message it saw. */
+  onProgress(cb: (p: Progress) => void): void {
+    this.sink = cb;
   }
 
   /** Boots the wasm module; resolves with the engine version. */
@@ -115,7 +125,11 @@ export class WorkerTransport implements EngineTransport {
       const res = e.data;
       const p = this.pending.get(res.id);
       if (!p) return;
-      if ('progress' in res) return p.onProgress?.(res.progress);
+      if ('progress' in res) {
+        p.onProgress?.(res.progress);
+        this.sink?.(res.progress);
+        return;
+      }
       this.pending.delete(res.id);
       if (!res.ok) return p.reject(new FemError(res.error.code, res.error.cause, res.error.where ?? null, res.error.suggestion ?? null));
       p.resolve(res.raw ? decodeBulk({ value: res.value, buffers: res.buffers }, res.raw) : res.value);

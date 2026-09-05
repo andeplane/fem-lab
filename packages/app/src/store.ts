@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { Capabilities, JournalDump, ModelSummary, ObjectRef, Selection } from '@femlab/registry';
+import type { Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
@@ -67,6 +67,42 @@ export interface UiState {
   lastError: LastError | null;
   progress: { phase: string; fraction: number } | null;
   theme: 'dark' | 'light';
+  /** `query.result` for the last solved Step; `stale` on it is the engine's own hash check. */
+  result: ResultSummary | null;
+  /** The Step a solve is running for, `null` when none is. */
+  solving: string | null;
+  /** Which scalar the viewer contours, as a `FIELD_CHOICES` key. */
+  fieldKey: string;
+  /** The contoured field's range and unit in display units, for the legend. */
+  legend: { min: number; max: number; unit: string } | null;
+  /** A manual clamp from `view.setLegend { range }`; `null` follows the data. */
+  clamp: [number, number] | null;
+  /** The last `study.converge` report, for the Results tab's convergence bars. */
+  study: StudyReport | null;
+  /** Every default the solve fell back on: the `warnings` of the solve's own Ack. */
+  assumptions: Warning[];
+  /** display = SI x this, for the one dimension the camera needs: length. */
+  lengthFactor: number;
+  /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
+  clipOn: boolean;
+}
+
+/** The design's states 4–7, as one word derived from what the store already holds. */
+export type Stage = 'idle' | 'solving' | 'solved' | 'stale' | 'error';
+
+export function stageOf(s: Pick<UiState, 'solving' | 'result' | 'lastError'>): Stage {
+  if (s.solving !== null) return 'solving';
+  if (s.lastError) return 'error';
+  if (!s.result) return 'idle';
+  return s.result.stale ? 'stale' : 'solved';
+}
+
+/** The Solve button's label: `Solve`, `Solving 47 %`, `Solved · rev 10`, `Re-solve`. */
+export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>): string {
+  if (stage === 'solving') return `Solving ${Math.round((s.progress?.fraction ?? 0) * 100)} %`;
+  if (stage === 'solved') return `Solved · rev ${s.result?.revision ?? 0}`;
+  if (stage === 'stale') return 'Re-solve';
+  return 'Solve';
 }
 
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
@@ -100,6 +136,15 @@ export const initialState: UiState = {
   lastError: null,
   progress: null,
   theme: 'dark',
+  result: null,
+  solving: null,
+  fieldKey: 'vonMises',
+  legend: null,
+  clamp: null,
+  study: null,
+  assumptions: [],
+  lengthFactor: 1,
+  clipOn: false,
 };
 
 const MAX_CONSOLE = 500;

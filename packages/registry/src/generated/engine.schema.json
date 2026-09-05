@@ -457,7 +457,7 @@
         ]
       },
       {
-        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.",
+        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
         "type": "object",
         "properties": {
           "format": {
@@ -2164,12 +2164,27 @@
         ]
       },
       "ExportFormat": {
-        "description": "A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.",
+        "description": "A file format `mesh.export` writes.",
         "oneOf": [
           {
-            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.",
+            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens. The only\nformat that carries a Step's result fields as point data.",
             "type": "string",
             "const": "vtu"
+          },
+          {
+            "description": "Gmsh `.msh` 4.1 ASCII: nodes, elements in Gmsh's node order, and the Sets as physical\nnames. Mesh only; a `step` is ignored.",
+            "type": "string",
+            "const": "msh"
+          },
+          {
+            "description": "Abaqus/CalculiX `.inp`: `*NODE`, `*ELEMENT` and the Sets as `*NSET`/`*ELSET`, for the\nCalculiX cross-check. Mesh only; a `step` is ignored.",
+            "type": "string",
+            "const": "inp"
+          },
+          {
+            "description": "ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a\n`step` is ignored.",
+            "type": "string",
+            "const": "stl"
           }
         ]
       },
@@ -4401,7 +4416,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
             "type": "object",
             "properties": {
               "format": {
@@ -6039,12 +6054,27 @@
         ]
       },
       "ExportFormat": {
-        "description": "A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.",
+        "description": "A file format `mesh.export` writes.",
         "oneOf": [
           {
-            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.",
+            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens. The only\nformat that carries a Step's result fields as point data.",
             "type": "string",
             "const": "vtu"
+          },
+          {
+            "description": "Gmsh `.msh` 4.1 ASCII: nodes, elements in Gmsh's node order, and the Sets as physical\nnames. Mesh only; a `step` is ignored.",
+            "type": "string",
+            "const": "msh"
+          },
+          {
+            "description": "Abaqus/CalculiX `.inp`: `*NODE`, `*ELEMENT` and the Sets as `*NSET`/`*ELSET`, for the\nCalculiX cross-check. Mesh only; a `step` is ignored.",
+            "type": "string",
+            "const": "inp"
+          },
+          {
+            "description": "ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a\n`step` is ignored.",
+            "type": "string",
+            "const": "stl"
           }
         ]
       },
@@ -6785,12 +6815,27 @@
         ]
       },
       "ExportFormat": {
-        "description": "A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.",
+        "description": "A file format `mesh.export` writes.",
         "oneOf": [
           {
-            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.",
+            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens. The only\nformat that carries a Step's result fields as point data.",
             "type": "string",
             "const": "vtu"
+          },
+          {
+            "description": "Gmsh `.msh` 4.1 ASCII: nodes, elements in Gmsh's node order, and the Sets as physical\nnames. Mesh only; a `step` is ignored.",
+            "type": "string",
+            "const": "msh"
+          },
+          {
+            "description": "Abaqus/CalculiX `.inp`: `*NODE`, `*ELEMENT` and the Sets as `*NSET`/`*ELSET`, for the\nCalculiX cross-check. Mesh only; a `step` is ignored.",
+            "type": "string",
+            "const": "inp"
+          },
+          {
+            "description": "ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a\n`step` is ignored.",
+            "type": "string",
+            "const": "stl"
           }
         ]
       }
@@ -9064,7 +9109,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
             "type": "object",
             "properties": {
               "format": {
@@ -10702,12 +10747,27 @@
         ]
       },
       "ExportFormat": {
-        "description": "A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.",
+        "description": "A file format `mesh.export` writes.",
         "oneOf": [
           {
-            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.",
+            "description": "VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens. The only\nformat that carries a Step's result fields as point data.",
             "type": "string",
             "const": "vtu"
+          },
+          {
+            "description": "Gmsh `.msh` 4.1 ASCII: nodes, elements in Gmsh's node order, and the Sets as physical\nnames. Mesh only; a `step` is ignored.",
+            "type": "string",
+            "const": "msh"
+          },
+          {
+            "description": "Abaqus/CalculiX `.inp`: `*NODE`, `*ELEMENT` and the Sets as `*NSET`/`*ELSET`, for the\nCalculiX cross-check. Mesh only; a `step` is ignored.",
+            "type": "string",
+            "const": "inp"
+          },
+          {
+            "description": "ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a\n`step` is ignored.",
+            "type": "string",
+            "const": "stl"
           }
         ]
       },

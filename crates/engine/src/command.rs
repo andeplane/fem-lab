@@ -254,12 +254,34 @@ pub enum MesherSpec {
     Sweep { base: Box<MesherSpec>, sweep: SweepSpec },
 }
 
-/// A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.
+/// A file format `mesh.export` writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportFormat {
-    /// VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens.
+    /// VTK XML UnstructuredGrid with base64 binary payloads: what ParaView opens. The only
+    /// format that carries a Step's result fields as point data.
     Vtu,
+    /// Gmsh `.msh` 4.1 ASCII: nodes, elements in Gmsh's node order, and the Sets as physical
+    /// names. Mesh only; a `step` is ignored.
+    Msh,
+    /// Abaqus/CalculiX `.inp`: `*NODE`, `*ELEMENT` and the Sets as `*NSET`/`*ELSET`, for the
+    /// CalculiX cross-check. Mesh only; a `step` is ignored.
+    Inp,
+    /// ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a
+    /// `step` is ignored.
+    Stl,
+}
+
+impl ExportFormat {
+    /// The file extension and MIME type a host saves this format under.
+    pub fn extension(self) -> (&'static str, &'static str) {
+        match self {
+            ExportFormat::Vtu => ("vtu", "application/xml"),
+            ExportFormat::Msh => ("msh", "model/mesh"),
+            ExportFormat::Inp => ("inp", "text/plain"),
+            ExportFormat::Stl => ("stl", "model/stl"),
+        }
+    }
 }
 
 /// A quantity of interest for convergence studies.
@@ -761,6 +783,7 @@ pub enum Command {
     /// stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
     /// id and the Body index as cell data. Name a `step` to add that Step's result fields as
     /// point data — displacement, reaction, stress and von Mises — so ParaView colours by them.
+    /// `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
     #[serde(rename = "mesh.export", rename_all = "camelCase")]
     MeshExport {
         format: ExportFormat,

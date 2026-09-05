@@ -30,7 +30,7 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { ViewMode } from '../store';
 import type { AppSurface } from '../worker-transport';
-import { type ColormapName, sample } from './colormap';
+import { MAPS, type ColormapName, sample } from './colormap';
 
 export interface CameraState {
   position: [number, number, number];
@@ -42,6 +42,18 @@ export interface Pick {
   face: string | null;
   body: string | null;
   point: [number, number, number];
+  /** The mesh node nearest the hit, and the contoured value there; `null` off a Result. */
+  node: number | null;
+  value: number | null;
+}
+
+/** What `screenshot` burns into the corner of the image, so a saved PNG can be read alone. */
+export interface LegendBurn {
+  title: string;
+  unit: string;
+  min: number;
+  max: number;
+  colormap: ColormapName;
 }
 
 const GREY_GEOMETRY = 0.58;
@@ -99,6 +111,8 @@ export class Viewer {
   private colormap: ColormapName = 'viridis';
   private field: Float32Array | null = null;
   private range: [number, number] = [0, 1];
+  /** Design state 6: a stale Result keeps its contours, at 42 % so nobody trusts them. */
+  private dim = false;
   private hoverFace: string | null = null;
   private readonly hidden = new Set<string>();
   private box = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
@@ -233,6 +247,7 @@ export class Viewer {
           c.setScalar(grey).lerp(bodyTint(s.triBody[t]!), 0.14);
         }
         if (hot) c.lerp(HIGHLIGHT, 0.45);
+        if (this.dim) c.multiplyScalar(0.42);
         colour.setXYZ(vertex, c.r, c.g, c.b);
       }
     }
@@ -281,6 +296,25 @@ export class Viewer {
     this.range = range;
     this.paint();
     this.render();
+  }
+
+  /** Design state 6: dim the contours without throwing them away. */
+  setDim(on: boolean): void {
+    if (this.dim === on) return;
+    this.dim = on;
+    this.paint();
+    this.render();
+  }
+
+  /** The exaggeration that makes the largest displacement a tenth of the model: `"auto"`. */
+  autoScale(displacement: Float32Array): number {
+    let max = 0;
+    for (let n = 0; n < displacement.length; n += 3) {
+      const d = Math.hypot(displacement[n]!, displacement[n + 1]!, displacement[n + 2]!);
+      if (d > max) max = d;
+    }
+    const diagonal = this.box.getSize(new Vector3()).length();
+    return max > 0 ? Math.round((0.1 * diagonal) / max) : 1;
   }
 
   /** `position = X + scale·u`, on the CPU; the Result never changes, only the drawing. */
@@ -372,10 +406,22 @@ export class Viewer {
     return { position: [p.x, p.y, p.z], target: [t.x, t.y, t.z], up: [u.x, u.y, u.z] };
   }
 
-  /** A PNG data URL of exactly what is on screen (`preserveDrawingBuffer`). */
-  screenshot(): string {
+  /**
+   * A PNG data URL of exactly what is on screen (`preserveDrawingBuffer`), with the legend
+   * painted into the right-hand edge when one is given: a saved image has to be readable on
+   * its own, and the HTML legend is not part of the WebGL canvas.
+   */
+  screenshot(legend?: LegendBurn): string {
     this.render();
-    return this.canvas.toDataURL('image/png');
+    if (!legend) return this.canvas.toDataURL('image/png');
+    const out = document.createElement('canvas');
+    out.width = this.canvas.width;
+    out.height = this.canvas.height;
+    const g = out.getContext('2d');
+    if (!g) return this.canvas.toDataURL('image/png');
+    g.drawImage(this.canvas, 0, 0);
+    drawLegend(g, out.width, out.height, legend);
+    return out.toDataURL('image/png');
   }
 
   dispose(): void {
@@ -394,11 +440,34 @@ export class Viewer {
     const hit = this.raycaster.intersectObject(this.mesh, false)[0];
     if (!hit || hit.faceIndex === undefined || hit.faceIndex === null) return null;
     const t = this.tri[hit.faceIndex]!;
+    const node = this.nearestNode(hit.faceIndex, hit.point);
     return {
       face: s.faceNames[s.triFace[t]!] ?? null,
       body: s.bodyNames[s.triBody[t]!] ?? null,
       point: [hit.point.x, hit.point.y, hit.point.z],
+      node,
+      value: node !== null && this.field ? (this.field[node] ?? null) : null,
     };
+  }
+
+  /**
+   * The mesh node behind a hit: triangles are expanded, so the drawn triangle's three vertices
+   * map back through `vert` to node ids and the nearest of the three is the one a probe means.
+   */
+  private nearestNode(faceIndex: number, at: Vector3): number | null {
+    const pos = this.mesh?.geometry.getAttribute('position');
+    if (!pos) return null;
+    let best: number | null = null;
+    let nearest = Infinity;
+    for (let k = 0; k < 3; k++) {
+      const drawn = faceIndex * 3 + k;
+      const d = at.distanceToSquared(new Vector3(pos.getX(drawn), pos.getY(drawn), pos.getZ(drawn)));
+      if (d < nearest) {
+        nearest = d;
+        best = this.vert[drawn] ?? null;
+      }
+    }
+    return best;
   }
 
   private hoverAt(e: MouseEvent): void {
@@ -414,5 +483,28 @@ export class Viewer {
     const aspect = (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480);
     Object.assign(this.orthographic, { left: -h * aspect, right: h * aspect, top: h, bottom: -h });
     this.orthographic.updateProjectionMatrix();
+  }
+}
+
+/** The legend the screenshot burns in: gradient bar, title, unit and six ticks, in one column. */
+function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: LegendBurn): void {
+  const x = w - 132;
+  const top = 56;
+  const barH = Math.max(120, Math.min(300, h - 160));
+  const stops = MAPS[l.colormap];
+  const grad = g.createLinearGradient(0, top + barH, 0, top);
+  stops.forEach((c, i) => grad.addColorStop(i / (stops.length - 1), c));
+  g.fillStyle = '#101218ee';
+  g.fillRect(x - 14, top - 34, 146, barH + 52);
+  g.fillStyle = grad;
+  g.fillRect(x, top, 16, barH);
+  g.fillStyle = '#e7e9ec';
+  g.font = '13px ui-monospace, monospace';
+  g.fillText(`${l.title} ${l.unit}`.trim(), x - 8, top - 14);
+  g.font = '11px ui-monospace, monospace';
+  for (let i = 0; i < 6; i++) {
+    const t = i / 5;
+    g.fillStyle = i === 0 ? '#e2703a' : '#8b929d';
+    g.fillText(String(Number((l.max - (l.max - l.min) * t).toPrecision(4))), x + 22, top + barH * t + 4);
   }
 }

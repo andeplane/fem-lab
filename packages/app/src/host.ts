@@ -3,7 +3,9 @@
 // except through the transport, and nothing in the registry knows the DOM exists.
 import { FemError, type HostContext, type HostDef, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { chatBridge } from './ai';
 import type { HostCaps } from './capabilities';
+import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
 import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
 import type { ColormapName } from './viewer/colormap';
@@ -25,7 +27,7 @@ async function fetchExample(name: string): Promise<string> {
   return res.text();
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost): HostContext {
+export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -37,22 +39,28 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       setCamera: (c) => v().setCamera(c as CameraState),
       preset: (p) => v().preset(p),
       setProjection: (p) => v().setProjection(p),
-      // No Result exists yet, so a field can only be turned off; the mode still follows the ask.
       showField: (f) => {
-        v().setField(null, [0, 1]);
-        store.set({ viewMode: 'field' in f && f.field ? 'results' : 'geometry' });
+        v();
+        return results?.showField(f as { field: string | null; component?: number | null });
       },
       setLegend: (l) => {
-        if (!l.colormap) return;
-        store.set({ colormap: l.colormap as ColormapName });
-        v().setColormap(l.colormap as ColormapName);
+        if (!results) {
+          if (!l.colormap) return;
+          store.set({ colormap: l.colormap as ColormapName });
+          v().setColormap(l.colormap as ColormapName);
+          return;
+        }
+        return results.setLegend(l as { colormap?: string; range?: [number, number] | 'auto' });
       },
       setDeformScale: (s) => {
-        const scale = typeof s === 'number' ? s : s === 'true' ? 1 : 100;
-        store.set({ deformScale: scale });
-        v().setDeformed(null, scale);
+        if (!results) return store.set({ deformScale: typeof s === 'number' ? s : 1 });
+        v();
+        results.setDeformScale(s);
       },
-      setClip: (p) => v().setClip(p ? { normal: p.normal, offset: p.offset } : null),
+      setClip: (p) => {
+        store.set({ clipOn: p !== null });
+        v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
+      },
       toggle: (layer, on) => v().setLayer(layer, on ?? true),
       setVisible: (bodies, on) => v().setVisible(bodies, on),
       setTheme: (t) => {
@@ -62,7 +70,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       },
       animate: (a) => v().animate(a.playing),
       camera: () => v().getCamera() as never,
-      screenshot: async () => ({ png: v().screenshot() }),
+      screenshot: async (o) => {
+        const burn = o.legend === false ? null : results?.legendBurn();
+        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined) };
+      },
     },
     selection: {
       set: (s) => store.select(s),
@@ -88,11 +99,9 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       stop: () => scripts?.stop(),
       setSource: (code, append) => store.set({ scriptDraft: append === true ? `${store.state.scriptDraft ?? store.state.script}${code}` : code, tab: 'script' }),
     },
-    chat: {
-      send: soon('the AI assistant', 'drive the registry with window.fem for now'),
-      insertMention: soon('the AI assistant', 'drive the registry with window.fem for now'),
-      clear: soon('the AI assistant', 'drive the registry with window.fem for now'),
-    },
+    // The drawer rebinds these the moment it mounts; until then they are no-ops, so a
+    // `chat.send` from a script or the palette never throws at a person.
+    chat: chatBridge,
     skills: () => [],
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
@@ -173,6 +182,8 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         const { name } = input as { name: string };
         const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
         for (const e of entries) await transport.dispatch(e.cmd as never);
+        // The gallery has done its job; leaving it up hides the Model it just opened.
+        store.togglePanel('examples', false);
         await refresh();
         return { name, commands: entries.length };
       },
