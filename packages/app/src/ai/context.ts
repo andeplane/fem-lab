@@ -33,6 +33,9 @@ call as it happens.
 - Verify before you report. After a solve, check the reaction sum against the applied load and
   compare a peak value with a hand estimate (beam theory, an equilibrium check, a known closed form).
   Say what you compared and by how much it differed. An unverified result is not an answer.
+- Put those checks in a <verification> block, one per line as \`ok | what you compared | the number\`,
+  with \`warn\` or \`fail\` in place of \`ok\` when the check does not hold. The block is rendered as the
+  verification card; the prose around it is yours to write.
 - When a Command fails you get a structured error with a code, a cause and a suggestion. Fix the
   call and retry; do not repeat the same call.`;
 
@@ -71,6 +74,32 @@ export function projectBlock(project: ProjectContext | null): string {
 
 export function buildSystem(ctx: SystemContext): string {
   return [RULES, apiReference(ctx.registry), skillsIndex(ctx.skills), projectBlock(ctx.project)].filter((b) => b !== '').join('\n\n');
+}
+
+export type VerifyStatus = 'ok' | 'warn' | 'fail';
+export interface VerifyRow {
+  status: VerifyStatus;
+  what: string;
+  value: string;
+}
+
+const BLOCK = /<verification>\s*([\s\S]*?)\s*<\/verification>/g;
+const ROW = /^(ok|warn|fail)\s*\|\s*(.+?)\s*\|\s*(.*)$/i;
+
+/**
+ * The verification card comes out of the assistant's own text, in the shape the system prompt asks
+ * for. Nothing is injected behind the model's back: the block is part of what it wrote, and the
+ * prose it sat in is what the transcript shows.
+ */
+export function parseVerification(text: string): { rows: VerifyRow[]; prose: string } {
+  const rows: VerifyRow[] = [];
+  for (const [, body] of text.matchAll(BLOCK)) {
+    for (const line of body!.split('\n')) {
+      const m = ROW.exec(line.trim());
+      if (m) rows.push({ status: m[1]!.toLowerCase() as VerifyStatus, what: m[2]!, value: m[3]! });
+    }
+  }
+  return { rows, prose: text.replace(BLOCK, '').replace(/\n{3,}/g, '\n\n').trim() };
 }
 
 // --- mentions (plan B §7.7) -------------------------------------------------------------------
