@@ -35,6 +35,43 @@ jobs:
           cargo install cargo-llvm-cov --locked
           cargo llvm-cov -p femlab-engine -p femlab-geometry --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
 
+  # The engine is a library with two hosts: the same Journal must hash identically natively and in wasm.
+  wasm-hash:
+    name: native vs wasm Journal hashes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install the wasm-bindgen CLI matching Cargo.lock
+        run: |
+          V=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | tail -1 | cut -d'"' -f2)
+          cargo install --locked wasm-bindgen-cli --version "$V"
+      - run: node tools/build-wasm.mjs
+      - run: cargo build -p femlab --release
+      - run: ./target/release/femlab schema --out engine.schema.json
+      - name: replay every fixture natively and in wasm
+        run: |
+          mkdir -p hashes/native hashes/wasm
+          for j in crates/engine/benches/journals/*.json; do
+            n=$(basename "$j" .json)
+            ./target/release/femlab run "$j" --hashes --skip-solves > "hashes/native/$n.txt"
+            node tools/replay-wasm.mjs "$j" --skip-solves > "hashes/wasm/$n.txt"
+          done
+      - run: node tools/compare-hashes.mjs hashes/native hashes/wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: |
+            packages/app/src/generated/wasm
+            engine.schema.json
+
   windows:
     name: windows (allowed to fail until gated)
     runs-on: windows-latest
