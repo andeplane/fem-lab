@@ -1,5 +1,5 @@
-//! Finite-element kernels: quadrature, material laws (and, in later commits, reference
-//! elements, the isoparametric solid, loads and assembly).
+//! Finite-element kernels: quadrature, shape functions and material laws (and, in later
+//! commits, the isoparametric solid, loads and assembly).
 //!
 //! Each kernel family is an Extension Point (ADR 0010): one trait with flat `f64` slices and
 //! no generic methods, so it is dyn-compatible. The built-ins (`LinearElastic`, the `Iso`
@@ -9,3 +9,4 @@
 
 pub mod material;
 pub mod quadrature;
+pub mod shape;

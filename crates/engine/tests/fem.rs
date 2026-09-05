@@ -1,5 +1,6 @@
-//! Quadrature rules against exact monomial integrals, and the Material Extension Point against
-//! closed-form elasticity. One binary: llvm-cov does not merge instantiations across binaries.
+//! Quadrature rules against exact monomial integrals, the Material Extension Point against
+//! closed-form elasticity, and the reference elements against their defining properties.
+//! One binary: llvm-cov does not merge instantiations across binaries.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -10,7 +11,13 @@ use femlab_engine::fem::material::{
 use femlab_engine::fem::quadrature::{
     gauss_legendre, Rule, HEX_2X2X2, HEX_3X3X3, QUAD_2X2, QUAD_3X3, TET_1, TET_4, TRI_1, TRI_3,
 };
+use femlab_engine::fem::shape::{
+    centre_xi, dshape_of, face_dshape_of, face_rule_of, face_shape_of, in_reference, node_xi, rule_of, shape_of, Hex20,
+    Hex8, Line2, Line3, Quad4, Quad4F, Quad8, Quad8F, RefElement, RefFace, Tet10, Tet4, Tri3, Tri3F, Tri6, Tri6F,
+    LINE_2, LINE_3,
+};
 use femlab_engine::{Error, ErrorCode};
+use femlab_geometry::mesh::{ElementKind, FaceKind};
 
 // ---------------------------------------------------------------- quadrature
 
@@ -43,6 +50,11 @@ fn exact_quad(e: [i32; 3]) -> f64 {
 /// ∫ x^a y^b z^c over the unit tetrahedron = a! b! c! / (a+b+c+3)!.
 fn exact_tet(e: [i32; 3]) -> f64 {
     factorial(e[0]) * factorial(e[1]) * factorial(e[2]) / factorial(e[0] + e[1] + e[2] + 3)
+}
+
+/// ∫ x^a over [-1, 1], as an `Exact`.
+fn exact_line(e: [i32; 3]) -> f64 {
+    line_exact(e[0])
 }
 
 /// ∫ x^a y^b over the unit triangle = a! b! / (a+b+2)!.
@@ -400,4 +412,299 @@ fn laws_are_send_and_sync() {
     assert_send_sync::<LinearElastic>();
     assert_send_sync::<&'static dyn MaterialLaw>();
     assert_send_sync::<Cubic>();
+}
+
+// ---------------------------------------------------------------- shape functions
+
+/// Deterministic linear congruential generator: the shape-function property tests want random
+/// points but a reproducible failure.
+struct Lcg(u64);
+
+impl Lcg {
+    fn unit(&mut self) -> f64 {
+        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+const ALL_KINDS: [ElementKind; 8] = [
+    ElementKind::Hex8,
+    ElementKind::Hex20,
+    ElementKind::Tet4,
+    ElementKind::Tet10,
+    ElementKind::Quad4,
+    ElementKind::Quad8,
+    ElementKind::Tri3,
+    ElementKind::Tri6,
+];
+
+const ALL_FACE_KINDS: [FaceKind; 6] =
+    [FaceKind::Quad4, FaceKind::Quad8, FaceKind::Tri3, FaceKind::Tri6, FaceKind::Line2, FaceKind::Line3];
+
+/// A point inside the reference domain: uniform on the cube, and the sorted-uniform
+/// construction (which is uniform on the simplex) for tetrahedra and triangles.
+fn random_xi(kind: ElementKind, r: &mut Lcg) -> [f64; 3] {
+    let dim = kind.dim();
+    let mut xi = [0.0; 3];
+    if in_reference(kind, [1.0, 1.0, 1.0], 0.0) {
+        for x in xi.iter_mut().take(dim) {
+            *x = 2.0 * r.unit() - 1.0;
+        }
+        return xi;
+    }
+    let mut u = [r.unit(), r.unit(), r.unit()];
+    u.sort_by(f64::total_cmp);
+    for (k, x) in xi.iter_mut().enumerate().take(dim) {
+        *x = u[k] - if k == 0 { 0.0 } else { u[k - 1] };
+    }
+    xi
+}
+
+/// The centre of a face parent's own domain.
+fn face_centre(kind: FaceKind) -> [f64; 2] {
+    match kind {
+        FaceKind::Tri3 | FaceKind::Tri6 => [1.0 / 3.0, 1.0 / 3.0],
+        _ => [0.0, 0.0],
+    }
+}
+
+/// Reference coordinates of a face parent's nodes, in `face_nodes` order.
+fn face_node_s(kind: FaceKind) -> Vec<[f64; 2]> {
+    let flat = |k: ElementKind| node_xi(k).iter().map(|p| [p[0], p[1]]).collect::<Vec<_>>();
+    match kind {
+        FaceKind::Quad4 => flat(ElementKind::Quad4),
+        FaceKind::Quad8 => flat(ElementKind::Quad8),
+        FaceKind::Tri3 => flat(ElementKind::Tri3),
+        FaceKind::Tri6 => flat(ElementKind::Tri6),
+        FaceKind::Line2 => vec![[-1.0, 0.0], [1.0, 0.0]],
+        FaceKind::Line3 => vec![[-1.0, 0.0], [1.0, 0.0], [0.0, 0.0]],
+    }
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn norm3(a: [f64; 3]) -> f64 {
+    dot3(a, a).sqrt()
+}
+
+#[test]
+fn shape_functions_are_a_partition_of_unity_with_vanishing_derivative_sums() {
+    let mut rng = Lcg(0x5eed_1234);
+    for kind in ALL_KINDS {
+        let nn = kind.n_nodes();
+        let (mut n, mut dn) = (vec![0.0; nn], vec![[0.0; 3]; nn]);
+        for _ in 0..32 {
+            let xi = random_xi(kind, &mut rng);
+            assert!(in_reference(kind, xi, 1e-12), "{kind:?} {xi:?}");
+            shape_of(kind, xi, &mut n);
+            assert!((n.iter().sum::<f64>() - 1.0).abs() <= 1e-14, "{kind:?} {xi:?} {n:?}");
+            dshape_of(kind, xi, &mut dn);
+            for j in 0..3 {
+                let s: f64 = dn.iter().map(|d| d[j]).sum();
+                assert!(s.abs() <= 1e-13, "{kind:?} d{j} {s}");
+            }
+            // the third parametric direction is unused in 2D
+            for d in &dn {
+                assert!(kind.dim() == 3 || d[2] == 0.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn shape_functions_are_the_kronecker_delta_at_the_nodes() {
+    for kind in ALL_KINDS {
+        let x = node_xi(kind);
+        assert_eq!(x.len(), kind.n_nodes());
+        // mid-edge node n_corners + i is the midpoint of edges()[i]
+        for (i, e) in kind.edges()[..kind.n_nodes() - kind.n_corners()].iter().enumerate() {
+            let (a, b) = (x[e[0] as usize], x[e[1] as usize]);
+            for k in 0..3 {
+                assert_eq!(x[kind.n_corners() + i][k], 0.5 * (a[k] + b[k]));
+            }
+        }
+        let mut n = vec![0.0; kind.n_nodes()];
+        for (a, &p) in x.iter().enumerate() {
+            shape_of(kind, p, &mut n);
+            for (b, &v) in n.iter().enumerate() {
+                let want = f64::from(u8::from(a == b));
+                assert!((v - want).abs() <= 1e-14, "{kind:?} N{b}(node {a}) = {v}");
+            }
+        }
+        // and the centre is the mean of the corners
+        let c = centre_xi(kind);
+        for k in 0..3 {
+            let mean: f64 = x[..kind.n_corners()].iter().map(|p| p[k]).sum::<f64>() / kind.n_corners() as f64;
+            assert!((c[k] - mean).abs() <= 1e-15);
+        }
+    }
+}
+
+#[test]
+fn each_kind_gets_the_planned_rule_and_it_is_exact_to_that_degree() {
+    let plan: [(ElementKind, usize, i32, i32, Exact, f64); 8] = [
+        (ElementKind::Hex8, 8, 3, 0, exact_cube, 8.0),
+        (ElementKind::Hex20, 27, 5, 0, exact_cube, 8.0),
+        (ElementKind::Tet4, 1, 0, 1, exact_tet, 1.0 / 6.0),
+        (ElementKind::Tet10, 4, 0, 2, exact_tet, 1.0 / 6.0),
+        (ElementKind::Quad4, 4, 3, 0, exact_quad, 4.0),
+        (ElementKind::Quad8, 9, 5, 0, exact_quad, 4.0),
+        (ElementKind::Tri3, 1, 0, 1, exact_tri, 0.5),
+        (ElementKind::Tri6, 3, 0, 2, exact_tri, 0.5),
+    ];
+    for (kind, n, per_dir, total, exact, measure) in plan {
+        let r = rule_of(kind);
+        assert_eq!(r.points.len(), n, "{kind:?}");
+        assert_eq!(r.weights.len(), n, "{kind:?}");
+        assert!((r.weights.iter().sum::<f64>() - measure).abs() <= 1e-14, "{kind:?}");
+        check_exact(&r, kind.dim(), per_dir, total, exact);
+    }
+    // face parents: the same rules, plus the two line rules built from Gauss–Legendre
+    let faces: [(FaceKind, usize, f64); 6] = [
+        (FaceKind::Quad4, 4, 4.0),
+        (FaceKind::Quad8, 9, 4.0),
+        (FaceKind::Tri3, 1, 0.5),
+        (FaceKind::Tri6, 3, 0.5),
+        (FaceKind::Line2, 2, 2.0),
+        (FaceKind::Line3, 3, 2.0),
+    ];
+    for (kind, n, measure) in faces {
+        let r = face_rule_of(kind);
+        assert_eq!(r.points.len(), n, "{kind:?}");
+        assert!((r.weights.iter().sum::<f64>() - measure).abs() <= 1e-14, "{kind:?}");
+    }
+    for (r, n) in [(&LINE_2, 2usize), (&LINE_3, 3)] {
+        for (i, (x, w)) in gauss_legendre(n).iter().enumerate() {
+            assert_eq!(r.points[i], [*x, 0.0, 0.0]);
+            assert_eq!(r.weights[i], *w);
+        }
+        check_exact(r, 1, 2 * n as i32 - 1, 0, exact_line);
+    }
+}
+
+#[test]
+fn face_shape_functions_are_a_partition_of_unity_and_kronecker() {
+    let mut rng = Lcg(0xf00d);
+    for kind in ALL_FACE_KINDS {
+        let nn = kind.n_nodes();
+        let (mut n, mut dn) = (vec![0.0; nn], vec![[0.0; 2]; nn]);
+        for (a, &p) in face_node_s(kind).iter().enumerate() {
+            face_shape_of(kind, p, &mut n);
+            assert_eq!(n.len(), nn);
+            for (b, &v) in n.iter().enumerate() {
+                let want = f64::from(u8::from(a == b));
+                assert!((v - want).abs() <= 1e-14, "{kind:?} N{b}(node {a}) = {v}");
+            }
+        }
+        for _ in 0..16 {
+            let raw = [2.0 * rng.unit() - 1.0, 2.0 * rng.unit() - 1.0];
+            let s = if kind.n_corners() == 3 { [raw[0].abs() * 0.4, raw[1].abs() * 0.4] } else { raw };
+            face_shape_of(kind, s, &mut n);
+            assert!((n.iter().sum::<f64>() - 1.0).abs() <= 1e-14, "{kind:?} {s:?}");
+            face_dshape_of(kind, s, &mut dn);
+            for j in 0..2 {
+                assert!(dn.iter().map(|d| d[j]).sum::<f64>().abs() <= 1e-13, "{kind:?} d{j}");
+            }
+            // the line parents have no second direction
+            assert!(kind.n_corners() > 2 || dn.iter().all(|d| d[1] == 0.0));
+        }
+    }
+}
+
+#[test]
+fn face_normals_point_away_from_the_element_centroid() {
+    for kind in ALL_KINDS {
+        let xi = node_xi(kind);
+        let mut centroid = [0.0; 3];
+        for p in &xi {
+            for k in 0..3 {
+                centroid[k] += p[k] / xi.len() as f64;
+            }
+        }
+        let fk = kind.face_kind();
+        let (mut n, mut dn) = (vec![0.0; fk.n_nodes()], vec![[0.0; 2]; fk.n_nodes()]);
+        for f in 0..kind.n_faces() {
+            let nodes = kind.face_nodes(f);
+            assert_eq!(nodes.len(), fk.n_nodes());
+            let s = face_centre(fk);
+            face_shape_of(fk, s, &mut n);
+            face_dshape_of(fk, s, &mut dn);
+            let (mut x, mut t) = ([0.0; 3], [[0.0; 3]; 2]);
+            for (i, &l) in nodes.iter().enumerate() {
+                let p = xi[l as usize];
+                for k in 0..3 {
+                    x[k] += n[i] * p[k];
+                    t[0][k] += dn[i][0] * p[k];
+                    t[1][k] += dn[i][1] * p[k];
+                }
+            }
+            let nvec = if kind.dim() == 3 { cross(t[0], t[1]) } else { [t[0][1], -t[0][0], 0.0] };
+            let out = sub3(x, centroid);
+            let cos = dot3(nvec, out) / (norm3(nvec) * norm3(out));
+            assert!(cos > 0.3, "{kind:?} face {f}: cos {cos}");
+        }
+    }
+}
+
+fn check_ref_element<R: RefElement>() {
+    let kind = R::KIND;
+    assert_eq!(R::N, kind.n_nodes());
+    assert_eq!(R::DIM, kind.dim());
+    let (a, b) = (R::rule(), rule_of(kind));
+    assert_eq!(a.points, b.points);
+    assert_eq!(a.weights, b.weights);
+    let xi = [0.11, 0.22, 0.13];
+    let (mut n1, mut n2) = (vec![0.0; R::N], vec![0.0; R::N]);
+    R::shape(xi, &mut n1);
+    shape_of(kind, xi, &mut n2);
+    assert_eq!(n1, n2);
+    let (mut d1, mut d2) = (vec![[0.0; 3]; R::N], vec![[0.0; 3]; R::N]);
+    R::dshape(xi, &mut d1);
+    dshape_of(kind, xi, &mut d2);
+    assert_eq!(d1, d2);
+}
+
+fn check_ref_face<F: RefFace>() {
+    let kind = F::KIND;
+    assert_eq!(F::N, kind.n_nodes());
+    let (a, b) = (F::rule(), face_rule_of(kind));
+    assert_eq!(a.points, b.points);
+    assert_eq!(a.weights, b.weights);
+    let s = [0.17, 0.23];
+    let (mut n1, mut n2) = (vec![0.0; F::N], vec![0.0; F::N]);
+    F::shape(s, &mut n1);
+    face_shape_of(kind, s, &mut n2);
+    assert_eq!(n1, n2);
+    let (mut d1, mut d2) = (vec![[0.0; 2]; F::N], vec![[0.0; 2]; F::N]);
+    F::dshape(s, &mut d1);
+    face_dshape_of(kind, s, &mut d2);
+    assert_eq!(d1, d2);
+}
+
+#[test]
+fn the_typed_reference_elements_are_the_enum_dispatch() {
+    check_ref_element::<Hex8>();
+    check_ref_element::<Hex20>();
+    check_ref_element::<Tet4>();
+    check_ref_element::<Tet10>();
+    check_ref_element::<Quad4>();
+    check_ref_element::<Quad8>();
+    check_ref_element::<Tri3>();
+    check_ref_element::<Tri6>();
+    check_ref_face::<Quad4F>();
+    check_ref_face::<Quad8F>();
+    check_ref_face::<Tri3F>();
+    check_ref_face::<Tri6F>();
+    check_ref_face::<Line2>();
+    check_ref_face::<Line3>();
 }
