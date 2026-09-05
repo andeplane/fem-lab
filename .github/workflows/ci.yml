@@ -83,3 +83,19 @@ jobs:
           toolchain: "1.94"
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+
+  # TypeScript side: generated types are fresh, the registry type-checks, and vitest holds 100 % on
+  # all four metrics. No Rust toolchain: the schema document is committed.
+  web:
+    name: web (codegen, typecheck, registry tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run codegen:check
+      - run: npm run typecheck
+      - run: npm run test -w packages/registry
