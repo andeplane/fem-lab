@@ -2,9 +2,10 @@
 // bottom panel, and the three overlays. Rule (ADR 0003): everything a person can click dispatches
 // one registry Command and carries its name in `data-cmd`, so `test/data-cmd.test.tsx` and the
 // Playwright smoke can hold the DOM against `registry.list()`.
-import type { CommandDef, EngineSchema, JsonSchema } from '@femlab/registry';
+import type { CommandDef, EngineSchema, JsonSchema, Registry } from '@femlab/registry';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/engine.schema.json';
+import { AssistantPanel } from '../ai';
 import { engineChip } from '../capabilities';
 import { fieldChoices, formatNumber, legendTicks } from '../fields';
 import type { ViewerRef } from '../host';
@@ -14,6 +15,7 @@ import { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
 import { ExportModal } from './Export';
 import { Examples, Palette, Start } from './Overlays';
+import { Tour, TutorialPanel } from '../tutorial';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
 import { Cmd, useStore, type Dispatch } from './cmd';
@@ -29,6 +31,12 @@ export interface AppProps {
   query?: Query;
   /** `registry.list().commands`, which is what the ⌘K palette is a view of. */
   commands?: CommandDef[];
+  /**
+   * The Assistant and the tutorial runner dispatch through whatever Registry they are handed;
+   * `main.tsx` hands them the app's own wrapped `dispatch`, so a tool call and a "do it for me"
+   * repaint the viewer exactly like a click does.
+   */
+  registry?: Registry;
 }
 
 const doc = schema as unknown as EngineSchema;
@@ -93,6 +101,9 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'report' }}>
         Report
+      </Cmd>
+      <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'tutorial' }} pressed={s.panels['tutorial'] === true} title="Guided tutorials">
+        Tutorials
       </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton outline" args={{ panel: 'assistant' }} pressed={s.panels['assistant'] === true}>
         ✳ Assistant
@@ -183,7 +194,7 @@ function ErrorCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
             {fix}
           </Cmd>
         ) : null}
-        <Cmd dispatch={dispatch} cmd="chat.send" class="tbutton outline" args={{ text: `This failed: ${text}` }} onRun={() => void sendToAssistant(dispatch, text)}>
+        <Cmd dispatch={dispatch} cmd="chat.send" class="tbutton outline" args={{ text }} onRun={() => void sendToAssistant(dispatch, text)}>
           Send this error to the Assistant
         </Cmd>
       </div>
@@ -191,10 +202,11 @@ function ErrorCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
-/** The Assistant is not wired in every build, so the fallback is the clipboard. */
+/** Open the drawer, then send the error into it; the clipboard is the fallback when it refuses. */
 async function sendToAssistant(dispatch: Dispatch, text: string): Promise<void> {
+  await dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }).catch(() => undefined);
   try {
-    await dispatch({ cmd: 'chat.send', text: `This failed: ${text}` });
+    await dispatch({ cmd: 'chat.send', text: `This failed: ${text}. What should I change?` });
   } catch {
     await dispatch({ cmd: 'clipboard.copy', what: { kind: 'text', text } }).catch(() => undefined);
   }
@@ -381,7 +393,7 @@ function ViewerPane({ s, dispatch, viewer }: { s: UiState; dispatch: Dispatch; v
   );
 }
 
-export function App({ store, dispatch, viewer, query, commands = [] }: AppProps) {
+export function App({ store, dispatch, viewer, query, commands = [], registry }: AppProps) {
   const s = useStore(store);
   const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
@@ -423,11 +435,14 @@ export function App({ store, dispatch, viewer, query, commands = [] }: AppProps)
             <Bottom s={s} store={store} dispatch={dispatch} query={read} />
           </div>
           <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
+          {registry && s.panels['assistant'] ? <AssistantPanel registry={registry} store={store} /> : null}
         </div>
       </div>
       <Examples s={s} dispatch={dispatch} />
       <ExportModal s={s} dispatch={dispatch} />
       <Palette s={s} dispatch={dispatch} commands={commands} />
+      {registry ? <TutorialPanel registry={registry} store={store} /> : null}
+      <Tour store={store} />
     </div>
   );
 }

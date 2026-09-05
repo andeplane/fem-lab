@@ -102,7 +102,10 @@ async function boot(): Promise<void> {
       k === 'registry' ? registry : k === 'dispatch' ? dispatch : k === 'gpuSelfTest' ? (n: number) => transport.gpuSelfTest(n) : proxy[k as string],
   });
 
-  render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} />, root);
+  // The Assistant's tool calls and the tutorial's "do it for me" go through the same wrapper
+  // as a click, so the Journal, the tree and the viewer surface all catch up either way.
+  const panelRegistry = new Proxy(registry, { get: (t, k) => (k === 'dispatch' ? dispatch : Reflect.get(t, k, t)) });
+  render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} registry={panelRegistry} />, root);
 
   await booted;
   const engineCaps = (await query({ query: 'query.capabilities' })) as Capabilities;

@@ -186,7 +186,8 @@ describe('images', () => {
   });
 
   it('attaches the current view through query.screenshot', async () => {
+    // The fake screenshot is a real `data:` URL now, so this also covers the prefix strip.
     const block = await screenshotBlock(registryWith());
-    expect(block).toEqual({ type: 'image', mediaType: 'image/png', base64: 'iVBOR', caption: 'the current viewer view' });
+    expect(block).toEqual({ type: 'image', mediaType: 'image/png', base64: 'QUJD', caption: 'the current viewer view' });
   });
 });
