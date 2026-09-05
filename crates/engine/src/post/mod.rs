@@ -1,6 +1,10 @@
 //! Post-processing: the container every Result field lives in, its extremes, and the reactions
 //! grouped by the Constraint that carried them (plan A §8).
 
+pub mod convergence;
+pub mod probe;
+pub mod stress;
+
 use femlab_geometry::Mesh;
 
 use crate::fem::assembly::ResolvedConstraints;

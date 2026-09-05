@@ -8,7 +8,7 @@ use crate::engine::OnProgress;
 use crate::error::Error;
 use crate::fem::problem::Problem;
 use crate::fem::{assembly, checks, loads};
-use crate::post::{FieldData, Per};
+use crate::post::{stress, FieldData, Per};
 use crate::procedure::{report, StepResult};
 use crate::solve::{solve, SolveOptions};
 
@@ -41,9 +41,20 @@ pub async fn run(
     let r = assembly::reactions(&a.k, &u, &f, &red);
     report(&mut progress, "post", 0.9, "recovering fields")?;
 
+    // The stiffness integral above already called this material on these elements, so the
+    // recovery cannot fail here; `stress_gp` still reports it for a caller that skipped it.
+    let (gp_stress, gp_strain) = stress::stress_gp(p, &u).expect("the stiffness integral accepted this material");
+    let unaveraged = stress::gp_to_nodes(p.mesh, &gp_stress);
+    let nodal_stress = stress::average_at_nodes(p, &unaveraged);
+    let nodal_strain = stress::average_at_nodes(p, &stress::gp_to_nodes(p.mesh, &gp_strain));
     let mut fields = BTreeMap::new();
     fields.insert(Field::Displacement, vector_field(&u, dpn));
     fields.insert(Field::Reaction, vector_field(&r, dpn));
+    fields.insert(Field::VonMises, stress::von_mises(&nodal_stress));
+    fields.insert(Field::Principal, stress::principal(&nodal_stress));
+    fields.insert(Field::Stress, nodal_stress);
+    fields.insert(Field::StressUnaveraged, unaveraged);
+    fields.insert(Field::Strain, nodal_strain);
     let mut scalars = BTreeMap::new();
     scalars.insert("min_det_j".to_string(), a.min_det_j);
     for (c, axis) in ["x", "y", "z"].iter().enumerate() {

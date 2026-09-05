@@ -29,6 +29,9 @@ use femlab_engine::fem::shape::{
 };
 use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
+use femlab_engine::post::convergence::{observed_rate, richardson};
+use femlab_engine::post::probe::{path, probe};
+use femlab_engine::post::stress::{average_at_nodes, principal, stress_gp, von_mises};
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
 use femlab_engine::procedure::{self, Step, StepResult};
 use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
@@ -2385,4 +2388,252 @@ fn a_load_over_a_body_without_a_material_says_so() {
     p.loads = vec![Load::NodalForce { nodes: "nowhere".into(), f: [1.0; 3] }];
     let e = assemble_loads(&p, &mut vec![0.0; p.n_dofs()]).expect_err("no such set");
     assert_eq!(e.code, ErrorCode::SetEmpty);
+}
+
+// ------------------------------------------------------------- post-processing
+
+/// A5's bar, stretched by a prescribed end displacement, as a Result to post-process.
+fn stretched_bar(kind: ElementKind) -> (Mesh, BTreeMap<String, ResolvedSet>, f64, f64) {
+    let mesh = Structured { kind, n: [6, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let delta = 2e-4;
+    (mesh, sets, delta, YOUNG * delta)
+}
+
+fn bar_constraints(kind: ElementKind, delta: f64) -> Vec<Constraint> {
+    let mut c = vec![
+        fix("root", "xmin", [true, false, false], 0.0),
+        fix("sym_y", "ymin", [false, true, false], 0.0),
+        fix("pull", "xmax", [true, false, false], delta),
+    ];
+    if kind.dim() == 3 {
+        c.push(fix("sym_z", "zmin", [false, false, true], 0.0));
+    }
+    c
+}
+
+/// A5's stress half: the nodal stress is `F/A = E δ / L` everywhere, averaged and not.
+#[test]
+fn the_uniaxial_bar_recovers_f_over_a_at_every_node_averaged_and_not() {
+    for kind in ALL_KINDS {
+        let (mesh, sets, delta, sigma) = stretched_bar(kind);
+        let bodies = vec!["bar".to_string()];
+        let id = if kind.dim() == 3 { Idealisation::Solid3d } else { Idealisation::PlaneStress { thickness: 0.1 } };
+        let p = problem(&mesh, &sets, &bodies, id, Formulation::IncompatibleModes, bar_constraints(kind, delta));
+        let res = run_static(&p, &mut nop).expect("the bar solves");
+        for field in [Field::Stress, Field::StressUnaveraged] {
+            let f = &res.fields[&field];
+            assert_eq!(f.comps, VOIGT);
+            for i in 0..f.len() {
+                let s = &f.data[i * VOIGT..(i + 1) * VOIGT];
+                assert!((s[0] - sigma).abs() <= 1e-8 * sigma, "{kind:?} {field:?} entry {i}: {}", s[0]);
+                for (c, v) in s.iter().enumerate().skip(1) {
+                    assert!(v.abs() <= 1e-8 * sigma, "{kind:?} {field:?} entry {i} component {c}: {v}");
+                }
+            }
+        }
+        assert_eq!(res.fields[&Field::Stress].per, Per::Node);
+        assert_eq!(res.fields[&Field::StressUnaveraged].per, Per::ElemNode);
+        // uniaxial: von Mises is |σ| and the principal stresses are (σ, 0, 0)
+        let vm = &res.fields[&Field::VonMises];
+        assert_eq!(vm.comps, 1);
+        assert!(vm.data.iter().all(|v| (v - sigma).abs() <= 1e-7 * sigma), "{kind:?}");
+        let pr = &res.fields[&Field::Principal];
+        assert_eq!(pr.comps, 3);
+        for i in 0..pr.len() {
+            let want = [sigma, 0.0, 0.0];
+            for (c, w) in want.iter().enumerate() {
+                assert!((pr.data[i * 3 + c] - w).abs() <= 1e-7 * sigma, "{kind:?} node {i} principal {c}");
+            }
+        }
+        // the axial strain is δ/L
+        let strain = &res.fields[&Field::Strain];
+        assert!(strain.data.iter().step_by(VOIGT).all(|e| (e - delta).abs() <= 1e-8 * delta), "{kind:?}");
+    }
+}
+
+/// Probing a field the solve made constant gives that constant, wherever it is asked — Gauss
+/// points included — and a point off the mesh gives nothing.
+#[test]
+fn a_probe_finds_the_element_and_a_path_walks_the_bar() {
+    let kind = ElementKind::Hex8;
+    let (mesh, sets, delta, sigma) = stretched_bar(kind);
+    let bodies = vec!["bar".to_string()];
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::IncompatibleModes,
+        bar_constraints(kind, delta),
+    );
+    let res = run_static(&p, &mut nop).expect("the bar solves");
+    let stress = &res.fields[&Field::Stress];
+    let el = element_for(kind);
+    let mut coords = vec![0.0; kind.n_nodes() * 3];
+    let mut shape = vec![0.0; kind.n_nodes()];
+    for elem in 0..mesh.n_elems() as u32 {
+        mesh.elem_coords(elem, &mut coords);
+        for g in 0..el.n_gp() {
+            el.shape_at(el.gp_xi(g), &mut shape);
+            let mut x = [0.0; 3];
+            for (a, &n) in shape.iter().enumerate() {
+                for (k, xk) in x.iter_mut().enumerate() {
+                    *xk += n * coords[3 * a + k];
+                }
+            }
+            let (found, v) = probe(&mesh, stress, x).expect("a Gauss point is inside its element");
+            assert_eq!(found, elem, "the lowest element containing the point");
+            assert!((v[0] - sigma).abs() <= 1e-7 * sigma, "{v:?}");
+        }
+    }
+    assert!(probe(&mesh, stress, [2.0, 0.0, 0.0]).is_none(), "off the end of the bar");
+
+    // the displacement along the axis rises monotonically from 0 to δ
+    let u = &res.fields[&Field::Displacement];
+    let line = path(&mesh, u, [0.0, 0.05, 0.05], [1.0, 0.05, 0.05], 11);
+    assert_eq!(line.len(), 11);
+    let ux: Vec<f64> = line.iter().map(|(_, v)| v.as_ref().expect("inside the bar")[0]).collect();
+    assert!(ux.windows(2).all(|w| w[1] > w[0]), "{ux:?}");
+    assert!((ux[0]).abs() <= 1e-12 && (ux[10] - delta).abs() <= 1e-12 * delta);
+    assert_eq!(line[0].0, 0.0);
+    assert_eq!(line[10].0, 1.0);
+    // a path that leaves the mesh reports the gaps
+    let off = path(&mesh, u, [-1.0, 0.05, 0.05], [-0.5, 0.05, 0.05], 2);
+    assert!(off.iter().all(|(_, v)| v.is_none()));
+    // fewer than two points is still a segment
+    assert_eq!(path(&mesh, u, [0.0, 0.05, 0.05], [1.0, 0.05, 0.05], 0).len(), 2);
+}
+
+/// Principal stresses against hand-computed 3×3 cases, including a diagonal one the Jacobi
+/// sweep must leave alone.
+#[test]
+fn principal_stresses_match_hand_computed_three_by_three_cases() {
+    // (Voigt stress, expected principal values descending)
+    let cases: [([f64; VOIGT], [f64; 3]); 4] = [
+        ([3.0, 2.0, 1.0, 0.0, 0.0, 0.0], [3.0, 2.0, 1.0]),
+        // pure shear in xy: ±τ and 0
+        ([0.0, 0.0, 0.0, 5.0, 0.0, 0.0], [5.0, 0.0, -5.0]),
+        // hydrostatic
+        ([-4.0, -4.0, -4.0, 0.0, 0.0, 0.0], [-4.0, -4.0, -4.0]),
+        // uniaxial plus shear in xz: (σ/2) ± sqrt((σ/2)² + τ²)
+        ([2.0, 0.0, 0.0, 0.0, 1.5, 0.0], [1.0 + (1.0 + 2.25f64).sqrt(), 0.0, 1.0 - (1.0 + 2.25f64).sqrt()]),
+    ];
+    for (s, want) in cases {
+        let f = FieldData::new(Per::Node, VOIGT, s.to_vec());
+        let got = principal(&f);
+        assert_eq!(got.comps, 3);
+        for (c, w) in want.iter().enumerate() {
+            assert!((got.data[c] - w).abs() <= 1e-12 * w.abs().max(1.0), "{s:?} principal {c}: {}", got.data[c]);
+        }
+        // the invariants must survive: trace and von Mises
+        let trace: f64 = got.data.iter().sum();
+        assert!((trace - (s[0] + s[1] + s[2])).abs() <= 1e-12 * trace.abs().max(1.0));
+        let vm = von_mises(&f).data[0];
+        let by_principal = (0.5
+            * ((got.data[0] - got.data[1]).powi(2)
+                + (got.data[1] - got.data[2]).powi(2)
+                + (got.data[2] - got.data[0]).powi(2)))
+        .sqrt();
+        assert!((vm - by_principal).abs() <= 1e-12 * vm.max(1.0));
+    }
+}
+
+/// Averaging stops at a material boundary: two blocks of different stiffness under the same
+/// strain keep their own stress at the nodes they share.
+#[test]
+fn averaging_never_crosses_a_material_boundary() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([2.0, 1.0, 1.0]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["left".to_string()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    // one block, one material: the shared face is averaged
+    let per_elem = FieldData::new(Per::ElemNode, 1, (0..16).map(|i| if i < 8 { 1.0 } else { 3.0 }).collect());
+    let averaged = average_at_nodes(&p, &per_elem);
+    assert_eq!(averaged.per, Per::Node);
+    assert_eq!(averaged.len(), mesh.n_nodes());
+    let shared: Vec<f64> =
+        (0..mesh.n_nodes()).filter(|&n| mesh.node(n as u32)[0] == 1.0).map(|n| averaged.data[n]).collect();
+    assert!(shared.iter().all(|v| (v - 2.0).abs() < 1e-12), "{shared:?}");
+
+    // pretend the two elements came from different Bodies: the shared nodes keep element 0's
+    let split = Mesh {
+        blocks: vec![
+            femlab_geometry::ElementBlock {
+                kind: ElementKind::Hex8,
+                conn: mesh.blocks[0].conn[..8].to_vec(),
+                first_elem: 0,
+            },
+            femlab_geometry::ElementBlock {
+                kind: ElementKind::Hex8,
+                conn: mesh.blocks[0].conn[8..].to_vec(),
+                first_elem: 1,
+            },
+        ],
+        ..mesh.clone()
+    };
+    let two = vec!["left".to_string(), "right".to_string()];
+    let mut q = problem(&split, &sets, &two, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    q.materials.push(steel());
+    q.material_of_block = vec![Some(0), Some(1)];
+    let averaged = average_at_nodes(&q, &per_elem);
+    let shared: Vec<f64> =
+        (0..split.n_nodes()).filter(|&n| split.node(n as u32)[0] == 1.0).map(|n| averaged.data[n]).collect();
+    assert!(shared.iter().all(|v| (v - 1.0).abs() < 1e-12), "the first material wins: {shared:?}");
+    p.materials.truncate(1);
+}
+
+#[test]
+fn the_observed_rate_recovers_a_planted_slope_and_richardson_the_limit() {
+    let h = [0.4, 0.2, 0.1, 0.05];
+    for slope in [1.0, 2.0, 3.0] {
+        let err: Vec<f64> = h.iter().map(|x| 0.37 * libm::pow(*x, slope)).collect();
+        assert!((observed_rate(&h, &err) - slope).abs() <= 1e-12, "slope {slope}");
+    }
+    // fewer than two usable points, or a zero error, is not a rate
+    assert!(observed_rate(&h[..1], &[1.0]).is_nan());
+    assert!(observed_rate(&h, &[0.0; 4]).is_nan());
+
+    // q(h) = q* + c h^2 converges at rate 2 to q*
+    let (q_star, c) = (1.25, 0.8);
+    let q: Vec<f64> = h.iter().map(|x| q_star + c * x * x).collect();
+    let (limit, rate) = richardson(&h, &q);
+    assert!((rate - 2.0).abs() <= 1e-9, "{rate}");
+    assert!((limit - q_star).abs() <= 1e-9 * q_star, "{limit}");
+    // the order of the meshes does not matter
+    let (rl, rr) = ([h[3], h[0], h[2], h[1]], [q[3], q[0], q[2], q[1]]);
+    let (l2, r2) = richardson(&rl, &rr);
+    assert!((l2 - limit).abs() <= 1e-9 && (r2 - rate).abs() <= 1e-9);
+    // too few meshes, or a sequence that is not converging, has nothing to extrapolate
+    assert!(richardson(&h[..2], &q[..2]).0.is_nan());
+    assert!(richardson(&h, &[1.0, 2.0, 1.0, 2.0]).1.is_nan());
+    assert!(richardson(&[1.0, 1.0, 1.0], &[3.0, 2.0, 1.0]).0.is_nan());
+}
+
+/// A point can sit inside an element's bounding box and outside the element: on a tetrahedral
+/// mesh most of them do, and the probe must walk past those.
+#[test]
+fn a_probe_walks_past_elements_whose_box_it_is_only_nearly_in() {
+    let mesh = Structured { kind: ElementKind::Tet4, n: [2, 2, 2] }.box_([1.0, 1.0, 1.0]);
+    let f = FieldData::new(Per::Node, 1, (0..mesh.n_nodes()).map(|n| mesh.node(n as u32)[0]).collect());
+    // a linear field is reproduced exactly wherever the probe lands
+    for at in [[0.1, 0.9, 0.4], [0.5, 0.5, 0.5], [0.87, 0.13, 0.21]] {
+        let (elem, v) = probe(&mesh, &f, at).expect("inside the cube");
+        assert!(elem < mesh.n_elems() as u32);
+        assert!((v[0] - at[0]).abs() <= 1e-12, "{at:?} gave {v:?}");
+    }
+    assert!(probe(&mesh, &f, [1.5, 0.5, 0.5]).is_none());
+}
+
+/// Stress recovery calls the material law, so it reports a law given the wrong properties —
+/// which is how a caller that skipped assembly finds out.
+#[test]
+fn recovering_stress_reports_a_material_it_cannot_call() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["c".to_string()];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.materials[0].props = vec![YOUNG];
+    let u = vec![0.0; p.n_dofs()];
+    assert_eq!(stress_gp(&p, &u).map(|_| ()).expect_err("one prop, not two").code, ErrorCode::MaterialProps);
 }
