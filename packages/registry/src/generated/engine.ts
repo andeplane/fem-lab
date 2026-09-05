@@ -1036,6 +1036,11 @@ export type MesherSpec =
       body?: string | null;
       blocks: QuadBlockSpec[];
       kind: "mapped";
+    }
+  | {
+      base: MesherSpec;
+      sweep: SweepSpec;
+      kind: "sweep";
     };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -1132,6 +1137,28 @@ export type CurveSpec =
         )
       ];
       kind: "ellipse";
+    };
+/**
+ * How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.
+ */
+export type SweepSpec =
+  | {
+      layers: number;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      height:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "extrude";
+    }
+  | {
+      segments: number;
+      angleDeg: number;
+      kind: "revolve";
     };
 /**
  * Element formulation for linear hexahedra and quadrilaterals.
@@ -1413,6 +1440,11 @@ export type MesherSettings =
       body: string;
       blocks: QuadBlock[];
       kind: "mapped";
+    }
+  | {
+      base: MesherSettings;
+      sweep: Sweep;
+      kind: "sweep";
     };
 /**
  * The shape of one block edge between its two corners.
@@ -1442,6 +1474,20 @@ export type Curve =
        */
       semi_axes: [number, number];
       kind: "ellipse";
+    };
+/**
+ * How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
+ */
+export type Sweep =
+  | {
+      layers: number;
+      height: number;
+      kind: "extrude";
+    }
+  | {
+      segments: number;
+      angle_deg: number;
+      kind: "revolve";
     };
 /**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.

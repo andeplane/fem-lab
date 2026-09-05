@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use femlab_geometry::{
-    annulus, elliptic_annulus, mapped, perturb_interior, split_to_simplices, Curve, ElementBlock, ElementKind, Face,
-    FaceKind, Mesh, QuadBlock, Structured,
+    annulus, elliptic_annulus, extrude, mapped, perturb_interior, revolve, split_to_simplices, Curve, ElementBlock,
+    ElementKind, Face, FaceKind, Mesh, QuadBlock, Structured,
 };
 use proptest::prelude::*;
 
@@ -1042,4 +1042,196 @@ fn an_elliptic_edge_takes_the_short_way_across_the_negative_x_axis() {
     let exact = PI / 4.0 * (1.0 - 0.25);
     let err = |n: usize| (measure(&mapped(&sector(n), ElementKind::Quad8).unwrap()) - exact).abs();
     assert!(err(4) / err(8) > 3.5, "errors {} {}", err(4), err(8));
+}
+
+// ---- sweep: extrude and revolve --------------------------------------------------------------
+
+/// Serendipity shape function `i` of a hex8 or hex20 at the reference point `x`.
+fn hex_shape(kind: ElementKind, i: usize, x: [f64; 3]) -> f64 {
+    if i < 8 {
+        let r = HEX_REF[i];
+        let p = (0..3).map(|k| 1.0 + x[k] * r[k]).product::<f64>() / 8.0;
+        match kind {
+            ElementKind::Hex8 => p,
+            _ => p * ((0..3).map(|k| x[k] * r[k]).sum::<f64>() - 2.0),
+        }
+    } else {
+        let [a, b] = kind.edges()[i - 8];
+        let r = mean(&[HEX_REF[a as usize], HEX_REF[b as usize]]);
+        let z = (0..3).find(|&k| r[k] == 0.0).expect("a mid-edge node is centred on one axis");
+        0.25 * (1.0 - x[z] * x[z]) * (0..3).filter(|&k| k != z).map(|k| 1.0 + x[k] * r[k]).product::<f64>()
+    }
+}
+
+/// Volume by 3×3×3 Gauss quadrature of the isoparametric map, so a hex20's curved faces count.
+/// The Jacobian is a central difference of the map, good to about 1e-10 of the volume.
+fn iso_volume(m: &Mesh) -> f64 {
+    let g = [-libm::sqrt(0.6), 0.0, libm::sqrt(0.6)];
+    let w = [5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0];
+    let h = 1e-5;
+    let mut vol = 0.0;
+    for e in 0..m.n_elems() as u32 {
+        let kind = m.kind_of(e);
+        let nodes: Vec<[f64; 3]> = m.elem_nodes(e).iter().map(|&n| m.node(n)).collect();
+        let map = |x: [f64; 3]| {
+            let mut p = [0.0; 3];
+            for (i, xi) in nodes.iter().enumerate() {
+                let n = hex_shape(kind, i, x);
+                for k in 0..3 {
+                    p[k] += n * xi[k];
+                }
+            }
+            p
+        };
+        for a in 0..3 {
+            for b in 0..3 {
+                for c in 0..3 {
+                    let x = [g[a], g[b], g[c]];
+                    let mut j = [[0.0; 3]; 3];
+                    for d in 0..3 {
+                        let (mut xp, mut xm) = (x, x);
+                        xp[d] += h;
+                        xm[d] -= h;
+                        let (pp, pm) = (map(xp), map(xm));
+                        for k in 0..3 {
+                            j[k][d] = (pp[k] - pm[k]) / (2.0 * h);
+                        }
+                    }
+                    vol += w[a] * w[b] * w[c] * det3(j);
+                }
+            }
+        }
+    }
+    vol
+}
+
+/// Every mid-edge node of a quadratic element is the midpoint of its two corners.
+fn mid_nodes_are_midpoints(m: &Mesh) -> bool {
+    (0..m.n_elems() as u32).all(|e| {
+        let kind = m.kind_of(e);
+        let n: Vec<[f64; 3]> = m.elem_nodes(e).iter().map(|&i| m.node(i)).collect();
+        kind.edges().iter().enumerate().all(|(i, &[a, b])| {
+            let mid = mean(&[n[a as usize], n[b as usize]]);
+            (0..3).all(|k| (n[kind.n_corners() + i][k] - mid[k]).abs() < 1e-12)
+        })
+    })
+}
+
+fn plate(kind: ElementKind, n: [usize; 3]) -> Mesh {
+    Structured { kind, n }.build(|p| [2.0 * p[0], 3.0 * p[1], 0.0])
+}
+
+#[test]
+fn extruding_a_quad_mesh_gives_an_exact_box_of_hexes() {
+    let base = plate(ElementKind::Quad4, [2, 3, 1]);
+    let m = extrude(&base, 4, 5.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.blocks[0].kind, ElementKind::Hex8);
+    assert_eq!((m.n_nodes(), m.n_elems()), (base.n_nodes() * 5, 6 * 4));
+    assert!(min_element_measure(&m) > 0.0);
+    assert!((measure(&m) - 30.0).abs() < 1e-12, "{}", measure(&m));
+    assert!((iso_volume(&m) - 30.0).abs() < 1e-7, "{}", iso_volume(&m));
+    assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["bottom", "top", "xmax", "xmin", "ymax", "ymin"]);
+    assert_eq!((m.face_sets["bottom"].len(), m.face_sets["top"].len()), (6, 6));
+    assert_eq!(m.face_sets["xmin"].len(), 3 * 4);
+    assert_eq!(m.face_sets["ymin"].len(), 2 * 4);
+    assert!(face_set_nodes(&m, "bottom").iter().all(|&i| m.node(i)[2] == 0.0));
+    assert!(face_set_nodes(&m, "top").iter().all(|&i| (m.node(i)[2] - 5.0).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "xmin").iter().all(|&i| m.node(i)[0] == 0.0));
+    assert_eq!(m.elem_sets["all"].len(), 24);
+    assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+
+    // quad8 gives hex20: the mid-edge nodes of the base on the whole layers, the corner nodes
+    // alone on the half layers, and no face-centre node anywhere
+    let base8 = plate(ElementKind::Quad8, [2, 3, 1]);
+    let m = extrude(&base8, 2, 5.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.blocks[0].kind, ElementKind::Hex20);
+    assert_eq!((base8.n_nodes(), m.n_nodes(), m.n_elems()), (29, 3 * 29 + 2 * 12, 12));
+    assert!(min_element_measure(&m) > 0.0);
+    assert!((iso_volume(&m) - 30.0).abs() < 1e-7, "{}", iso_volume(&m));
+    assert!(mid_nodes_are_midpoints(&m), "a straight extrusion is affine in every direction");
+    assert_eq!(m.face_sets["bottom"].len(), 6);
+    assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+}
+
+/// A meridian section of the Lamé cylinder: `x = r` from `a` to `b`, `y = z` from 0 to `h`.
+fn section(kind: ElementKind, n: [usize; 3], a: f64, b: f64, h: f64) -> Mesh {
+    Structured { kind, n }.build(|p| [a + p[0] * (b - a), p[1] * h, 0.0])
+}
+
+#[test]
+fn revolving_a_section_converges_to_the_cylinder_volume() {
+    let (a, b, h) = (0.1, 0.2, 0.1);
+    let quarter = PI * (b * b - a * a) * h / 4.0;
+    let err = |kind, n: usize| {
+        let m = revolve(&section(kind, [2, 1, 1], a, b, h), n, 90.0).unwrap();
+        assert!(min_element_measure(&m) > 0.0, "a revolved counter-clockwise section stays positive");
+        (iso_volume(&m) - quarter).abs()
+    };
+    let (e2, e4) = (err(ElementKind::Quad4, 2), err(ElementKind::Quad4, 4));
+    assert!(e4 < 0.03 * quarter && e2 / e4 > 3.5, "hex8 errors {e2} {e4}");
+    let (q2, q4) = (err(ElementKind::Quad8, 2), err(ElementKind::Quad8, 4));
+    assert!(q4 < 1e-4 * quarter && q2 / q4 > 10.0, "hex20 errors {q2} {q4}");
+    assert!(q4 < e4 / 100.0, "mid-nodes on the arc beat straight chords by two orders");
+
+    let m = revolve(&section(ElementKind::Quad8, [2, 1, 1], a, b, h), 4, 90.0).unwrap();
+    m.validate().unwrap();
+    // every node sits on the cylinder radius its base node had, mid-nodes at the half angle
+    for i in 0..m.n_nodes() as u32 {
+        let r = radius(m.node(i));
+        assert!(r > a - 1e-12 && r < b + 1e-12, "{r}");
+    }
+    assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["theta0", "theta1", "xmax", "xmin", "ymax", "ymin"]);
+    assert_eq!((m.face_sets["theta0"].len(), m.face_sets["theta1"].len()), (2, 2));
+    assert!(face_set_nodes(&m, "theta0").iter().all(|&i| m.node(i)[1].abs() < 1e-12));
+    assert!(face_set_nodes(&m, "theta1").iter().all(|&i| m.node(i)[0].abs() < 1e-12));
+    assert!(face_set_nodes(&m, "xmax").iter().all(|&i| (radius(m.node(i)) - b).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "xmin").iter().all(|&i| (radius(m.node(i)) - a).abs() < 1e-12));
+    assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+}
+
+#[test]
+fn a_full_revolution_merges_its_seam() {
+    let (a, b, h) = (0.1, 0.2, 0.1);
+    let base = section(ElementKind::Quad4, [2, 1, 1], a, b, h);
+    let m = revolve(&base, 8, 360.0).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.n_nodes(), 8 * base.n_nodes(), "the last slice is the first one again");
+    assert_eq!(m.n_elems(), 8 * base.n_elems());
+    assert!(min_element_measure(&m) > 0.0);
+    assert!(!m.face_sets.contains_key("theta0") && !m.face_sets.contains_key("theta1"));
+    assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["xmax", "xmin", "ymax", "ymin"]);
+    // a closed tube has no free end: every boundary face is named
+    assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+    let exact = PI * (b * b - a * a) * h;
+    // eight straight-chord slices under-fill the tube by (1 - (n/2pi) sin(2pi/n)) = 10 %
+    assert!((iso_volume(&m) / exact - 0.9003).abs() < 1e-3, "{}", iso_volume(&m) / exact);
+    let base8 = section(ElementKind::Quad8, [2, 1, 1], a, b, h);
+    let q = revolve(&base8, 6, 360.0).unwrap();
+    q.validate().unwrap();
+    assert_eq!(
+        q.n_nodes(),
+        6 * (base8.n_nodes() + 3 * 2),
+        "whole slices carry the base's mid-nodes, half slices only its corners"
+    );
+    assert!((iso_volume(&q) - exact).abs() < 3e-3 * exact, "{}", iso_volume(&q) / exact);
+}
+
+#[test]
+fn sweeps_refuse_what_they_cannot_sweep() {
+    let base = plate(ElementKind::Quad4, [1, 1, 1]);
+    assert!(extrude(&cube(ElementKind::Hex8, [1, 1, 1]), 1, 1.0).unwrap_err().0.contains("2D base mesh"));
+    let mut two = plate(ElementKind::Quad4, [1, 1, 1]);
+    two.blocks.push(ElementBlock { kind: ElementKind::Quad4, conn: two.blocks[0].conn.clone(), first_elem: 1 });
+    assert!(extrude(&two, 1, 1.0).unwrap_err().0.contains("one element kind"));
+    assert!(extrude(&plate(ElementKind::Tri3, [1, 1, 1]), 1, 1.0).unwrap_err().0.contains("quad4 or quad8"));
+    assert!(extrude(&base, 0, 1.0).unwrap_err().0.contains("at least one layer"));
+    assert!(extrude(&base, 1, 0.0).unwrap_err().0.contains("must be finite and positive"));
+    assert!(revolve(&cube(ElementKind::Hex8, [1, 1, 1]), 1, 90.0).unwrap_err().0.contains("2D base mesh"));
+    assert!(revolve(&base, 0, 90.0).unwrap_err().0.contains("at least one segment"));
+    assert!(revolve(&base, 1, 400.0).unwrap_err().0.contains("in (0, 360]"));
+    assert!(revolve(&base, 1, 0.0).unwrap_err().0.contains("in (0, 360]"));
+    // the base touches x = 0, which a revolution about z cannot mesh
+    assert!(revolve(&base, 4, 90.0).unwrap_err().0.contains("butterfly block set"));
 }

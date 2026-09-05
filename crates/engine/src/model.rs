@@ -165,6 +165,19 @@ pub enum MesherSettings {
         body: String,
         blocks: Vec<QuadBlock>,
     },
+    /// A 2D mesher swept into 3D.
+    Sweep {
+        base: Box<MesherSettings>,
+        sweep: Sweep,
+    },
+}
+
+/// How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Sweep {
+    Extrude { layers: usize, height: f64 },
+    Revolve { segments: usize, angle_deg: f64 },
 }
 
 impl MesherSettings {
@@ -173,6 +186,7 @@ impl MesherSettings {
         match self {
             MesherSettings::Lattice { .. } => None,
             MesherSettings::Mapped { body, .. } => Some(body),
+            MesherSettings::Sweep { base, .. } => base.implicit_body(),
         }
     }
 }

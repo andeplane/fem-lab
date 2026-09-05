@@ -186,6 +186,25 @@ pub struct QuadBlockSpec {
     pub tags: Option<[Option<String>; 4]>,
 }
 
+/// How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SweepSpec {
+    /// Extrude along z into `layers` layers of equal thickness, `height` in total. Use an even
+    /// number of layers when a Set has to land on the mid-plane. The ends become the face sets
+    /// `<body>.bottom` (z = 0) and `<body>.top`.
+    Extrude { layers: u32, height: Q<Length> },
+    /// Revolve the base, read as an (r, z) section with x the radius and y the axis, about the
+    /// z axis through `angleDeg` in `segments` steps. Below a full turn the ends become the
+    /// face sets `<body>.theta0` and `<body>.theta1`; a full turn merges its seam instead. A
+    /// base node at r = 0 is refused: mesh a solid section as blocks and extrude it.
+    Revolve {
+        segments: u32,
+        #[serde(rename = "angleDeg")]
+        angle_deg: f64,
+    },
+}
+
 /// The mesher and its settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -204,6 +223,12 @@ pub enum MesherSpec {
         body: Option<String>,
         blocks: Vec<QuadBlockSpec>,
     },
+    /// A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`
+    /// extrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes
+    /// on the swept curve). The base's edge face Sets become the side faces of the solid, so a
+    /// Set named on the section is still there in 3D, and the ends get their own. The
+    /// idealisation must be 3D, and the base must be a 2D mesher: mapped, not lattice.
+    Sweep { base: Box<MesherSpec>, sweep: SweepSpec },
 }
 
 /// A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.

@@ -1383,3 +1383,137 @@ fn a_mapped_mesher_validates_every_field_it_reads() {
     assert_eq!(er.where_.as_deref(), Some("mesher.blocks"));
     assert!(er.cause.contains("four distinct corners"), "{}", er.cause);
 }
+
+/// C §7 D1: the NAFEMS LE10 plate, LE1's elliptic block extruded in an even number of layers.
+fn le10(order: u8, layers: u32) -> String {
+    format!(
+        r#"{{"cmd":"mesh.set","mesher":{{"kind":"sweep","base":{{"kind":"mapped","body":"plate","blocks":[{{
+        "corners":[["2 m","0 m"],["3.25 m","0 m"],["0 m","2.75 m"],["0 m","1 m"]],
+        "edges":[{{"kind":"line"}},{{"kind":"ellipse","center":["0 m","0 m"],"semiAxes":["3.25 m","2.75 m"]}},
+                 {{"kind":"line"}},{{"kind":"ellipse","center":["0 m","0 m"],"semiAxes":["2 m","1 m"]}}],
+        "n":[2,3],"tags":["y0","outer","x0","inner"]}}]}},
+        "sweep":{{"kind":"extrude","layers":{layers},"height":"0.6 m"}}}},"order":{order}}}"#
+    )
+}
+
+#[test]
+fn a_swept_mapped_base_gives_hexes_with_named_ends() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"le10"}"#);
+    ok(&mut e, &le10(1, 4));
+    let m = mesh_summary(&mut e);
+    assert_eq!((m.elements, m.element_kind.as_str()), (2 * 3 * 4, "hex8"));
+    assert_eq!((m.nodes, m.dofs), (3 * 4 * 5, 3 * m.nodes));
+    assert_eq!(
+        m.sets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["plate.bottom", "plate.inner", "plate.outer", "plate.top", "plate.x0", "plate.y0"]
+    );
+    // the ends are the plate's faces: 6 quads each, of the quarter elliptic annulus area
+    let top = set_info(&mut e, "plate.top");
+    assert_eq!((top.kind.as_str(), top.count), ("face", 6));
+    assert_eq!(top.measure.unit, "m^2");
+    let exact = std::f64::consts::PI / 4.0 * (3.25 * 2.75 - 2.0);
+    assert!((top.measure.value - exact).abs() < 0.05 * exact, "{:?} vs {exact}", top.measure);
+    assert_eq!(set_info(&mut e, "plate.outer").count, 3 * 4);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"edge","on":"plate.outer"}"#);
+
+    // order 2 gives hex20, whose whole layers carry the base's mid-nodes
+    ok(&mut e, &le10(2, 2));
+    let m = mesh_summary(&mut e);
+    assert_eq!((m.elements, m.element_kind.as_str()), (2 * 3 * 2, "hex20"));
+    let base_nodes = 5 * 7 - 2 * 3;
+    assert_eq!(m.nodes, 3 * base_nodes + 2 * (3 * 4));
+    let top = set_info(&mut e, "plate.top");
+    assert!((top.measure.value - exact).abs() < 0.05 * exact, "{:?}", top.measure);
+
+    // a 2D idealisation cannot hold a swept mesh
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::ModelIllPosed);
+    assert!(er.cause.contains("the sweep mesher makes a 3D mesh"), "{}", er.cause);
+}
+
+#[test]
+fn revolving_a_section_names_theta0_and_theta1() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"lame"}"#);
+    // C §7 C2: the Lame cylinder strip r in [0.1, 0.2] m, z in [0, 0.1] m, revolved 90 degrees
+    let strip = |sweep: &str| {
+        format!(
+            r#"{{"cmd":"mesh.set","mesher":{{"kind":"sweep","body":null,"base":{{"kind":"mapped","body":"tube",
+            "blocks":[{{"corners":[["0.1 m","0 m"],["0.2 m","0 m"],["0.2 m","0.1 m"],["0.1 m","0.1 m"]],
+            "n":[2,1],"tags":["zmin","outer","zmax","inner"]}}]}},"sweep":{sweep}}}}}"#
+        )
+    };
+    ok(&mut e, &strip(r#"{"kind":"revolve","segments":4,"angleDeg":90}"#));
+    let m = mesh_summary(&mut e);
+    assert_eq!((m.elements, m.element_kind.as_str()), (8, "hex8"));
+    assert_eq!(m.nodes, 5 * 3 * 2);
+    assert_eq!(
+        m.sets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["tube.inner", "tube.outer", "tube.theta0", "tube.theta1", "tube.zmax", "tube.zmin"]
+    );
+    assert_eq!(set_info(&mut e, "tube.theta0").count, 2);
+    let inner = set_info(&mut e, "tube.inner");
+    // a quarter of the inner wall: 2 pi r h / 4, less the chord error of four flat facets
+    assert!((inner.measure.value - 0.005 * std::f64::consts::PI).abs() < 4e-4, "{:?}", inner.measure);
+
+    // a full turn merges its seam and has no theta faces
+    ok(&mut e, &strip(r#"{"kind":"revolve","segments":8,"angleDeg":360}"#));
+    let m = mesh_summary(&mut e);
+    assert_eq!((m.elements, m.nodes), (16, 8 * 3 * 2));
+    assert!(!m.sets.iter().any(|s| s.name.starts_with("tube.theta")));
+
+    // a section on the axis is a mesh failure that names the way out
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"sweep","base":{"kind":"mapped","blocks":[
+          {"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]],"n":[1,1]}]},
+          "sweep":{"kind":"revolve","segments":4,"angleDeg":90}}}"#,
+    );
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::MeshFailed);
+    assert_eq!(er.where_.as_deref(), Some("mesher.sweep"));
+    assert!(er.cause.contains("butterfly"), "{}", er.cause);
+}
+
+#[test]
+fn a_sweep_validates_its_own_fields_and_refuses_a_lattice_base() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"bad"}"#);
+    let block = r#"{"kind":"mapped","blocks":[{"corners":[["1 m","0 m"],["2 m","0 m"],["2 m","1 m"],["1 m","1 m"]],"n":[1,1]}]}"#;
+    let sweep = |s: &str| format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"sweep","base":{block},"sweep":{s}}}}}"#);
+    assert_eq!(where_(&mut e, &sweep(r#"{"kind":"extrude","layers":0,"height":"1 m"}"#)), "mesher.sweep.layers");
+    assert_eq!(where_(&mut e, &sweep(r#"{"kind":"extrude","layers":1,"height":"1 s"}"#)), "mesher.sweep.height");
+    assert_eq!(where_(&mut e, &sweep(r#"{"kind":"extrude","layers":1,"height":"0 m"}"#)), "mesher.sweep.height");
+    assert_eq!(where_(&mut e, &sweep(r#"{"kind":"revolve","segments":0,"angleDeg":90}"#)), "mesher.sweep.segments");
+    assert_eq!(where_(&mut e, &sweep(r#"{"kind":"revolve","segments":4,"angleDeg":400}"#)), "mesher.sweep.angleDeg");
+    // the base is validated too, with its own paths
+    assert_eq!(
+        where_(
+            &mut e,
+            r#"{"cmd":"mesh.set","mesher":{"kind":"sweep","base":{"kind":"mapped","blocks":[]},
+                "sweep":{"kind":"extrude","layers":1,"height":"1 m"}}}"#
+        ),
+        "mesher.blocks"
+    );
+    // a lattice base meshes whole Bodies, not a section
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"sweep","base":{"kind":"lattice","size":"1 m"},
+            "sweep":{"kind":"extrude","layers":1,"height":"1 m"}}}"#,
+    );
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::MeshFailed);
+    assert_eq!(er.where_.as_deref(), Some("mesher.base"));
+    // and a sweep of a sweep has a 3D base, which the sweep refuses
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"mesh.set","mesher":{{"kind":"sweep","base":{{"kind":"sweep","base":{block},
+               "sweep":{{"kind":"extrude","layers":1,"height":"1 m"}}}},
+               "sweep":{{"kind":"extrude","layers":1,"height":"1 m"}}}}}}"#
+        ),
+    );
+    assert!(e.query(Query::Mesh {}).unwrap_err().cause.contains("2D base mesh"));
+}

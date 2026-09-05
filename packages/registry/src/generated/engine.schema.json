@@ -1834,6 +1834,27 @@
               "kind",
               "blocks"
             ]
+          },
+          {
+            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must be a 2D mesher: mapped, not lattice.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSpec"
+              },
+              "sweep": {
+                "$ref": "#/$defs/SweepSpec"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
           }
         ]
       },
@@ -2011,6 +2032,58 @@
               "kind",
               "center",
               "semiAxes"
+            ]
+          }
+        ]
+      },
+      "SweepSpec": {
+        "description": "How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.",
+        "oneOf": [
+          {
+            "description": "Extrude along z into `layers` layers of equal thickness, `height` in total. Use an even\nnumber of layers when a Set has to land on the mid-plane. The ends become the face sets\n`<body>.bottom` (z = 0) and `<body>.top`.",
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "height": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "description": "Revolve the base, read as an (r, z) section with x the radius and y the axis, about the\nz axis through `angleDeg` in `segments` steps. Below a full turn the ends become the\nface sets `<body>.theta0` and `<body>.theta1`; a full turn merges its seam instead. A\nbase node at r = 0 is refused: mesh a solid section as blocks and extrude it.",
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angleDeg"
             ]
           }
         ]
@@ -3063,6 +3136,27 @@
               "body",
               "blocks"
             ]
+          },
+          {
+            "description": "A 2D mesher swept into 3D.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSettings"
+              },
+              "sweep": {
+                "$ref": "#/$defs/Sweep"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
           }
         ]
       },
@@ -3205,6 +3299,57 @@
               "kind",
               "center",
               "semi_axes"
+            ]
+          }
+        ]
+      },
+      "Sweep": {
+        "description": "How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "height": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "angle_deg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angle_deg"
             ]
           }
         ]
@@ -5457,6 +5602,27 @@
               "kind",
               "blocks"
             ]
+          },
+          {
+            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must be a 2D mesher: mapped, not lattice.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSpec"
+              },
+              "sweep": {
+                "$ref": "#/$defs/SweepSpec"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
           }
         ]
       },
@@ -5634,6 +5800,58 @@
               "kind",
               "center",
               "semiAxes"
+            ]
+          }
+        ]
+      },
+      "SweepSpec": {
+        "description": "How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.",
+        "oneOf": [
+          {
+            "description": "Extrude along z into `layers` layers of equal thickness, `height` in total. Use an even\nnumber of layers when a Set has to land on the mid-plane. The ends become the face sets\n`<body>.bottom` (z = 0) and `<body>.top`.",
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "height": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "description": "Revolve the base, read as an (r, z) section with x the radius and y the axis, about the\nz axis through `angleDeg` in `segments` steps. Below a full turn the ends become the\nface sets `<body>.theta0` and `<body>.theta1`; a full turn merges its seam instead. A\nbase node at r = 0 is refused: mesh a solid section as blocks and extrude it.",
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angleDeg"
             ]
           }
         ]
@@ -7861,6 +8079,27 @@
               "body",
               "blocks"
             ]
+          },
+          {
+            "description": "A 2D mesher swept into 3D.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSettings"
+              },
+              "sweep": {
+                "$ref": "#/$defs/Sweep"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
           }
         ]
       },
@@ -8003,6 +8242,57 @@
               "kind",
               "center",
               "semi_axes"
+            ]
+          }
+        ]
+      },
+      "Sweep": {
+        "description": "How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "height": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "angle_deg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angle_deg"
             ]
           }
         ]
@@ -9853,6 +10143,27 @@
               "kind",
               "blocks"
             ]
+          },
+          {
+            "description": "A 3D mesh swept from a 2D one: `base` is the mesher that makes the section, and `sweep`\nextrudes or revolves it into hexahedra (a quadratic base gives hex20 with the mid-nodes\non the swept curve). The base's edge face Sets become the side faces of the solid, so a\nSet named on the section is still there in 3D, and the ends get their own. The\nidealisation must be 3D, and the base must be a 2D mesher: mapped, not lattice.",
+            "type": "object",
+            "properties": {
+              "base": {
+                "$ref": "#/$defs/MesherSpec"
+              },
+              "sweep": {
+                "$ref": "#/$defs/SweepSpec"
+              },
+              "kind": {
+                "type": "string",
+                "const": "sweep"
+              }
+            },
+            "required": [
+              "kind",
+              "base",
+              "sweep"
+            ]
           }
         ]
       },
@@ -10030,6 +10341,58 @@
               "kind",
               "center",
               "semiAxes"
+            ]
+          }
+        ]
+      },
+      "SweepSpec": {
+        "description": "How a 2D mesh is swept into a 3D one: straight along z, or around the z axis.",
+        "oneOf": [
+          {
+            "description": "Extrude along z into `layers` layers of equal thickness, `height` in total. Use an even\nnumber of layers when a Set has to land on the mid-plane. The ends become the face sets\n`<body>.bottom` (z = 0) and `<body>.top`.",
+            "type": "object",
+            "properties": {
+              "layers": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "height": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "kind": {
+                "type": "string",
+                "const": "extrude"
+              }
+            },
+            "required": [
+              "kind",
+              "layers",
+              "height"
+            ]
+          },
+          {
+            "description": "Revolve the base, read as an (r, z) section with x the radius and y the axis, about the\nz axis through `angleDeg` in `segments` steps. Below a full turn the ends become the\nface sets `<body>.theta0` and `<body>.theta1`; a full turn merges its seam instead. A\nbase node at r = 0 is refused: mesh a solid section as blocks and extrude it.",
+            "type": "object",
+            "properties": {
+              "segments": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "angleDeg": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "revolve"
+              }
+            },
+            "required": [
+              "kind",
+              "segments",
+              "angleDeg"
             ]
           }
         ]

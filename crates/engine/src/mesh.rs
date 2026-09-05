@@ -6,14 +6,14 @@
 use std::collections::BTreeMap;
 
 use femlab_geometry::{
-    face_centroid_normal, lattice, mapped, nearest_boundary_face, resolve_face_set, resolve_region, Curve,
-    ElementBlock, ElementKind, Face, Mesh, QuadBlock, Solid,
+    extrude, face_centroid_normal, lattice, mapped, nearest_boundary_face, resolve_face_set, resolve_region, revolve,
+    Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, Solid,
 };
 
-use crate::command::{CurveSpec, LatticeSize, MesherSpec, QuadBlockSpec};
+use crate::command::{CurveSpec, LatticeSize, MesherSpec, QuadBlockSpec, SweepSpec};
 use crate::engine::display;
 use crate::error::{Error, ErrorCode};
-use crate::model::{MesherSettings, Model, SetSource};
+use crate::model::{MesherSettings, Model, SetSource, Sweep};
 use crate::units::{Dim, Length, Q};
 
 /// What a Set selects.
@@ -86,14 +86,9 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let quadratic = settings.order == 2;
     let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
         MesherSettings::Lattice { size, counts } => lattice_bodies(model, solids, dim, quadratic, *size, *counts)?,
-        MesherSettings::Mapped { body, blocks } => {
-            let kind = if quadratic { ElementKind::Quad8 } else { ElementKind::Quad4 };
-            let part = mapped(blocks, kind).map_err(|e| {
-                Error::new(ErrorCode::MeshFailed, e.0)
-                    .at("mesher.blocks")
-                    .suggest("mesh.set with the same divisions and grading on the block edges that meet")
-            })?;
-            one_body(body, part, dim, "mapped")?
+        m => {
+            let (body, part, mesher) = planar_or_swept(m, quadratic)?;
+            one_body(&body, part, dim, mesher)?
         }
     };
     mesh.elem_sets.insert("all".into(), (0..mesh.n_elems() as u32).collect());
@@ -134,6 +129,43 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
 /// What a mesher produced: the Mesh, the Body of every element block, and the boundary faces
 /// of each Body, which is what a `geometry.nameFace` predicate is resolved against.
 type Meshed = (Mesh, Vec<String>, BTreeMap<String, Vec<Face>>);
+
+/// The Mesh of a mesher that is its own geometry, with the Body it makes and the mesher's name.
+///
+/// A sweep meshes its base the same way and then extrudes or revolves it, so the Body of a
+/// swept mesh is the base's.
+fn planar_or_swept(m: &MesherSettings, quadratic: bool) -> Result<(String, Mesh, &'static str), Error> {
+    match m {
+        MesherSettings::Lattice { .. } => Err(Error::new(
+            ErrorCode::MeshFailed,
+            "a sweep needs a 2D base mesher, and the lattice mesher meshes whole Bodies",
+        )
+        .at("mesher.base")
+        .suggest("mesh.set with a mapped base")),
+        MesherSettings::Mapped { body, blocks } => {
+            let kind = if quadratic { ElementKind::Quad8 } else { ElementKind::Quad4 };
+            let part = mapped(blocks, kind).map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.0)
+                    .at("mesher.blocks")
+                    .suggest("mesh.set with the same divisions and grading on the block edges that meet")
+            })?;
+            Ok((body.clone(), part, "mapped"))
+        }
+        MesherSettings::Sweep { base, sweep } => {
+            let (body, section, _) = planar_or_swept(base, quadratic)?;
+            let swept = match *sweep {
+                Sweep::Extrude { layers, height } => extrude(&section, layers, height),
+                Sweep::Revolve { segments, angle_deg } => revolve(&section, segments, angle_deg),
+            }
+            .map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.0)
+                    .at("mesher.sweep")
+                    .suggest("mesh.set with a 2D base whose section stays clear of the axis")
+            })?;
+            Ok((body, swept, "sweep"))
+        }
+    }
+}
 
 /// A mesher that is its own geometry: one Mesh, one Body, face sets renamed `<body>.<tag>`.
 fn one_body(body: &str, part: Mesh, dim: usize, mesher: &str) -> Result<Meshed, Error> {
@@ -239,6 +271,37 @@ pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
                 out.push(quad_block(b, i)?);
             }
             Ok(MesherSettings::Mapped { body: body.clone().unwrap_or_else(|| "sheet".to_string()), blocks: out })
+        }
+        MesherSpec::Sweep { base, sweep } => {
+            Ok(MesherSettings::Sweep { base: Box::new(mesher_settings(base)?), sweep: sweep_settings(sweep)? })
+        }
+    }
+}
+
+/// How far and in how many steps a sweep goes, in SI.
+fn sweep_settings(spec: &SweepSpec) -> Result<Sweep, Error> {
+    match spec {
+        SweepSpec::Extrude { layers, height } => {
+            if *layers == 0 {
+                return Err(Error::schema("an extrusion needs at least one layer").at("mesher.sweep.layers"));
+            }
+            let h = height.si().map_err(|e| e.at("mesher.sweep.height"))?;
+            if h <= 0.0 {
+                return Err(Error::schema("the extrusion height must be positive").at("mesher.sweep.height"));
+            }
+            Ok(Sweep::Extrude { layers: *layers as usize, height: h })
+        }
+        SweepSpec::Revolve { segments, angle_deg } => {
+            if *segments == 0 {
+                return Err(Error::schema("a revolution needs at least one segment").at("mesher.sweep.segments"));
+            }
+            if !(angle_deg.is_finite() && *angle_deg > 0.0 && *angle_deg <= 360.0) {
+                return Err(Error::schema(format!(
+                    "the revolution angle is {angle_deg} degrees; it must be above 0 and at most 360"
+                ))
+                .at("mesher.sweep.angleDeg"));
+            }
+            Ok(Sweep::Revolve { segments: *segments as usize, angle_deg: *angle_deg })
         }
     }
 }
