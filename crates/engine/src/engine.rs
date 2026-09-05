@@ -5,13 +5,13 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::{Shape, Solid};
 
-use crate::command::{Command, ExportFormat, IdealisationSpec, LatticeSize, MesherSpec, ObjectKind};
+use crate::command::{Command, ExportFormat, IdealisationSpec, ObjectKind};
 use crate::error::{Error, ErrorCode, Warning};
 use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
 use crate::model::{
-    Body, Constraint, ConstraintKind, Cut, Idealisation, Load, LoadKind, Material, MeshSettings, MesherSettings, Model,
-    NamedSet, SetSource, Step,
+    Body, Constraint, ConstraintKind, Cut, Idealisation, Load, LoadKind, Material, MeshSettings, Model, NamedSet,
+    SetSource, Step,
 };
 use crate::par::Pool;
 use crate::query::{Ack, Output};
@@ -494,23 +494,7 @@ impl Engine {
                 if !(1..=2).contains(&order) {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
                 }
-                let settings = match mesher {
-                    MesherSpec::Lattice { size } => match size {
-                        LatticeSize::Size(q) => {
-                            let s = q.si().map_err(|e| e.at("mesher.size"))?;
-                            if s <= 0.0 {
-                                return Err(Error::schema("element size must be positive").at("mesher.size"));
-                            }
-                            MesherSettings::Lattice { size: Some(s), counts: None }
-                        }
-                        LatticeSize::Counts { nx, ny, nz } => {
-                            if *nx == 0 || *ny == 0 || *nz == 0 {
-                                return Err(Error::schema("element counts must be at least 1").at("mesher.size"));
-                            }
-                            MesherSettings::Lattice { size: None, counts: Some([*nx, *ny, *nz]) }
-                        }
-                    },
-                };
+                let settings = crate::mesh::mesher_settings(mesher)?;
                 self.model.mesh =
                     Some(MeshSettings { mesher: settings, order, formulation: formulation.unwrap_or_default() });
                 Ok(Output::None)

@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use femlab_geometry::{
-    annulus, elliptic_annulus, perturb_interior, split_to_simplices, ElementBlock, ElementKind, Face, FaceKind, Mesh,
-    Structured,
+    annulus, elliptic_annulus, mapped, perturb_interior, split_to_simplices, Curve, ElementBlock, ElementKind, Face,
+    FaceKind, Mesh, QuadBlock, Structured,
 };
 use proptest::prelude::*;
 
@@ -810,4 +810,236 @@ fn quality_is_perfect_on_a_lattice_and_zero_on_a_degenerate_element() {
     // an empty mesh has nothing to be wrong with
     let empty = Mesh { blocks: vec![], coords: vec![], ..flat };
     assert_eq!(quality(&empty, 5).worst, []);
+}
+
+// ---- mapped quad blocks ----------------------------------------------------------------------
+
+fn block(corners: [[f64; 2]; 4], edges: [Curve; 4], n: [usize; 2], grading: [f64; 2], tags: [&str; 4]) -> QuadBlock {
+    QuadBlock { corners, edges, n, grading, tags: tags.map(|t| (!t.is_empty()).then(|| t.to_string())) }
+}
+
+const LINES: [Curve; 4] = [Curve::Line, Curve::Line, Curve::Line, Curve::Line];
+
+fn unit_block(n: [usize; 2]) -> QuadBlock {
+    block([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], LINES, n, [1.0, 1.0], ["ymin", "xmax", "ymax", "xmin"])
+}
+
+#[test]
+fn a_mapped_unit_block_is_the_structured_box() {
+    for kind in [ElementKind::Quad4, ElementKind::Quad8, ElementKind::Tri3, ElementKind::Tri6] {
+        let m = mapped(&[unit_block([2, 3])], kind).unwrap();
+        let s = Structured { kind, n: [2, 3, 1] }.box_([1.0, 1.0, 1.0]);
+        m.validate().unwrap();
+        assert_eq!((m.n_nodes(), m.n_elems()), (s.n_nodes(), s.n_elems()), "{kind:?}");
+        assert_eq!(m.blocks[0].conn, s.blocks[0].conn, "{kind:?}");
+        for (a, b) in m.coords.iter().zip(&s.coords) {
+            assert!((a - b).abs() < 1e-15, "{kind:?}: {a} vs {b}");
+        }
+        for name in ["xmin", "xmax", "ymin", "ymax"] {
+            assert_eq!(m.face_sets[name], s.face_sets[name], "{kind:?} {name}");
+        }
+        assert_eq!(m.elem_sets["all"], s.elem_sets["all"]);
+        assert!(min_element_measure(&m) > 0.0, "{kind:?}");
+    }
+    // grading > 1 packs cells toward the u = 0 / v = 0 side, geometrically
+    let graded = block([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], LINES, [4, 1], [2.0, 1.0], ["", "", "", ""]);
+    let g = mapped(&[graded], ElementKind::Quad4).unwrap();
+    assert!(g.face_sets.is_empty(), "an untagged block names nothing");
+    let mut xs: Vec<f64> = g.coords.chunks_exact(3).filter(|p| p[1].abs() < 1e-12).map(|p| p[0]).collect();
+    xs.sort_by(f64::total_cmp);
+    assert_eq!(xs.len(), 5);
+    for i in 0..3 {
+        assert!(((xs[i + 2] - xs[i + 1]) / (xs[i + 1] - xs[i]) - 2.0).abs() < 1e-12, "{xs:?}");
+    }
+    assert!((xs[1] - 1.0 / 15.0).abs() < 1e-15, "u_1 = (1 - r)/(1 - r^n)");
+}
+
+/// C §7 C1: the two-block quarter plate with a circular hole of radius `a` in a `w` square.
+fn kirsch(a: f64, w: f64, n: usize, grading: f64) -> Vec<QuadBlock> {
+    let d = a / 2.0f64.sqrt();
+    let arc = Curve::Arc { center: [0.0, 0.0], ccw: false };
+    vec![
+        block(
+            [[a, 0.0], [w, 0.0], [w, w], [d, d]],
+            [Curve::Line, Curve::Line, Curve::Line, arc.clone()],
+            [n, n],
+            [grading, 1.0],
+            ["ymin", "xmax", "", "hole"],
+        ),
+        block(
+            [[d, d], [w, w], [0.0, w], [0.0, a]],
+            [Curve::Line, Curve::Line, Curve::Line, arc],
+            [n, n],
+            [grading, 1.0],
+            ["", "ymax", "xmin", "hole"],
+        ),
+    ]
+}
+
+#[test]
+fn the_kirsch_two_block_plate_merges_its_diagonal_and_names_the_hole() {
+    let (a, w, n) = (1.0, 10.0, 4);
+    let m = mapped(&kirsch(a, w, n, 1.15), ElementKind::Quad8).unwrap();
+    m.validate().unwrap();
+    // two quad8 blocks of (2n+1)^2 - n^2 nodes, sharing the 2n+1 nodes of the diagonal
+    assert_eq!(m.n_nodes(), 2 * (9 * 9 - n * n) - (2 * n + 1));
+    assert_eq!(m.n_elems(), 2 * n * n);
+    assert!(min_element_measure(&m) > 0.0);
+    assert_eq!(m.face_sets.keys().collect::<Vec<_>>(), ["hole", "xmax", "xmin", "ymax", "ymin"]);
+    // the hole is a quarter circle: every node of it, mid-edge nodes included, is at radius a
+    assert_eq!(m.face_sets["hole"].len(), 2 * n);
+    let hole = face_set_nodes(&m, "hole");
+    assert_eq!(hole.len(), 4 * n + 1, "shared node in the middle of the quarter");
+    assert!(hole.iter().all(|&i| (radius(m.node(i)) - a).abs() < 1e-12));
+    let angles: Vec<f64> = hole.iter().map(|&i| libm::atan2(m.node(i)[1], m.node(i)[0])).collect();
+    assert!(angles.iter().copied().fold(f64::INFINITY, f64::min).abs() < 1e-12);
+    assert!((angles.iter().copied().fold(0.0, f64::max) - FRAC_PI_2).abs() < 1e-12);
+    // every face centroid sits just inside radius a, by the chord error of a 2n-sided quarter
+    let chord = a * (1.0 - libm::cos(FRAC_PI_2 / (4.0 * n as f64)));
+    for &f in &m.face_sets["hole"] {
+        let c = mean(&m.face_nodes(f).take(2).map(|i| m.node(i)).collect::<Vec<_>>());
+        assert!(a - radius(c) > 0.0 && a - radius(c) < chord + 1e-12, "{}", radius(c));
+    }
+    // the radial spacing is graded by 1.15 from the hole outwards along y = 0
+    let mut xs: Vec<f64> = m.coords.chunks_exact(3).filter(|p| p[1].abs() < 1e-12).map(|p| p[0]).collect();
+    xs.sort_by(f64::total_cmp);
+    let corner: Vec<f64> = xs.iter().copied().step_by(2).collect();
+    assert_eq!(corner.len(), n + 1);
+    for i in 0..n - 1 {
+        let r = (corner[i + 2] - corner[i + 1]) / (corner[i + 1] - corner[i]);
+        assert!((r - 1.15).abs() < 1e-12, "{corner:?}");
+    }
+    // a tag on the shared diagonal names nothing: the merge leaves no boundary face there
+    let mut tagged = kirsch(a, w, n, 1.0);
+    tagged[0].tags[2] = Some("diag".to_string());
+    tagged[1].tags[0] = Some("diag".to_string());
+    let d = mapped(&tagged, ElementKind::Quad4).unwrap();
+    assert!(!d.face_sets.contains_key("diag"), "{:?}", d.face_sets.keys().collect::<Vec<_>>());
+    // the same blocks in every 2D kind, each conforming across the shared diagonal
+    for kind in [ElementKind::Quad4, ElementKind::Tri3, ElementKind::Tri6] {
+        let t = mapped(&kirsch(a, w, n, 1.15), kind).unwrap();
+        t.validate().unwrap();
+        assert!(min_element_measure(&t) > 0.0, "{kind:?}");
+        assert_eq!(t.boundary_faces().len(), t.face_sets.values().map(Vec::len).sum::<usize>(), "{kind:?}");
+    }
+}
+
+#[test]
+fn cooks_membrane_is_one_block_of_the_exact_trapezoid_area() {
+    let cook = |n: usize| {
+        block(
+            [[0.0, 0.0], [48.0, 44.0], [48.0, 60.0], [0.0, 44.0]],
+            LINES,
+            [n, n],
+            [1.0, 1.0],
+            ["bottom", "right", "top", "left"],
+        )
+    };
+    // the trapezoid has parallel vertical sides of 44 and 16 a distance 48 apart
+    let exact = 0.5 * (44.0 + 16.0) * 48.0;
+    for kind in [ElementKind::Quad4, ElementKind::Quad8, ElementKind::Tri3] {
+        let m = mapped(&[cook(4)], kind).unwrap();
+        m.validate().unwrap();
+        assert!((measure(&m) - exact).abs() < 1e-9 * exact, "{kind:?}: {}", measure(&m));
+    }
+    let m = mapped(&[cook(4)], ElementKind::Quad4).unwrap();
+    assert_eq!(m.face_sets["left"].len(), 4);
+    assert!(face_set_nodes(&m, "left").iter().all(|&i| m.node(i)[0].abs() < 1e-13));
+    assert!(face_set_nodes(&m, "right").iter().all(|&i| (m.node(i)[0] - 48.0).abs() < 1e-13));
+}
+
+/// C §7 C5: the NAFEMS LE1 elliptic membrane as one block with two elliptic edges.
+fn le1(n: usize) -> Vec<QuadBlock> {
+    vec![block(
+        [[2.0, 0.0], [3.25, 0.0], [0.0, 2.75], [0.0, 1.0]],
+        [
+            Curve::Line,
+            Curve::Ellipse { center: [0.0, 0.0], semi_axes: [3.25, 2.75] },
+            Curve::Line,
+            Curve::Ellipse { center: [0.0, 0.0], semi_axes: [2.0, 1.0] },
+        ],
+        [n, n],
+        [1.0, 1.0],
+        ["y0", "outer", "x0", "inner"],
+    )]
+}
+
+#[test]
+fn le1_puts_every_node_on_its_two_ellipses_and_converges_in_area() {
+    let m = mapped(&le1(3), ElementKind::Quad8).unwrap();
+    m.validate().unwrap();
+    assert!(min_element_measure(&m) > 0.0);
+    assert!(face_set_nodes(&m, "outer").iter().all(|&i| on_ellipse(m.node(i), [3.25, 2.75]).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "inner").iter().all(|&i| on_ellipse(m.node(i), [2.0, 1.0]).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "y0").iter().all(|&i| m.node(i)[1].abs() < 1e-15));
+    assert!(face_set_nodes(&m, "x0").iter().all(|&i| m.node(i)[0].abs() < 1e-15));
+    let exact = PI / 4.0 * (3.25 * 2.75 - 2.0 * 1.0);
+    let err = |n: usize| (measure(&mapped(&le1(n), ElementKind::Quad8).unwrap()) - exact).abs();
+    assert!(err(8) < 1e-2 * exact && err(4) / err(8) > 3.5, "errors {} {}", err(4), err(8));
+}
+
+#[test]
+fn mapped_refuses_what_it_cannot_mesh() {
+    let bad = |b: Vec<QuadBlock>| mapped(&b, ElementKind::Quad4).unwrap_err().0;
+    assert!(mapped(&[unit_block([1, 1])], ElementKind::Hex8).unwrap_err().0.contains("2D elements"));
+    assert!(mapped(&[], ElementKind::Quad4).unwrap_err().0.contains("at least one block"));
+    assert!(bad(vec![unit_block([0, 1])]).contains("both must be at least 1"));
+    assert!(bad(vec![unit_block([1, 0])]).contains("both must be at least 1"));
+    let mut g = unit_block([1, 1]);
+    g.grading = [1.0, 0.0];
+    assert!(bad(vec![g.clone()]).contains("grading[1] is 0"));
+    g.grading = [f64::NAN, 1.0];
+    assert!(bad(vec![g]).contains("grading[0] is NaN"));
+    let mut d = unit_block([1, 1]);
+    d.corners[1] = [0.0, 0.0];
+    assert!(bad(vec![d]).contains("four distinct corners"));
+    let mut arc = unit_block([1, 1]);
+    arc.edges[1] = Curve::Arc { center: [0.0, 0.0], ccw: true };
+    assert!(bad(vec![arc.clone()]).contains("they must be equal"));
+    arc.edges[1] = Curve::Arc { center: [1.0, 0.0], ccw: true };
+    assert!(bad(vec![arc]).contains("radius 0"));
+    let mut el = unit_block([1, 1]);
+    el.edges[1] = Curve::Ellipse { center: [0.0, 0.0], semi_axes: [0.0, 1.0] };
+    assert!(bad(vec![el.clone()]).contains("both must be positive"));
+    el.edges[1] = Curve::Ellipse { center: [0.0, 0.0], semi_axes: [1.0, 1.0] };
+    assert!(bad(vec![el]).contains("is not on it"));
+    // two blocks sharing an edge they divide, or grade, differently
+    let mut k = kirsch(1.0, 10.0, 4, 1.0);
+    k[1].n = [8, 4];
+    let e = mapped(&k, ElementKind::Quad4).unwrap_err().0;
+    assert!(e.contains("block 0 edge 2 and block 1 edge 0") && e.contains("same division count"), "{e}");
+    let mut k = kirsch(1.0, 10.0, 4, 1.0);
+    k[1].grading = [1.2, 1.0];
+    let e = mapped(&k, ElementKind::Quad4).unwrap_err().0;
+    assert!(e.contains("same grading"), "{e}");
+    let ok = mapped(&kirsch(1.0, 10.0, 2, 1.0), ElementKind::Quad4).unwrap();
+    assert_eq!(ok.n_elems(), 8);
+}
+
+#[test]
+fn an_elliptic_edge_takes_the_short_way_across_the_negative_x_axis() {
+    let (i, o) = (0.5 / 2.0f64.sqrt(), 1.0 / 2.0f64.sqrt());
+    let sector = |n: usize| {
+        vec![block(
+            [[-i, i], [-o, o], [-o, -o], [-i, -i]],
+            [
+                Curve::Line,
+                Curve::Ellipse { center: [0.0, 0.0], semi_axes: [1.0, 1.0] },
+                Curve::Line,
+                Curve::Ellipse { center: [0.0, 0.0], semi_axes: [0.5, 0.5] },
+            ],
+            [n, n],
+            [1.0, 1.0],
+            ["", "outer", "", "inner"],
+        )]
+    };
+    let m = mapped(&sector(4), ElementKind::Quad8).unwrap();
+    m.validate().unwrap();
+    assert!(min_element_measure(&m) > 0.0, "the arc runs counter-clockwise through (-1, 0)");
+    assert!(face_set_nodes(&m, "outer").iter().all(|&j| (radius(m.node(j)) - 1.0).abs() < 1e-12));
+    assert!(face_set_nodes(&m, "inner").iter().all(|&j| (radius(m.node(j)) - 0.5).abs() < 1e-12));
+    assert!(m.coords.chunks_exact(3).any(|p| p[0] < -0.9), "the block reaches past (-1, 0)");
+    let exact = PI / 4.0 * (1.0 - 0.25);
+    let err = |n: usize| (measure(&mapped(&sector(n), ElementKind::Quad8).unwrap()) - exact).abs();
+    assert!(err(4) / err(8) > 3.5, "errors {} {}", err(4), err(8));
 }

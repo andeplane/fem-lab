@@ -1232,3 +1232,154 @@ fn decode_i64(text: &str, name: &str) -> Vec<i64> {
 fn decode_u8(text: &str, name: &str) -> Vec<u8> {
     decode_array(text, name)
 }
+
+/// C §7 C4: Cook's membrane as one mapped block, which is its own geometry.
+const COOK: &str = r#"{"cmd":"mesh.set","mesher":{"kind":"mapped","blocks":[{
+    "corners":[["0 m","0 m"],["48 m","44 m"],["48 m","60 m"],["0 m","44 m"]],
+    "n":[4,4],"tags":["bottom","right","top","left"]}]}}"#;
+
+#[test]
+fn a_mapped_block_is_its_own_geometry_and_names_its_edges() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"cook"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(&mut e, COOK);
+    let m = mesh_summary(&mut e);
+    assert_eq!((m.nodes, m.elements, m.element_kind.as_str()), (25, 16, "quad4"));
+    assert_eq!(m.dofs, 2 * m.nodes);
+    assert_eq!(
+        m.sets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["sheet.bottom", "sheet.left", "sheet.right", "sheet.top"]
+    );
+    let left = set_info(&mut e, "sheet.left");
+    assert_eq!((left.kind.as_str(), left.count), ("face", 4));
+    assert_eq!(left.measure.unit, "m");
+    assert!((left.measure.value - 44.0).abs() < 1e-9, "{:?}", left.measure);
+    assert!((set_info(&mut e, "sheet.right").measure.value - 16.0).abs() < 1e-9);
+    // an implicit Body is a known Set prefix, so constraints and loads attach to it
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"sheet.left"}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"sheet.right","total":["0 N","1 N","0 N"]}"#);
+
+    // order 2 gives quad8 with the same elements and the mid-side nodes
+    ok(&mut e, &COOK.replace("}]}}", "}]},\"order\":2}"));
+    let m = mesh_summary(&mut e);
+    assert_eq!((m.nodes, m.elements, m.element_kind.as_str()), (65, 16, "quad8"));
+    assert_eq!(set_info(&mut e, "sheet.left").count, 4);
+
+    // the same blocks under a 3D idealisation are ill posed, and say so
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"solid3d"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::ModelIllPosed);
+    assert_eq!(er.where_.as_deref(), Some("mesher"));
+    assert!(er.suggestion.as_deref().unwrap().contains("setIdealisation"));
+}
+
+#[test]
+fn the_kirsch_quarter_plate_is_two_mapped_blocks_with_a_graded_hole() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"kirsch"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 mm"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"mapped","body":"plate","blocks":[
+          {"corners":[["1 m","0 m"],["10 m","0 m"],["10 m","10 m"],["0.7071067811865476 m","0.7071067811865476 m"]],
+           "edges":[{"kind":"line"},{"kind":"line"},{"kind":"line"},{"kind":"arc","center":["0 m","0 m"],"ccw":false}],
+           "n":[4,4],"grading":[1.15,1.0],"tags":["ymin","xmax",null,"hole"]},
+          {"corners":[["0.7071067811865476 m","0.7071067811865476 m"],["10 m","10 m"],["0 m","10 m"],["0 m","1 m"]],
+           "edges":[{"kind":"line"},{"kind":"line"},{"kind":"line"},{"kind":"arc","center":["0 m","0 m"],"ccw":false}],
+           "n":[4,4],"grading":[1.15,1.0],"tags":[null,"ymax","xmin","hole"]}]},"order":2}"#,
+    );
+    let m = mesh_summary(&mut e);
+    assert_eq!((m.nodes, m.elements), (2 * (81 - 16) - 9, 32));
+    assert_eq!(m.element_kind, "quad8");
+    assert_eq!(
+        m.sets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        ["plate.hole", "plate.xmax", "plate.xmin", "plate.ymax", "plate.ymin"]
+    );
+    // the hole is a quarter circle of radius 1 m, to the chord error of eight quad8 faces
+    let hole = set_info(&mut e, "plate.hole");
+    assert_eq!(hole.count, 8);
+    assert!((hole.measure.value - std::f64::consts::FRAC_PI_2).abs() < 3e-3, "{:?}", hole.measure);
+}
+
+#[test]
+fn a_set_named_on_a_body_the_mapped_mesher_does_not_mesh_is_ill_posed() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"mix"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"disc","shape":{"kind":"sheet","sketch":{"outer":[
+          {"kind":"arc","center":["0 m","0 m"],"to":["-1 m","0 m"],"ccw":true,"tag":"rim"},
+          {"kind":"arc","center":["0 m","0 m"],"to":["1 m","0 m"],"ccw":true,"tag":"rim"}]}}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"geometry.nameFace","name":"edge","of":"disc","where":{"kind":"normal","normal":[1,0,0]}}"#);
+    ok(&mut e, COOK);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::ModelIllPosed);
+    assert_eq!(er.where_.as_deref(), Some("set 'edge'"));
+    assert!(er.cause.contains("body 'disc'"), "{}", er.cause);
+}
+
+#[test]
+fn a_mapped_mesher_validates_every_field_it_reads() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"bad"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    let one = |blocks: &str| format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"mapped","blocks":{blocks}}}}}"#);
+    assert_eq!(err(&mut e, &one("[]")).where_.as_deref(), Some("mesher.blocks"));
+    let corners = r#""corners":[["0 m","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]]"#;
+    assert_eq!(
+        where_(&mut e, &one(r#"[{"corners":[["0 kg","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]],"n":[1,1]}]"#)),
+        "mesher.blocks[0].corners[0][0]"
+    );
+    assert_eq!(where_(&mut e, &one(&format!(r#"[{{{corners},"n":[0,1]}}]"#))), "mesher.blocks[0].n");
+    assert_eq!(
+        where_(&mut e, &one(&format!(r#"[{{{corners},"n":[1,1],"grading":[1.0,0.0]}}]"#))),
+        "mesher.blocks[0].grading"
+    );
+    assert_eq!(
+        where_(
+            &mut e,
+            &one(&format!(
+                r#"[{{{corners},"n":[1,1],"edges":[{{"kind":"line"}},{{"kind":"line"}},{{"kind":"line"}},
+                   {{"kind":"arc","center":["0 s","0 m"],"ccw":true}}]}}]"#
+            ))
+        ),
+        "mesher.blocks[0].edges[3].center[0]"
+    );
+    assert_eq!(
+        where_(
+            &mut e,
+            &one(&format!(
+                r#"[{{{corners},"n":[1,1],"edges":[{{"kind":"line"}},{{"kind":"line"}},{{"kind":"line"}},
+                   {{"kind":"ellipse","center":["0 m","0 m"],"semiAxes":["1 m","1 K"]}}]}}]"#
+            ))
+        ),
+        "mesher.blocks[0].edges[3].semiAxes[1]"
+    );
+    assert_eq!(
+        where_(
+            &mut e,
+            &one(&format!(
+                r#"[{{{corners},"n":[1,1],"edges":[{{"kind":"line"}},{{"kind":"line"}},{{"kind":"line"}},
+                   {{"kind":"ellipse","center":["0 N","0 m"],"semiAxes":["1 m","1 m"]}}]}}]"#
+            ))
+        ),
+        "mesher.blocks[0].edges[3].center[0]"
+    );
+    assert_eq!(
+        where_(&mut e, &one(&format!(r#"[{{{corners},"n":[1,1],"tags":["a.b",null,null,null]}}]"#))),
+        "mesher.blocks[0].tags[0]"
+    );
+    assert_eq!(
+        where_(&mut e, &one(&format!(r#"[{{{corners},"n":[1,1],"tags":["",null,null,null]}}]"#))),
+        "mesher.blocks[0].tags[0]"
+    );
+    // geometry the mesher itself refuses is a mesh failure at build time, not a schema error
+    ok(&mut e, &one(r#"[{"corners":[["0 m","0 m"],["0 m","0 m"],["1 m","1 m"],["0 m","1 m"]],"n":[1,1]}]"#));
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(er.code, ErrorCode::MeshFailed);
+    assert_eq!(er.where_.as_deref(), Some("mesher.blocks"));
+    assert!(er.cause.contains("four distinct corners"), "{}", er.cause);
+}

@@ -146,6 +146,46 @@ pub enum LatticeSize {
     Counts { nx: u32, ny: u32, nz: u32 },
 }
 
+/// The shape of one edge of a mapped block, between the two corners it joins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CurveSpec {
+    /// The straight segment between the edge's two corners; the default when `edges` is omitted.
+    Line,
+    /// The circular arc about `center`, counter-clockwise when `ccw` is true, else clockwise.
+    /// Both corners must lie at the same distance from `center` or the block is rejected.
+    Arc { center: [Q<Length>; 2], ccw: bool },
+    /// The arc of the axis-aligned ellipse with these semi-axes about `center`, taken the short
+    /// way between the corners' parametric angles. Both corners must lie on the ellipse.
+    Ellipse {
+        center: [Q<Length>; 2],
+        #[serde(rename = "semiAxes")]
+        semi_axes: [Q<Length>; 2],
+    },
+}
+
+/// One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
+///
+/// `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
+/// corner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so
+/// edges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape
+/// (straight by default). `n` is the number of elements along u and v, `grading` the ratio
+/// between successive element sizes along each (1.0 uniform, above 1 packs elements toward the
+/// u = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes
+/// `<body>.<tag>`. Blocks that share an edge must divide and grade it identically.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuadBlockSpec {
+    pub corners: [[Q<Length>; 2]; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edges: Option<[CurveSpec; 4]>,
+    pub n: [u32; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grading: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<[Option<String>; 4]>,
+}
+
 /// The mesher and its settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -153,6 +193,17 @@ pub enum MesherSpec {
     /// Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering
     /// every Body; exact for box geometry, stair-stepped for curved bodies.
     Lattice { size: LatticeSize },
+    /// Structured quadrilaterals on one or more mapped blocks, merged where they touch. The
+    /// blocks *are* the geometry: no geometry.add is needed, and the Body they make is named by
+    /// `body` (default "sheet"), so each block edge tag becomes the face Set `<body>.<tag>`.
+    /// This is the mesher for the classic 2D benchmarks: it is exact, has no quality surprises,
+    /// grades toward a stress concentration, and puts quadratic mid-nodes on the real curve.
+    /// The idealisation must be 2D (model.setIdealisation) because the mesh is.
+    Mapped {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        blocks: Vec<QuadBlockSpec>,
+    },
 }
 
 /// A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.

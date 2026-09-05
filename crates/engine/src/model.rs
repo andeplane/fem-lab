@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use femlab_geometry::{FacePredicate, RegionPredicate, Shape};
+use femlab_geometry::{FacePredicate, QuadBlock, RegionPredicate, Shape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -156,7 +156,25 @@ pub struct Step {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MesherSettings {
-    Lattice { size: Option<f64>, counts: Option<[u32; 3]> },
+    Lattice {
+        size: Option<f64>,
+        counts: Option<[u32; 3]>,
+    },
+    /// Mapped blocks, which are their own geometry: `body` is the implicit Body they make.
+    Mapped {
+        body: String,
+        blocks: Vec<QuadBlock>,
+    },
+}
+
+impl MesherSettings {
+    /// The Body a mesher makes on its own, without a `geometry.add`: the mapped mesher's.
+    pub fn implicit_body(&self) -> Option<&str> {
+        match self {
+            MesherSettings::Lattice { .. } => None,
+            MesherSettings::Mapped { body, .. } => Some(body),
+        }
+    }
 }
 
 /// Mesh settings.
@@ -273,7 +291,12 @@ impl Model {
     /// bodies' and cuts' names as prefixes (auto faces are `<prefix>.<tag>`; the tag part is
     /// checked when the mesh is built).
     pub fn set_prefixes(&self) -> BTreeSet<String> {
-        self.bodies.iter().map(|b| b.name.clone()).chain(self.cuts.iter().map(|c| c.name.clone())).collect()
+        self.bodies
+            .iter()
+            .map(|b| b.name.clone())
+            .chain(self.cuts.iter().map(|c| c.name.clone()))
+            .chain(self.mesh.iter().filter_map(|m| m.mesher.implicit_body().map(str::to_string)))
+            .collect()
     }
 
     /// Does a Set reference resolve to something the Model knows (a named Set, or an auto face

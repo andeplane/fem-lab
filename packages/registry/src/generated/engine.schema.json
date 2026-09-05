@@ -1808,6 +1808,32 @@
               "kind",
               "size"
             ]
+          },
+          {
+            "description": "Structured quadrilaterals on one or more mapped blocks, merged where they touch. The\nblocks *are* the geometry: no geometry.add is needed, and the Body they make is named by\n`body` (default \"sheet\"), so each block edge tag becomes the face Set `<body>.<tag>`.\nThis is the mesher for the classic 2D benchmarks: it is exact, has no quality surprises,\ngrades toward a stress concentration, and puts quadratic mid-nodes on the real curve.\nThe idealisation must be 2D (model.setIdealisation) because the mesh is.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlockSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "blocks"
+            ]
           }
         ]
       },
@@ -1840,6 +1866,151 @@
               "nx",
               "ny",
               "nz"
+            ]
+          }
+        ]
+      },
+      "QuadBlockSpec": {
+        "description": "One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.\n\n`corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to\ncorner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so\nedges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape\n(straight by default). `n` is the number of elements along u and v, `grading` the ratio\nbetween successive element sizes along each (1.0 uniform, above 1 packs elements toward the\nu = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes\n`<body>.<tag>`. Blocks that share an edge must divide and grade it identically.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/CurveSpec"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "n"
+        ]
+      },
+      "CurveSpec": {
+        "description": "The shape of one edge of a mapped block, between the two corners it joins.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the edge's two corners; the default when `edges` is omitted.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw` is true, else clockwise.\nBoth corners must lie at the same distance from `center` or the block is rejected.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse with these semi-axes about `center`, taken the short\nway between the corners' parametric angles. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semiAxes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semiAxes"
             ]
           }
         ]
@@ -2867,6 +3038,173 @@
             },
             "required": [
               "kind"
+            ]
+          },
+          {
+            "description": "Mapped blocks, which are their own geometry: `body` is the implicit Body they make.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlock"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "body",
+              "blocks"
+            ]
+          }
+        ]
+      },
+      "QuadBlock": {
+        "description": "One mapped block: a curvilinear quadrilateral meshed as a structured grid.\n\n`corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 → c1`\nalong u and `c0 → c3` along v. Edge `k` joins `c_k → c_{k+1}` (edges 0 and 2 run along u,\n1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio\nbetween successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /\nv = 0 side). `tags` names the face set each edge contributes to.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Curve"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "edges",
+          "n",
+          "grading",
+          "tags"
+        ]
+      },
+      "Curve": {
+        "description": "The shape of one block edge between its two corners.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the corners.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw`. Both corners must lie at\nthe same distance from `center`.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse `((x - cx)/a)² + ((y - cy)/b)² = 1` between the\ncorners' parametric angles, the short way round. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semi_axes": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semi_axes"
             ]
           }
         ]
@@ -5093,6 +5431,32 @@
               "kind",
               "size"
             ]
+          },
+          {
+            "description": "Structured quadrilaterals on one or more mapped blocks, merged where they touch. The\nblocks *are* the geometry: no geometry.add is needed, and the Body they make is named by\n`body` (default \"sheet\"), so each block edge tag becomes the face Set `<body>.<tag>`.\nThis is the mesher for the classic 2D benchmarks: it is exact, has no quality surprises,\ngrades toward a stress concentration, and puts quadratic mid-nodes on the real curve.\nThe idealisation must be 2D (model.setIdealisation) because the mesh is.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlockSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "blocks"
+            ]
           }
         ]
       },
@@ -5125,6 +5489,151 @@
               "nx",
               "ny",
               "nz"
+            ]
+          }
+        ]
+      },
+      "QuadBlockSpec": {
+        "description": "One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.\n\n`corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to\ncorner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so\nedges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape\n(straight by default). `n` is the number of elements along u and v, `grading` the ratio\nbetween successive element sizes along each (1.0 uniform, above 1 packs elements toward the\nu = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes\n`<body>.<tag>`. Blocks that share an edge must divide and grade it identically.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/CurveSpec"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "n"
+        ]
+      },
+      "CurveSpec": {
+        "description": "The shape of one edge of a mapped block, between the two corners it joins.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the edge's two corners; the default when `edges` is omitted.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw` is true, else clockwise.\nBoth corners must lie at the same distance from `center` or the block is rejected.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse with these semi-axes about `center`, taken the short\nway between the corners' parametric angles. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semiAxes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semiAxes"
             ]
           }
         ]
@@ -7328,6 +7837,173 @@
             "required": [
               "kind"
             ]
+          },
+          {
+            "description": "Mapped blocks, which are their own geometry: `body` is the implicit Body they make.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlock"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "body",
+              "blocks"
+            ]
+          }
+        ]
+      },
+      "QuadBlock": {
+        "description": "One mapped block: a curvilinear quadrilateral meshed as a structured grid.\n\n`corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 → c1`\nalong u and `c0 → c3` along v. Edge `k` joins `c_k → c_{k+1}` (edges 0 and 2 run along u,\n1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio\nbetween successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /\nv = 0 side). `tags` names the face set each edge contributes to.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Curve"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "edges",
+          "n",
+          "grading",
+          "tags"
+        ]
+      },
+      "Curve": {
+        "description": "The shape of one block edge between its two corners.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the corners.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw`. Both corners must lie at\nthe same distance from `center`.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse `((x - cx)/a)² + ((y - cy)/b)² = 1` between the\ncorners' parametric angles, the short way round. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semi_axes": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semi_axes"
+            ]
           }
         ]
       },
@@ -9151,6 +9827,32 @@
               "kind",
               "size"
             ]
+          },
+          {
+            "description": "Structured quadrilaterals on one or more mapped blocks, merged where they touch. The\nblocks *are* the geometry: no geometry.add is needed, and the Body they make is named by\n`body` (default \"sheet\"), so each block edge tag becomes the face Set `<body>.<tag>`.\nThis is the mesher for the classic 2D benchmarks: it is exact, has no quality surprises,\ngrades toward a stress concentration, and puts quadratic mid-nodes on the real curve.\nThe idealisation must be 2D (model.setIdealisation) because the mesh is.",
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "blocks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QuadBlockSpec"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "const": "mapped"
+              }
+            },
+            "required": [
+              "kind",
+              "blocks"
+            ]
           }
         ]
       },
@@ -9183,6 +9885,151 @@
               "nx",
               "ny",
               "nz"
+            ]
+          }
+        ]
+      },
+      "QuadBlockSpec": {
+        "description": "One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.\n\n`corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to\ncorner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so\nedges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape\n(straight by default). `n` is the number of elements along u and v, `grading` the ratio\nbetween successive element sizes along each (1.0 uniform, above 1 packs elements toward the\nu = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes\n`<body>.<tag>`. Blocks that share an edge must divide and grade it identically.",
+        "type": "object",
+        "properties": {
+          "corners": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Q_length"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "edges": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/CurveSpec"
+            },
+            "minItems": 4,
+            "maxItems": 4
+          },
+          "n": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "grading": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "corners",
+          "n"
+        ]
+      },
+      "CurveSpec": {
+        "description": "The shape of one edge of a mapped block, between the two corners it joins.",
+        "oneOf": [
+          {
+            "description": "The straight segment between the edge's two corners; the default when `edges` is omitted.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "line"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "The circular arc about `center`, counter-clockwise when `ccw` is true, else clockwise.\nBoth corners must lie at the same distance from `center` or the block is rejected.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "ccw": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "const": "arc"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "ccw"
+            ]
+          },
+          {
+            "description": "The arc of the axis-aligned ellipse with these semi-axes about `center`, taken the short\nway between the corners' parametric angles. Both corners must lie on the ellipse.",
+            "type": "object",
+            "properties": {
+              "center": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "semiAxes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 2,
+                "maxItems": 2
+              },
+              "kind": {
+                "type": "string",
+                "const": "ellipse"
+              }
+            },
+            "required": [
+              "kind",
+              "center",
+              "semiAxes"
             ]
           }
         ]

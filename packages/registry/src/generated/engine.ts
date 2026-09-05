@@ -256,6 +256,11 @@ export type Command =
       cmd: "mesh.set";
     }
   | {
+      format: ExportFormat;
+      step?: string | null;
+      cmd: "mesh.export";
+    }
+  | {
       name: string;
       on: string;
       dofs?: Dof[] | null;
@@ -1022,10 +1027,16 @@ export type RegionPredicate =
 /**
  * The mesher and its settings.
  */
-export type MesherSpec = {
-  size: LatticeSize;
-  kind: "lattice";
-};
+export type MesherSpec =
+  | {
+      size: LatticeSize;
+      kind: "lattice";
+    }
+  | {
+      body?: string | null;
+      blocks: QuadBlockSpec[];
+      kind: "mapped";
+    };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
  */
@@ -1043,9 +1054,93 @@ export type LatticeSize =
       nz: number;
     };
 /**
+ * The shape of one edge of a mapped block, between the two corners it joins.
+ */
+export type CurveSpec =
+  | {
+      kind: "line";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      ccw: boolean;
+      kind: "arc";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      center: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * @minItems 2
+       * @maxItems 2
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      semiAxes: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      kind: "ellipse";
+    };
+/**
  * Element formulation for linear hexahedra and quadrilaterals.
  */
 export type Formulation = "incompatible-modes" | "full";
+/**
+ * A file format `mesh.export` writes. More formats (msh, inp, stl) extend this enum.
+ */
+export type ExportFormat = "vtu";
 /**
  * A displacement component.
  */
@@ -1304,15 +1399,50 @@ export type QueryResult =
 /**
  * Mesher settings, SI.
  */
-export type MesherSettings = {
-  size?: number | null;
-  /**
-   * @minItems 3
-   * @maxItems 3
-   */
-  counts?: [number, number, number] | null;
-  kind: "lattice";
-};
+export type MesherSettings =
+  | {
+      size?: number | null;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      counts?: [number, number, number] | null;
+      kind: "lattice";
+    }
+  | {
+      body: string;
+      blocks: QuadBlock[];
+      kind: "mapped";
+    };
+/**
+ * The shape of one block edge between its two corners.
+ */
+export type Curve =
+  | {
+      kind: "line";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      ccw: boolean;
+      kind: "arc";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      semi_axes: [number, number];
+      kind: "ellipse";
+    };
 /**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  */
@@ -1567,6 +1697,11 @@ export type ModelFile_Command =
       order?: number | null;
       formulation?: Formulation | null;
       cmd: "mesh.set";
+    }
+  | {
+      format: ExportFormat;
+      step?: string | null;
+      cmd: "mesh.export";
     }
   | {
       name: string;
@@ -2045,6 +2180,13 @@ export type Output =
       type: "study";
     }
   | {
+      format: ExportFormat;
+      filename: string;
+      mime: string;
+      text: string;
+      type: "export";
+    }
+  | {
       steps: number;
       type: "undo";
     }
@@ -2391,6 +2533,109 @@ export interface Placement {
   scale?: [number, number, number] | null;
 }
 /**
+ * One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
+ *
+ * `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
+ * corner 1 along u and corner 0 to corner 3 along v. Edge k joins corner k to corner k+1, so
+ * edges 0 and 2 run along u and edges 1 and 3 along v; `edges` gives each one its shape
+ * (straight by default). `n` is the number of elements along u and v, `grading` the ratio
+ * between successive element sizes along each (1.0 uniform, above 1 packs elements toward the
+ * u = 0 / v = 0 side), and `tags` the face-set name each edge contributes to, which becomes
+ * `<body>.<tag>`. Blocks that share an edge must divide and grade it identically.
+ */
+export interface QuadBlockSpec {
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  corners: [
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ],
+    [
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      ),
+      (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    ]
+  ];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  edges?: [CurveSpec, CurveSpec, CurveSpec, CurveSpec] | null;
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  n: [number, number];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  grading?: [number, number] | null;
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  tags?: [string | null, string | null, string | null, string | null] | null;
+}
+/**
  * `query.model` response.
  */
 export interface ModelSummary {
@@ -2476,6 +2721,42 @@ export interface MeshSettings {
   formulation: Formulation;
 }
 /**
+ * One mapped block: a curvilinear quadrilateral meshed as a structured grid.
+ *
+ * `corners` are `c0..c3` counter-clockwise; the block's `(u, v)` unit square maps `c0 → c1`
+ * along u and `c0 → c3` along v. Edge `k` joins `c_k → c_{k+1}` (edges 0 and 2 run along u,
+ * 1 and 3 along v). `n` is the division count along u and v, `grading` the geometric ratio
+ * between successive spacings along each (1.0 uniform; > 1 packs nodes toward the u = 0 /
+ * v = 0 side). `tags` names the face set each edge contributes to.
+ */
+export interface QuadBlock {
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  corners: [[number, number], [number, number], [number, number], [number, number]];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  edges: [Curve, Curve, Curve, Curve];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  n: [number, number];
+  /**
+   * @minItems 2
+   * @maxItems 2
+   */
+  grading: [number, number];
+  /**
+   * @minItems 4
+   * @maxItems 4
+   */
+  tags: [string | null, string | null, string | null, string | null];
+}
+/**
  * A check that did not stop the run but the user should see.
  */
 export interface Warning {
@@ -2499,6 +2780,29 @@ export interface MeshSummary {
   minEdge: Valued;
   maxEdge: Valued;
   sets: SetRow[];
+  quality?: QualitySummary | null;
+}
+/**
+ * Mesh quality inside `query.mesh`: worst-case ratios and the elements that set them.
+ */
+export interface QualitySummary {
+  /**
+   * Smallest corner `min(det J) / max(det J)`; 1 is perfect, 0 degenerate, negative inverted.
+   */
+  minDetJRatio: number;
+  /**
+   * Largest longest-edge over shortest-edge ratio.
+   */
+  maxAspect: number;
+  /**
+   * Smallest angle at any element corner, in degrees.
+   */
+  minAngleDeg: number;
+  worst: QualityRow[];
+}
+export interface QualityRow {
+  element: number;
+  value: number;
 }
 /**
  * `query.set` response.

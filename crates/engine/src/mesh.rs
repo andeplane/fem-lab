@@ -6,14 +6,15 @@
 use std::collections::BTreeMap;
 
 use femlab_geometry::{
-    face_centroid_normal, lattice, nearest_boundary_face, resolve_face_set, resolve_region, ElementBlock, Face, Mesh,
-    Solid,
+    face_centroid_normal, lattice, mapped, nearest_boundary_face, resolve_face_set, resolve_region, Curve,
+    ElementBlock, ElementKind, Face, Mesh, QuadBlock, Solid,
 };
 
+use crate::command::{CurveSpec, LatticeSize, MesherSpec, QuadBlockSpec};
 use crate::engine::display;
 use crate::error::{Error, ErrorCode};
 use crate::model::{MesherSettings, Model, SetSource};
-use crate::units::{Dim, Length};
+use crate::units::{Dim, Length, Q};
 
 /// What a Set selects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,13 +82,88 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
         Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
             .suggest("mesh.set { mesher: { kind: \"lattice\", size: \"25 mm\" } }")
     })?;
+    let dim = model.idealisation.dim();
+    let quadratic = settings.order == 2;
+    let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
+        MesherSettings::Lattice { size, counts } => lattice_bodies(model, solids, dim, quadratic, *size, *counts)?,
+        MesherSettings::Mapped { body, blocks } => {
+            let kind = if quadratic { ElementKind::Quad8 } else { ElementKind::Quad4 };
+            let part = mapped(blocks, kind).map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.0)
+                    .at("mesher.blocks")
+                    .suggest("mesh.set with the same divisions and grading on the block edges that meet")
+            })?;
+            one_body(body, part, dim, "mapped")?
+        }
+    };
+    mesh.elem_sets.insert("all".into(), (0..mesh.n_elems() as u32).collect());
+
+    let mut sets: BTreeMap<String, ResolvedSet> = BTreeMap::new();
+    for (name, faces) in &mesh.face_sets {
+        sets.insert(name.clone(), face_set(&mesh, faces.clone()));
+    }
+    for named in &model.sets {
+        let (resolved, probe) = match &named.source {
+            SetSource::Face { of, where_ } => {
+                let of_body = body_faces.get(of).ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("set '{}' is named on body '{of}', which the current mesher does not mesh", named.name),
+                    )
+                    .at(format!("set '{}'", named.name))
+                    .suggest("mesh.set with a mesher that meshes that Body, or geometry.nameFace on the meshed one")
+                })?;
+                (face_set(&mesh, resolve_face_set(&mesh, where_, Some(of_body))), where_.reference_point())
+            }
+            SetSource::Region { where_ } => {
+                let body_of = |e: u32| body_of_block[mesh.block_of(e).0].as_str();
+                let (nodes, elems) = resolve_region(&mesh, where_, &body_of);
+                // A region that catches no whole element is a node Set: what a nodal load wants.
+                let kind = if elems.is_empty() { SetKind::Node } else { SetKind::Element };
+                (ResolvedSet { kind, faces: Vec::new(), nodes, elems }, where_.reference_point())
+            }
+        };
+        if resolved.is_empty() {
+            return Err(set_empty(model, &mesh, &named.name, probe));
+        }
+        sets.insert(named.name.clone(), resolved);
+    }
+    Ok(BuiltMesh { mesh, body_of_block, sets })
+}
+
+/// What a mesher produced: the Mesh, the Body of every element block, and the boundary faces
+/// of each Body, which is what a `geometry.nameFace` predicate is resolved against.
+type Meshed = (Mesh, Vec<String>, BTreeMap<String, Vec<Face>>);
+
+/// A mesher that is its own geometry: one Mesh, one Body, face sets renamed `<body>.<tag>`.
+fn one_body(body: &str, part: Mesh, dim: usize, mesher: &str) -> Result<Meshed, Error> {
+    if part.dim != dim {
+        return Err(Error::new(
+            ErrorCode::ModelIllPosed,
+            format!("the {mesher} mesher makes a {}D mesh but the idealisation is {dim}D", part.dim),
+        )
+        .at("mesher")
+        .suggest("model.setIdealisation"));
+    }
+    let mut mesh = part;
+    mesh.face_sets = mesh.face_sets.iter().map(|(tag, f)| (format!("{body}.{tag}"), f.clone())).collect();
+    let faces = mesh.boundary_faces();
+    let blocks = mesh.blocks.len();
+    Ok((mesh, vec![body.to_string(); blocks], BTreeMap::from([(body.to_string(), faces)])))
+}
+
+/// One lattice per Body of the Model, merged into one Mesh.
+fn lattice_bodies(
+    model: &Model,
+    solids: &BTreeMap<String, Solid>,
+    dim: usize,
+    quadratic: bool,
+    size: Option<f64>,
+    counts: Option<[u32; 3]>,
+) -> Result<Meshed, Error> {
     if model.bodies.is_empty() {
         return Err(Error::new(ErrorCode::ModelIllPosed, "the Model has no Body to mesh").suggest("geometry.add"));
     }
-    let dim = model.idealisation.dim();
-    let quadratic = settings.order == 2;
-    let MesherSettings::Lattice { size, counts } = settings.mesher;
-
     let mut mesh = Mesh {
         dim,
         coords: Vec::new(),
@@ -133,31 +209,94 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
         }
         body_faces.insert(body.name.clone(), part.boundary_faces().iter().map(shift).collect());
     }
-    mesh.elem_sets.insert("all".into(), (0..mesh.n_elems() as u32).collect());
+    Ok((mesh, body_of_block, body_faces))
+}
 
-    let mut sets: BTreeMap<String, ResolvedSet> = BTreeMap::new();
-    for (name, faces) in &mesh.face_sets {
-        sets.insert(name.clone(), face_set(&mesh, faces.clone()));
-    }
-    for named in &model.sets {
-        let (resolved, probe) = match &named.source {
-            SetSource::Face { of, where_ } => {
-                (face_set(&mesh, resolve_face_set(&mesh, where_, Some(&body_faces[of]))), where_.reference_point())
+/// A `mesh.set` mesher spec with unit strings, converted to the Model's SI settings.
+pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
+    match spec {
+        MesherSpec::Lattice { size } => match size {
+            LatticeSize::Size(q) => {
+                let s = q.si().map_err(|e| e.at("mesher.size"))?;
+                if s <= 0.0 {
+                    return Err(Error::schema("element size must be positive").at("mesher.size"));
+                }
+                Ok(MesherSettings::Lattice { size: Some(s), counts: None })
             }
-            SetSource::Region { where_ } => {
-                let body_of = |e: u32| body_of_block[mesh.block_of(e).0].as_str();
-                let (nodes, elems) = resolve_region(&mesh, where_, &body_of);
-                // A region that catches no whole element is a node Set: what a nodal load wants.
-                let kind = if elems.is_empty() { SetKind::Node } else { SetKind::Element };
-                (ResolvedSet { kind, faces: Vec::new(), nodes, elems }, where_.reference_point())
+            LatticeSize::Counts { nx, ny, nz } => {
+                if *nx == 0 || *ny == 0 || *nz == 0 {
+                    return Err(Error::schema("element counts must be at least 1").at("mesher.size"));
+                }
+                Ok(MesherSettings::Lattice { size: None, counts: Some([*nx, *ny, *nz]) })
             }
-        };
-        if resolved.is_empty() {
-            return Err(set_empty(model, &mesh, &named.name, probe));
+        },
+        MesherSpec::Mapped { body, blocks } => {
+            if blocks.is_empty() {
+                return Err(Error::schema("a mapped mesh needs at least one block").at("mesher.blocks"));
+            }
+            let mut out = Vec::with_capacity(blocks.len());
+            for (i, b) in blocks.iter().enumerate() {
+                out.push(quad_block(b, i)?);
+            }
+            Ok(MesherSettings::Mapped { body: body.clone().unwrap_or_else(|| "sheet".to_string()), blocks: out })
         }
-        sets.insert(named.name.clone(), resolved);
     }
-    Ok(BuiltMesh { mesh, body_of_block, sets })
+}
+
+/// Two lengths in SI, each reporting its own index if the unit is wrong.
+fn xy(v: &[Q<Length>; 2], at: &str) -> Result<[f64; 2], Error> {
+    let mut out = [0.0; 2];
+    for (a, q) in v.iter().enumerate() {
+        out[a] = q.si().map_err(|e| e.at(format!("{at}[{a}]")))?;
+    }
+    Ok(out)
+}
+
+/// One block of a mapped mesh in SI, with `mesher.blocks[i].<field>` on every failure.
+fn quad_block(b: &QuadBlockSpec, i: usize) -> Result<QuadBlock, Error> {
+    let at = |field: &str| format!("mesher.blocks[{i}].{field}");
+    let mut corners = [[0.0; 2]; 4];
+    for (k, c) in b.corners.iter().enumerate() {
+        corners[k] = xy(c, &at(&format!("corners[{k}]")))?;
+    }
+    if b.n[0] == 0 || b.n[1] == 0 {
+        return Err(Error::schema("a block needs at least one element along each direction").at(at("n")));
+    }
+    let grading = b.grading.unwrap_or([1.0, 1.0]);
+    for (a, &r) in grading.iter().enumerate() {
+        if !(r.is_finite() && r > 0.0) {
+            return Err(Error::schema(format!("grading[{a}] is {r}; it must be finite and positive (1.0 is uniform)"))
+                .at(at("grading")));
+        }
+    }
+    let mut edges = [Curve::Line, Curve::Line, Curve::Line, Curve::Line];
+    if let Some(spec) = &b.edges {
+        for (k, e) in spec.iter().enumerate() {
+            edges[k] = match e {
+                CurveSpec::Line => Curve::Line,
+                CurveSpec::Arc { center, ccw } => {
+                    Curve::Arc { center: xy(center, &at(&format!("edges[{k}].center")))?, ccw: *ccw }
+                }
+                CurveSpec::Ellipse { center, semi_axes } => Curve::Ellipse {
+                    center: xy(center, &at(&format!("edges[{k}].center")))?,
+                    semi_axes: xy(semi_axes, &at(&format!("edges[{k}].semiAxes")))?,
+                },
+            };
+        }
+    }
+    let mut tags: [Option<String>; 4] = [None, None, None, None];
+    if let Some(spec) = &b.tags {
+        for (k, t) in spec.iter().enumerate() {
+            if let Some(name) = t {
+                if name.is_empty() || name.contains('.') {
+                    return Err(Error::schema(format!("tag '{name}' must be a non-empty name without a dot"))
+                        .at(at(&format!("tags[{k}]"))));
+                }
+                tags[k] = Some(name.clone());
+            }
+        }
+    }
+    Ok(QuadBlock { corners, edges, n: [b.n[0] as usize, b.n[1] as usize], grading, tags })
 }
 
 /// A face Set plus the nodes its faces touch, sorted and unique.
