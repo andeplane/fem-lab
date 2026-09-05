@@ -1,0 +1,77 @@
+{
+  "id": "thermal-bar",
+  "title": "Thermal bar",
+  "minutes": 5,
+  "summary": "A fixed aluminium bar heated uniformly — no mechanical load at all, just thermal strain against a restraint.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "`model.new` again — every tutorial starts here.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "thermal-bar" }
+    },
+    {
+      "title": "Choose display units",
+      "explain": "Millimetres suit a small bar like this one.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "force": "N", "stress": "MPa" } }
+    },
+    {
+      "title": "Add the bar",
+      "explain": "A thin, long fin: 120 mm long, 20 mm wide, only 3 mm thick.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "fin" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "fin", "size": ["120 mm", "20 mm", "3 mm"] }
+    },
+    {
+      "title": "Define the material, with alpha",
+      "explain": "`material.add` takes `alpha`, the coefficient of thermal expansion, alongside `E` and `nu` — without it, `load.temperature` has nothing to convert a temperature change into. `k` (conductivity) is here too, though only a heat-transfer Step would use it.",
+      "expect": { "cmd": "material.add", "match": { "name": "aluminium" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "aluminium", "E": "70 GPa", "nu": 0.33, "rho": "2700 kg/m^3", "alpha": "2.3e-5 1/K", "k": "205 W/(m*K)", "source": "EN 573-3 6061-T6" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "Link the Material to the bar.",
+      "expect": { "cmd": "material.assign", "match": { "material": "aluminium" } },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "aluminium", "bodies": ["fin"] }
+    },
+    {
+      "title": "Mesh it",
+      "explain": "A lattice mesh at 5 mm — plenty for a thin bar in uniform temperature.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "5 mm" }, "order": 1 }
+    },
+    {
+      "title": "Fix the root",
+      "explain": "Without a restraint, a uniformly heated bar just grows freely and carries no stress at all — the restraint is what turns thermal expansion into a stress. Fix one end.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "root" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "root", "on": "fin.xmin" }
+    },
+    {
+      "title": "Heat it",
+      "explain": "`load.temperature` sets a uniform temperature on one or more Bodies relative to `reference` (default 293.15 K). There is no mechanical load in this Model at all — the temperature change is the only load.",
+      "expect": { "cmd": "load.temperature", "match": { "name": "heat" } },
+      "highlight": "load.temperature",
+      "doIt": { "cmd": "load.temperature", "name": "heat", "bodies": ["fin"], "value": "80 degC", "reference": "20 degC" }
+    },
+    {
+      "title": "Add a Step",
+      "explain": "One static Step, with the restraint and the heat load active together.",
+      "expect": { "cmd": "step.add", "match": { "name": "static" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["root"], "loads": ["heat"] }
+    },
+    {
+      "title": "Thermal strain",
+      "explain": "A free (unrestrained) temperature change produces strain with no stress at all; restraining even part of that strain is what produces stress. That is the whole of thermal loading — no new physics, just alpha times delta T fed into the same stiffness the mechanical loads use.",
+      "expect": null,
+      "theory": "Free thermal strain: epsilon = alpha * delta_T (no stress, if nothing restrains it).\nHere alpha = 2.3e-5 /K and delta_T = 60 K, so the unrestrained strain would be epsilon = 1.38e-3 (0.138 %).\nFixing one end converts the restrained fraction of that strain into stress via the usual sigma = E * epsilon."
+    }
+  ]
+}

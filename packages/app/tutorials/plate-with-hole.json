@@ -1,0 +1,110 @@
+{
+  "id": "plate-with-hole",
+  "title": "Plate with a hole",
+  "minutes": 8,
+  "summary": "A flat plate in tension with a circular hole, meshed freely with extra refinement where the stress concentrates.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "Same first move as every Model: `model.new` starts an empty one.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "plate-with-hole" }
+    },
+    {
+      "title": "Choose display units",
+      "explain": "Millimetres and megapascals suit a steel plate this size.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "force": "N", "stress": "MPa" } }
+    },
+    {
+      "title": "Go 2D: plane stress",
+      "explain": "This plate is thin compared with its other dimensions and free to bulge through its thickness, which is exactly what plane stress models: a flat Body in the xy plane with a `thickness` that scales stiffness and loads. `model.setIdealisation` has to come before any 2D geometry — a Body's dimension has to match it.",
+      "expect": { "cmd": "model.setIdealisation" },
+      "highlight": "model.setIdealisation",
+      "doIt": { "cmd": "model.setIdealisation", "idealisation": { "kind": "planeStress", "thickness": "10 mm" } }
+    },
+    {
+      "title": "Sketch the plate and its hole",
+      "explain": "`geometry.add` with a `sheet` shape takes a Sketch: an outer loop of line/arc segments, plus hole loops. A hole is a closed ring of arcs about its centre — here four quarter-arcs. Every segment can carry a `tag`, which becomes a face Set (`plate.ymin`, `plate.hole`, …) once the plate is meshed.",
+      "expect": { "cmd": "geometry.add", "match": { "name": "plate" } },
+      "highlight": "geometry.add",
+      "doIt": {
+        "cmd": "geometry.add",
+        "name": "plate",
+        "shape": {
+          "kind": "sheet",
+          "sketch": {
+            "outer": [
+              { "kind": "line", "to": ["100 mm", "0 mm"], "tag": "xmax0" },
+              { "kind": "line", "to": ["100 mm", "80 mm"], "tag": "ymax" },
+              { "kind": "line", "to": ["0 mm", "80 mm"], "tag": "xmin0" },
+              { "kind": "line", "to": ["0 mm", "0 mm"], "tag": "ymin" }
+            ],
+            "holes": [
+              [
+                { "kind": "arc", "center": ["50 mm", "40 mm"], "to": ["35 mm", "40 mm"], "ccw": true, "tag": "hole" },
+                { "kind": "arc", "center": ["50 mm", "40 mm"], "to": ["50 mm", "25 mm"], "ccw": true, "tag": "hole" },
+                { "kind": "arc", "center": ["50 mm", "40 mm"], "to": ["65 mm", "40 mm"], "ccw": true, "tag": "hole" },
+                { "kind": "arc", "center": ["50 mm", "40 mm"], "to": ["35 mm", "40 mm"], "ccw": true, "tag": "hole" }
+              ]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Define the material",
+      "explain": "Structural steel: `E` and `nu` are all a linear-elastic solve needs.",
+      "expect": { "cmd": "material.add", "match": { "name": "steel" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "source": "EN 10025" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "Link the Material to the plate Body.",
+      "expect": { "cmd": "material.assign", "match": { "material": "steel" } },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["plate"] }
+    },
+    {
+      "title": "Mesh it freely, refined at the hole",
+      "explain": "A hole is not a shape the lattice Mesher can follow, so `mesh.set` with `free` triangulates the Sketch instead. `refine` asks for a smaller element size inside a box — here, around the hole, where the stress rises fastest and a coarse mesh would smear the peak. `order: 2` gives curved-edge tri6 elements, which follow the hole's true circle.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": { "kind": "free", "of": "plate", "size": "5 mm", "refine": [{ "min": ["20 mm", "10 mm"], "max": ["80 mm", "70 mm"], "size": "1.5 mm" }] },
+        "order": 2
+      }
+    },
+    {
+      "title": "Fix one edge",
+      "explain": "Fixing `plate.xmin0` (the tagged left edge) stops the plate translating and rotating, so the only motion left is the stretch the load produces.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "left" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "left", "on": "plate.xmin0" }
+    },
+    {
+      "title": "Pull the other edge",
+      "explain": "A traction on the opposite edge puts the plate in uniaxial tension — the loading the Kirsch solution below assumes.",
+      "expect": { "cmd": "load.traction", "match": { "name": "pull" } },
+      "highlight": "load.traction",
+      "doIt": { "cmd": "load.traction", "name": "pull", "on": "plate.xmax0", "total": ["10 kN", "0 N", "0 N"] }
+    },
+    {
+      "title": "Add a Step",
+      "explain": "One static Step, and the Model is complete.",
+      "expect": { "cmd": "step.add", "match": { "name": "static" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["left"], "loads": ["pull"] }
+    },
+    {
+      "title": "Symmetry, and the Kirsch factor",
+      "explain": "This tutorial fixes one whole edge for simplicity; the accurate way to model a hole in an infinite plate is a quarter model with `constraint.symmetry` on the two cut faces (see the Kirsch quarter-plate example) — a quarter gives the same answer as the full plate at a quarter of the cost.",
+      "expect": null,
+      "theory": "Kirsch (1898): next to a small circular hole in an infinite plate under uniaxial tension sigma, the stress at the hole's edge, perpendicular to the load, rises to Kt * sigma with Kt = 3 — three times the far-field stress, independent of the hole's radius."
+    }
+  ]
+}

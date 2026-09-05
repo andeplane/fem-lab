@@ -1,0 +1,35 @@
+{
+  "id": "read-a-result",
+  "title": "Read a Result",
+  "minutes": 4,
+  "summary": "No Model to build this time — just the Results and Checks panels, and what each row means once you have solved something.",
+  "steps": [
+    {
+      "title": "Solve produces a Result",
+      "explain": "Pressing Solve runs the current Step and attaches a Result to the Model. Nothing else in FEM Lab produces one — not opening an example, not editing the Journal.",
+      "expect": null
+    },
+    {
+      "title": "The Results tab",
+      "explain": "The Results tab's Extremes table lists every field's minimum and maximum, and where in the Model each occurs. Click a row's location to jump the viewer there.",
+      "expect": null,
+      "highlight": "[title=\"panel.toggle results\"]"
+    },
+    {
+      "title": "Reactions balance the applied load",
+      "explain": "Always check this first: the sum of the reactions at every constraint should equal the sum of the applied loads, to numerical precision. If it does not, something upstream is wrong — a load on the wrong Set, a constraint that is not doing what you think — and no stress number downstream is trustworthy until it does.",
+      "expect": null
+    },
+    {
+      "title": "The Checks tab",
+      "explain": "Checks groups four kinds of question: well-posedness (is there a body, a material, a constraint, a load?), mesh quality (element shape, aspect ratio), a cost estimate (DOF, memory, predicted time), and the assumption log — every default the solver used that you did not set explicitly.",
+      "expect": null,
+      "highlight": "[title=\"panel.toggle checks\"]"
+    },
+    {
+      "title": "A Result goes stale",
+      "explain": "Editing the Model after a Result exists — a different mesh size, a moved load — dims the contours and marks the Result stale. The Journal keeps both the edit and the old Result side by side; Re-solve brings them back in sync. Nothing is silently out of date.",
+      "expect": null
+    }
+  ]
+}
