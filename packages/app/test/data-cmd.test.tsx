@@ -30,7 +30,12 @@ const model = (): ModelSummary =>
 
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
 
-function mount(): { root: HTMLElement; registry: Registry; store: Store } {
+/**
+ * The whole shell with every panel showing at once: the tree, the generated Properties form,
+ * each bottom tab and the ⌘K palette. If any of them names a Command the registry does not
+ * have, the first test below fails.
+ */
+function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLElement; registry: Registry; store: Store } {
   const store = new Store();
   const viewer = { current: null };
   const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
@@ -39,16 +44,42 @@ function mount(): { root: HTMLElement; registry: Registry; store: Store } {
     host: makeHostContext(store, transport, viewer, host),
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, async () => undefined)],
   });
-  store.set({ ready: true, model: model(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never });
+  store.set({ ready: true, model: model(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
+  store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
-  render(<App store={store} dispatch={async () => undefined} viewer={viewer} />, root);
+  render(<App store={store} dispatch={async () => undefined} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
   return { root, registry, store };
 }
 
 describe('the shell', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
+  });
+
+  it('names only Commands the registry has on every clickable, in every panel', () => {
+    const seen = new Set<string>();
+    for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
+      document.body.innerHTML = '';
+      const { root, registry } = mount({ tab, panels: { palette: true } });
+      const { commands, queries } = registry.list();
+      const known = new Set([...commands, ...queries].map((d) => d.name));
+      const used = [...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
+      for (const u of used) seen.add(u);
+      expect([...new Set(used)].filter((c) => !known.has(c)), tab).toEqual([]);
+    }
+    // Every panel of the design is represented, not just the top bar.
+    for (const cmd of ['form.open', 'script.run', 'selection.setPickTarget', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode']) expect([...seen]).toContain(cmd);
+  });
+
+  it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {
+    const { root, registry } = mount();
+    const known = new Set(registry.list().commands.map((d) => d.name));
+    root.querySelector('.tree .row')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20)); // preact re-renders after the state change
+    const menu = [...root.querySelectorAll('.menu [data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
+    expect(menu).toEqual(['model.rename', 'model.duplicate', 'geometry.remove', 'selection.set', 'clipboard.copy']);
+    expect(menu.filter((c) => !known.has(c))).toEqual([]);
   });
 
   it('names only Commands the registry has on every clickable', () => {
@@ -83,15 +114,17 @@ describe('the shell', () => {
 
   it('starts on the Journal tab and shows the Command lines', () => {
     const { root } = mount();
-    expect(root.querySelector('.log')!.textContent).toContain('model.new');
+    expect(root.querySelector('.bottom-body')!.textContent).toContain('model.new');
   });
 
-  it('renders the start screen with its three paths before a Model exists', () => {
+  it('renders the start screen with its four paths before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');
     document.body.append(root);
     render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} />, root);
     expect(root.textContent).toContain('Open an example');
-    expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual(['panel.toggle', 'panel.toggle', 'model.new']);
+    expect(root.textContent).toContain('Start a tutorial');
+    // The "start from geometry" card carries the model-name field, which is the same Command.
+    expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual(['panel.toggle', 'panel.toggle', 'model.new', 'model.new', 'panel.toggle']);
   });
 });

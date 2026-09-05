@@ -7,6 +7,7 @@ import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { devApiKeys } from './dev-keys';
 import { appHostCommands, makeHostContext, type ViewerRef } from './host';
+import { ScriptHost } from './script-host';
 import { Store } from './store';
 import { App } from './ui/App';
 import './ui/style.css';
@@ -36,12 +37,22 @@ async function boot(): Promise<void> {
   // any early `window.fem` call behind the engine's construction.
   const booted = transport.init();
 
-  const ctx = makeHostContext(store, transport, viewer, host);
+  // The script Worker's `fem` goes back through the Registry, which does not exist yet, so its
+  // two calls are bound late.
+  const late: { dispatch: Registry['dispatch']; query: Registry['query'] } = { dispatch: async () => undefined, query: async () => undefined };
+  const scripts = new ScriptHost(
+    () => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }),
+    (p) => late.dispatch(p as { cmd: string }),
+    (p) => late.query(p as { query: string }),
+  );
+
+  const ctx = makeHostContext(store, transport, viewer, host, scripts);
   const refresh = async (): Promise<void> => {
     const model = (await transport.query({ query: 'query.model' })) as never;
     const journal = (await transport.query({ query: 'query.journal' })) as never;
     const script = ((await transport.query({ query: 'query.script' })) as { text: string }).text;
-    store.set({ model, journal, script, revision: (model as { revision: number }).revision });
+    const objects = ((await transport.query({ query: 'query.objects' })) as { objects: never[] }).objects;
+    store.set({ model, journal, script, objects, revision: (model as { revision: number }).revision });
     viewer.current?.setSurface(await transport.surface());
   };
   const registry = new Registry({
@@ -56,7 +67,11 @@ async function boot(): Promise<void> {
     try {
       const ack = await registry.dispatch(cmd);
       store.log('command', cmd.cmd);
-      if (registry.describe(cmd.cmd).provider === 'engine') await refresh();
+      if (registry.describe(cmd.cmd).provider === 'engine') {
+        const { seq } = ack as { seq?: number };
+        if (typeof seq === 'number' && seq >= 0) store.set({ journalWho: { ...store.state.journalWho, [seq]: { who: store.state.source, at: Date.now() } } });
+        await refresh();
+      }
       return ack;
     } catch (e) {
       store.fail(e);
@@ -64,6 +79,8 @@ async function boot(): Promise<void> {
     }
   };
   const query: Registry['query'] = (q) => registry.query(q);
+  late.dispatch = dispatch;
+  late.query = query;
 
   const proxy = makeFemProxy(dispatch, query) as unknown as Record<string, unknown>;
   window.fem = new Proxy({} as Window['fem'], {
@@ -71,7 +88,7 @@ async function boot(): Promise<void> {
       k === 'registry' ? registry : k === 'dispatch' ? dispatch : k === 'gpuSelfTest' ? (n: number) => transport.gpuSelfTest(n) : proxy[k as string],
   });
 
-  render(<App store={store} dispatch={dispatch} viewer={viewer} />, root);
+  render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} />, root);
 
   await booted;
   const engineCaps = (await query({ query: 'query.capabilities' })) as Capabilities;

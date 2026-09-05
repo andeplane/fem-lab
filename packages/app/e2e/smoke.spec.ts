@@ -21,9 +21,7 @@ test.describe('@cpu the shell', () => {
     await expect(page.getByText('Open an example')).toBeVisible();
     await ready(page);
 
-    // `model.new` is a construct signature in the generated `fem.d.ts`, so it goes through
-    // `dispatch` rather than the proxy's dotted form.
-    await page.evaluate(() => window.fem.dispatch({ cmd: 'model.new', name: 'smoke' }));
+    await page.evaluate(() => window.fem.model.new({ name: 'smoke' }));
     await page.evaluate(() => window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] }));
 
     const model = (await page.evaluate(() => window.fem.query.model())) as unknown as { bodies: { name: string }[]; revision: number };
@@ -31,7 +29,7 @@ test.describe('@cpu the shell', () => {
     expect(model.revision).toBe(2);
 
     // The Journal panel shows the same two lines.
-    const journal = page.locator('.log');
+    const journal = page.locator('.bottom-body');
     await expect(journal).toContainText('model.new');
     await expect(journal).toContainText('geometry.addBox');
     await expect(page.locator('canvas')).toBeVisible();

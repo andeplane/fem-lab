@@ -31,11 +31,14 @@ describe('makeFemProxy', () => {
     await expect(fem.query.model()).resolves.toBe('result');
     await expect(fem.query.set({ name: 'beam.top' })).resolves.toBe('result');
     await expect(fem.journal.undo()).resolves.toBe('ack');
+    // `new` is quoted in the generated `fem.d.ts`, so it stays a plain method here too.
+    await expect(fem.model.new({ name: 'beam' })).resolves.toBe('ack');
     expect(calls).toEqual([
       { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m', '1 m'] },
       { query: 'query.model' },
       { query: 'query.set', name: 'beam.top' },
       { cmd: 'journal.undo' },
+      { cmd: 'model.new', name: 'beam' },
     ]);
   });
   it('is inert for then and symbols so it can be awaited and inspected', () => {

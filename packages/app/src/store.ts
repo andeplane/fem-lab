@@ -1,11 +1,22 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { Capabilities, JournalDump, ModelSummary, Selection } from '@femlab/registry';
+import type { Capabilities, JournalDump, ModelSummary, ObjectRef, Selection } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
+import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
+export type Tab = 'journal' | 'script' | 'results' | 'checks' | 'console';
+export const TABS: Tab[] = ['journal', 'script', 'results', 'checks', 'console'];
+
+/** The Properties panel: which Command is being filled in, and the arguments so far. */
+export interface FormState {
+  cmd: string;
+  values: Record<string, unknown>;
+  /** What Revert goes back to: the values the form was opened with. */
+  initial: Record<string, unknown>;
+}
 export type ConsoleLevel = 'command' | 'engine' | 'warn' | 'error' | 'result';
 export interface ConsoleLine {
   level: ConsoleLevel;
@@ -33,7 +44,22 @@ export interface UiState {
   deformScale: number;
   /** Panel id → open. Panels absent from the map are closed. */
   panels: Record<string, boolean>;
-  tab: 'journal' | 'script' | 'console';
+  tab: Tab;
+  /** Every `@`-mentionable object, for the picker chips and the palette. */
+  objects: ObjectRef[];
+  form: FormState | null;
+  /** The last failure of an Apply, so the form can put it under the field `where` names. */
+  formError: LastError | null;
+  /** Which form field the next viewer pick fills in, from "pick in viewer". */
+  pickInto: string[] | null;
+  /** Journal `seq` → who dispatched it and when. The UI is `you`; scripts and the AI are `ai`. */
+  journalWho: Record<number, { who: 'you' | 'ai'; at: number }>;
+  /** What the caller of `dispatch` currently counts as; the script host flips it to `ai`. */
+  source: 'you' | 'ai';
+  /** `null` while the Script tab shows the Journal; a string once it is being edited. */
+  scriptDraft: string | null;
+  scriptOut: string[];
+  scriptRunning: boolean;
   hostCaps: HostCaps | null;
   engineCaps: Capabilities | null;
   notes: string[];
@@ -56,8 +82,17 @@ export const initialState: UiState = {
   viewMode: 'geometry',
   colormap: 'viridis',
   deformScale: 1,
-  panels: { assistant: false, examples: false, export: false, report: false },
+  panels: { assistant: false, examples: false, export: false, report: false, palette: false },
   tab: 'journal',
+  objects: [],
+  form: null,
+  formError: null,
+  pickInto: null,
+  journalWho: {},
+  source: 'you',
+  scriptDraft: null,
+  scriptOut: [],
+  scriptRunning: false,
   hostCaps: null,
   engineCaps: null,
   notes: [],
@@ -115,8 +150,27 @@ export class Store {
     for (const fn of this.listeners) fn();
   }
 
+  /**
+   * Every pick, tree click and `selection.set` lands here, which is also where a pending
+   * "pick in viewer" is spent: one place, so no caller can forget.
+   */
   select(input: Parameters<typeof selectionReducer>[1]): void {
-    this.set({ selection: selectionReducer(this.state.selection, input) });
+    const selection = selectionReducer(this.state.selection, input);
+    const { pickInto, form } = this.state;
+    const picked = selection.faces[0] ?? selection.sets[0] ?? selection.bodies[0];
+    if (!pickInto || !picked || !form) return this.set({ selection });
+    const current = getAt(form.values, pickInto);
+    const next = Array.isArray(current) ? [...new Set([...current, picked])] : picked;
+    this.set({ selection, pickInto: null, form: { ...form, values: setAt(form.values, pickInto, next) } });
+  }
+
+  /**
+   * Open the Properties form on a Command, pre-filled with `values`. Every field edit comes
+   * back through here with `keepInitial`, so Revert still knows where the form started.
+   */
+  openForm(cmd: string, values: Record<string, unknown> = {}, keepInitial = false): void {
+    const initial = keepInitial && this.state.form?.cmd === cmd ? this.state.form.initial : values;
+    this.set({ form: { cmd, values, initial }, formError: null, pickInto: null });
   }
 
   log(level: ConsoleLevel, text: string): void {
@@ -125,7 +179,7 @@ export class Store {
 
   /** The bottom tabs are panels too, so the tab strip needs no Command of its own. */
   togglePanel(panel: string, open?: boolean): void {
-    if (panel === 'journal' || panel === 'script' || panel === 'console') return this.set({ tab: panel });
+    if ((TABS as string[]).includes(panel)) return this.set({ tab: panel as Tab });
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
   }
 
