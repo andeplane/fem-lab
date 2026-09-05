@@ -215,6 +215,10 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 | 4.7 | Guardrails: `run_script` runs in the Worker with a timeout; the agent cannot call `file.load` on arbitrary URLs; no key ever in a Journal or export | tests |
 | 4.8 | `validate_script` tool: parse + type-check the script against the registry's `.d.ts` before running it (VFEAgent found most Abaqus-script failures were API hallucination and lifecycle errors); structured errors `{ ok, code, where, hint }` from every Command | an intentionally wrong call is caught before execution |
 | 4.9 | Material lookup for the agent: the library of 8.4 is pulled forward as data (name, E, ν, ρ, α, yield, source) so the model never invents a modulus (note 04: 900–2000× errors without lookup); every unset default the solver used is listed in the result ("assumption log") | eval tasks that name a material pass without numbers in the prompt |
+| 4.11 | **@-mentions**: the chat resolves `@name` to a Model object (body, face, set, material, constraint, load, step, result, Journal entry, project file) and attaches its `query.*` summary to the message; picker over the registry's object index | an eval task phrased with `@` chips only passes |
+| 4.12 | **Skills**: `skills/<name>/SKILL.md` (frontmatter: name, description, when) from the app's built-ins and from the project folder; `/` menu in the chat; a skill is prepended to the turn when invoked, and the AI may invoke one itself from its description | built-in skills: beam-theory check, convergence study, report, NAFEMS benchmark; a project skill overrides a built-in of the same name |
+| 4.13 | **Project folder**: open a directory via the File System Access API (Chromium, ADR 0014); the Journal, scripts, plugins and exports live in it; `AGENTS.md`/`CLAUDE.md` in the folder is read into the system prompt with a visible badge; the AI gets `file.read`/`file.write` scoped to that folder | a project rule ("all stresses in MPa, S355 yield 355 MPa") is followed without being repeated in the chat |
+| 4.14 | **Export** Commands: `file.exportVTU` (mesh + fields), `file.exportMsh` (Gmsh 4.1), `file.exportInp` (Abaqus/CalculiX), `file.exportSTL` (geometry surface), `file.exportCSV` (any table/probe/path), `file.exportPNG`/`SVG` (viewer, legend burned in), `file.exportScript`, `file.exportReport` (Markdown; PDF via print); STEP when B-rep lands (7.2) | each exporter has a round-trip or reference-file test; the UI Export menu enumerates the registry |
 | 4.10 | `femlab mcp`: the CLI host serves the registry's tool definitions plus `run_script` over stdio with the MCP SDK; a running engine, headless, with dawn.node if a GPU exists (ADR 0011) | Claude Code builds and solves a cantilever through `femlab mcp` with no browser; the eval suite of 4.6 runs against both hosts |
 
 ## 7. Phase 5: post-processing and reporting
@@ -367,7 +371,10 @@ Phase numbers refer to §2–§10. "Out" means deliberately out of scope with th
 | J4.8 mesh import/export | 3.8 | J8.4 XY plots | 5.3 | J15.1–J15.2 interop | 1, 3.8, 7.2 |
 | | | J7.2 responsive/queue (server) | S.2, S.3 | J15.3 outgrow the browser | S.2, S.3 (same engine, bigger machine); 3.8 (export deck) |
 | | | | | Python analysis (P3 researcher habit) | Py.1–Py.5 |
-| J4.9 sets survive remesh | 1 (design), 3.2 | J8.5 animation | 5.4 | | |
+| J4.9 sets survive remesh | 1 (design), 3.2 | J8.5 animation | 5.4 | J13.9 @-mentions | 4.11 |
+| | | | | J13.10 skills | 4.12 |
+| | | | | J13.11 project AGENTS.md | 4.13 |
+| | | | | J15.4 export formats | 4.14, 3.8, 7.2 (STEP) |
 
 Every job has a phase or an explicit Out. The Outs: frictional contact and topology
 optimisation, each a project rather than a task. Creep and damage materials are not built in,

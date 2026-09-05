@@ -91,6 +91,11 @@ times.
     study, see the benchmark reference values.
 11. **Report and share**: Markdown/PDF report with assumptions, pictures, tables and the
     script as appendix; share link (the whole Model compressed into the URL); save/load file.
+12. **Export**: one Export menu that covers the usual formats: mesh and results as VTU
+    (ParaView), mesh as Gmsh `.msh` and Abaqus `.inp` (CalculiX), geometry as STL and (later)
+    STEP, tables as CSV, pictures as PNG/SVG at set resolution, the Model as a Journal file or a
+    TypeScript script, the report as Markdown/PDF. Each export names the format, what it
+    contains and its size before writing.
 
 The AI (§7) can drive any of these steps, and the person can take over at any step.
 
@@ -105,7 +110,8 @@ is a panel or a control; each control corresponds to exactly one Command (§9).
   results are Commands with their parameters.
 - Solve button with state (disabled + reason when the model is not well-posed; progress ring
   when running; result age when stale after an edit).
-- Share, Save, Open, Examples, Report, Settings (API key for AI, theme).
+- Share, Save, Open (file or project folder), Export (§4 step 12), Examples, Report,
+  Settings (API key for AI, theme).
 - Capability badges: WebGPU on/off, threads on/off, with a one-line reason when off ("Open in
   Chrome for GPU solving").
 
@@ -194,6 +200,22 @@ Bring-your-own API key, stored locally, with a plain notice about cost.
   chat and the Checks tab).
 - The person and the AI share one Model; either can act next. No "AI mode".
 - Cost/time shown per turn. Model choice in settings.
+- **@-mentions**: typing `@` in the chat opens a picker over everything in the Model and the
+  project: bodies, faces, sets, materials, constraints, loads, steps, results, Journal entries,
+  project files. `@bracket.top` or `@result:static-1` inserts a chip; the AI receives the
+  object's summary (a Query result), so "make @top thicker" or "why is @vonMises high near
+  @hole" need no further explanation. Chips are also drag targets from the model tree and the
+  viewer (click a face, drag it into the chat).
+- **Skills**: reusable instruction packs the AI can invoke, shown as a `/` menu in the chat
+  (built-in: "verify against beam theory", "mesh convergence study", "write report", "NAFEMS
+  benchmark"; user skills come from the project folder). A skill card shows name, one-line
+  description and what it will do before it runs.
+- **Project folder and AGENTS.md**: a Model can live in a project folder on disk (Chromium
+  File System Access API). If the folder contains `AGENTS.md` (or `CLAUDE.md`), the AI reads
+  it as standing instructions for that project (company material limits, report template,
+  units, naming rules), and `skills/*/SKILL.md` become skills. The chat shows a small
+  "following AGENTS.md" badge with a click-through to the file; a project panel lists the
+  folder's files (Journal, scripts, plugins, exports) and lets the AI read and write them.
 
 The success story to design for: a student opens a link, types "a 1 m steel cantilever,
 50×100 mm, 10 kN at the tip, quadratic hexes, compare the tip deflection with beam theory",
@@ -280,10 +302,12 @@ table, then opens the script the AI wrote, changes the load and reruns.
    with legend and reactions, stale result, error.
 3. Properties form patterns: quantity field, enum, face/set picker, validation message.
 4. Journal ↔ Script panel and the "AI did this" diff.
-5. AI chat with visible tool calls and a verification card.
+5. AI chat with visible tool calls, a verification card, the `@` mention picker, the `/`
+   skills menu and the AGENTS.md badge.
 6. Examples gallery card and the theory-next-to-result view.
 7. Viewer chrome: legend, deformation scale, glyph toggles, clip plane, animation bar.
 8. Command palette.
+8b. Export dialog and project-folder panel.
 9. Colour/type tokens for dark and light themes.
 
 ## 14. Vocabulary (use these words in the UI)

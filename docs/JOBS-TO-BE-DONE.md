@@ -178,6 +178,9 @@ reason for the "everything is a Command" rule (see the glossary and ADR 0003).
 | J13.8 | I want a result to record exactly which custom code (and version) produced it, and a colleague to be able to load it | not tracked; the .for file lives next to the job if you are lucky |
 | J13.4 | I want an AI to build/modify/run/interpret models for me and show me what it did | Blender-MCP-style: only where an API exists |
 | J13.5 | I want the script API to be discoverable and typed so I (or the AI) can find the right call without reading a manual | API reference; autocomplete |
+| J13.9 | When I talk to the AI, I want to point at things (`@top`, `@steel`, `@result`) instead of describing them, so it acts on exactly what I mean | none; screenshots pasted into chat |
+| J13.10 | I want reusable instruction packs (skills: "verify against beam theory", "write the report our way") that I or the AI can invoke | none; prompt copy-paste |
+| J13.11 | I want the AI to respect my project's standing rules (an `AGENTS.md` in the project folder: material limits, units, naming, report template) and my project's own skills | none |
 
 ## J14 Learn and teach
 
@@ -195,6 +198,7 @@ reason for the "everything is a Command" rule (see the glossary and ADR 0003).
 | J15.1 | I want to import/export meshes (Gmsh .msh, Abaqus .inp, VTK/VTU) and results (VTU, CSV) | meshio, vendor exporters |
 | J15.2 | I want to import geometry (STEP, STL) | CAD import |
 | J15.3 | I want to hand the model to a bigger solver when it outgrows the browser | export deck |
+| J15.4 | I want to export to the formats my colleagues' tools read: VTU, Gmsh .msh, Abaqus .inp, STL/STEP geometry, CSV tables, PNG/SVG images, Markdown/PDF report | per-tool exporters |
 
 ## What the incumbents get wrong that we can get right
 
