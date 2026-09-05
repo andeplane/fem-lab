@@ -1394,3 +1394,611 @@ fn a_material_with_the_wrong_props_fails_every_integral_that_calls_the_law() {
         assert!(el.body_load(&c, &|_x| [0.0; 3], &mut v).is_ok());
     }
 }
+
+// ==================================================================================
+// Mesh I/O: Gmsh `.msh`, Abaqus `.inp`, STL (plan C §3; master commit 30).
+// ==================================================================================
+
+use std::collections::BTreeMap;
+
+use femlab_engine::io::msh::gmsh_permutation;
+use femlab_engine::io::{read_msh, write_inp, write_msh, write_stl, write_stl_mesh};
+use femlab_geometry::{
+    annulus, elliptic_annulus, split_to_simplices, ElementBlock, Face, Mesh, Shape, Solid, Structured, TriMesh,
+};
+
+// ---------------------------------------------------------------- msh: gmsh_permutation
+
+#[test]
+fn gmsh_permutation_is_identity_except_tet10_and_hex20() {
+    for kind in [
+        ElementKind::Hex8,
+        ElementKind::Tet4,
+        ElementKind::Quad4,
+        ElementKind::Quad8,
+        ElementKind::Tri3,
+        ElementKind::Tri6,
+    ] {
+        let perm = gmsh_permutation(kind);
+        let identity: Vec<u8> = (0..kind.n_nodes() as u8).collect();
+        assert_eq!(perm, identity.as_slice(), "{kind:?}");
+    }
+    let tet10 = gmsh_permutation(ElementKind::Tet10);
+    assert_eq!(&tet10[..8], &(0..8u8).collect::<Vec<_>>()[..]);
+    assert_eq!((tet10[8], tet10[9]), (9, 8));
+}
+
+fn edge_midpoint(coords: &[f64], a: u32, b: u32) -> [f64; 3] {
+    let pa = &coords[3 * a as usize..3 * a as usize + 3];
+    let pb = &coords[3 * b as usize..3 * b as usize + 3];
+    [(pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0, (pa[2] + pb[2]) / 2.0]
+}
+
+#[test]
+fn gmsh_hex20_permutation_matches_gmshs_published_edge_order() {
+    // Gmsh's own mid-edge order (plan C §1) — an independent oracle, not read from our source.
+    const GMSH_HEX20_EDGES: [[u8; 2]; 12] =
+        [[0, 1], [0, 3], [0, 4], [1, 2], [1, 5], [2, 3], [2, 6], [3, 7], [4, 5], [4, 7], [5, 6], [6, 7]];
+    let perm = gmsh_permutation(ElementKind::Hex20);
+    let abaqus_edges = ElementKind::Hex20.edges();
+    for (g, pair) in GMSH_HEX20_EDGES.iter().enumerate() {
+        let abaqus_local = perm[8 + g] as usize - 8;
+        let e = abaqus_edges[abaqus_local];
+        let matches = (e[0] == pair[0] && e[1] == pair[1]) || (e[0] == pair[1] && e[1] == pair[0]);
+        assert!(matches, "gmsh edge {g} {pair:?} maps to abaqus edge {e:?}");
+    }
+
+    // Pin the direction with real coordinates: the node the writer puts at gmsh position 8+g is
+    // the midpoint of that Gmsh edge's two corners.
+    let m = Structured { kind: ElementKind::Hex20, n: [1, 1, 1] }.box_([1.3, 0.9, 1.7]);
+    let text = write_msh(&m);
+    let elements = text.split("$Elements\n").nth(1).unwrap().split("$EndElements").next().unwrap();
+    let lines: Vec<&str> = elements.lines().collect();
+    let hdr_idx = lines.iter().position(|&l| l == "3 1 17 1").expect("the hex20 block header");
+    let ids: Vec<u32> = lines[hdr_idx + 1].split_whitespace().skip(1).map(|s| s.parse::<u32>().unwrap() - 1).collect();
+    assert_eq!(ids.len(), 20);
+    let conn = &m.blocks[0].conn;
+    for (g, pair) in GMSH_HEX20_EDGES.iter().enumerate() {
+        let want = edge_midpoint(&m.coords, conn[pair[0] as usize], conn[pair[1] as usize]);
+        let got = &m.coords[3 * ids[8 + g] as usize..3 * ids[8 + g] as usize + 3];
+        for k in 0..3 {
+            assert!((got[k] - want[k]).abs() < 1e-9, "gmsh edge {g}: {got:?} vs {want:?}");
+        }
+    }
+}
+
+fn assert_mid_nodes_are_edge_midpoints(m: &Mesh) {
+    for blk in &m.blocks {
+        let nc = blk.kind.n_corners();
+        if blk.kind.n_nodes() == nc {
+            continue;
+        }
+        for en in blk.conn.chunks_exact(blk.kind.n_nodes()) {
+            for (i, &[a, b]) in blk.kind.edges().iter().enumerate() {
+                let want = edge_midpoint(&m.coords, en[a as usize], en[b as usize]);
+                let id = en[nc + i] as usize;
+                let got = &m.coords[3 * id..3 * id + 3];
+                for k in 0..3 {
+                    assert!((got[k] - want[k]).abs() < 1e-6, "{:?} mid-edge {i}: {got:?} vs {want:?}", blk.kind);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- msh: round trip
+
+fn assert_msh_round_trips(m: &Mesh, label: &str) -> Mesh {
+    let text = write_msh(m);
+    let back = read_msh(&text).unwrap_or_else(|e| panic!("{label}: {e}"));
+    assert_eq!(&back, m, "{label}");
+    back
+}
+
+#[test]
+fn msh_round_trips_box_meshes_of_every_kind() {
+    for kind in [
+        ElementKind::Hex8,
+        ElementKind::Hex20,
+        ElementKind::Tet4,
+        ElementKind::Tet10,
+        ElementKind::Quad4,
+        ElementKind::Quad8,
+        ElementKind::Tri3,
+        ElementKind::Tri6,
+    ] {
+        let n = if kind.dim() == 3 { [2, 1, 1] } else { [2, 2, 1] };
+        let m = Structured { kind, n }.box_([1.3, 0.9, 1.7]);
+        assert_msh_round_trips(&m, &format!("{kind:?} box"));
+    }
+}
+
+#[test]
+fn msh_round_trip_hex20_and_tet10_mid_nodes_are_true_edge_midpoints() {
+    for kind in [ElementKind::Hex20, ElementKind::Tet10] {
+        let m = Structured { kind, n: [2, 1, 1] }.box_([1.3, 0.9, 1.7]);
+        let back = assert_msh_round_trips(&m, &format!("{kind:?} mid-nodes"));
+        assert_mid_nodes_are_edge_midpoints(&back);
+    }
+}
+
+#[test]
+fn msh_round_trips_split_to_simplices() {
+    for kind in [ElementKind::Hex8, ElementKind::Hex20, ElementKind::Quad4, ElementKind::Quad8] {
+        let n = if kind.dim() == 3 { [2, 1, 1] } else { [2, 2, 1] };
+        let grid = Structured { kind, n }.box_([1.3, 0.9, 1.7]);
+        let split = split_to_simplices(&grid);
+        assert_msh_round_trips(&split, &format!("split {kind:?}"));
+    }
+}
+
+#[test]
+fn msh_round_trips_annulus_and_elliptic_annulus() {
+    let a = annulus(ElementKind::Quad8, 2, 3, 1.0, 2.0, [0.0, std::f64::consts::FRAC_PI_2]);
+    assert_msh_round_trips(&a, "annulus quad8");
+    let e = elliptic_annulus(ElementKind::Hex20, [2, 2], [2.0, 1.0], [3.25, 2.75], Some((1.5, 1)));
+    assert_msh_round_trips(&e, "elliptic annulus hex20");
+    let e2 = elliptic_annulus(ElementKind::Tet10, [1, 1], [2.0, 1.0], [3.25, 2.75], None);
+    assert_msh_round_trips(&e2, "elliptic annulus tet10 (split)");
+}
+
+#[test]
+fn msh_round_trips_a_two_block_mesh_with_a_block_partial_elem_set() {
+    // Two disjoint hex8 blocks. "all" spans both (whole-mesh entities pick it up); "half" spans
+    // only block 0's elements, which the writer can represent (the whole block is covered);
+    // "mixed" covers only element 0 of block 0, which is NOT block-aligned and so is dropped on
+    // write — a documented limitation no mesher in this codebase runs into.
+    let a = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let b = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let n_nodes_a = a.n_nodes() as u32;
+    let mut coords = a.coords.clone();
+    coords.extend(b.coords.iter());
+    let conn_b: Vec<u32> = b.blocks[0].conn.iter().map(|&n| n + n_nodes_a).collect();
+    let m = Mesh {
+        dim: 3,
+        coords,
+        blocks: vec![
+            ElementBlock { kind: ElementKind::Hex8, conn: a.blocks[0].conn.clone(), first_elem: 0 },
+            ElementBlock { kind: ElementKind::Hex8, conn: conn_b, first_elem: 2 },
+        ],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::from([
+            ("all".to_string(), (0..3u32).collect()),
+            ("half".to_string(), (0..2u32).collect()),
+            ("mixed".to_string(), vec![0]),
+        ]),
+        face_sets: BTreeMap::new(),
+    };
+    let text = write_msh(&m);
+    // every set gets a $PhysicalNames entry regardless of whether any entity ends up tagged
+    // with it, so check that "mixed" is unreferenced rather than absent from the text
+    assert!(text.contains("\"all\""));
+    assert!(text.contains("\"half\""));
+    let back = read_msh(&text).unwrap();
+    assert_eq!(back.elem_sets.get("all"), Some(&(0..3u32).collect::<Vec<_>>()));
+    assert_eq!(back.elem_sets.get("half"), Some(&(0..2u32).collect::<Vec<_>>()));
+    assert!(
+        !back.elem_sets.contains_key("mixed"),
+        "a set not aligned to a whole block must be dropped, not partly written: {:?}",
+        back.elem_sets
+    );
+}
+
+// ---------------------------------------------------------------- msh: read errors
+
+fn good_msh_text() -> (String, Mesh) {
+    let m = Mesh {
+        dim: 2,
+        coords: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        blocks: vec![ElementBlock { kind: ElementKind::Tri3, conn: vec![0, 1, 2], first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::from([("all".to_string(), vec![0])]),
+        face_sets: BTreeMap::from([("bottom".to_string(), vec![Face { elem: 0, local: 0 }])]),
+    };
+    (write_msh(&m), m)
+}
+
+fn set_line_after(text: &str, marker: &str, offset: usize, new_line: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let idx = lines.iter().position(|l| l == marker).unwrap_or_else(|| panic!("marker '{marker}' not found"));
+    lines[idx + offset] = new_line.to_string();
+    lines.join("\n") + "\n"
+}
+
+fn remove_lines_after(text: &str, marker: &str, offset: usize, count: usize) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let idx = lines.iter().position(|l| l == marker).unwrap_or_else(|| panic!("marker '{marker}' not found"));
+    lines.drain(idx + offset..idx + offset + count);
+    lines.join("\n") + "\n"
+}
+
+fn assert_schema_err(text: &str, want: &str) {
+    let e = read_msh(text).unwrap_err();
+    assert_eq!(e.code, ErrorCode::Schema);
+    assert!(e.to_string().contains(want), "got '{e}', want it to contain '{want}'");
+}
+
+#[test]
+fn read_msh_reports_the_line_of_a_truncated_file() {
+    assert_schema_err("$MeshFormat", "unexpected end of file");
+    assert_schema_err("", "unexpected end of file");
+}
+
+#[test]
+fn read_msh_reports_unexpected_end_of_file_at_every_truncation_point() {
+    // Every place read_msh asks for "the next line" is its own early-return path; a truncation
+    // sweep hits each one once, wherever in the file it falls, without naming every line by hand.
+    let (good, _) = good_msh_text();
+    let lines: Vec<&str> = good.lines().collect();
+    for n in 0..lines.len() {
+        let truncated = lines[..n].join("\n") + "\n";
+        let e = read_msh(&truncated).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Schema, "truncated after {n} lines");
+    }
+}
+
+#[test]
+fn read_msh_rejects_binary_files() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&good.replace("4.1 0 8", "4.1 1 8"), "binary");
+}
+
+#[test]
+fn read_msh_rejects_a_version_other_than_4_1() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&good.replace("4.1 0 8", "9.9 0 8"), "4.1");
+}
+
+#[test]
+fn read_msh_rejects_a_malformed_mesh_format_header() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&good.replace("4.1 0 8", "4.1 0"), "malformed $MeshFormat header");
+}
+
+#[test]
+fn read_msh_rejects_a_missing_section() {
+    let (good, _) = good_msh_text();
+    let bad = good.replacen("$PhysicalNames\n", "", 1);
+    assert_schema_err(&bad, "expected '$PhysicalNames'");
+}
+
+#[test]
+fn read_msh_rejects_a_non_numeric_physical_name_count() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$PhysicalNames", 1, "two"), "expected a number");
+}
+
+#[test]
+fn read_msh_rejects_a_physical_name_with_no_quotes() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$PhysicalNames", 2, "1 1 bottom"), "no quotes");
+}
+
+#[test]
+fn read_msh_rejects_a_physical_name_with_an_unterminated_quote() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$PhysicalNames", 2, "1 1 \"bottom"), "no quotes");
+}
+
+#[test]
+fn read_msh_rejects_a_malformed_physical_name_header() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$PhysicalNames", 2, "1 \"bottom\""), "malformed physical name header");
+}
+
+#[test]
+fn read_msh_rejects_a_malformed_entities_header() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Entities", 1, "0 1 1"), "malformed $Entities header");
+}
+
+#[test]
+fn read_msh_rejects_point_entities() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Entities", 1, "1 1 1 0"), "point entities");
+}
+
+#[test]
+fn read_msh_rejects_an_entity_line_with_too_few_tokens() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0"), "malformed entity line");
+}
+
+#[test]
+fn read_msh_rejects_an_entity_line_whose_physical_tag_count_overruns_the_line() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0 0 0 0 5 1"), "malformed entity line");
+}
+
+#[test]
+fn read_msh_rejects_a_malformed_nodes_header() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Nodes", 1, "1 3 1"), "malformed $Nodes header");
+}
+
+#[test]
+fn read_msh_rejects_more_than_one_nodes_entity_block() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Nodes", 1, "2 3 1 3"), "a single $Nodes entity block");
+}
+
+#[test]
+fn read_msh_rejects_a_malformed_node_entity_block_header() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Nodes", 2, "2 1 0"), "malformed node entity-block header");
+}
+
+#[test]
+fn read_msh_rejects_parametric_nodes() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Nodes", 2, "2 1 1 3"), "parametric nodes");
+}
+
+#[test]
+fn read_msh_rejects_malformed_node_coordinates() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Nodes", 6, "0.0 0.0"), "malformed node coordinates");
+}
+
+#[test]
+fn read_msh_rejects_a_malformed_elements_header() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Elements", 1, "2 2 1"), "malformed $Elements header");
+}
+
+#[test]
+fn read_msh_rejects_a_malformed_element_entity_block_header() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Elements", 2, "2 1 2"), "malformed element entity-block header");
+}
+
+#[test]
+fn read_msh_rejects_an_unknown_gmsh_element_type_in_the_block_header() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Elements", 2, "2 1 999 1"), "unknown gmsh element type 999");
+}
+
+#[test]
+fn read_msh_rejects_a_malformed_element_line() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Elements", 3, "1 1 2"), "malformed element line");
+}
+
+#[test]
+fn read_msh_rejects_an_element_referencing_an_unknown_node() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Elements", 3, "1 1 2 99"), "unknown node 99");
+}
+
+#[test]
+fn read_msh_rejects_a_file_with_no_elements() {
+    let (good, _) = good_msh_text();
+    let mut t = set_line_after(&good, "$Elements", 1, "0 0 1 0");
+    t = remove_lines_after(&t, "$Elements", 2, 4);
+    assert_schema_err(&t, "no elements");
+}
+
+#[test]
+fn read_msh_rejects_an_element_at_an_unsupported_entity_dimension() {
+    let (good, _) = good_msh_text();
+    // the boundary block's entity dim becomes 0, which is neither the mesh dim (2) nor 2 - 1
+    assert_schema_err(&set_line_after(&good, "$Elements", 4, "0 1 1 1"), "unsupported element dimension");
+}
+
+#[test]
+fn read_msh_rejects_a_line_element_placed_in_the_volume_dimension() {
+    let (good, _) = good_msh_text();
+    // same entity dim as the mesh (2), but a line2 type, which is never a volume element
+    assert_schema_err(&set_line_after(&good, "$Elements", 4, "2 1 1 1"), "unknown element type 1");
+}
+
+#[test]
+fn read_msh_rejects_a_volume_only_element_placed_in_the_face_dimension() {
+    let (good, _) = good_msh_text();
+    let mut t = set_line_after(&good, "$Elements", 4, "1 1 4 1");
+    t = set_line_after(&t, "$Elements", 5, "2 1 2 3 1");
+    assert_schema_err(&t, "unknown element type 4");
+}
+
+#[test]
+fn read_msh_rejects_a_volume_entity_with_an_undeclared_physical_tag() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Entities", 3, "1 0 0 0 1 1 0 1 99 0"), "physical tag 99");
+}
+
+#[test]
+fn read_msh_rejects_a_face_entity_with_an_undeclared_physical_tag() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0 1 1 0 1 99 0"), "physical tag 99");
+}
+
+#[test]
+fn read_msh_rejects_a_face_element_matching_no_boundary_face() {
+    let (good, _) = good_msh_text();
+    assert_schema_err(&set_line_after(&good, "$Elements", 5, "2 1 1"), "does not match any boundary face");
+}
+
+#[test]
+fn read_msh_rejects_a_non_numeric_token_at_every_numeric_field() {
+    // One `parse_tok::<T>(...)?` per numeric field read; each is its own early-return path, so
+    // each needs its own bad token to be exercised (a shared malformed-count test would only
+    // ever hit the first one reached).
+    let (good, _) = good_msh_text();
+    let cases: &[(&str, usize, &str)] = &[
+        ("$PhysicalNames", 2, "x 1 \"bottom\""), // physical name dim
+        ("$PhysicalNames", 2, "1 x \"bottom\""), // physical name tag
+        ("$Entities", 1, "x 1 1 0"),             // entities header counts
+        ("$Entities", 2, "x 0 0 0 1 1 0 1 1 0"), // entity line tag
+        ("$Entities", 2, "1 0 0 0 1 1 0 x 1 0"), // entity line n_phys
+        ("$Entities", 2, "1 0 0 0 1 1 0 1 x 0"), // entity line physical tag
+        ("$Nodes", 1, "x 3 1 3"),                // $Nodes header n_blocks
+        ("$Nodes", 2, "2 1 0 x"),                // node entity-block header n_nodes
+        ("$Nodes", 3, "x"),                      // a node tag
+        ("$Nodes", 6, "x 0 0"),                  // a node coordinate
+        ("$Elements", 1, "x 2 1 2"),             // $Elements header n_elem_blocks
+        ("$Elements", 2, "x 1 2 1"),             // element entity-block header entity_dim
+        ("$Elements", 2, "2 x 2 1"),             // element entity-block header entity_tag
+        ("$Elements", 2, "2 1 x 1"),             // element entity-block header gmsh type
+        ("$Elements", 2, "2 1 2 x"),             // element entity-block header n_in_block
+        ("$Elements", 3, "1 x 2 3"),             // element line node reference
+    ];
+    for &(marker, offset, new_line) in cases {
+        let bad = set_line_after(&good, marker, offset, new_line);
+        let e = read_msh(&bad).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Schema, "{marker}+{offset} = '{new_line}'");
+        assert!(e.to_string().contains("expected a number"), "{marker}+{offset}: {e}");
+    }
+}
+
+// ---------------------------------------------------------------- inp
+
+fn section_lines<'a>(text: &'a str, header: &str) -> Vec<&'a str> {
+    let mut it = text.lines();
+    for line in &mut it {
+        if line == header {
+            break;
+        }
+    }
+    it.take_while(|l| !l.starts_with('*')).collect()
+}
+
+#[test]
+fn inp_writes_node_and_element_counts_that_parse_back() {
+    let m = Structured { kind: ElementKind::Hex20, n: [2, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let text = write_inp(&m, "demo");
+    assert!(text.starts_with("*HEADING\ndemo\n"));
+    assert_eq!(section_lines(&text, "*NODE").len(), m.n_nodes());
+    // C3D20 = 21 fields per element (id + 20 nodes), so 16 + 5 wraps onto two lines
+    let elem_lines = section_lines(&text, "*ELEMENT, TYPE=C3D20, ELSET=BLOCK1");
+    assert_eq!(elem_lines.len(), m.n_elems() * 2);
+    assert_eq!(elem_lines[0].split(", ").count(), 16);
+    assert_eq!(elem_lines[1].split(", ").count(), 5);
+}
+
+#[test]
+fn inp_writes_every_set_and_correct_box_face_labels() {
+    let m = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let text = write_inp(&m, "box");
+    for name in ["xmin", "xmax", "ymin", "ymax", "zmin", "zmax"] {
+        assert!(text.contains(&format!("*NSET, NSET={name}\n")), "{name}");
+        assert!(text.contains(&format!("*SURFACE, TYPE=ELEMENT, NAME={name}\n")), "{name}");
+    }
+    assert!(text.contains("*ELSET, ELSET=all\n"));
+    // hex S6/S4, S3/S5, S1/S2 on the low/high side per axis (structured.rs FACE_LOCAL_3D)
+    for (name, want) in [("xmin", "S6"), ("xmax", "S4"), ("ymin", "S3"), ("ymax", "S5"), ("zmin", "S1"), ("zmax", "S2")]
+    {
+        let header = format!("*SURFACE, TYPE=ELEMENT, NAME={name}");
+        let lines = section_lines(&text, &header);
+        assert_eq!(lines.len(), 1, "{name}");
+        assert!(lines[0].ends_with(&format!(", {want}")), "{name}: {}", lines[0]);
+    }
+}
+
+#[test]
+fn inp_maps_every_element_kind_to_its_abaqus_type() {
+    for (kind, want) in [
+        (ElementKind::Hex8, "C3D8"),
+        (ElementKind::Hex20, "C3D20"),
+        (ElementKind::Tet4, "C3D4"),
+        (ElementKind::Tet10, "C3D10"),
+        (ElementKind::Quad4, "CPS4"),
+        (ElementKind::Quad8, "CPS8"),
+        (ElementKind::Tri3, "CPS3"),
+        (ElementKind::Tri6, "CPS6"),
+    ] {
+        let m = Structured { kind, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+        let text = write_inp(&m, "t");
+        assert!(text.contains(&format!("*ELEMENT, TYPE={want}, ELSET=BLOCK1")), "{kind:?} -> {want}");
+    }
+}
+
+// ---------------------------------------------------------------- stl
+
+#[derive(Debug)]
+struct Facet {
+    normal: [f64; 3],
+    verts: [[f64; 3]; 3],
+}
+
+fn parse_stl(text: &str) -> Vec<Facet> {
+    let mut out = Vec::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        if let Some(rest) = line.strip_prefix("facet normal ") {
+            let n: Vec<f64> = rest.split_whitespace().map(|s| s.parse().unwrap()).collect();
+            lines.next(); // outer loop
+            let mut verts = [[0.0; 3]; 3];
+            for v in &mut verts {
+                let vl = lines.next().unwrap().trim();
+                let coords: Vec<f64> =
+                    vl.strip_prefix("vertex ").unwrap().split_whitespace().map(|s| s.parse().unwrap()).collect();
+                *v = [coords[0], coords[1], coords[2]];
+            }
+            lines.next(); // endloop
+            lines.next(); // endfacet
+            out.push(Facet { normal: [n[0], n[1], n[2]], verts });
+        }
+    }
+    out
+}
+
+fn assert_unit_outward_normals(facets: &[Facet], centroid: [f64; 3]) {
+    for f in facets {
+        let len = (f.normal[0] * f.normal[0] + f.normal[1] * f.normal[1] + f.normal[2] * f.normal[2]).sqrt();
+        assert!((len - 1.0).abs() < 1e-9, "{f:?}");
+        let tc = [
+            (f.verts[0][0] + f.verts[1][0] + f.verts[2][0]) / 3.0,
+            (f.verts[0][1] + f.verts[1][1] + f.verts[2][1]) / 3.0,
+            (f.verts[0][2] + f.verts[1][2] + f.verts[2][2]) / 3.0,
+        ];
+        let d = [tc[0] - centroid[0], tc[1] - centroid[1], tc[2] - centroid[2]];
+        let dot = f.normal[0] * d[0] + f.normal[1] * d[1] + f.normal[2] * d[2];
+        assert!(dot > 0.0, "{f:?}");
+    }
+}
+
+fn assert_watertight(triangles: &[[u32; 3]]) {
+    let mut edges = Vec::new();
+    for t in triangles {
+        edges.push((t[0], t[1]));
+        edges.push((t[1], t[2]));
+        edges.push((t[2], t[0]));
+    }
+    for &(u, v) in &edges {
+        let forward = edges.iter().filter(|&&e| e == (u, v)).count();
+        let backward = edges.iter().filter(|&&e| e == (v, u)).count();
+        assert_eq!(forward, 1, "edge ({u},{v}) appears {forward} times in its own direction");
+        assert_eq!(backward, 1, "edge ({u},{v}) has {backward} matching reverse edges");
+    }
+}
+
+#[test]
+fn stl_writes_a_unit_outward_normal_watertight_box_solid() {
+    let solid = Solid::evaluate(&Shape::Box { size: [1.0, 1.0, 1.0] }).unwrap();
+    let text = write_stl(solid.triangles(), "box");
+    assert!(text.starts_with("solid box\n"));
+    assert!(text.trim_end().ends_with("endsolid box"));
+    let facets = parse_stl(&text);
+    assert_eq!(facets.len(), solid.triangles().triangles.len());
+    assert_unit_outward_normals(&facets, [0.5, 0.5, 0.5]);
+    assert_watertight(&solid.triangles().triangles);
+}
+
+#[test]
+fn stl_mesh_writes_a_unit_outward_normal_watertight_box_skin() {
+    let m = Structured { kind: ElementKind::Hex8, n: [2, 2, 2] }.box_([1.0, 1.0, 1.0]);
+    let text = write_stl_mesh(&m);
+    assert!(text.starts_with("solid mesh\n"));
+    let surface = m.surface();
+    let facets = parse_stl(&text);
+    assert_eq!(facets.len(), surface.triangles.len());
+    assert_unit_outward_normals(&facets, [0.5, 0.5, 0.5]);
+    assert_watertight(&surface.triangles);
+}
+
+#[test]
+fn stl_gives_a_degenerate_triangle_a_zero_normal() {
+    let tri = TriMesh { positions: vec![[0.0; 3]; 3], triangles: vec![[0, 1, 2]], ..Default::default() };
+    let text = write_stl(&tri, "degenerate");
+    assert!(text.contains("facet normal 0 0 0\n"), "{text}");
+}
