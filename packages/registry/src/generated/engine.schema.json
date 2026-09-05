@@ -2231,7 +2231,7 @@
         ]
       },
       "Solver": {
-        "description": "Linear solver choice. `auto` picks the direct solver for small systems and the GPU\nconjugate gradient with f64 refinement for large ones when a GPU is present.",
+        "description": "Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations\n(100 000 in the browser, where the heap is smaller) and above that a conjugate gradient\ninside an f64 iterative-refinement loop — on the GPU when the host granted one, on the CPU\notherwise. `cpu-direct` is exact and is what to fall back to when a solve reports\n`solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.",
         "type": "string",
         "enum": [
           "auto",
@@ -6106,7 +6106,7 @@
         ]
       },
       "Solver": {
-        "description": "Linear solver choice. `auto` picks the direct solver for small systems and the GPU\nconjugate gradient with f64 refinement for large ones when a GPU is present.",
+        "description": "Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations\n(100 000 in the browser, where the heap is smaller) and above that a conjugate gradient\ninside an f64 iterative-refinement loop — on the GPU when the host granted one, on the CPU\notherwise. `cpu-direct` is exact and is what to fall back to when a solve reports\n`solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.",
         "type": "string",
         "enum": [
           "auto",
@@ -10727,7 +10727,7 @@
         "x-dimension": "temperature"
       },
       "Solver": {
-        "description": "Linear solver choice. `auto` picks the direct solver for small systems and the GPU\nconjugate gradient with f64 refinement for large ones when a GPU is present.",
+        "description": "Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations\n(100 000 in the browser, where the heap is smaller) and above that a conjugate gradient\ninside an f64 iterative-refinement loop — on the GPU when the host granted one, on the CPU\notherwise. `cpu-direct` is exact and is what to fall back to when a solve reports\n`solve.stalled`; `cpu-pcg` and `gpu-pcg` force the iterative paths at any size.",
         "type": "string",
         "enum": [
           "auto",

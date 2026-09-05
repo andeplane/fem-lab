@@ -2705,16 +2705,12 @@ fn a_host_that_says_stop_cancels_at_every_phase() {
 }
 
 #[test]
-fn only_the_direct_solver_and_the_static_procedure_exist_so_far() {
+fn only_the_cpu_solvers_and_the_static_procedure_exist_so_far() {
     let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![2.0] };
-    for solver in [Solver::CpuPcg, Solver::GpuPcg] {
-        let opts = SolveOptions { solver, ..SolveOptions::default() };
-        let e = pollster::block_on(solve(&k, &[1.0], &opts, &Pool::new(2), None, &mut nop)).expect_err("not built yet");
-        assert_eq!(e.code, ErrorCode::Unsupported);
-        assert!(e.cause.contains(&solver_name(solver)), "{}", e.cause);
-    }
-    assert_eq!(resolve_solver(Solver::Auto), Solver::CpuDirect);
-    assert_eq!(resolve_solver(Solver::GpuPcg), Solver::GpuPcg);
+    let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
+    let e = pollster::block_on(solve(&k, &[1.0], &opts, &Pool::new(2), None, &mut nop)).expect_err("not built yet");
+    assert_eq!(e.code, ErrorCode::Unsupported);
+    assert!(e.cause.contains(&solver_name(Solver::GpuPcg)), "{}", e.cause);
     assert_eq!(solver_name(Solver::CpuDirect), "cpu-direct");
 
     let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
@@ -2764,6 +2760,124 @@ fn an_indefinite_matrix_is_not_positive_definite() {
     assert_eq!(e.code, ErrorCode::SolveNotPositiveDefinite);
     assert_eq!(e.suggestion.as_deref(), Some("constraint.fix"));
     assert_eq!(e.where_.as_deref(), Some("solve"));
+}
+
+/// The reduced system `K_ff u = f_f` of a Problem, which is what every solver actually sees.
+fn reduced_system(p: &Problem<'_>) -> (Csr, Vec<f64>) {
+    let (_, a) = assemble(p);
+    let mut f = a.f_thermal.clone();
+    assemble_loads(p, &mut f).expect("the loads of these cases assemble");
+    let rc = resolve(p).expect("no conflict");
+    let red = reduce(&a.k, &f, &rc);
+    (red.k_ff, red.f_f)
+}
+
+/// A5 and B1 through `cpu-pcg` inside the f64 refinement loop: the same answer as the direct
+/// factorisation, to the tolerance the refinement was asked for.
+#[test]
+fn the_conjugate_gradient_inside_refinement_reaches_the_direct_answer() {
+    let cases: [([usize; 3], Vec<Load>); 2] = [
+        ([10, 1, 1], vec![Load::Traction { faces: "xmax".into(), t: [1e5, 0.0, 0.0] }]),
+        ([8, 2, 2], vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }]),
+    ];
+    for (n, loads) in cases {
+        let mesh = cantilever_mesh(n, ElementKind::Hex8);
+        let sets = sets_of(&mesh);
+        let bodies = vec!["beam".to_string()];
+        let mut p = problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            Formulation::IncompatibleModes,
+            vec![fix("root", "xmin", [true, true, true], 0.0)],
+        );
+        p.loads = loads;
+        let (k, f) = reduced_system(&p);
+        let pool = Pool::new(2);
+        let direct = SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() };
+        let (want, _) = pollster::block_on(solve(&k, &f, &direct, &pool, None, &mut nop)).expect("direct");
+        let opts = SolveOptions { solver: Solver::CpuPcg, ..SolveOptions::default() };
+        let (got, info) = pollster::block_on(solve(&k, &f, &opts, &pool, None, &mut nop)).expect("cpu-pcg");
+        assert_eq!(info.solver, "cpu-pcg");
+        assert!(info.rel_residual < opts.rel_tol, "{n:?}: residual {}", info.rel_residual);
+        let scale = want.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        for (i, (a, b)) in got.iter().zip(&want).enumerate() {
+            assert!((a - b).abs() <= 1e-10 * scale, "{n:?} dof {i}: {a} vs {b}");
+        }
+        println!("cpu-pcg on {n:?}: {} equations, {} refinement steps", k.n, info.iterations);
+    }
+}
+
+/// An inner solve that never makes progress is a stall, not an infinite loop — twice over: a
+/// budget that runs out, and a residual that stops halving before it does.
+#[test]
+fn refinement_that_gets_nowhere_reports_a_stall_and_names_the_way_out() {
+    let mesh = cantilever_mesh([4, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::IncompatibleModes,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let (k, f) = reduced_system(&p);
+    let pool = Pool::new(2);
+    // one inner iteration and one outer step: the budget runs out
+    let budget = SolveOptions { solver: Solver::CpuPcg, max_iterations: 1, max_outer: 1, ..SolveOptions::default() };
+    let e = pollster::block_on(solve(&k, &f, &budget, &pool, None, &mut nop)).expect_err("nowhere near 1e-10");
+    assert_eq!(e.code, ErrorCode::SolveStalled);
+    assert_eq!(e.where_.as_deref(), Some("solve"));
+    assert_eq!(e.suggestion.as_deref(), Some("solve.run { solver: 'cpu-direct' }"));
+    assert!(e.cause.contains("budget ran out"), "{}", e.cause);
+    // no inner iterations at all: the correction is zero and the residual never halves
+    let stuck = SolveOptions { solver: Solver::CpuPcg, max_iterations: 0, ..SolveOptions::default() };
+    let e = pollster::block_on(solve(&k, &f, &stuck, &pool, None, &mut nop)).expect_err("no progress");
+    assert_eq!(e.code, ErrorCode::SolveStalled);
+    assert!(e.cause.contains("stopped halving"), "{}", e.cause);
+    // and a host that says stop between refinement steps is obeyed
+    for at in 0..2 {
+        let mut stop = cancel_on(at);
+        let opts = SolveOptions { solver: Solver::CpuPcg, ..SolveOptions::default() };
+        let e = pollster::block_on(solve(&k, &f, &opts, &pool, None, &mut stop)).expect_err("cancelled");
+        assert_eq!(e.code, ErrorCode::Cancelled, "call {at}");
+    }
+}
+
+/// The conjugate gradient needs positive curvature; a matrix without it says so instead of
+/// wandering. Both the indefinite case and the one whose diagonal gives no preconditioner.
+#[test]
+fn the_conjugate_gradient_refuses_a_matrix_that_is_not_positive_definite() {
+    let opts = SolveOptions { solver: Solver::CpuPcg, ..SolveOptions::default() };
+    let indefinite = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![1.0, 2.0, 2.0, 1.0] };
+    let no_diagonal = Csr { n: 2, row_ptr: vec![0, 1, 2], col_idx: vec![1, 0], vals: vec![1.0, 1.0] };
+    for k in [indefinite, no_diagonal] {
+        let e = pollster::block_on(solve(&k, &[1.0, -1.0], &opts, &Pool::new(2), None, &mut nop))
+            .expect_err("not positive definite");
+        assert_eq!(e.code, ErrorCode::SolveNotPositiveDefinite);
+        assert!(e.cause.contains("pᵀKp"), "{}", e.cause);
+        assert_eq!(e.suggestion.as_deref(), Some("constraint.fix"));
+    }
+}
+
+/// `Auto` is a policy on the size of the system and whether the host granted a device, and it
+/// is tested at both sides of the threshold without needing either.
+#[test]
+fn auto_picks_the_direct_solver_until_the_factor_stops_fitting() {
+    use femlab_engine::solve::DIRECT_MAX_DOFS;
+    assert_eq!(DIRECT_MAX_DOFS, 200_000, "the native threshold; wasm32 takes half");
+    for gpu in [false, true] {
+        assert_eq!(resolve_solver(Solver::Auto, DIRECT_MAX_DOFS, gpu), Solver::CpuDirect);
+    }
+    assert_eq!(resolve_solver(Solver::Auto, DIRECT_MAX_DOFS + 1, false), Solver::CpuPcg);
+    assert_eq!(resolve_solver(Solver::Auto, DIRECT_MAX_DOFS + 1, true), Solver::GpuPcg);
+    // an explicit choice is never overridden by the size
+    assert_eq!(resolve_solver(Solver::GpuPcg, 1, false), Solver::GpuPcg);
+    assert_eq!(resolve_solver(Solver::CpuDirect, usize::MAX, true), Solver::CpuDirect);
 }
 
 #[test]
