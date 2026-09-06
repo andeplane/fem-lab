@@ -3607,57 +3607,65 @@ fn steady_heat_power_balances_flux_sources_and_outgoing_convection() {
 fn transient_heat_reactions_include_storage_at_the_last_theta_stage() {
     for n in [2, 4] {
         for theta in [0.5, 0.75, 1.0] {
-            let mesh = Structured { kind: ElementKind::Hex8, n: [n, 1, 1] }.box_([1.0, 0.1, 0.1]);
-            let mut sets = sets_of(&mesh);
-            let bodies = one_body();
-            let mut constraints = Vec::new();
-            for node in 0..mesh.n_nodes() as u32 {
-                let name = format!("node{node}");
-                sets.insert(
-                    name.clone(),
-                    ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: Vec::new(), elems: Vec::new() },
-                );
-                constraints.push(hold(&name, &name, 10.0 + 4.0 * mesh.node(node)[0]));
-            }
-            for (loads, film) in
-                [(Vec::new(), 0.0), (vec![HeatLoad::Convection { faces: "xmax".into(), h: 50.0, t_inf: 100.0 }], 50.0)]
-            {
-                let p = heat_problem(
-                    &mesh,
-                    &sets,
-                    &bodies,
-                    Idealisation::Solid3d,
-                    conductor(45.0, 1.0, 1.0),
-                    constraints.clone(),
-                    loads,
-                );
-                // Two steps, output only at the end: power accounting must use the last internal
-                // state, not the last saved history row.
-                let step = Step::HeatTransient {
-                    dt: 1.0,
-                    t_end: 2.0,
-                    theta,
-                    initial: 10.0,
-                    output_every: 2,
-                    amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, 2.0], value: vec![1.0, 3.0] }),
-                    solver: SolveOptions::default(),
-                };
-                let res = run_step(&p, &step).unwrap();
-                assert!((res.scalars["storage_power"] - 0.12).abs() < 1e-10);
-                let applied = film * 0.01 * (100.0 - 14.0 * (2.0 + theta));
-                assert!((res.scalars["applied_total_x"] - applied).abs() < 1e-10);
-                let removed: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
-                assert!((removed - applied + 0.12).abs() < 1e-10); // prescribed heating adds, rather than removes, power
-                let cold: f64 =
-                    sets["xmin"].nodes.iter().map(|&node| res.fields[&Field::Reaction].data[node as usize * 3]).sum();
-                let dx = 1.0 / n as f64;
-                // Exact integral of the left-end linear basis times dT/dt over its adjacent cell.
-                let storage_at_cold = 0.01 * dx * (30.0 + 4.0 * dx) / 6.0;
-                let expected_cold = 45.0 * 0.01 * 4.0 * (2.0 + theta) - storage_at_cold;
-                assert!((cold - expected_cold).abs() < 1e-10, "n={n}, θ={theta}: {cold} vs {expected_cold}");
-                assert_eq!(res.history.as_ref().unwrap().times, [0.0, 2.0]);
-                for (node, t) in temperature_of(&res).iter().enumerate() {
-                    assert!((t - 3.0 * (10.0 + 4.0 * mesh.node(node as u32)[0])).abs() < 1e-12);
+            for (requested_dt, end, effective_dt) in [(1.0, 2.0, 1.0), (0.4, 0.9, 0.3)] {
+                let mesh = Structured { kind: ElementKind::Hex8, n: [n, 1, 1] }.box_([1.0, 0.1, 0.1]);
+                let mut sets = sets_of(&mesh);
+                let bodies = one_body();
+                let mut constraints = Vec::new();
+                for node in 0..mesh.n_nodes() as u32 {
+                    let name = format!("node{node}");
+                    sets.insert(
+                        name.clone(),
+                        ResolvedSet { kind: SetKind::Node, nodes: vec![node], faces: Vec::new(), elems: Vec::new() },
+                    );
+                    constraints.push(hold(&name, &name, 10.0 + 4.0 * mesh.node(node)[0]));
+                }
+                for (loads, film) in [
+                    (Vec::new(), 0.0),
+                    (vec![HeatLoad::Convection { faces: "xmax".into(), h: 50.0, t_inf: 100.0 }], 50.0),
+                ] {
+                    let p = heat_problem(
+                        &mesh,
+                        &sets,
+                        &bodies,
+                        Idealisation::Solid3d,
+                        conductor(45.0, 1.0, 1.0),
+                        constraints.clone(),
+                        loads,
+                    );
+                    // Keep only endpoints: power uses the final internal interval, including
+                    // the independently known 0.3 s increment for a 0.4/0.9 s request.
+                    let step = Step::HeatTransient {
+                        dt: requested_dt,
+                        t_end: end,
+                        theta,
+                        initial: 10.0,
+                        output_every: 99,
+                        amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, 2.0], value: vec![1.0, 3.0] }),
+                        solver: SolveOptions::default(),
+                    };
+                    let res = run_step(&p, &step).unwrap();
+                    assert!((res.scalars["storage_power"] - 0.12).abs() < 1e-10);
+                    assert!((res.scalars["dt"] - effective_dt).abs() < 1e-15);
+                    let stage_factor = 1.0 + end - (1.0 - theta) * effective_dt;
+                    let applied = film * 0.01 * (100.0 - 14.0 * stage_factor);
+                    assert!((res.scalars["applied_total_x"] - applied).abs() < 1e-10);
+                    let removed: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
+                    assert!((removed - applied + 0.12).abs() < 1e-10); // prescribed heating adds, rather than removes, power
+                    let cold: f64 = sets["xmin"]
+                        .nodes
+                        .iter()
+                        .map(|&node| res.fields[&Field::Reaction].data[node as usize * 3])
+                        .sum();
+                    let dx = 1.0 / n as f64;
+                    // Exact integral of the left-end linear basis times dT/dt over its adjacent cell.
+                    let storage_at_cold = 0.01 * dx * (30.0 + 4.0 * dx) / 6.0;
+                    let expected_cold = 45.0 * 0.01 * 4.0 * stage_factor - storage_at_cold;
+                    assert!((cold - expected_cold).abs() < 1e-10, "n={n}, θ={theta}: {cold} vs {expected_cold}");
+                    assert_eq!(res.history.as_ref().unwrap().times, [0.0, end]);
+                    for (node, t) in temperature_of(&res).iter().enumerate() {
+                        assert!((t - (1.0 + end) * (10.0 + 4.0 * mesh.node(node as u32)[0])).abs() < 1e-12);
+                    }
                 }
             }
         }

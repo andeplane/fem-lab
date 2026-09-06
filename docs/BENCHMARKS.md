@@ -345,13 +345,16 @@ checks a zero assembled-power scale. Power errors stay below `1e-8 W`.
 
 The independent transient field `T(x,t)=(10+4x)(1+t)` on a unit-long `0.1×0.1 m` bar with
 `rho=cp=1` has exactly `dU/dt=0.12 W`. Tests prescribe that field on two meshes for
-`theta=0.5,0.75,1`, with and without an end film. The final-step conduction gradient is
-`4*(2+theta)`; the cold-end storage contribution is the exact basis integral
+`theta=0.5,0.75,1`, with and without an end film. Requested `(dt,tEnd)` pairs `(1,2)`
+and `(0.4,0.9)` s use known effective increments `1` and `0.3` s. The final-step
+conduction gradient is `4*(1+tEnd-(1-theta)*effectiveDt)`; the cold-end storage contribution is the exact basis integral
 `0.01*dx*(30+4*dx)/6`. These give independent cold-end reaction and net-film powers to
 `1e-10 W`. Saving only the initial/final history rows proves that the last internal state,
 not the last saved output, defines the final-step powers. A source-driven uniform ramp
 with free interior DOFs separately checks `dT/dt=q/(rho*cp)=1 K/s`, zero support heat flow
-and `dU/dt=36.11 kW` through the registry, on two meshes and two theta values.
+and `dU/dt=36.11 kW` through the registry, on two meshes and two theta values with both
+endpoint schedules. This detects dividing the storage increment by the nominal `0.4 s`
+instead of the actual `0.3 s` interval.
 
 Positive thermal reaction is removed power. The conservation equation is
 `net applied − removed − storage = 0`, with net convection `integral h*(T_inf−T) dA`.

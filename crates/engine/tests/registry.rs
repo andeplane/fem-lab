@@ -2367,26 +2367,28 @@ fn heat_conservation_reports_net_film_power_and_transient_energy_storage() {
         // rho=7850, cp=460 from heat_bar; q=rho*cp makes dT/dt exactly 1 K/s.
         ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"3611000 W/m^3"}"#);
         for theta in [0.5, 1.0] {
-            ok(
-                &mut e,
-                &format!(
-                    r#"{{"cmd":"step.add","name":"ramp","procedure":"heat-transient","constraints":["left","right"],"loads":["source"],"dt":"1 s","tEnd":"2 s","theta":{theta},"initial":"10 K","outputEvery":2,"amplitude":{{"kind":"table","t":["0 s","2 s"],"value":[1,1.2]}}}}"#
-                ),
-            );
-            ok(&mut e, r#"{"cmd":"solve.run","step":"ramp"}"#);
-            let r = result_of(&mut e, Some("ramp"));
-            let storage = r.storage_power.as_ref().unwrap();
-            assert_eq!(storage.unit, "kW");
-            assert!((storage.value - 36.11).abs() < 1e-8, "{r:?}");
-            assert!((r.applied_total[0].value - 36.11).abs() < 1e-8);
-            assert!(r.reactions.iter().all(|row| row.total[0].value.abs() < 1e-8));
-            assert!(r.balance < 1e-9);
-            assert_eq!(r.history.len(), 2);
-            assert!((r.history[1].min.value - 12.0).abs() < 1e-9);
-            assert!((r.history[1].max.value - 12.0).abs() < 1e-9);
-            let md = report(&mut e, Some("ramp"), Some(vec![ReportSection::Results])).markdown;
-            assert!(md.contains("Storage rate") && md.contains("net applied − removed − storage"), "{md}");
-            assert!(md.contains("36.11") && md.contains("kW"));
+            for (dt, end) in [(1.0, 2.0), (0.4, 0.9)] {
+                ok(
+                    &mut e,
+                    &format!(
+                        r#"{{"cmd":"step.add","name":"ramp","procedure":"heat-transient","constraints":["left","right"],"loads":["source"],"dt":"{dt} s","tEnd":"{end} s","theta":{theta},"initial":"10 K","outputEvery":99,"amplitude":{{"kind":"table","t":["0 s","2 s"],"value":[1,1.2]}}}}"#
+                    ),
+                );
+                ok(&mut e, r#"{"cmd":"solve.run","step":"ramp"}"#);
+                let r = result_of(&mut e, Some("ramp"));
+                let storage = r.storage_power.as_ref().unwrap();
+                assert_eq!(storage.unit, "kW");
+                assert!((storage.value - 36.11).abs() < 1e-8, "{r:?}");
+                assert!((r.applied_total[0].value - 36.11).abs() < 1e-8);
+                assert!(r.reactions.iter().all(|row| row.total[0].value.abs() < 1e-8));
+                assert!(r.balance < 1e-9);
+                assert_eq!(r.history.len(), 2);
+                assert!((r.history[1].min.value - (10.0 + end)).abs() < 1e-9);
+                assert!((r.history[1].max.value - (10.0 + end)).abs() < 1e-9);
+                let md = report(&mut e, Some("ramp"), Some(vec![ReportSection::Results])).markdown;
+                assert!(md.contains("Storage rate") && md.contains("net applied − removed − storage"), "{md}");
+                assert!(md.contains("36.11") && md.contains("kW"));
+            }
         }
     }
 }
