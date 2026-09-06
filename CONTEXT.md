@@ -64,6 +64,15 @@ The fields (displacement, stress, temperature, mode shapes) a Step produced, tie
 Mesh it ran on and to the Model revision it came from.
 _Avoid_: output, odb, solution
 
+**Frame**:
+One retained primary nodal field at a physical time in a transient Result. Frame indices count
+retained output from zero (the initial state), independently of integration-step numbers.
+`query.frames` lists them; `query.frame` reads one SI field. A probe or path can select the
+same Frame by index or by exact/explicitly nearest unit-bearing time, without temporal
+interpolation. Final-field Queries retain their existing defaults when no sample is supplied.
+Frames carry the solved Model hash and Step name; these identify Model state, so a host must
+invalidate cached Frames on every solve acknowledgement, including a re-solve of the same Model.
+
 ## Doing things
 
 **Command**:

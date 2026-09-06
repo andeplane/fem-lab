@@ -236,6 +236,21 @@ Requested `(dt, tEnd)` pairs `(0.6, 1)`, `(0.4, 0.9)`, and `(2, 0.25)` must reac
 `tEnd` in the saved history and the correct temperature at every node. The requested step is
 an upper bound; a uniform adjusted step preserves one reusable factorisation.
 
+The retained-frame registry checks (#243) read every uniform-heating value through
+`query.frames`/`query.frame`: both orders, 2/4 axial cells, zero/normal/oversized retention
+strides, integral and nonintegral endpoint ratios, and initial/final-only output. The values
+must equal `T=t` K within `1e-10 K`; SI arrays remain labelled K when Model display units
+are Celsius. The final frame is exactly the final primary FieldData, including zero padding.
+
+An independent cooled-slab Fourier series checks every retained node at 0.05, 0.10 and 0.15 s:
+`T(x,t) = Σ_(odd n) 400/(nπ) sin(nπx) exp(−n²π²t)` K for a 1 m slab initially at 100 K,
+with zero-temperature end faces and diffusivity 1 m²/s. Both element orders refine through
+8/16/32 cells with Crank–Nicolson at dt=0.0001 s; maximum nodal errors decrease on each mesh
+and stay below 2 K, with observed spatial rates at least 1.8/3.5 for linear/quadratic elements.
+Backward-Euler steps 0.01/0.005/0.0025 s on 32 cells reduce errors by at
+least 1.7 per halving at each retained time. Public frame-aware line samples independently
+match the same continuum solution in Celsius. The existing NAFEMS T3 check remains in place.
+
 ## F. Dynamics and explicit (phase 2, 6)
 
 | # | Case | Reference | Tolerance | Proves | Status |
@@ -272,6 +287,13 @@ corner loads `−ρ A g/12` and midside loads `ρ A g/3`, checked individually. 
 with positive HRZ masses in explicit dynamics previously made quadratic corner nodes move
 against gravity. Explicit now assembles `m_i g` using its actual inertia; other load types retain
 the common consistent assembly.
+
+The retained-frame free-fall Query check (#243) reads every node at every saved time through
+the public registry and compares displacement with `u_y=−9.81 t²/2`, within `1e-12 m`.
+Mapped quad4/quad8 and lattice hex8/hex20 use 1/2/4 axial cells, two CFL factors and a
+nonintegral requested endpoint. Sampled probes read the same retained fields in millimetres.
+2D History stores two components and the response pads z to zero, exactly matching final
+FieldData. These tests depend on the separate #278 correction to quadratic gravity inertia.
 
 ## G. Shells and plates (phase 8)
 

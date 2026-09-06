@@ -9,6 +9,7 @@ pub mod command;
 pub mod engine;
 pub mod error;
 pub mod fem;
+mod frames;
 pub mod gpu;
 pub mod hash;
 pub mod io;
