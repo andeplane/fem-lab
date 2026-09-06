@@ -9,7 +9,8 @@ Keep `[workspace.package].version` in `Cargo.toml` and the version in
 `packages/mcp/package.json` equal, update the npm lockfile, and merge the version change through
 a reviewed PR with green CI. The release tag must be exactly `v` followed by that version.
 
-Run the `release` workflow manually from GitHub Actions to validate and build without publishing.
+PRs changing the release workflow or packaging helpers run its full build without publishing.
+You can also run the `release` workflow manually from GitHub Actions to validate and build without publishing.
 It runs the same CI workflow with all Windows, GPU and browser GPU checks required. Native builds
 test a copied CLI outside the checkout; npm packaging installs the tarball in a temporary project
 and exercises the actual engine, script worker and validation worker. The downloadable
