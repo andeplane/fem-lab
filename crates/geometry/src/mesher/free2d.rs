@@ -131,7 +131,15 @@ pub fn free_sheet(shape: &Shape, size: f64, quadratic: bool, refine: &[RefineBox
                         (coarse.points[t[0]][1] + coarse.points[t[1]][1] + coarse.points[t[2]][1]) / 3.0,
                     ];
                     // 0 means "no local bound"; the global max_area still applies everywhere.
-                    refine.iter().filter(|b| b.contains(c)).map(|b| max_area(b.size)).fold(0.0, f64::max)
+                    // When boxes overlap, the smallest area is the finest requested size.
+                    // When boxes overlap, the smallest area is the finest requested size.
+                    refine.iter().filter(|b| b.contains(c)).map(|b| max_area(b.size)).fold(0.0, |best, area| {
+                        if best == 0.0 {
+                            area
+                        } else {
+                            best.min(area)
+                        }
+                    })
                 })
                 .collect();
             let input = InputMesh {

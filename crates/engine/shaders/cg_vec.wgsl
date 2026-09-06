@@ -19,6 +19,7 @@ const PQ = 2u;
 const ALPHA = 3u;
 const BETA = 4u;
 const BB = 5u;
+const HALTED = 6u;
 
 @group(0) @binding(0) var<storage, read_write> x: array<f32>;
 @group(0) @binding(1) var<storage, read_write> r: array<f32>;
@@ -42,17 +43,42 @@ fn init(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
     x[i] = 0.0;
     r[i] = b[i];
     p[i] = b[i];
+    if (i == 0u) {
+        scalars[HALTED] = 0.0;
+    }
+}
+
+// Bit inspection also rejects infinities and NaNs without relying on floating-point
+// comparisons with NaN (WGSL implementations may assume arithmetic is finite).
+fn finite(v: f32) -> bool {
+    return (bitcast<u32>(v) & 0x7f800000u) != 0x7f800000u;
 }
 
 @compute @workgroup_size(1)
 fn alpha() {
-    scalars[ALPHA] = scalars[RZ_OLD] / scalars[PQ];
+    if (scalars[HALTED] != 0.0) {
+        return;
+    }
+    let rr = scalars[RZ_OLD];
+    let pq = scalars[PQ];
+    // Exact convergence (including b=0) and nonpositive curvature must stop on-device:
+    // the CPU cannot see them until the remainder of this submission has executed.
+    if (!(rr > 0.0) || !(pq > 0.0) || !finite(rr) || !finite(pq)) {
+        scalars[HALTED] = 1.0;
+        return;
+    }
+    let a = rr / pq;
+    if (!finite(a)) {
+        scalars[HALTED] = 1.0;
+        return;
+    }
+    scalars[ALPHA] = a;
 }
 
 @compute @workgroup_size(256)
 fn update_x_r(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
     let i = index(lid, wid);
-    if (i >= params.n) {
+    if (i >= params.n || scalars[HALTED] != 0.0) {
         return;
     }
     let a = scalars[ALPHA];
@@ -62,14 +88,23 @@ fn update_x_r(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_i
 
 @compute @workgroup_size(1)
 fn beta() {
-    scalars[BETA] = scalars[RZ_NEW] / scalars[RZ_OLD];
-    scalars[RZ_OLD] = scalars[RZ_NEW];
+    if (scalars[HALTED] != 0.0) {
+        return;
+    }
+    let rr = scalars[RZ_NEW];
+    let beta = rr / scalars[RZ_OLD];
+    scalars[RZ_OLD] = rr;
+    if (!(rr > 0.0) || !finite(rr) || !finite(beta)) {
+        scalars[HALTED] = 1.0;
+        return;
+    }
+    scalars[BETA] = beta;
 }
 
 @compute @workgroup_size(256)
 fn update_p(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
     let i = index(lid, wid);
-    if (i >= params.n) {
+    if (i >= params.n || scalars[HALTED] != 0.0) {
         return;
     }
     p[i] = r[i] + scalars[BETA] * p[i];

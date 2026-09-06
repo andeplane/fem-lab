@@ -1,5 +1,5 @@
 import { deflateRawSync } from 'node:zlib';
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 function fragment(commands: unknown[], compressed: boolean): string {
   const json = Buffer.from(JSON.stringify(commands));

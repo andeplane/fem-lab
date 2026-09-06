@@ -98,6 +98,7 @@ export type Field = FieldBase &
     | { kind: 'ref'; refKind: string; multi: boolean }
     | { kind: 'union'; variants: { kind: string; fields: Field[] }[] }
     | { kind: 'object'; fields: Field[] }
+    | { kind: 'sketch' }
     | { kind: 'json' }
   );
 
@@ -140,6 +141,13 @@ const taggedOf = (node: JsonSchema): JsonSchema[] | null => {
 };
 
 function field(name: string, raw: JsonSchema, defs: Defs, required: boolean, path: string[], depth: number): Field {
+  // A sketch is an array of tagged unions, which `field` below would draw as a JSON textarea.
+  // ponytail: matched on the def's name, because that is what makes it *this* shape rather than
+  // any array of unions; detect it structurally when a second sketch-shaped def appears.
+  if (raw['$ref'] === '#/$defs/SketchSpec') {
+    const node = resolve(raw, defs);
+    return { path, label: humanise(name), hint: String(node['description'] ?? '').split('\n').join(' '), required, tag: 'sketch', kind: 'sketch' };
+  }
   const node = denull(resolve(raw, defs), defs);
   const base: FieldBase = { path, label: humanise(name), hint: String(node['description'] ?? '').split('\n').join(' '), required, tag: '' };
   const dimension = node['x-dimension'] as string | undefined;
@@ -195,9 +203,55 @@ function propertyFields(node: JsonSchema, defs: Defs, path: string[], depth: num
     .map(([name, prop]) => field(name, prop, defs, required.has(name), [...path, name], depth));
 }
 
-/** The form for one Command variant: its properties, in schema order, minus the discriminator. */
-export function fieldsOf(variant: JsonSchema, defs: Defs, depth = 2): Field[] {
+/**
+ * The form for one Command variant: its properties, in schema order, minus the discriminator.
+ * Depth 3 so `geometry.subtract`'s `shape → transform → shape → box` is fields rather than JSON.
+ */
+export function fieldsOf(variant: JsonSchema, defs: Defs, depth = 3): Field[] {
   return propertyFields(variant, defs, [], depth);
+}
+
+/**
+ * Every shape `geometry.add` accepts, read off `ShapeSpec.oneOf` rather than written out here, so
+ * a kind the engine gains appears in the add menu without an edit in the host.
+ */
+export function shapeKinds(defs: Defs): { kind: string; hint: string }[] {
+  const one = ((defs['ShapeSpec'] as JsonSchema | undefined)?.['oneOf'] ?? []) as JsonSchema[];
+  return one
+    .map((v) => ({ kind: String((v['properties'] as Record<string, JsonSchema> | undefined)?.['kind']?.['const'] ?? ''), hint: String(v['description'] ?? '').split('\n').join(' ') }))
+    .filter((v) => v.kind !== '');
+}
+
+/**
+ * The labels of the required fields that are still empty, so a form can say what it is waiting for
+ * instead of offering a button that will fail. A union only asks for the variant that is chosen;
+ * an object asks for its children. Pure, so `schema.test.ts` covers it without a DOM.
+ */
+export function missingRequired(fields: Field[], values: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  for (const f of fields) {
+    const value = getAt(values, f.path);
+    // An optional group nobody has opened asks for nothing: `step.add`'s `amplitude` is a union
+    // whose own variants have required fields, and reading them would block every Step.
+    const present = value !== undefined && value !== null;
+    if (f.kind === 'union') {
+      if (!present && !f.required) continue;
+      const kind = (getAt(values, [...f.path, 'kind']) as string | undefined) ?? f.variants[0]?.kind;
+      out.push(...missingRequired(f.variants.find((v) => v.kind === kind)?.fields ?? [], values));
+      continue;
+    }
+    if (f.kind === 'object') {
+      if (present || f.required) out.push(...missingRequired(f.fields, values));
+      continue;
+    }
+    if (!f.required) continue;
+    // An empty *list* is an answer — a free modal Step really has no constraints, and #178 wants
+    // that Applied. An empty part of a fixed-length quantity (`size: ['1 m', '', '']`) is not.
+    const list = (f.kind === 'ref' || f.kind === 'enum') && f.multi;
+    const empty = value === undefined || value === null || value === '' || (Array.isArray(value) && ((value.length === 0 && !list) || value.some((v) => v === undefined || v === null || v === '')));
+    if (empty) out.push(f.label);
+  }
+  return out;
 }
 
 /** The design's rule that the primary button says what it will do, not "Apply". */
