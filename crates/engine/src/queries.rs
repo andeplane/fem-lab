@@ -38,6 +38,8 @@ impl Engine {
     pub fn query(&mut self, q: Query) -> Result<QueryResult, Error> {
         match q {
             Query::Model {} => self.query_model().map(QueryResult::Model),
+            Query::Definition { kind, name } => crate::definition::command(&self.model, kind, &name)
+                .map(|command| QueryResult::Definition(ObjectDefinition { command })),
             Query::Journal { from_seq } => {
                 let from = from_seq.unwrap_or(0);
                 Ok(QueryResult::Journal(JournalDump {

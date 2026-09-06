@@ -92,6 +92,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | A7 | Reaction balance, every case | Σ reactions = −Σ applied loads | 1e-9 rel | Dirichlet handling and reaction recovery | engine test + green |
 | A8 | Journal replay, every case | Model hash identical after replay | exact | the engine is deterministic and scriptable | engine test |
 | A9 | GPU CG early convergence on identity and positive diagonal systems, 1 / 7 / 257 equations | `x_i = b_i / d_i`, including zero RHS | exact for powers-of-four diagonals | converged corrections survive the rest of a 25-iteration submission; reused contexts reset correctly | GPU test |
+| A10 | Simplex consistent mass and capacity, tri3/tri6/tet4/tet10 | Dirichlet barycentric integrals: ∫∏λᵢ^aᵢ = ∏aᵢ!/(d+Σaᵢ)! | 2e-12 × total mass/capacity per entry | exact entries, positive definite consistent mass, positive conservative HRZ lumping | engine test |
 
 A5 is run for all eight element kinds, driven by a prescribed end displacement so the reaction
 *is* `F`; A7's scale is the largest force that flows through the model, because a Step driven by
@@ -134,6 +135,21 @@ and `Gm^-35 = 1e-315 m^-35` remain valid. A shared native/wasm fixture verifies 
 temperature, geometry and display-unit Commands preserve the complete saved Model and Journal,
 and conversion Queries never serialize nonfinite numbers as JSON `null`.
 
+A10 (`every_simplex_mass_and_capacity_entry_matches_barycentric_closed_forms`) checks
+all entries, component blocks and Cholesky pivots on scaled affine simplices and curved
+quadratic maps. Plane stress includes thickness, plane strain unit depth, axisymmetry the
+variable `2πr` factor, and solids the full volume Jacobian. The independent oracle expands
+barycentric polynomials and integrates them by factorials; it calls neither production shape
+functions nor quadrature. Every HRZ diagonal is checked against the exact consistent diagonal
+scaled to the exact total. Positive quadrature weights avoid the zero/negative nodal masses
+that row-sum lumping would produce for quadratic simplices.
+
+`simplex_product_quadrature_integrates_the_required_polynomial_degrees` also checks every
+reference monomial, including unit-measure normalization, through degree 3 (tri3), 8 (tri6),
+2 (tet4), and 7 (tet10). The product `NᵀN` has degree 2 or 4; curved quadratic `det J`
+adds degree 2/3 in 2D/3D, and axisymmetric `r` adds degree 2. Compile-time collapsed
+Gauss tables are positive and cover these factors; stiffness/recovery retains its own rule.
+
 ## B. Beams and locking (phase 1–2)
 
 | # | Case | Reference | Tolerance | Proves | Status |
@@ -144,6 +160,11 @@ and conversion Queries never serialize nonfinite numbers as JSON `null`.
 | B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (modes 2 and 3, Timoshenko drift) | mass matrix, eigen solver | engine test + green |
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
+| B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
+
+B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
+motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
+refinements n=4,8,16 give rates about 2.00 for tri3/tet4 and 4.02/4.05 for tri6/tet10.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
@@ -256,6 +277,7 @@ hands out simplices, so `split_to_simplices` is reachable only from the geometry
 | E2 | Ansys VM97 fin, conduction + convection | 1D fin with a convective tip, `θ(L)/θ₀ = 1/[cosh mL + (h/mk) sinh mL]` | 2 % (see below) | convection with an analytical fin solution | engine test |
 | E3 | NAFEMS T3 1D transient, sinusoidal boundary | T = 36.60 °C, 20 mm inside the driven face at t = 32 s | 0.5 °C | transient integrator, θ-method order | engine test + green |
 | E4 | NAFEMS T2 conduction + radiation | T(B) = 927 K | 1 % | radiation BC (if/when added) | |
+| E5 | Forced transient slab, all four simplex kinds | mean T(t) = 1/12 − Σ(m odd) 8 exp(−m²π²t)/(mπ)⁴, at t=0.1 | finest mean error < 2e-4; monotone refinement, rate > 1.8 (linear), > 3.5 (quadratic) | capacity and transient mesh convergence | engine test |
 
 E1 runs the four element families on the same bar and checks every node, not just a probe: the
 profile is linear to 1e-10 for all of them, and the heat that enters at the hot end leaves at
@@ -309,6 +331,14 @@ truncation error is below `1e−2186 K` (and hence below the numerical tolerance
 Backward-Euler steps 0.01/0.005/0.0025 s on 32 cells reduce errors by at
 least 1.7 per halving at each retained time. Public frame-aware line samples independently
 match the same continuum solution in Celsius. The existing NAFEMS T3 check remains in place.
+The simplex E5 regression (`simplex_transient_capacity_converges_to_the_forced_slab_fourier_solution`)
+starts at zero, holds both ends at zero, and applies a unit volumetric source with
+k=ρ=cₚ=L=1. The sides are insulated. It refines the axial mesh n=4,8,16 for tri3,
+tri6, tet4 and tet10. Crank–Nicolson uses Δt=1e-5, keeping temporal error below the
+finest spatial error. Stored heat is integrated independently with exact barycentric moments
+of the temperature field on the equal-volume simplices, then compared to the Fourier mean.
+The polynomial steady contribution is integrated in closed form, so the exponentially decaying
+40-term series has negligible truncation error. No numerical reference mesh is the oracle.
 
 ## F. Dynamics and explicit (phase 2, 6)
 
@@ -464,6 +494,22 @@ copy, removal after dependent Commands are removed, undo/redo, and deterministic
 Journal replay with identical memberships and displacement. Unknown Bodies give structured
 errors identifying the selector argument and leave the Model and Journal unchanged.
 
+The lifecycle regression `implicit_body_rename_preserves_the_exact_patch_and_replay` repeats
+that independent uniaxial solution after renaming the implicit Body, for mapped quad4/quad8
+and swept hex8/hex20 meshes at two mesh densities. It checks every displacement against
+`ux=1e-4 x`, `uy,uz=-2.5e-5 y,z` within 1e-12 m and stress against 20 MPa within 1e-3 Pa;
+force balance remains below 1e-10. Whole-Body measure remains 2 m² or 6 m³. Undo/redo restore
+the exact Model hash and Journal replay reproduces the solution bit-for-bit. This verifies
+that renamed material and named/auto selectors retain their physical meaning, rather than
+only checking rewritten strings.
+
+Companion lifecycle cases cover direct mechanical and thermal auto-face references, named
+Face and Body-region dependencies, structured unsupported duplication, same-name remeshing,
+replacement/removal with unrelated explicit geometry, name collisions and unchanged Model
+and Journal on rejection. Free and swept-free source references follow explicit Body rename
+and block removal until the mesher changes. See ADR 0016 and
+[#251](https://github.com/andeplane/fem-lab/issues/251).
+
 ## Thermal Body loads on mapped and swept meshers (#260)
 
 The registry regressions use a 2 × 1 m mapped rectangle with 0.25 m plane-stress thickness
@@ -571,6 +617,38 @@ nine successful solves. After each solve, `query.cost` includes every live recor
 field and Mesh payload, plus the new Mesh snapshot. At the eight-record limit the oldest
 record remains charged during preparation; reads and rejected solves cannot advance eviction.
 These are payload accounting checks, not estimates of allocator or serialized Model overhead.
+## Unmeshed Sheet preview (#154)
+
+The tagged square-with-hole fixture has outer area 4 m² and hole area 1 m².
+An in-plane scale (2, 3), quarter turn, and translation (5, 7) produce signed loop
+areas +24 and −6 m², net 18 m², and bounds [−1, 5] × [7, 11] m. Independent
+shoelace and vertex-degree checks exercise both native geometry and the real wasm
+transport before `mesh.set`. Chromium checks rendered pixels, all four named outer
+edges, the hole boundary, an empty hole interior and hidden-body picking; these
+queries and view actions must leave the three-command Journal unchanged. The preview
+is an outline, not a mesh or a solver discretisation.
+
+### Procedure-aware convergence studies (#115)
+
+`convergence_studies_use_the_heat_operator_and_one_temperature_dof` uses a 1 m
+rod with 0°C ends, conductivity 45 W/(m K) and source 900 W/m³. The independent
+solution is T(x)=10x(1−x) °C. At x=1/3 m, linear interpolation on h=1/2, 1/4,
+1/8 m meshes has error 20h²/9 °C: the study must report second-order convergence
+and extrapolate to 20/9 °C. Its thermal DOF counts are 12, 45 and 225, with one
+unknown per node. Both restore modes preserve the intended mesh/Result pairing.
+
+`convergence_studies_keep_transient_initial_time_and_amplitude_settings` checks
+uniform T=10t K heating with q=ρc·10 and matching end ramps. The time integrator
+is exact for this linear function: all three meshes reach 20 K at 2 s and 40 K
+at 4 s, retaining the configured zero initial state, 0.25 s time step and output
+cadence. `convergence_studies_use_explicit_dynamics_for_a_falling_block` checks
+u_z=−gt²/2 at t=1 ms on 1³, 2³ and 4³ meshes, within 1%, without static supports.
+
+Modal amplitude studies and chained Steps explicitly return `unsupported` before
+changing Model, Journal or stored fields. Frequencies need a mode-aware quantity;
+chained studies need dependency results recomputed on each refinement. The current
+command instead directs callers to explicit per-mesh solve.run sequences.
+
 ### Thermal reaction power and display units (#120)
 
 For a `1 × 0.1 × 0.1 m` bar with `k=45 W/(m K)`, a `1000 W/m²` end flux
@@ -625,3 +703,37 @@ mesh forces the bounded fallback; its known graph count lies within the returned
 the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
 1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
 These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.
+
+### Transient retention and peak phases (#244)
+
+For `S` integration steps and normalized stride `E = max(outputEvery, 1)`, the retained-frame
+count is exactly `1 + floor(S/E) + (S mod E != 0)`: the initial state, every requested stride,
+and one final endpoint only when the endpoint is not already a stride. Tests cover divisible and
+non-divisible schedules, `outputEvery` beyond the step count, zero's established normalization,
+and checked count/byte overflow. The logical retained payload matches `query.frames`:
+`8 × frames × (1 + nodes × storedComponents)` bytes for f64 times and raw primary values.
+Vec headers, spare capacity and allocator overhead are deliberately separate; History reserves
+the exact outer frame count and remains the only full-series allocation.
+
+The cost Query reports two phases. The integration phase counts the #122 assembly lower bound,
+the retained payload and a conservative full-field f64 working allowance: `5 × nodes × 8` bytes
+for heat and `6 × nodes × storedComponents × 8` bytes for explicit dynamics. Heat's free-DOF
+vectors are charged at the full nodal length; the five-field allowance covers the temporary old
+and new temperature vectors during `expand`. The frame-read phase counts retained payload plus one
+normalized three-component f64 response (`24 × nodes` bytes) for a native Query. WASM/Worker transport has two
+normalized numeric payloads alive at once: the current JSON path's parsed source and structured
+clone, or #245's transferred `Float64Array` and final schema-owned `number[]`. Its separately
+reported known numeric staging is therefore at least `48 × nodes` bytes. Rust/JavaScript strings,
+array/object headers and engine-specific number storage remain value- and runtime-dependent; the
+schema marks the WASM staging estimate incomplete and `bytes` remains a counted conservative
+estimate rather than a complete host-memory claim. #245 measures those copies when it changes the browser route. Solver
+factor fill/workspace, final derived fields, the resident Mesh/Model and allocator overhead also
+remain excluded, so a counted peak below the fixed 1.5 GiB planning budget is still feasibility
+unknown.
+
+An end-to-end heat regression first stores a valid Result, then requests 1,000,000,001 frames.
+`query.cost` reports the exact count and an over-budget peak; `solve.run` returns structured
+`solve.too-large` before History allocation, suggests a larger `outputEvery`, and leaves the prior
+Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
+An explicit regression independently checks that the pre-solve count equals the history rows
+produced by its element-frequency-derived integration schedule.

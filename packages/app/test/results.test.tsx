@@ -266,6 +266,48 @@ function registryHarness(result: ResultSummary) {
 }
 
 describe('ResultsView', () => {
+  it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
+    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
+    await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
+    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
+    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 0.5, 0.75);
+    expect(store.state).toMatchObject({ playing: false, phase: 0.75, animationSpeed: 0.5, fieldKey: 'mode:2', viewMode: 'results' });
+    await results.animate({ step: 'modes', mode: 2, playing: true, speed: 2 });
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(true, 2, undefined);
+    expect(store.state.playing).toBe(true);
+    await results.refresh();
+    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
+    await expect(results.animate({ step: 'modes', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
+    expect(store.state.fieldKey).toBe('mode:2');
+  });
+
+  it('keeps a newer pause when an older play finishes loading afterward', async () => {
+    const modal = { ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] };
+    const { store, viewer, results, transport } = harness(modal);
+    let finishLoad!: () => void;
+    const loadPending = new Promise<void>((resolve) => { finishLoad = resolve; });
+    transport.field.mockImplementationOnce(async () => {
+      await loadPending;
+      return { values: Float32Array.from([0, 0, 0, 0, 0, -0.0001919]), min: 0, max: 1, unit: '' };
+    });
+
+    const play = results.animate({ step: 'modes', mode: 1, playing: true });
+    await vi.waitFor(() => expect(transport.field).toHaveBeenCalledWith('modes', 'mode:1', undefined));
+    await results.animate({ step: 'modes', mode: 1, playing: false });
+    finishLoad();
+    await play;
+
+    expect(viewer.current.animate).toHaveBeenCalledTimes(1);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, undefined);
+    expect(store.state.playing).toBe(false);
+  });
+
+  it('reports missing displacement without pretending a thermal field can be animated', async () => {
+    const { results, viewer } = harness({ ...RESULT, extremes: [] });
+    await expect(results.animate({ step: 'heat', playing: true })).rejects.toThrow('has no displacement');
+    expect(viewer.current.animate).not.toHaveBeenCalled();
+  });
   it('uses current material yields in display units, independent of historical Journal entries', async () => {
     const { store, results, transport } = harness();
     transport.query.mockImplementation(async (q) => {
@@ -292,27 +334,6 @@ describe('ResultsView', () => {
     expect(store.state.yieldStress).toBeNull();
   });
 
-  it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
-    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
-    await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
-    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
-    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined);
-    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 0.5, 0.75);
-    expect(store.state).toMatchObject({ playing: false, phase: 0.75, animationSpeed: 0.5, fieldKey: 'mode:2', viewMode: 'results' });
-    await results.animate({ step: 'modes', mode: 2, playing: true, speed: 2 });
-    expect(viewer.current.animate).toHaveBeenLastCalledWith(true, 2, undefined);
-    expect(store.state.playing).toBe(true);
-    await results.refresh();
-    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
-    await expect(results.animate({ step: 'modes', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
-    expect(store.state.fieldKey).toBe('mode:2');
-  });
-
-  it('reports missing displacement without pretending a thermal field can be animated', async () => {
-    const { results, viewer } = harness({ ...RESULT, extremes: [] });
-    await expect(results.animate({ step: 'heat', playing: true })).rejects.toThrow('has no displacement');
-    expect(viewer.current.animate).not.toHaveBeenCalled();
-  });
   it('loads the contoured scalar in display units and the displacement in SI', async () => {
     const { store, viewer, results } = harness();
     await results.refresh();
@@ -489,7 +510,7 @@ describe('ResultsView', () => {
   // Issue #42: the shape a person sees must not depend on which chain got there first.
   it('pushes the same exaggeration for every field, memoised path and forced path alike', async () => {
     const { viewer, results } = harness();
-    await results.refresh(true);
+    await results.refresh(); // Hydrate the current Result before requesting one of its fields.
     await results.showField({ field: 'vonMises' });
     const first = viewer.current.setDeformed.mock.calls.at(-1)![1];
     await results.showField({ field: 'displacement', component: null });
