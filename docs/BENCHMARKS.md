@@ -427,3 +427,37 @@ mesh forces the bounded fallback; its known graph count lies within the returned
 the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
 1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
 These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.
+
+### Transient retention and peak phases (#244)
+
+For `S` integration steps and normalized stride `E = max(outputEvery, 1)`, the retained-frame
+count is exactly `1 + floor(S/E) + (S mod E != 0)`: the initial state, every requested stride,
+and one final endpoint only when the endpoint is not already a stride. Tests cover divisible and
+non-divisible schedules, `outputEvery` beyond the step count, zero's established normalization,
+and checked count/byte overflow. The logical retained payload matches `query.frames`:
+`8 × frames × (1 + nodes × storedComponents)` bytes for f64 times and raw primary values.
+Vec headers, spare capacity and allocator overhead are deliberately separate; History reserves
+the exact outer frame count and remains the only full-series allocation.
+
+The cost Query reports two phases. The integration phase counts the #122 assembly lower bound,
+the retained payload and a conservative full-field f64 working allowance: `5 × nodes × 8` bytes
+for heat and `6 × nodes × storedComponents × 8` bytes for explicit dynamics. Heat's free-DOF
+vectors are charged at the full nodal length; the five-field allowance covers the temporary old
+and new temperature vectors during `expand`. The frame-read phase counts retained payload plus one
+normalized three-component f64 response (`24 × nodes` bytes) for a native Query. WASM/Worker transport has two
+normalized numeric payloads alive at once: the current JSON path's parsed source and structured
+clone, or #245's transferred `Float64Array` and final schema-owned `number[]`. Its separately
+reported known numeric staging is therefore at least `48 × nodes` bytes. Rust/JavaScript strings,
+array/object headers and engine-specific number storage remain value- and runtime-dependent; the
+schema marks the WASM staging estimate incomplete and `bytes` remains a counted conservative
+estimate rather than a complete host-memory claim. #245 measures those copies when it changes the browser route. Solver
+factor fill/workspace, final derived fields, the resident Mesh/Model and allocator overhead also
+remain excluded, so a counted peak below the fixed 1.5 GiB planning budget is still feasibility
+unknown.
+
+An end-to-end heat regression first stores a valid Result, then requests 1,000,000,001 frames.
+`query.cost` reports the exact count and an over-budget peak; `solve.run` returns structured
+`solve.too-large` before History allocation, suggests a larger `outputEvery`, and leaves the prior
+Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
+An explicit regression independently checks that the pre-solve count equals the history rows
+produced by its element-frequency-derived integration schedule.

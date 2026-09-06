@@ -490,8 +490,22 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
           <span class="n">{cost.dofs}</span>
           <span>matrix non-zeros (upper bound)</span>
           <span class="n">{cost.nnz}</span>
-          <span>mandatory memory (at least)</span>
+          <span>counted peak memory estimate</span>
           <span class="n">{bytes(cost.bytes)}</span>
+          {cost.retainedFrames > 0 ? (
+            <>
+              <span>retained frames</span>
+              <span class="n">{cost.retainedFrames}</span>
+              <span>retained primary fields</span>
+              <span class="n">{bytes(cost.retainedBytes)}</span>
+              <span>native frame staging</span>
+              <span class="n">{bytes(cost.transportStagingBytes)}</span>
+              <span>browser frame staging</span>
+              <span class="n">
+                {cost.wasmTransportStagingComplete ? bytes(cost.wasmTransportStagingBytes) : `≥ ${bytes(cost.wasmTransportStagingBytes)} + JSON/JS overhead`}
+              </span>
+            </>
+          ) : null}
           <span>planning budget</span>
           <span class="n">{bytes(cost.budgetBytes)}</span>
           <span>feasibility</span>

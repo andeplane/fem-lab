@@ -20,7 +20,7 @@ use crate::fem::heat::{capacity, conductivity, face_integrals, source, HeatLoad}
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, Per};
-use crate::procedure::{blank, report, time_grid, vector_field, History, StepResult};
+use crate::procedure::{blank, report, retained_frame_count, time_grid, vector_field, History, StepResult};
 use crate::solve::{direct::Direct, solve, LinearSolve, SolveInfo, SolveOptions};
 
 /// The assembled steady system and what went into it.
@@ -252,6 +252,7 @@ pub fn transient(
     // prescribed values, which the amplitude scales linearly.
     let zeros = vec![0.0; a.n];
     let red = reduce(&a, &zeros, &rc);
+    drop(zeros);
     // `C/Δt + θK` is positive definite for θ ≥ 0 once the temperature is held somewhere, and
     // the checks have established that it is.
     let mut factored = pool.install(|| Direct::factor(&red.k_ff)).expect("the reduced matrix is positive definite");
@@ -262,7 +263,8 @@ pub fn transient(
         t[dof as usize] = red.u_fixed[i] * g(0.0);
     }
     let every = output_every.max(1);
-    let mut history = History { field: Field::Temperature, times: vec![0.0], values: vec![t.clone()] };
+    let frames = retained_frame_count(n_steps, every).expect("time_grid bounds the retained-frame count");
+    let mut history = History::with_initial(Field::Temperature, t.clone(), frames);
     let mut rhs_full = vec![0.0; a.n];
     let mut rhs_f = vec![0.0; red.free.len()];
     let mut t_f = vec![0.0; red.free.len()];

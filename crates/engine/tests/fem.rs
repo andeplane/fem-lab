@@ -2650,6 +2650,11 @@ fn every_well_posedness_check_has_a_failing_input() {
     let mut no_mat = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held());
     no_mat.material_of_block = vec![None];
     assert_eq!(checks::all(&no_mat)[0].code, ErrorCode::ModelNoMaterial);
+    let explicit = Step::Explicit { t_end: 1e-3, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    assert_eq!(
+        run_step(&no_mat, &explicit).expect_err("the procedure runs the checks").code,
+        ErrorCode::ModelNoMaterial
+    );
 
     let mut empty = held();
     empty.push(fix("nothing", "void", [true, false, false], 0.0));

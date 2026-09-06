@@ -147,9 +147,10 @@ pub enum Query {
         n: u32,
     },
 
-    /// Cost before solving: DOF, matrix non-zero bounds and mandatory assembly memory lower
-    /// bound. Counting uses at most 16 MiB scratch after meshing. Feasibility is false above
-    /// a fixed 1.5 GiB planning budget, otherwise unknown: solver fill/workspace are excluded.
+    /// Cost before solving: DOF, matrix non-zero bounds, exact retained-frame schedule and
+    /// counted peak memory. Counting uses at most 16 MiB scratch after meshing. Feasibility is
+    /// false above a fixed 1.5 GiB planning budget, otherwise unknown because solver fill,
+    /// allocator overhead and host serialization are excluded.
     /// Use before large solves; this query does not promise that a solve fits the current host.
     #[serde(rename = "query.cost", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "CostEstimate"))]
@@ -506,13 +507,31 @@ pub struct CostEstimate {
     pub nnz: u64,
     /// Lower bound on matrix non-zeros.
     pub nnz_lower: u64,
-    /// Mandatory assembly storage lower bound in bytes, including element slots and two CSRs.
-    /// Excludes mesh/model, element buffers, reduction, solver storage/fill and time history.
+    /// Estimated peak of the counted solve and frame-read phases. It includes mandatory
+    /// assembly storage, retained primary values, a conservative transient f64 working-vector
+    /// allowance and known native/browser frame-response storage. It is incomplete because
+    /// solver fill, JSON and allocator overhead are not known before solving.
     pub bytes: u64,
+    /// Mandatory assembly storage before transient-specific values are added.
+    pub assembly_bytes: u64,
+    /// Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
+    pub retained_frames: u64,
+    /// Logical f64 bytes for retained times and unpadded primary values.
+    pub retained_bytes: u64,
+    /// Conservative full-field allowance for procedure working f64 vectors live with History.
+    /// Free-DOF vectors are charged at the full nodal length.
+    pub transient_work_bytes: u64,
+    /// One normalized three-component f64 frame owned by a native Query result.
+    pub transport_staging_bytes: u64,
+    /// Known lower bound for the WASM/Worker frame route while two normalized three-component
+    /// numeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.
+    pub wasm_transport_staging_bytes: u64,
+    /// False while the generic JSON route has value- and runtime-dependent allocation overhead.
+    pub wasm_transport_staging_complete: bool,
     /// Fixed 1.5 GiB planning budget; not measured free memory on the current host.
     pub budget_bytes: u64,
-    /// False if mandatory storage exceeds the planning budget; null means feasibility is
-    /// unknown. Fitting a lower bound does not establish that assembly or factorisation fits.
+    /// False if the counted conservative estimate exceeds the planning budget; null means
+    /// feasibility is unknown. Fitting it does not establish that assembly or factorisation fits.
     pub feasible: Option<bool>,
     pub note: String,
 }
