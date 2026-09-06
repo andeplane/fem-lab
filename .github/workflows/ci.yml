@@ -83,6 +83,7 @@ jobs:
       # `web` job's size budget is measured on the module this job uploads.
       - run: npm ci
       - run: node tools/build-wasm.mjs
+      - run: node tools/test-units-wasm.mjs
       - run: cargo build -p femlab --release
       - run: ./target/release/femlab schema --out engine.schema.json
       - name: replay every fixture natively and in wasm

@@ -687,6 +687,33 @@ fn convert_query() {
     );
 }
 
+/// Shared with the Node wasm regression: rejected inputs cannot change the saved Model or
+/// Journal. The expected errors cover numeric, factor and dimension overflow independently.
+#[test]
+fn invalid_quantities_preserve_the_model_and_journal() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/invalid-quantities.json")).unwrap();
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"quantity validation"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let hash = e.model_hash();
+    for case in fixture["commands"].as_array().unwrap() {
+        let error = run(&mut e, &case["input"].to_string()).unwrap_err();
+        assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
+        assert!(error.where_.is_some());
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+    for case in fixture["queries"].as_array().unwrap() {
+        let query: Query = serde_json::from_value(case["input"].clone()).unwrap();
+        let error = e.query(query).unwrap_err();
+        assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
+        assert!(error.where_.is_some());
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+}
+
 #[test]
 fn enum_helpers_used_by_hosts() {
     // exercised here so the command module's helpers are part of the public contract
@@ -2353,6 +2380,52 @@ fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
     assert_eq!(bad.code, ErrorCode::Schema);
 }
 
+/// A modal model with every displacement DOF constrained has no reduced system to solve. The
+/// failed solve must be a structured model error, and the Engine must remain usable afterwards.
+#[test]
+fn a_modal_solve_with_no_free_dofs_returns_an_error_and_recovers() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"fully-fixed-modal"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    for (name, face) in [
+        ("xmin", "block.xmin"),
+        ("xmax", "block.xmax"),
+        ("ymin", "block.ymin"),
+        ("ymax", "block.ymax"),
+        ("zmin", "block.zmin"),
+        ("zmax", "block.zmax"),
+    ] {
+        ok(&mut e, &format!(r#"{{"cmd":"constraint.fix","name":"{name}","on":"{face}"}}"#));
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmin","xmax","ymin","ymax","zmin","zmax"],"loads":[],"nModes":2}"#,
+    );
+
+    let failure = err(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(failure.code, ErrorCode::ModelIllPosed);
+    assert_eq!(failure.where_.as_deref(), Some("constraints"));
+    assert!(failure.cause.contains("no free displacement DOF"), "{}", failure.cause);
+    assert_eq!(
+        failure.suggestion.as_deref(),
+        Some("constraint.remove on an over-constraining displacement constraint")
+    );
+
+    // The failed solve is transactional: reissuing the Step with five faces released and solving
+    // again works on the same Engine, so the worker did not abort or retain broken state.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmax"],"loads":[],"nModes":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(result_of(&mut e, Some("modes")).frequencies.len(), 2);
+}
+
 /// A Step that names an earlier one with `after` reads its temperature field: the
 /// thermal-to-structural chain. Running it before the Step it continues is a `not-found`.
 #[test]
@@ -3586,4 +3659,47 @@ fn a_stale_result_is_labelled_in_the_report() {
     ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
     let md = report(&mut e, Some("static"), None).markdown;
     assert!(md.contains("| Up to date | no: the Model changed after the solve |"), "{md}");
+}
+
+#[test]
+fn guarded_undo_checks_the_whole_history_at_execution() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"guarded"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    let boundary = e.journal().entries.clone();
+    let guarded = serde_json::json!({"cmd":"journal.undo","steps":1,"expectedJournal":e.journal().hash()}).to_string();
+    ok(&mut e, &guarded);
+    assert_eq!(e.revision(), 1);
+    assert_eq!(run(&mut e, &guarded).unwrap_err().code, ErrorCode::InUse);
+    assert_eq!(e.revision(), 1);
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    ok(&mut e, &guarded);
+    // A rewrite with the same length and final model is a different Journal boundary.
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1000 mm","1 m","1 m"]}"#);
+    assert_eq!(e.model_hash(), boundary[1].hash_after);
+    let unchanged = e.journal().clone();
+    assert_eq!(run(&mut e, &guarded).unwrap_err().code, ErrorCode::InUse);
+    assert_eq!(e.journal(), &unchanged);
+    // A later human Command queued before the guarded undo cannot be removed by it.
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"human","size":["1 m","1 m","1 m"]}"#);
+    assert_eq!(run(&mut e, &guarded).unwrap_err().code, ErrorCode::InUse);
+    assert_eq!(e.revision(), 3);
+}
+
+#[test]
+fn journal_guard_uses_full_history_even_for_filtered_queries() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"hash"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"],"at":null}"#);
+    let QueryResult::Journal(full) = e.query(Query::Journal { from_seq: None }).unwrap() else { panic!() };
+    let QueryResult::Journal(tail) = e.query(Query::Journal { from_seq: Some(1) }).unwrap() else { panic!() };
+    assert_eq!(full.hash, tail.hash);
+    assert_eq!(tail.entries.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&tail.entries[0].cmd).unwrap(),
+        serde_json::json!({"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]})
+    );
+    let guarded = serde_json::json!({"cmd":"journal.undo","expectedJournal":tail.hash}).to_string();
+    ok(&mut e, &guarded);
+    assert_eq!(e.revision(), 1);
 }
