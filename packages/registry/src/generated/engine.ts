@@ -3240,6 +3240,12 @@ export interface SetInfo {
   bbox: [Valued, Valued, Valued, Valued, Valued, Valued];
   measure: Valued;
   /**
+   * Effective loaded area from the pressure/traction boundary quadrature, including plane
+   * stress thickness or axisymmetric 2πr. Plane strain uses one metre of out-of-plane depth.
+   * Null for non-face Sets. Pressure times this area is a scalar, not a net vector force.
+   */
+  pressureArea?: Valued | null;
+  /**
    * @minItems 3
    * @maxItems 3
    */

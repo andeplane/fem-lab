@@ -6,6 +6,7 @@ import type { JsonSchema } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import type { LastError, Store, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
+import { PressurePreview } from './PressurePreview';
 import { applyLabel, commandLine, defaultTaggedUnions, type Defs, type Field, fieldsOf, getAt, parseQuantity, setAt, siUnit, step } from './schema';
 
 export type Query = (q: { query: string } & Record<string, unknown>) => Promise<unknown>;
@@ -185,6 +186,9 @@ function FieldView(props: FieldProps) {
             />
           ))
         )}
+        {s.form?.cmd === 'load.pressure' && field.path.join('.') === 'value' ? (
+          <PressurePreview pressure={value} on={values['on']} context={`${s.model?.hash}:${s.revision}`} forceUnit={s.model?.units.force ?? 'N'} lengthUnit={s.model?.units.length ?? 'm'} idealisation={s.model?.idealisation ?? 'solid3d'} query={query} />
+        ) : null}
       </Row>
     );
   }

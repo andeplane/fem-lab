@@ -606,7 +606,7 @@
         ]
       },
       {
-        "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nThe total force is the pressure times the face area and is reported by query.model.",
+        "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.",
         "type": "object",
         "properties": {
           "name": {
@@ -2725,7 +2725,7 @@
         "x-returns": "MeshSummary"
       },
       {
-        "description": "What a Set resolved to on the current Mesh: kind, count, bounding box, area or volume\nand centroid. Use it to verify a predicate selected what you meant.",
+        "description": "What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure\nand centroid. Face Sets also report pressureArea from the load boundary quadrature,\nincluding thickness or radial weighting (plane strain: one metre of depth). Pressure\ntimes pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.",
         "type": "object",
         "properties": {
           "name": {
@@ -4041,6 +4041,17 @@
           "measure": {
             "$ref": "#/$defs/Valued"
           },
+          "pressureArea": {
+            "description": "Effective loaded area from the pressure/traction boundary quadrature, including plane\nstress thickness or axisymmetric 2πr. Plane strain uses one metre of out-of-plane depth.\nNull for non-face Sets. Pressure times this area is a scalar, not a net vector force.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "centroid": {
             "type": "array",
             "items": {
@@ -4971,7 +4982,7 @@
             ]
           },
           {
-            "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nThe total force is the pressure times the face area and is reported by query.model.",
+            "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.",
             "type": "object",
             "properties": {
               "name": {
@@ -10257,7 +10268,7 @@
             ]
           },
           {
-            "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nThe total force is the pressure times the face area and is reported by query.model.",
+            "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.",
             "type": "object",
             "properties": {
               "name": {
