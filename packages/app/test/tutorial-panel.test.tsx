@@ -5,6 +5,7 @@
 // guessed number of milliseconds.
 import type { JournalDump, ModelSummary, Registry } from '@femlab/registry';
 import { render } from 'preact';
+import { act } from 'preact/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Store } from '../src/store';
 import { afterEffects, waitFor, waitForGone, waitForText } from './wait-for';
@@ -54,17 +55,22 @@ const journalOf = (store: Store, cmds: ({ cmd: string } & Record<string, unknown
 
 let root: HTMLElement;
 
+async function cleanupTutorialFixtures(): Promise<void> {
+  await act(async () => {
+    render(null, root);
+  });
+  document.body.replaceChildren();
+}
+
 beforeEach(() => {
-  document.body.innerHTML = '';
+  document.body.replaceChildren();
   root = document.createElement('div');
   document.body.append(root);
   localStorage.clear();
   location.hash = '';
 });
 
-afterEach(() => {
-  document.body.innerHTML = '';
-});
+afterEach(cleanupTutorialFixtures);
 
 describe('TutorialPanel', () => {
   it('is invisible until the tutorial panel is open', async () => {
@@ -238,6 +244,30 @@ describe('TutorialPanel', () => {
     await waitForText(progress, 'step 1 of');
     expect(root.querySelector('.tutorial-panel.anchored')).toBeNull();
     expect(root.querySelector('.tutorial-spot')).toBeNull();
+  });
+
+  it('disposes a pending spotlight retry and its listeners before removing the DOM', async () => {
+    const intervals = vi.spyOn(globalThis, 'setInterval');
+    const cleared = vi.spyOn(globalThis, 'clearInterval');
+    const removed = vi.spyOn(globalThis, 'removeEventListener');
+    try {
+      render(<TutorialPanel registry={fakeRegistry()} store={new Store()} />, root);
+      await afterEffects();
+      const retryIndex = intervals.mock.calls.findIndex(([, delay]) => delay === 150);
+      const retry = intervals.mock.results[retryIndex]?.value as ReturnType<typeof setInterval>;
+      expect(retry).toBeDefined();
+
+      await cleanupTutorialFixtures();
+
+      expect(cleared).toHaveBeenCalledWith(retry);
+      expect(removed).toHaveBeenCalledWith('resize', expect.any(Function));
+      expect(removed).toHaveBeenCalledWith('scroll', expect.any(Function), true);
+      expect(document.body.children).toHaveLength(0);
+    } finally {
+      intervals.mockRestore();
+      cleared.mockRestore();
+      removed.mockRestore();
+    }
   });
 
   it('moves focus to the target when nobody is typing, and never while somebody is', async () => {
