@@ -2199,6 +2199,198 @@ fn a_temperature_load_expands_a_free_block() {
     assert!(vm.max.value.abs() <= 1e-6, "{} MPa", vm.max.value);
 }
 
+/// Three disconnected cubes with independently restrained rigid modes. The third is unheated.
+fn thermal_cubes(e: &mut Engine, n: usize) -> Vec<String> {
+    ok(e, r#"{"cmd":"model.new","name":"thermal cubes"}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"alpha":"1.2e-5 1/K","k":"10 W/(m K)"}"#);
+    let mut constraints = Vec::new();
+    for (i, body) in ["a", "b", "c"].iter().enumerate() {
+        ok(
+            e,
+            &format!(
+                r#"{{"cmd":"geometry.addBox","name":"{body}","size":["1 m","1 m","1 m"],"at":["{} m","0 m","0 m"]}}"#,
+                i * 2
+            ),
+        );
+        for axis in ["x", "y", "z"] {
+            let name = format!("{body}{axis}");
+            ok(
+                e,
+                &format!(
+                    r#"{{"cmd":"constraint.symmetry","name":"{name}","on":"{body}.{axis}min","normal":"{axis}"}}"#
+                ),
+            );
+            constraints.push(name);
+        }
+    }
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["a","b","c"]}"#);
+    ok(e, &serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":n,"ny":n,"nz":n}}}).to_string());
+    ok(e, r#"{"cmd":"load.temperature","name":"warm","bodies":["a"],"value":"100 degC","reference":"20 degC"}"#);
+    ok(e, r#"{"cmd":"load.temperature","name":"cool","bodies":["b"],"value":"10 degC","reference":"50 degC"}"#);
+    constraints
+}
+
+/// Closed form at every node: free expansion, or expansion with x restrained at both ends.
+fn assert_thermal_cubes(e: &mut Engine, restrained: bool, deltas: [f64; 3]) -> Vec<f64> {
+    let coords = e.mesh().unwrap().mesh.coords.clone();
+    let displacement = e.field(None, Field::Displacement).unwrap().data.clone();
+    let stress = e.field(None, Field::Stress).unwrap().data.clone();
+    for (i, x) in coords.chunks_exact(3).enumerate() {
+        let body = (x[0] / 2.0).floor() as usize;
+        let delta = deltas[body];
+        let strain = 1.2e-5 * delta;
+        let local = [x[0] - 2.0 * body as f64, x[1], x[2]];
+        let expected = if restrained {
+            [0.0, 1.3 * strain * local[1], 1.3 * strain * local[2]]
+        } else {
+            local.map(|v| strain * v)
+        };
+        for c in 0..3 {
+            assert!(
+                (displacement[3 * i + c] - expected[c]).abs() < 1e-12,
+                "node {i}, component {c}: free thermal strain"
+            );
+        }
+        let sigma_x = if restrained { -210e9 * strain } else { 0.0 };
+        for c in 0..6 {
+            let want = if c == 0 { sigma_x } else { 0.0 };
+            assert!(
+                (stress[6 * i + c] - want).abs() < 1e-3,
+                "node {i}, stress {c}: {} vs {want} Pa",
+                stress[6 * i + c]
+            );
+        }
+    }
+    [displacement, stress].concat()
+}
+
+#[test]
+fn disjoint_temperature_loads_compose_independently_of_order() {
+    for n in [1, 2, 3] {
+        let mut fields = Vec::new();
+        for loads in [r#"["warm","cool"]"#, r#"["cool","warm"]"#, r#"["warm","cool","same"]"#] {
+            let mut e = engine();
+            let constraints = thermal_cubes(&mut e, n);
+            // Same increment, different absolute temperature/reference: overlap is harmless.
+            ok(
+                &mut e,
+                r#"{"cmd":"load.temperature","name":"same","bodies":["a","a"],"value":"180 K","reference":"100 K"}"#,
+            );
+            ok(
+                &mut e,
+                &format!(
+                    r#"{{"cmd":"step.add","name":"s","procedure":"static","constraints":{},"loads":{loads}}}"#,
+                    serde_json::to_string(&constraints).unwrap()
+                ),
+            );
+            ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+            fields.push(assert_thermal_cubes(&mut e, false, [80.0, -40.0, 0.0]));
+        }
+        assert_eq!(fields[0], fields[1], "load order cannot change the displacement field");
+        assert_eq!(fields[0], fields[2], "duplicate increments must not be summed");
+    }
+}
+
+#[test]
+fn conflicting_temperature_loads_report_both_names_and_the_body() {
+    for loads in [r#"["warm","different"]"#, r#"["different","warm"]"#] {
+        let mut e = engine();
+        let constraints = thermal_cubes(&mut e, 1);
+        ok(
+            &mut e,
+            r#"{"cmd":"load.temperature","name":"different","bodies":["a"],"value":"180 K","reference":"50 K"}"#,
+        );
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"s","procedure":"static","constraints":{},"loads":{loads}}}"#,
+                serde_json::to_string(&constraints).unwrap()
+            ),
+        );
+        let before = e.export_file();
+        let error = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+        assert_eq!(error.code, ErrorCode::ModelIllPosed);
+        assert!(error.cause.contains("warm") && error.cause.contains("different") && error.cause.contains("body 'a'"));
+        assert_eq!(error.where_.as_deref(), Some("step 's'"));
+        assert!(error.suggestion.as_deref().unwrap().contains("load.temperature"));
+        assert_eq!(e.export_file(), before);
+        assert_eq!(e.query(Query::Result { step: None }).unwrap_err().code, ErrorCode::NotFound);
+    }
+}
+
+#[test]
+fn chained_heat_uses_each_bodys_reference_temperature() {
+    for n in [1, 2, 3] {
+        let mut fields = Vec::new();
+        for (loads, deltas) in [
+            (r#"["warm","cool"]"#, [80.0, -40.0, 0.0]),
+            (r#"["cool","warm"]"#, [80.0, -40.0, 0.0]),
+            ("[]", [80.0, -10.0, 0.0]),
+        ] {
+            let mut e = engine();
+            let mut constraints = thermal_cubes(&mut e, n);
+            let mut heat_constraints = Vec::new();
+            for (body, temperature) in [("a", "100 degC"), ("b", "10 degC"), ("c", "20 degC")] {
+                for face in ["xmin", "xmax"] {
+                    let name = format!("{body}_{face}");
+                    ok(
+                        &mut e,
+                        &format!(
+                            r#"{{"cmd":"constraint.temperature","name":"{name}","on":"{body}.{face}","value":"{temperature}"}}"#
+                        ),
+                    );
+                    heat_constraints.push(name);
+                }
+                let name = format!("{body}_end");
+                ok(
+                    &mut e,
+                    &format!(r#"{{"cmd":"constraint.symmetry","name":"{name}","on":"{body}.xmax","normal":"x"}}"#),
+                );
+                constraints.push(name);
+            }
+            ok(
+                &mut e,
+                &format!(
+                    r#"{{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":{},"loads":[]}}"#,
+                    serde_json::to_string(&heat_constraints).unwrap()
+                ),
+            );
+            ok(
+                &mut e,
+                &format!(
+                    r#"{{"cmd":"step.add","name":"stress","procedure":"static","after":"heat","constraints":{},"loads":{loads}}}"#,
+                    serde_json::to_string(&constraints).unwrap()
+                ),
+            );
+            ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+            ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+            fields.push(assert_thermal_cubes(&mut e, true, deltas));
+            if loads == "[]" {
+                // Equal prescribed increments can have different references. Once a heat
+                // field supplies T, those references conflict and neither may win by order.
+                ok(
+                    &mut e,
+                    r#"{"cmd":"load.temperature","name":"same","bodies":["a"],"value":"180 K","reference":"100 K"}"#,
+                );
+                ok(
+                    &mut e,
+                    &format!(
+                        r#"{{"cmd":"step.add","name":"stress","procedure":"static","after":"heat","constraints":{},"loads":["warm","same"]}}"#,
+                        serde_json::to_string(&constraints).unwrap()
+                    ),
+                );
+                ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+                let error = err(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+                assert_eq!(error.code, ErrorCode::ModelIllPosed);
+                assert!(
+                    error.cause.contains("warm") && error.cause.contains("same") && error.cause.contains("body 'a'")
+                );
+            }
+        }
+        assert_eq!(fields[0], fields[1], "reference lookup must be independent of load order");
+    }
+}
+
 /// The paths a Result Query can fail on: a Set a Load names that the Mesh never made, a Model
 /// that cannot be meshed at all, and a point given in the wrong dimension.
 #[test]

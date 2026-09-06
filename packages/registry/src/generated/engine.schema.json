@@ -717,7 +717,7 @@
         ]
       },
       {
-        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
         "type": "object",
         "properties": {
           "name": {
@@ -5106,7 +5106,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {
@@ -10401,7 +10401,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {

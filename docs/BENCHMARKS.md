@@ -77,7 +77,15 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 A5 is run for all eight element kinds, driven by a prescribed end displacement so the reaction
 *is* `F`; A7's scale is the largest force that flows through the model, because a Step driven by
 a displacement or a temperature has no applied total to be relative to. A6 covers hex8, hex20, a
-plane-stress sheet and an axisymmetric ring. A8's numerics half is
+plane-stress sheet and an axisymmetric ring. A6 also runs three independently supported unit
+cubes at 1, 2 and 3 hex8 divisions per edge through the registry (#146). Their temperature
+increments are +80 K, −40 K and 0 K, from distinct references. Free expansion has
+`u = α ΔT (x − x₀)` and zero stress; a preceding uniform heat solve with both x ends held gives
+`σxx = −E α ΔT`, `σyy = σzz = 0` and lateral strain `(1 + ν) α ΔT`. With E = 210 GPa and
+α = 1.2e-5 /K, the two heated cubes carry −201.6 MPa and +100.8 MPa. Every nodal displacement
+is within 1e-12 m and stress component within 1e-3 Pa of the closed form on all three meshes.
+Reversing disjoint Load order is bit-identical; equal overlapping increments are idempotent,
+while unequal increments are rejected with both Load names and the Body. A8's numerics half is
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.

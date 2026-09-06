@@ -881,6 +881,11 @@ pub enum Command {
 
     /// A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
     /// producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
+    /// Disjoint Bodies compose independently, each using its own reference. Overlapping
+    /// assignments must produce exactly the same increment; otherwise `solve.run` returns
+    /// `model.ill-posed` naming both Loads and the Body. Equal increments are not added.
+    /// When continuing a heat Step, its nodal temperatures replace `value`; these per-Body
+    /// references still apply, with 293.15 K on Bodies without a temperature Load.
     #[serde(rename = "load.temperature", rename_all = "camelCase")]
     LoadTemperature {
         name: String,
