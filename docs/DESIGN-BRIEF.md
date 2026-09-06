@@ -178,8 +178,10 @@ First-run onboarding and a tutorial system are part of the product, not a help p
   relevant glossary entry or theory section; errors link to the fix.
 
 ### 5.9 Start / empty state
-A blank Model with four obvious paths: "Ask the AI" (chat box), "Start a tutorial",
-"Open an example", "Start from geometry". A one-line capability check underneath.
+Lead with the chat box ("Describe the part…"), then **New project**, then **Recent projects**
+kept in this browser, then "Open a file", "Examples" and "Tutorials". A one-line capability
+check underneath, which also says where a project lives. (Issue #41 replaced the original four
+cards; the design is `docs/design/README.md` state 0.)
 
 ## 6. The 3D viewer
 
@@ -347,4 +349,9 @@ table, then opens the script the AI wrote, changes the load and reruns.
 
 Model, Geometry, Body, Face, Set, Mesh, Element, Material, Constraint (not "BC"), Load,
 Step, Result, Command, Query, Journal, Script, Mesher, Solver, Plugin, Benchmark, Convergence
-study. Avoid: project, part file, BC, job, deck, macro, history, backend.
+study. Avoid: part file, BC, job, deck, macro, history, backend.
+
+**Project** was on the avoid list until issue #41; it is now vocabulary, and it means exactly one
+thing: **one saved Model in this browser** — its Journal and its metadata, in IndexedDB, listed
+by `query.projects` and opened by `project.open`. A directory on disk is a **folder**
+(`folder.open`, `query.folder`), never a project.

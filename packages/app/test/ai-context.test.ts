@@ -25,7 +25,7 @@ function registryWith(answers: Record<string, unknown> = {}, projectOpen = false
     throw new Error(`no fake for ${q.query}`);
   }) as never;
   const host = fakeHost(transport, projectOpen);
-  host.project.info = (() => (projectOpen ? { name: 'proj', files, agentsMd: 'AGENTS.md', skills: [] } : null)) as never;
+  host.folder.info = (() => (projectOpen ? { name: 'proj', files, agentsMd: 'AGENTS.md', skills: [] } : null)) as never;
   return new Registry({ schema: schema as unknown as EngineSchema, host });
 }
 

@@ -19,12 +19,12 @@ test.describe('@cpu the shell', () => {
     await page.goto('./');
 
     // The start screen is up before the engine is.
-    await expect(page.getByText('Open an example')).toBeVisible();
+    await expect(page.locator('.start')).toBeVisible();
     const painted = Date.now() - t0;
     await ready(page);
-    // `store.ready` flips the start screen's build control; before it, `model.new` is disabled
+    // `store.ready` flips the start screen's build control; before it, `project.new` is disabled
     // (asserting *that* would be a race against a fast engine, so only the flip is checked).
-    await expect(page.locator('button[title="model.new"]')).toBeEnabled();
+    await expect(page.locator('button[title="project.new"]')).toBeEnabled();
 
     // Reported, never asserted on: CI runners have no timing guarantees (AGENTS.md, ADR 0007).
     // What the budget cares about is the *gap* — the start screen minus the wasm.

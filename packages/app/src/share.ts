@@ -1,35 +1,21 @@
-// The two ways a Model leaves and re-enters this browser without a file (PLAN.md 5.8, J11.4 and
-// J12.2): a share link that carries the Journal in the URL fragment, and an autosave that keeps
-// the last one in IndexedDB. Both move a *Command list*, never a Model snapshot — replay rebuilds
-// the Model, and a Journal is an order of magnitude smaller than the `femlab/1` file.
+// A share link: the Journal in the URL fragment, so a Model moves between browsers without a
+// file and without a server (PLAN.md 5.8, J11.4). It carries a *Command list*, never a Model
+// snapshot — replay rebuilds the Model, and a Journal is an order of magnitude smaller.
 //
-// Nothing leaves the page in either case: a fragment is never sent to a server, and IndexedDB is
-// per-origin. Storage is behind `JournalStore` so the units are testable with a fake, as every
-// other boundary in this repo is (AGENTS: dependency injection everywhere a boundary exists).
-//
-// Three lines mount all of it, and they live in files this module does not own:
-//
-//   main.tsx, at the end of `refresh()` (which already runs after every journaled Command):
-//     noteAutosave(store.state.model.name, store.state.journal);
+// Nothing leaves the page: a fragment is never sent to a server. Two lines mount it, in files
+// this module does not own:
 //
 //   main.tsx, next to the existing `?example=` line at the end of `boot()`:
-//     await primeAutosave();
 //     await openShared({ dispatch }, location.hash);
 //
-//   the start screen (src/ui/Overlays.tsx `Start`), one card when `query.autosave` has a `saved`:
-//     <Cmd dispatch={dispatch} cmd="file.restore" class="card">…</Cmd>
+//   the top bar's Share button, which is `file.shareLink`.
 //
-// `noteAutosave` and `primeAutosave` are in `host.ts`, next to the `HostContext` that shares the
-// same autosave instance; `openShared` is here.
+// The background save that used to live in the other half of this file is now `projects.ts`:
+// there is one record per project rather than one autosave slot (issue #41).
 import { FemError } from '@femlab/registry';
 
 /** A Command in the app's wire shape — the same thing the Journal holds. */
 export type ShareCommand = { cmd: string } & Record<string, unknown>;
-
-/** What a Journal entry looks like coming back from `query.journal`. */
-interface JournalEntry {
-  cmd: ShareCommand;
-}
 
 /** Anything that dispatches: the real `Registry`, or a fake in a test. */
 export interface Dispatcher {
@@ -156,145 +142,4 @@ export async function applyShared(registry: Dispatcher, cmds: ShareCommand[]): P
 export async function openShared(registry: Dispatcher, hash: string): Promise<number> {
   const cmds = await readShareFragment(hash);
   return cmds ? applyShared(registry, cmds) : 0;
-}
-
-// ---------------------------------------------------------------------------- autosave
-
-/** The last autosave: enough to say what it is before the person decides to reopen it. */
-export interface Saved {
-  name: string;
-  at: number;
-  cmds: ShareCommand[];
-}
-
-/** Where the autosave lives. One implementation per storage; the app injects the real one. */
-export interface JournalStore {
-  read(): Promise<Saved | null>;
-  write(s: Saved): Promise<void>;
-  clear(): Promise<void>;
-}
-
-const DB_NAME = 'femlab';
-const STORE = 'autosave';
-const KEY = 'last';
-
-const done = <T>(req: IDBRequest<T>): Promise<T> =>
-  new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error('IndexedDB request failed'));
-  });
-
-/** The real one: a single record in a single object store. No library, no schema migration. */
-export function indexedDbStore(factory: IDBFactory): JournalStore {
-  const open = (): Promise<IDBDatabase> =>
-    new Promise((resolve, reject) => {
-      const req = factory.open(DB_NAME, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error('cannot open IndexedDB'));
-    });
-  const tx = async <T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> => {
-    const db = await open();
-    try {
-      return await done(run(db.transaction(STORE, mode).objectStore(STORE)));
-    } finally {
-      db.close();
-    }
-  };
-  return {
-    read: () => tx('readonly', (s) => s.get(KEY) as IDBRequest<Saved | undefined>).then((v) => v ?? null),
-    write: (saved) => tx('readwrite', (s) => s.put(saved, KEY)).then(() => undefined),
-    clear: () => tx('readwrite', (s) => s.delete(KEY)).then(() => undefined),
-  };
-}
-
-/** For tests, and for a browser that refuses IndexedDB (private mode): autosave then costs nothing. */
-export function memoryStore(): JournalStore {
-  let saved: Saved | null = null;
-  return {
-    read: () => Promise.resolve(saved),
-    write: (s) => {
-      saved = s;
-      return Promise.resolve();
-    },
-    clear: () => {
-      saved = null;
-      return Promise.resolve();
-    },
-  };
-}
-
-export interface Autosave {
-  /** Call after every Command; writes at most once per `delayMs`. */
-  note(name: string, journal: JournalEntry[]): void;
-  setEnabled(on: boolean): void;
-  enabled(): boolean;
-  /** The pending write, awaited — for tests and for `beforeunload`. */
-  flush(): Promise<void>;
-  read(): Promise<Saved | null>;
-  clear(): Promise<void>;
-}
-
-export interface AutosaveOptions {
-  store: JournalStore;
-  /** Debounce: a burst of Commands costs one write. */
-  delayMs?: number;
-  /** Injected so a test does not have to wait in real time. */
-  setTimer?: (fn: () => void, ms: number) => unknown;
-  clearTimer?: (h: unknown) => void;
-  /** Autosave is on unless the person turned it off; the choice sticks in this browser. */
-  initiallyOn?: boolean;
-  /** Told about a write that failed, so the console can say so instead of the tab dying. */
-  onError?: (e: unknown) => void;
-}
-
-/**
- * Writes the Journal to `store` after every Command, debounced. A failed write is reported and
- * swallowed: losing an autosave must never take the model down with it.
- */
-export function makeAutosave({
-  store,
-  delayMs = 500,
-  setTimer = (fn, ms) => setTimeout(fn, ms),
-  clearTimer = (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-  initiallyOn = true,
-  onError,
-}: AutosaveOptions): Autosave {
-  let on = initiallyOn;
-  let timer: unknown = null;
-  let pending: Saved | null = null;
-  let writing: Promise<void> = Promise.resolve();
-
-  const write = (): void => {
-    const saved = pending;
-    timer = null;
-    pending = null;
-    if (!saved) return;
-    writing = store.write(saved).catch((e: unknown) => onError?.(e));
-  };
-
-  return {
-    note(name, journal) {
-      if (!on) return;
-      pending = { name, at: Date.now(), cmds: journal.map((e) => e.cmd) };
-      if (timer === null) timer = setTimer(write, delayMs);
-    },
-    setEnabled(next) {
-      on = next;
-      if (on) return;
-      if (timer !== null) clearTimer(timer);
-      timer = null;
-      pending = null;
-    },
-    enabled: () => on,
-    async flush() {
-      if (timer !== null) {
-        clearTimer(timer);
-        write();
-      }
-      await writing;
-    },
-    read: () => store.read(),
-    clear: () => store.clear(),
-  };
 }
