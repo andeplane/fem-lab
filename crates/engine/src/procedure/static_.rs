@@ -83,5 +83,6 @@ pub async fn run(
         history: None,
         solver,
         warnings: Vec::new(),
+        assumptions: Vec::new(),
     })
 }
