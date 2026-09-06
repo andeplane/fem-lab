@@ -193,7 +193,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     expect(await page.evaluate(() => performance.getEntriesByType('resource').some((entry) => entry.name.includes('/examples/thumbnails/')))).toBe(false);
     await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Examples' }).click();
     const examples = await page.evaluate(async () =>
-      ((await (await fetch('examples/index.json')).json()) as { examples: { tags: string[]; difficulty: number }[] }).examples,
+      ((await (await fetch('examples/index.json')).json()) as { examples: { name: string; tags: string[]; difficulty: number; expected: { reference: string } }[] }).examples,
     );
     const exampleCount = examples.length;
     expect(exampleCount).toBeGreaterThanOrEqual(22);
@@ -203,7 +203,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     const cantilever = page.locator('button[title="file.openExample cantilever"]');
     await expect(cantilever).toContainText('tip deflection δ');
     await expect(cantilever).toContainText('-0.1901 mm');
-    await expect(cantilever).toContainText('Euler–Bernoulli δ = PL³/3EI = 0.1905 mm');
+    await expect(cantilever).toContainText(examples.find((example) => example.name === 'cantilever')!.expected.reference);
     const thumbnail = cantilever.locator('img');
     await thumbnail.scrollIntoViewIfNeeded();
     await expect(thumbnail).toHaveJSProperty('naturalWidth', 320);
