@@ -413,7 +413,12 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 7px;
+  width: 100%;
   padding: 5px 12px;
+  text-align: left;
+}
+.group-head:hover {
+  background: #171a20;
 }
 .caret {
   font-size: 9px;
@@ -511,6 +516,46 @@ textarea:focus {
 }
 .at:hover:not(:disabled) {
   color: var(--cyan);
+}
+.tree-action {
+  flex: none;
+  width: 22px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: #3a4048;
+}
+.tree-action:hover {
+  color: var(--text-low);
+}
+.visibility .eye {
+  position: relative;
+  width: 12px;
+  height: 8px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+.visibility .eye::after {
+  content: '';
+  position: absolute;
+  inset: 2px 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.visibility.off .eye::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  width: 14px;
+  height: 1px;
+  top: 3px;
+  left: -2px;
+  background: currentColor;
+  transform: rotate(-35deg);
+}
+.menu-trigger {
+  padding-bottom: 5px;
+  font-size: 15px;
 }
 .empty {
   padding: 2px 12px 8px 26px;

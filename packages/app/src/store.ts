@@ -65,6 +65,8 @@ export interface UiState {
   panels: Record<string, boolean>;
   /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
   panelSizes: PanelSizes;
+  /** Body names hidden only in the viewer by `view.setVisible`; the Model is unchanged. */
+  hiddenBodies: string[];
   tab: Tab;
   /** Every `@`-mentionable object, for the picker chips and the palette. */
   objects: ObjectRef[];
@@ -166,8 +168,23 @@ export const initialState: UiState = {
   viewMode: 'geometry',
   colormap: 'viridis',
   deformScale: 1,
-  panels: { assistant: false, examples: false, export: false, report: false, palette: false },
+  panels: {
+    assistant: false,
+    examples: false,
+    export: false,
+    report: false,
+    palette: false,
+    'tree.geometry': true,
+    'tree.materials': true,
+    'tree.mesh': true,
+    'tree.constraints': true,
+    'tree.loads': true,
+    'tree.steps': true,
+    'tree.results': true,
+    'tree.plugins': true,
+  },
   panelSizes: { ...DEFAULT_PANEL_SIZES },
+  hiddenBodies: [],
   tab: 'journal',
   objects: [],
   form: null,
@@ -235,7 +252,17 @@ export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): Console
 }
 
 export function panelsReducer(panels: Record<string, boolean>, panel: string, open?: boolean): Record<string, boolean> {
-  return { ...panels, [panel]: open ?? !panels[panel] };
+  const nextOpen = open ?? !panels[panel];
+  if (!panel.startsWith('tree.menu.') || !nextOpen) return { ...panels, [panel]: nextOpen };
+  const next = { ...panels };
+  for (const key of Object.keys(next)) if (key.startsWith('tree.menu.')) next[key] = false;
+  next[panel] = true;
+  return next;
+}
+
+export function visibilityReducer(hidden: string[], bodies: string[], on: boolean): string[] {
+  if (on) return hidden.filter((body) => !bodies.includes(body));
+  return [...new Set([...hidden, ...bodies])];
 }
 
 export class Store {
