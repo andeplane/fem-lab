@@ -225,9 +225,8 @@ export class Viewer {
       this.box = keep.length > 0 ? this.box.union(outlineBox) : outlineBox.clone();
     }
     this.paint();
-    if (this.deformation) this.drawDeformed(this.deformation, this.deformScale);
     this.setChrome();
-    this.render();
+    this.drawDeformed(this.deformation, this.deformScale);
   }
 
   /** The engine supplies the actual Sheet boundaries, including hole edges and their names. */
@@ -395,16 +394,41 @@ export class Viewer {
 
   private drawDeformed(displacement: Float32Array | null, scale: number): void {
     const geom = this.mesh?.geometry;
-    if (!geom) return;
+    const s = this.surface;
+    if (!geom || !s) return;
+    const active = s.source === 'mesh' && displacement?.length === s.positions.length ? displacement : null;
     const pos = geom.getAttribute('position') as BufferAttribute;
     for (let v = 0; v < this.vert.length; v++) {
       const src = this.vert[v]! * 3;
       for (let k = 0; k < 3; k++) {
-        (pos.array as Float32Array)[v * 3 + k] = this.base[v * 3 + k]! + (displacement ? scale * displacement[src + k]! : 0);
+        (pos.array as Float32Array)[v * 3 + k] = this.base[v * 3 + k]! + (active ? scale * active[src + k]! : 0);
       }
     }
     pos.needsUpdate = true;
     geom.computeVertexNormals();
+    const outlineGeom = this.outlines?.geometry;
+    const outlinePos = outlineGeom?.getAttribute('position') as BufferAttribute | undefined;
+    if (outlinePos) {
+      for (let i = 0; i < this.line.length; i++) {
+        const edge = this.line[i]!;
+        for (let k = 0; k < 2; k++) {
+          const node = s.edges?.[edge * 2 + k];
+          if (node === undefined) continue;
+          const src = node * 3;
+          outlinePos.setXYZ(
+            i * 2 + k,
+            s.positions[src]! + (active ? scale * active[src]! : 0),
+            s.positions[src + 1]! + (active ? scale * active[src + 1]! : 0),
+            s.positions[src + 2]! + (active ? scale * active[src + 2]! : 0),
+          );
+        }
+      }
+      outlinePos.needsUpdate = true;
+      // three.js caches both bounds. A result deformation can move the whole boundary outside
+      // the original cache, where rendering and line raycasts would otherwise cull it.
+      outlineGeom!.computeBoundingBox();
+      outlineGeom!.computeBoundingSphere();
+    }
     this.render();
   }
 
@@ -556,16 +580,26 @@ export class Viewer {
       : 2 * this.camera.position.distanceTo(this.box.getCenter(new Vector3())) * Math.tan(this.perspective.getEffectiveFOV() * Math.PI / 360);
     this.raycaster.params.Line.threshold = 6 * height / Math.max(rect.height, 1);
     const objects = this.outlines?.visible ? [this.mesh, this.outlines] : [this.mesh];
-    const hit = this.raycaster.intersectObjects(objects, false)[0];
+    const hits = this.raycaster.intersectObjects(objects, false);
+    const triangle = hits.find((h) => h.object === this.mesh);
+    const outline = hits.find((h) => h.object === this.outlines);
+    // A Sheet outline is coplanar with its triangles. Prefer it when both hits are at the same
+    // depth, so the named boundary wins without allowing a line hidden behind a nearer body.
+    const sameDepth = outline && triangle
+      ? outline.distance <= triangle.distance + 1e-6 * Math.max(1, outline.distance, triangle.distance)
+      : false;
+    const hit = outline && (!triangle || sameDepth) ? outline : triangle;
     if (!hit) return null;
     if (hit.object === this.outlines && hit.index !== undefined) {
-      const edge = this.line[Math.floor(hit.index / 2)]!;
+      const segment = Math.floor(hit.index / 2);
+      const edge = this.line[segment]!;
+      const node = this.nearestOutlineNode(segment, edge, hit.point);
       return {
         face: s.faceNames[s.edgeFace?.[edge] ?? -1] ?? null,
         body: s.bodyNames[s.edgeBody?.[edge] ?? -1] ?? null,
         point: [hit.point.x, hit.point.y, hit.point.z],
-        node: null,
-        value: null,
+        node,
+        value: node !== null && this.field ? (this.field[node] ?? null) : null,
       };
     }
     if (hit.faceIndex === undefined || hit.faceIndex === null) return null;
@@ -578,6 +612,24 @@ export class Viewer {
       node,
       value: node !== null && this.field ? (this.field[node] ?? null) : null,
     };
+  }
+
+  /** A meshed Sheet outline retains the original node ids carried by its indexed edge. */
+  private nearestOutlineNode(segment: number, edge: number, at: Vector3): number | null {
+    const s = this.surface;
+    const pos = this.outlines?.geometry.getAttribute('position');
+    if (!s || s.source !== 'mesh' || !pos) return null;
+    let best: number | null = null;
+    let nearest = Infinity;
+    for (let k = 0; k < 2; k++) {
+      const drawn = segment * 2 + k;
+      const d = at.distanceToSquared(new Vector3(pos.getX(drawn), pos.getY(drawn), pos.getZ(drawn)));
+      if (d < nearest) {
+        nearest = d;
+        best = s.edges?.[edge * 2 + k] ?? null;
+      }
+    }
+    return best;
   }
 
   /**
