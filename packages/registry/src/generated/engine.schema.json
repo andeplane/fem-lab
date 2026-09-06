@@ -3345,56 +3345,6 @@
         "$ref": "#/$defs/Quantity",
         "x-dimension": "length"
       },
-      "ReportSection": {
-        "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
-        "oneOf": [
-          {
-            "description": "Title, model name, units, idealisation, revision and the Model hash.",
-            "type": "string",
-            "const": "header"
-          },
-          {
-            "description": "What the numbers rest on: linear elasticity, small strain, the idealisation, the element\nformulation, and every warning the Model carries.",
-            "type": "string",
-            "const": "assumptions"
-          },
-          {
-            "description": "Bodies with their extent, volume and mass, their faces, and the named Sets.",
-            "type": "string",
-            "const": "geometry"
-          },
-          {
-            "description": "Every material in the Model's display units, with its literature source.",
-            "type": "string",
-            "const": "materials"
-          },
-          {
-            "description": "Mesher settings, element kind and order, counts, quality and the cost estimate.",
-            "type": "string",
-            "const": "mesh"
-          },
-          {
-            "description": "Constraints and Loads as tables, with the total applied force.",
-            "type": "string",
-            "const": "loads"
-          },
-          {
-            "description": "Per solved Step: solver, extremes with locations, reactions against the applied total,\nfrequencies, transient history and the convergence study.",
-            "type": "string",
-            "const": "results"
-          },
-          {
-            "description": "The checks that ran, the reaction-balance verdict and the hand calculation.",
-            "type": "string",
-            "const": "verification"
-          },
-          {
-            "description": "The Journal as JSON and as the script that replays it.",
-            "type": "string",
-            "const": "journal"
-          }
-        ]
-      },
       "Journal": {
         "description": "Append-only list of applied Commands (undo truncates it).",
         "type": "object",
@@ -6133,6 +6083,56 @@
               "url",
               "sha256"
             ]
+          }
+        ]
+      },
+      "ReportSection": {
+        "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
+        "oneOf": [
+          {
+            "description": "Title, model name, units, idealisation, revision and the Model hash.",
+            "type": "string",
+            "const": "header"
+          },
+          {
+            "description": "What the numbers rest on: linear elasticity, small strain, the idealisation, the element\nformulation, and every warning the Model carries.",
+            "type": "string",
+            "const": "assumptions"
+          },
+          {
+            "description": "Bodies with their extent, volume and mass, their faces, and the named Sets.",
+            "type": "string",
+            "const": "geometry"
+          },
+          {
+            "description": "Every material in the Model's display units, with its literature source.",
+            "type": "string",
+            "const": "materials"
+          },
+          {
+            "description": "Mesher settings, element kind and order, counts, quality and the cost estimate.",
+            "type": "string",
+            "const": "mesh"
+          },
+          {
+            "description": "Constraints and Loads as tables, with the total applied force.",
+            "type": "string",
+            "const": "loads"
+          },
+          {
+            "description": "Per solved Step: solver, extremes with locations, reactions against the applied total,\nfrequencies, transient history and the convergence study.",
+            "type": "string",
+            "const": "results"
+          },
+          {
+            "description": "The checks that ran, the reaction-balance verdict and the hand calculation.",
+            "type": "string",
+            "const": "verification"
+          },
+          {
+            "description": "The Journal as JSON and as the script that replays it.",
+            "type": "string",
+            "const": "journal"
           }
         ]
       }
@@ -10373,6 +10373,45 @@
           "hashAfter"
         ]
       },
+      "JournalDiff": {
+        "description": "`query.journalDiff` response. Journals are causal histories, so this is a shared-prefix\ncomparison rather than a text diff that aligns similar Commands after histories diverge.",
+        "type": "object",
+        "properties": {
+          "baseHash": {
+            "description": "Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied\n`seq` can therefore change this hash without changing `sharedEntries`.",
+            "type": "string"
+          },
+          "currentHash": {
+            "type": "string"
+          },
+          "sharedEntries": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "removed": {
+            "description": "The base Journal's ordered tail after `sharedEntries`.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JournalEntry"
+            }
+          },
+          "added": {
+            "description": "The current Journal's ordered tail after `sharedEntries`.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JournalEntry"
+            }
+          }
+        },
+        "required": [
+          "baseHash",
+          "currentHash",
+          "sharedEntries",
+          "removed",
+          "added"
+        ]
+      },
       "ScriptText": {
         "description": "`query.script` response.",
         "type": "object",
@@ -10808,45 +10847,6 @@
         "required": [
           "markdown",
           "sections"
-        ]
-      },
-      "JournalDiff": {
-        "description": "`query.journalDiff` response. Journals are causal histories, so this is a shared-prefix\ncomparison rather than a text diff that aligns similar Commands after histories diverge.",
-        "type": "object",
-        "properties": {
-          "baseHash": {
-            "description": "Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied\n`seq` can therefore change this hash without changing `sharedEntries`.",
-            "type": "string"
-          },
-          "currentHash": {
-            "type": "string"
-          },
-          "sharedEntries": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "removed": {
-            "description": "The base Journal's ordered tail after `sharedEntries`.",
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/JournalEntry"
-            }
-          },
-          "added": {
-            "description": "The current Journal's ordered tail after `sharedEntries`.",
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/JournalEntry"
-            }
-          }
-        },
-        "required": [
-          "baseHash",
-          "currentHash",
-          "sharedEntries",
-          "removed",
-          "added"
         ]
       }
     }
