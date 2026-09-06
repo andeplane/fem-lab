@@ -346,7 +346,9 @@ fn one_result(r: &ResultSummary, st: Option<&StudyReport>) -> String {
             .collect(),
         "The Step produced no nodal fields.",
     );
-    s += "#### Reactions and applied load\n\n";
+    let power = r.reaction_quantity == crate::units::ReactionQuantity::Power;
+    s += if power { "#### Reactions and applied power\n\n" } else { "#### Reactions and applied load\n\n" };
+    let components = if power { 1 } else { 3 };
     let mut sum = [0.0; 3];
     for x in &r.reactions {
         for (k, v) in sum.iter_mut().enumerate() {
@@ -354,29 +356,23 @@ fn one_result(r: &ResultSummary, st: Option<&StudyReport>) -> String {
         }
     }
     let unit = r.applied_total[0].unit.clone();
-    let mut rows: Vec<Vec<String>> = r
-        .reactions
-        .iter()
-        .map(|x| {
-            vec![
-                format!("`{}`", x.constraint),
-                fmt_sig(x.total[0].value, 4),
-                fmt_sig(x.total[1].value, 4),
-                fmt_sig(x.total[2].value, 4),
-                x.total[0].unit.clone(),
-            ]
+    let mut totals: Vec<(String, [f64; 3])> =
+        r.reactions.iter().map(|x| (format!("`{}`", x.constraint), x.total.each_ref().map(|v| v.value))).collect();
+    totals.push(("**Σ reactions**".into(), sum));
+    totals.push(("**Σ applied**".into(), r.applied_total.each_ref().map(|v| v.value)));
+    let rows = totals
+        .into_iter()
+        .map(|(label, values)| {
+            let mut row = vec![label];
+            row.extend(values.iter().take(components).map(|v| fmt_sig(*v, 4)));
+            row.push(unit.clone());
+            row
         })
         .collect();
-    rows.push(vec!["**Σ reactions**".into(), fmt_sig(sum[0], 4), fmt_sig(sum[1], 4), fmt_sig(sum[2], 4), unit.clone()]);
-    rows.push(vec![
-        "**Σ applied**".into(),
-        fmt_sig(r.applied_total[0].value, 4),
-        fmt_sig(r.applied_total[1].value, 4),
-        fmt_sig(r.applied_total[2].value, 4),
-        unit,
-    ]);
-    s += &table(&["Constraint", "Fx", "Fy", "Fz", "Unit"], rows, "unreachable");
-    s += &format!("{}\n\n", balance_line(r.balance));
+    let headers: &[&str] =
+        if power { &["Constraint", "Power", "Unit"] } else { &["Constraint", "Fx", "Fy", "Fz", "Unit"] };
+    s += &table(headers, rows, "unreachable");
+    s += &format!("{}\n\n", balance_line(r.balance, r.reaction_quantity));
     if !r.frequencies.is_empty() {
         s += "#### Natural frequencies\n\n";
         s += &table(
@@ -400,9 +396,10 @@ fn one_result(r: &ResultSummary, st: Option<&StudyReport>) -> String {
 }
 
 /// The one line a reviewer reads first: equilibrium, or the solve did not converge.
-fn balance_line(balance: f64) -> String {
+fn balance_line(balance: f64, quantity: crate::units::ReactionQuantity) -> String {
+    let symbol = if quantity == crate::units::ReactionQuantity::Power { "Q" } else { "F" };
     format!(
-        "Reaction balance |Σ reactions + Σ applied| / max|F| = {} — **{}** (tolerance {}).",
+        "Reaction balance |Σ reactions + Σ applied| / max|{symbol}| = {} — **{}** (tolerance {}).",
         fmt_sig(balance, 3),
         if balance <= BALANCE_TOL { "pass" } else { "fail" },
         fmt_sig(BALANCE_TOL, 1)
@@ -525,7 +522,7 @@ fn verification(model: &crate::model::Model, results: &[(ResultSummary, Option<S
           - the Constraints resolve to distinct degrees of freedom;\n\
           - the structure has no unconstrained rigid-body mode (a held temperature, for a heat Step).\n\n";
     for (r, _) in results {
-        s += &format!("- Step `{}`: {}\n", r.step, balance_line(r.balance));
+        s += &format!("- Step `{}`: {}\n", r.step, balance_line(r.balance, r.reaction_quantity));
     }
     s += "\n";
     for (r, _) in results {
@@ -621,6 +618,7 @@ mod tests {
         })).unwrap();
         let zero = Valued { value: 0.0, unit: "mm".into() };
         let result = ResultSummary {
+            reaction_quantity: crate::units::ReactionQuantity::Force,
             step: "static".into(),
             revision: 1,
             stale: false,
@@ -707,9 +705,14 @@ mod tests {
     /// rather than left to whichever solve happens to run in the integration tests.
     #[test]
     fn the_balance_verdict_turns_at_the_tolerance() {
-        assert!(balance_line(1e-12).ends_with("= 1e-12 — **pass** (tolerance 1e-9)."));
-        assert!(balance_line(BALANCE_TOL).ends_with("**pass** (tolerance 1e-9)."));
-        assert!(balance_line(1e-3).ends_with("= 0.001 — **fail** (tolerance 1e-9)."));
+        assert!(balance_line(1e-12, crate::units::ReactionQuantity::Force)
+            .ends_with("= 1e-12 — **pass** (tolerance 1e-9)."));
+        assert!(
+            balance_line(BALANCE_TOL, crate::units::ReactionQuantity::Force).ends_with("**pass** (tolerance 1e-9).")
+        );
+        assert!(
+            balance_line(1e-3, crate::units::ReactionQuantity::Force).ends_with("= 0.001 — **fail** (tolerance 1e-9).")
+        );
     }
 
     /// A study over sizes that do not converge has no rate and no limit; the table still says

@@ -100,7 +100,10 @@ describe('the shell', () => {
     input.value = 'load.traction';
     input.dispatchEvent(new InputEvent('input', { bubbles: true }));
     await afterEffects();
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    input.dispatchEvent(enter);
+    // Closing restores focus to the opener before Chromium performs Enter's default click.
+    expect(enter.defaultPrevented).toBe(true);
     await waitForGone(() => root.querySelector('.palette'), 'the command palette');
     expect(commands.slice(-2)).toEqual([
       { cmd: 'panel.toggle', panel: 'palette', open: false },

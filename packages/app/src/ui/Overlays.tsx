@@ -76,7 +76,12 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
               if (e.key === 'ArrowDown') setCursor((c) => Math.min(c + 1, rows.length - 1));
               else if (e.key === 'ArrowUp') setCursor((c) => Math.max(c - 1, 0));
               else if (e.key === 'Tab' && active && !e.shiftKey) (e.preventDefault(), fill(active));
-              else if (e.key === 'Enter' && active) run(active);
+              else if (e.key === 'Enter' && active) {
+                // The dialog restores focus to its opener when it closes. Consume Enter so
+                // Chromium cannot activate that newly focused button and reopen the palette.
+                e.preventDefault();
+                run(active);
+              }
             }}
           />
           <span class="palette-note">every entry is one Command</span>
