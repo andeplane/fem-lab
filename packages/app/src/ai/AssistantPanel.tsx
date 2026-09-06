@@ -20,6 +20,8 @@ export interface AssistantPanelProps {
   store: Store;
   /** Collapse keeps local conversation state and active tool calls alive. */
   hidden?: boolean;
+  /** Store-backed width in CSS pixels; the shell's resize handle owns the gesture. */
+  panelWidth?: number;
   /**
    * Accepted for symmetry with the rest of the shell and unused: the panel reaches the engine
    * through the registry and nothing else, which is what makes a remote host a transport change.
@@ -154,11 +156,13 @@ function withRefs(text: string) {
 
 function ToolCard({ call }: { call: ToolCall }) {
   return (
-    <div class={`card${call.ok ? '' : ' bad'}`}>
+    <div class={`card${call.status === 'failed' ? ' bad' : ''}`} data-status={call.status}>
       <div class="head">
-        <span class={call.ok ? 'ok' : 'fail'}>{call.ok ? '✓' : '✕'}</span>
+        <span class={call.status === 'pending' ? 'tool-pending' : call.status === 'succeeded' ? 'ok' : 'fail'} role="img" aria-label={call.status === 'pending' ? 'Running' : call.status === 'succeeded' ? 'Succeeded' : 'Failed'}>
+          {call.status === 'pending' ? '' : call.status === 'succeeded' ? '✓' : '✕'}
+        </span>
         <span class="cmd">{call.command}</span>
-        <span class="ms">{call.ms > 0 ? `${call.ms} ms` : '…'}</span>
+        <span class="ms">{call.status === 'pending' ? '…' : `${call.ms} ms`}</span>
       </div>
       <div class="args">{JSON.stringify(call.input)}</div>
       {call.result ? <div class="out">{call.result.slice(0, 400)}</div> : null}
@@ -166,10 +170,11 @@ function ToolCard({ call }: { call: ToolCall }) {
   );
 }
 
-export function AssistantPanel({ registry, store, hidden = false }: AssistantPanelProps) {
+export function AssistantPanel({ registry, store, hidden = false, panelWidth = 392 }: AssistantPanelProps) {
   const ui = useStore(store);
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState('');
+  const [streaming, setStreaming] = useState('');
   const [draft, setDraft] = useState('');
   const [caret, setCaret] = useState(0);
   /** The keyboard cursor in whichever popover is open, and the `@` the person dismissed with Esc. */
@@ -247,6 +252,12 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       setImages([]);
       setBusy('thinking…');
       add({ kind: 'user', text: line, images: attached });
+      let prose = '';
+      const finishProse = () => {
+        if (prose.trim()) flushProse(prose, add);
+        prose = '';
+        setStreaming('');
+      };
       try {
         const built = await buildTurn({ text: line, registry, images: attached, selection: ui.selection, skills });
         if (built.skill) add({ kind: 'skill', name: built.skill, note: 'loaded into this turn' });
@@ -254,24 +265,23 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         messages.current.push(built.message);
 
         const system = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
-        let prose = '';
         for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current })) {
           if (event.type === 'text') {
             prose += event.text;
+            setStreaming(streamingProse(prose));
             setBusy('writing…');
           } else if (event.type === 'tool_start') {
-            if (prose.trim()) flushProse(prose, add);
-            prose = '';
+            finishProse();
             setBusy(`${event.call.command}…`);
             add({ kind: 'tool', call: event.call });
           } else if (event.type === 'tool_end') {
             setItems((cur) => cur.map((i) => (i.kind === 'tool' && i.call.id === event.call.id ? { kind: 'tool', call: { ...event.call } } : i)));
           } else if (event.type === 'error') {
+            finishProse();
             add({ kind: 'bad', text: event.message });
           } else if (event.type === 'turn') {
-            if (prose.trim()) flushProse(prose, add);
-            prose = '';
-            const wrote = event.turn.calls.filter((c) => c.ok && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
+            finishProse();
+            const wrote = event.turn.calls.filter((c) => c.status === 'succeeded' && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
             if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
             setTurn(event.turn);
@@ -279,8 +289,10 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         }
         await refreshIndex();
       } catch (e) {
+        finishProse();
         add({ kind: 'bad', text: e instanceof FemError ? `${e.code}: ${e.cause}` : String(e) });
       } finally {
+        finishProse();
         setBusy('');
       }
     },
@@ -303,6 +315,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       chatBridge.pending = null;
       messages.current = [];
       setItems([]);
+      setStreaming('');
       setTurn(null);
     };
     const queued = chatBridge.pending;
@@ -351,7 +364,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
 
   return (
-    <aside class="assistant" hidden={hidden}>
+    <aside class="assistant" hidden={hidden} aria-label="Assistant" style={`--assistant-width:${panelWidth}px`}>
       <header>
         <span class="ring">✳</span>
         <span class="title">Assistant</span>
@@ -402,6 +415,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         {items.map((item, i) => (
           <Item key={i} item={item} registry={registry} dispatch={dispatch} />
         ))}
+        {streaming ? <div class="prose streaming">{streaming}</div> : null}
         {busy ? (
           <div class="thinking">
             <i />
@@ -621,6 +635,14 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       ) : null}
     </aside>
   );
+}
+
+/** Keep verification markup private while its tag or block is still arriving. */
+function streamingProse(text: string): string {
+  let visible = parseVerification(text).prose.replace(/<verification>[\s\S]*$/i, '');
+  const start = visible.lastIndexOf('<');
+  if (start >= 0 && '<verification>'.startsWith(visible.slice(start).toLowerCase())) visible = visible.slice(0, start);
+  return visible;
 }
 
 /** Prose is split on its `<verification>` block, so the card and the sentences both survive. */

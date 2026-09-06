@@ -4617,3 +4617,264 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
         }
     }
 }
+
+// ------------------------------------------------------- simplex mass regression (#131)
+const SIMPLEX_KINDS: [ElementKind; 4] = [ElementKind::Tri3, ElementKind::Tri6, ElementKind::Tet4, ElementKind::Tet10];
+type BaryPoly = Vec<(f64, [i32; 4])>;
+
+fn bary_product(a: &[(f64, [i32; 4])], b: &[(f64, [i32; 4])]) -> BaryPoly {
+    a.iter()
+        .flat_map(|(ca, ea)| b.iter().map(move |(cb, eb)| (*ca * cb, std::array::from_fn(|i| ea[i] + eb[i]))))
+        .collect()
+}
+
+/// Dirichlet's closed form: integral of barycentric powers is product(a_i!)/(d+sum(a_i))!.
+/// No quadrature points, Jacobians, or production shape evaluations enter this oracle.
+fn bary_integral(p: &[(f64, [i32; 4])], dim: usize) -> f64 {
+    p.iter()
+        .map(|(c, e)| {
+            c * e.iter().map(|&a| factorial(a)).product::<f64>() / factorial(dim as i32 + e.iter().sum::<i32>())
+        })
+        .sum()
+}
+
+fn bary_power(coefficient: f64, coordinate: usize, power: i32) -> (f64, [i32; 4]) {
+    let mut e = [0; 4];
+    e[coordinate] = power;
+    (coefficient, e)
+}
+
+fn bary_shapes(kind: ElementKind) -> Vec<BaryPoly> {
+    let corners = kind.dim() + 1;
+    let quadratic = kind.n_nodes() > corners;
+    let mut shapes: Vec<BaryPoly> =
+        (0..corners)
+            .map(|i| {
+                if quadratic {
+                    vec![bary_power(2.0, i, 2), bary_power(-1.0, i, 1)]
+                } else {
+                    vec![bary_power(1.0, i, 1)]
+                }
+            })
+            .collect();
+    if quadratic {
+        for &[a, b] in kind.edges() {
+            shapes.push(bary_product(&[bary_power(4.0, a as usize, 1)], &[bary_power(1.0, b as usize, 1)]));
+        }
+    }
+    shapes
+}
+
+#[test]
+fn simplex_product_quadrature_integrates_the_required_polynomial_degrees() {
+    use femlab_engine::fem::shape::product_rule_of;
+    for (kind, degree, exact) in [
+        (ElementKind::Tri3, 3, exact_tri as Exact),
+        (ElementKind::Tri6, 8, exact_tri as Exact),
+        (ElementKind::Tet4, 2, exact_tet as Exact),
+        (ElementKind::Tet10, 7, exact_tet as Exact),
+    ] {
+        let r = product_rule_of(kind);
+        check_exact(&r, kind.dim(), 0, degree, exact);
+        assert!(r.weights.iter().all(|&w| w > 0.0));
+        assert!(r.points.iter().all(in_simplex));
+    }
+}
+
+#[test]
+fn every_simplex_mass_and_capacity_entry_matches_barycentric_closed_forms() {
+    let mat = conductor(1.0, 2.3, 4.7);
+    for kind in SIMPLEX_KINDS {
+        let dim = kind.dim();
+        let nn = kind.n_nodes();
+        let nd = nn * dim;
+        let shapes = bary_shapes(kind);
+        // The separable quadratic map has exactly known diagonal Jacobian factors.
+        for curvature in [0.0, 0.2] {
+            if curvature > 0.0 && nn == dim + 1 {
+                continue;
+            }
+            let coords: Vec<f64> = node_xi(kind)
+                .iter()
+                .flat_map(|p| {
+                    [
+                        1.0 + 2.0 * p[0] + curvature * p[0] * p[0],
+                        2.0 * p[1] + curvature * p[1] * p[1],
+                        3.0 * p[2] + curvature * p[2] * p[2],
+                    ]
+                })
+                .collect();
+            let mut jac = vec![(1.0, [0; 4])];
+            for axis in 0..dim {
+                let slope = [2.0, 2.0, 3.0][axis];
+                jac = bary_product(&jac, &[(slope, [0; 4]), bary_power(2.0 * curvature, axis + 1, 1)]);
+            }
+            for id in idealisations(kind) {
+                let scale = match id {
+                    Idealisation::Axisymmetric => {
+                        vec![(2.0 * PI, [0; 4]), bary_power(4.0 * PI, 1, 1), bary_power(2.0 * PI * curvature, 1, 2)]
+                    }
+                    Idealisation::PlaneStress { thickness } => vec![(thickness, [0; 4])],
+                    _ => vec![(1.0, [0; 4])],
+                };
+                let weight = bary_product(&jac, &scale);
+                let volume = bary_integral(&weight, dim);
+                let c = ctx(&coords, &mat, id.clone(), Formulation::Full);
+                let mut m = vec![0.0; nd * nd];
+                let mut capacity = vec![0.0; nn * nn];
+                element_for(kind).mass(&c, &mut m, false).expect("valid simplex");
+                femlab_engine::fem::heat::capacity(kind, &c, &mut capacity).expect("valid simplex");
+                let mut scalar = vec![0.0; nn * nn];
+                for a in 0..nn {
+                    for b in 0..nn {
+                        let want =
+                            mat.rho * bary_integral(&bary_product(&bary_product(&shapes[a], &shapes[b]), &weight), dim);
+                        scalar[a * nn + b] = m[(a * dim) * nd + b * dim];
+                        assert!(
+                            (capacity[a * nn + b] - mat.cp * want).abs() < 2e-12 * mat.rho * mat.cp * volume,
+                            "{kind:?} {id:?} curvature={curvature} C[{a},{b}]"
+                        );
+                        for i in 0..dim {
+                            for j in 0..dim {
+                                let expected = if i == j { want } else { 0.0 };
+                                assert!(
+                                    (m[(a * dim + i) * nd + b * dim + j] - expected).abs() < 2e-12 * mat.rho * volume,
+                                    "{kind:?} {id:?} curvature={curvature} M[{a},{b}]"
+                                );
+                            }
+                        }
+                    }
+                }
+                // Every Cholesky pivot is positive: this detects the old rank-deficient rules.
+                for a in 0..nn {
+                    for b in 0..=a {
+                        let pivot =
+                            scalar[a * nn + b] - (0..b).map(|k| scalar[a * nn + k] * scalar[b * nn + k]).sum::<f64>();
+                        scalar[a * nn + b] = if a == b {
+                            assert!(pivot > 1e-8 * mat.rho * volume, "{kind:?} pivot {a} = {pivot}");
+                            pivot.sqrt()
+                        } else {
+                            pivot / scalar[b * nn + b]
+                        };
+                    }
+                }
+                let diagonal: Vec<f64> = (0..nn).map(|a| m[(a * dim) * nd + a * dim]).collect();
+                let trace = diagonal.iter().sum::<f64>();
+                element_for(kind).mass(&c, &mut m, true).expect("HRZ lumping");
+                for i in 0..nd {
+                    let want = diagonal[i / dim] * mat.rho * volume / trace;
+                    assert!(m[i * nd + i] > 0.0);
+                    assert!((m[i * nd + i] - want).abs() < 2e-12 * mat.rho * volume);
+                    for j in 0..nd {
+                        assert!(i == j || m[i * nd + j] == 0.0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn simplex_axial_modes_converge_to_the_closed_form_bar_frequency() {
+    for kind in SIMPLEX_KINDS {
+        let mut errors = Vec::new();
+        for n in [4, 8, 16] {
+            let mesh = Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.01, 0.01]);
+            let mut sets = sets_of(&mesh);
+            sets.insert(
+                "all".into(),
+                ResolvedSet {
+                    kind: SetKind::Node,
+                    nodes: (0..mesh.n_nodes() as u32).collect(),
+                    elems: Vec::new(),
+                    faces: Vec::new(),
+                },
+            );
+            let bodies = one_body();
+            let id = if kind.dim() == 3 { Idealisation::Solid3d } else { Idealisation::PlaneStrain };
+            let mut p = problem(
+                &mesh,
+                &sets,
+                &bodies,
+                id,
+                Formulation::Full,
+                vec![
+                    fix("root", "xmin", [true, false, false], 0.0),
+                    fix("transverse", "all", [false, true, kind.dim() == 3], 0.0),
+                ],
+            );
+            p.materials[0].props = vec![1.0, 0.0];
+            p.materials[0].rho = 1.0;
+            let res = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
+                .expect("axial bar mode");
+            // u=sin(pi*x/2), E=rho=L=1 => f=1/4 Hz.
+            errors.push((res.frequencies[0] / 0.25 - 1.0).abs());
+        }
+        let rate = observed_rate(&[0.25, 0.125, 0.0625], &errors);
+        let required = if kind.n_nodes() == kind.dim() + 1 { 1.9 } else { 3.8 };
+
+        assert!(rate > required, "{kind:?} modal rate {rate}: {errors:?}");
+        assert!(errors[2] < 0.001, "{kind:?}: {errors:?}");
+    }
+}
+
+#[test]
+fn simplex_transient_capacity_converges_to_the_forced_slab_fourier_solution() {
+    let end = 0.1;
+    // T=x(1-x)/2 - sum_{m odd} 4 sin(m*pi*x) exp(-m²*pi²*t)/(m*pi)³.
+    let exact = 1.0 / 12.0
+        - (0..40)
+            .map(|j| {
+                let m = (2 * j + 1) as f64;
+                8.0 / (m * PI).powi(4) * libm::exp(-(m * PI).powi(2) * end)
+            })
+            .sum::<f64>();
+    for kind in SIMPLEX_KINDS {
+        let mut errors = Vec::new();
+        for n in [4, 8, 16] {
+            let mesh = Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.01, 0.01]);
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let id = if kind.dim() == 3 { Idealisation::Solid3d } else { Idealisation::PlaneStrain };
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                id,
+                conductor(1.0, 1.0, 1.0),
+                vec![hold("cold", "xmin", 0.0), hold("cold2", "xmax", 0.0)],
+                vec![HeatLoad::Source { bodies: bodies.clone(), q: 1.0 }],
+            );
+            let step = Step::HeatTransient {
+                dt: 0.00001,
+                t_end: end,
+                theta: 0.5,
+                initial: 0.0,
+                output_every: 10000,
+                amplitude: None,
+                solver: SolveOptions::default(),
+            };
+            let res = run_step(&p, &step).expect("heated slab");
+            // Every structured simplex has equal volume. Integrate T_h using exact
+            // barycentric moments, independently of the capacity matrix under test.
+            let temperature = temperature_of(&res);
+            let moments: Vec<f64> = bary_shapes(kind)
+                .iter()
+                .map(|shape| bary_integral(shape, kind.dim()) * factorial(kind.dim() as i32))
+                .collect();
+            let mut mean = 0.0;
+            for elem in 0..mesh.n_elems() {
+                for (&node, &moment) in mesh.elem_nodes(elem as u32).iter().zip(&moments) {
+                    mean += temperature[node as usize] * moment / mesh.n_elems() as f64;
+                }
+            }
+            errors.push((mean - exact).abs());
+        }
+        let rate = observed_rate(&[0.25, 0.125, 0.0625], &errors);
+        let required = if kind.n_nodes() == kind.dim() + 1 { 1.8 } else { 3.5 };
+
+        assert!(errors.windows(2).all(|pair| pair[1] < pair[0]), "{kind:?}: {errors:?}");
+        assert!(rate > required, "{kind:?} transient rate {rate}: {errors:?}");
+        assert!(errors[2] < 0.0002, "{kind:?}: {errors:?}");
+    }
+}

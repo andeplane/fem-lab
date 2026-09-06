@@ -9,10 +9,22 @@ import { TABS, type Tab } from './ui/tabs';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
-export { TABS, type Tab };
-
 export type ViewMode = 'geometry' | 'mesh' | 'results';
+export { TABS, type Tab } from './ui/tabs';
+export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
+export type PanelSizes = Record<ResizablePanel, number>;
+export const DEFAULT_PANEL_SIZES: PanelSizes = { tree: 274, properties: 308, bottom: 252, assistant: 392 };
+export const PANEL_SIZE_LIMITS: Record<ResizablePanel, { min: number; max: number }> = {
+  tree: { min: 180, max: 420 },
+  properties: { min: 240, max: 440 },
+  bottom: { min: 184, max: 480 },
+  assistant: { min: 320, max: 520 },
+};
 
+export function clampPanelSize(panel: ResizablePanel, size: number): number {
+  const limits = PANEL_SIZE_LIMITS[panel];
+  return Math.round(Math.min(limits.max, Math.max(limits.min, size)));
+}
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
   cmd: string;
@@ -51,6 +63,8 @@ export interface UiState {
   deformScale: number;
   /** Panel id → open. Panels absent from the map are closed. */
   panels: Record<string, boolean>;
+  /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
+  panelSizes: PanelSizes;
   /** Body names hidden only in the viewer by `view.setVisible`; the Model is unchanged. */
   hiddenBodies: string[];
   tab: Tab;
@@ -169,6 +183,7 @@ export const initialState: UiState = {
     'tree.results': true,
     'tree.plugins': true,
   },
+  panelSizes: { ...DEFAULT_PANEL_SIZES },
   hiddenBodies: [],
   tab: 'journal',
   objects: [],
@@ -307,6 +322,10 @@ export class Store {
   togglePanel(panel: string, open?: boolean): void {
     if ((TABS as string[]).includes(panel)) return this.set({ tab: panel as Tab });
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
+  }
+
+  resizePanel(panel: ResizablePanel, size: number): void {
+    this.set({ panelSizes: { ...this.state.panelSizes, [panel]: clampPanelSize(panel, size) } });
   }
 
   fail(e: unknown): void {
