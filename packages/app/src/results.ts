@@ -5,7 +5,7 @@
 // Values arrive from the engine in SI and are shown in the Model's own units, so the array the
 // viewer colours by is scaled once, here, with the factor `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
-import type { JournalDump, ResultSummary, StudyReport, Warning } from '@femlab/registry';
+import type { ResultSummary, StudyReport, Warning } from '@femlab/registry';
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store } from './store';
@@ -13,20 +13,6 @@ import type { WorkerTransport } from './worker-transport';
 
 /** `view.setDeformScale`'s argument. */
 export type DeformScale = number | 'auto' | 'true';
-
-/**
- * Every `yield` a `material.add` line in the Journal names, as the quantity strings they were
- * written with. `query.model`'s MaterialRow carries E, nu and rho only, and re-reading the
- * Journal is free: it is already in the store after every Command.
- */
-export function yieldQuantities(journal: JournalDump | null): unknown[] {
-  const out: unknown[] = [];
-  for (const e of journal?.entries ?? []) {
-    const cmd = e.cmd as unknown as Record<string, unknown>;
-    if (cmd['cmd'] === 'material.add' && cmd['yield'] !== undefined && cmd['yield'] !== null) out.push(cmd['yield']);
-  }
-  return out;
-}
 
 /**
  * The contoured array for a derived choice. `safety` is `f_y / σ_vM` — unbounded where the
@@ -93,9 +79,9 @@ export class ResultsView {
     return value;
   }
 
-  /** The Journal's smallest `yield` in pascals — the conservative one — or `null`. */
+  /** The current materials' smallest yield in pascals — the conservative one — or `null`. */
   private async readYield(): Promise<number | null> {
-    const quantities = yieldQuantities(this.store.state.journal);
+    const quantities = (this.store.state.model?.materials ?? []).flatMap((material) => material.yield ? [material.yield] : []);
     if (quantities.length === 0) return null;
     const values = await Promise.all(
       quantities.map((quantity) =>

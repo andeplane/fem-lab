@@ -3095,6 +3095,10 @@ export interface MaterialRow {
   E: Valued;
   nu: number;
   rho?: Valued | null;
+  /**
+   * Current yield strength in the Model's display stress unit, when specified.
+   */
+  yield?: Valued | null;
   assignedTo: string[];
 }
 export interface SetRow {
