@@ -408,6 +408,40 @@ describe('behavioral Command parity', () => {
     expect(result.actual.draft).toMatch(/^\/beam-theory-check /);
   });
 
+  it('awaits asynchronous chat.setDraft completion and failure', async () => {
+    const transport = fakeTransport();
+    const store = new Store();
+    const host = fakeHost(transport);
+    let release!: () => void;
+    const applied = vi.fn();
+    host.chat.setDraft = () => new Promise<void>((resolve) => {
+      release = () => {
+        applied();
+        resolve();
+      };
+    });
+    const registry = new Registry({
+      schema: ENGINE_SCHEMA,
+      host,
+      hostCommands: appHostCommands(store, transport, { current: null }, async () => undefined),
+    });
+
+    const settled = vi.fn();
+    const dispatched = registry.dispatch({ cmd: 'chat.setDraft', text: '/beam' }).then(settled);
+    await tick();
+    expect(settled).not.toHaveBeenCalled();
+    expect(applied).not.toHaveBeenCalled();
+
+    release();
+    await dispatched;
+    expect(applied).toHaveBeenCalledOnce();
+    expect(settled).toHaveBeenCalledOnce();
+
+    const failure = new Error('draft bridge unavailable');
+    host.chat.setDraft = () => Promise.reject(failure);
+    await expect(registry.dispatch({ cmd: 'chat.setDraft', text: '/retry' })).rejects.toBe(failure);
+  });
+
   it('would fail for a local-store mutant and a mislabeled known Command', async () => {
     await expect(
       assertClickParity(

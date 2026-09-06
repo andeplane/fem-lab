@@ -136,7 +136,7 @@ export interface HostContext {
     stop(): void;
     setSource(code: string, append?: boolean): void;
   };
-  chat: { send(text: string): void; insertMention(ref: string): void; setDraft(text: string): void; clear(): void };
+  chat: { send(text: string): void; insertMention(ref: string): void; setDraft(text: string): void | Promise<void>; clear(): void };
   skills(): Skill[];
   clipboard: { writeText(text: string): Promise<void> };
   files: {
