@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use crate::command::Field;
 use crate::engine::{OnProgress, Progress};
-use crate::error::{Error, Warning};
+use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::problem::Problem;
 use crate::post::{Extremum, FieldData};
 use crate::solve::{SolveInfo, SolveOptions};
@@ -107,6 +107,49 @@ pub struct History {
     pub times: Vec<f64>,
     /// One nodal vector per time, parallel to `times`.
     pub values: Vec<Vec<f64>>,
+}
+
+impl History {
+    /// Allocate exactly the number of outer frame slots the schedule will retain. The inner
+    /// value vectors remain the sole copy of the raw primary history.
+    fn with_initial(field: Field, values: Vec<f64>, frames: usize) -> History {
+        let mut times = Vec::with_capacity(frames);
+        times.push(0.0);
+        let mut retained = Vec::with_capacity(frames);
+        retained.push(values);
+        History { field, times, values: retained }
+    }
+}
+
+/// Initial state + each output stride + the final step when it was not already a stride.
+pub(crate) fn retained_frame_count(steps: usize, output_every: usize) -> Result<usize, Error> {
+    let every = output_every.max(1);
+    1usize.checked_add(steps / every).and_then(|n| n.checked_add(usize::from(!steps.is_multiple_of(every)))).ok_or_else(
+        || {
+            Error::new(ErrorCode::SolveTooLarge, "the retained-frame count cannot be represented")
+                .at("outputEvery")
+                .suggest("step.add with a larger outputEvery")
+        },
+    )
+}
+
+/// Logical payload bytes used by `History`: one f64 time and `values_per_frame` f64 values
+/// for every retained frame. Vec headers, spare capacity and allocator overhead are separate.
+pub(crate) fn retained_payload_bytes(frames: usize, values_per_frame: usize) -> Result<u64, Error> {
+    let frames = frames as u64;
+    let values = values_per_frame as u64;
+    frames
+        .checked_mul(values.checked_add(1).ok_or_else(|| {
+            Error::new(ErrorCode::SolveTooLarge, "the retained field size overflows byte accounting")
+                .at("mesh")
+                .suggest("mesh.generate with a coarser size")
+        })?)
+        .and_then(|n| n.checked_mul(std::mem::size_of::<f64>() as u64))
+        .ok_or_else(|| {
+            Error::new(ErrorCode::SolveTooLarge, "the retained history overflows byte accounting")
+                .at("outputEvery")
+                .suggest("step.add with a larger outputEvery")
+        })
 }
 
 /// Everything one Step produced. Fields cross to hosts as `f64`; the host casts to `f32` for
@@ -231,7 +274,7 @@ pub(crate) fn report(
 
 #[cfg(test)]
 mod tests {
-    use super::time_grid;
+    use super::{retained_frame_count, retained_payload_bytes, time_grid};
     use crate::ErrorCode;
 
     #[test]
@@ -257,5 +300,22 @@ mod tests {
             assert_eq!(error.where_.as_deref(), Some("dt"));
             assert!(error.suggestion.is_some());
         }
+    }
+
+    #[test]
+    fn retained_count_is_initial_stride_and_one_final_endpoint() {
+        assert_eq!(retained_frame_count(6, 2).unwrap(), 4);
+        assert_eq!(retained_frame_count(5, 2).unwrap(), 4);
+        assert_eq!(retained_frame_count(3, 10).unwrap(), 2);
+        assert_eq!(retained_frame_count(3, 0).unwrap(), 4);
+        assert_eq!(retained_payload_bytes(4, 6).unwrap(), 224);
+        let error = retained_frame_count(usize::MAX, 1).expect_err("initial + every usize step overflows");
+        assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        for (frames, values) in [(1, usize::MAX), (usize::MAX, 1)] {
+            let error = retained_payload_bytes(frames, values).expect_err("payload bytes overflow");
+            assert_eq!(error.code, ErrorCode::SolveTooLarge);
+        }
+        let history = super::History::with_initial(crate::command::Field::Temperature, vec![1.0, 2.0], 4);
+        assert_eq!((history.times.capacity(), history.values.capacity()), (4, 4));
     }
 }

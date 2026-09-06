@@ -22,7 +22,7 @@ const CODES = new Set([
   'unsupported', 'cancelled', 'internal', 'file.scope', 'file.not-found', 'export.unavailable',
   'material.props', 'mesh.inverted', 'mesh.failed', 'model.no-material', 'model.ill-posed',
   'constraint.conflict', 'constraint.rigid-modes', 'solve.not-positive-definite', 'solve.stalled',
-  'gpu.shader', 'gpu.too-large', 'explicit.unstable', 'result.stale',
+  'solve.too-large', 'gpu.shader', 'gpu.too-large', 'explicit.unstable', 'result.stale',
 ]);
 
 /**
