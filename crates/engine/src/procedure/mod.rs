@@ -63,6 +63,7 @@ pub enum Step {
     HeatSteady { solver: SolveOptions },
     /// Transient conduction by the θ-method, one factorisation reused for every time step.
     HeatTransient {
+        /// Maximum increment; a uniform increment no larger than this reaches `t_end` exactly.
         dt: f64,
         t_end: f64,
         /// 1.0 backward Euler, 0.5 Crank–Nicolson; below 0.5 is only conditionally stable.
@@ -77,7 +78,8 @@ pub enum Step {
     /// Explicit dynamics by central differences on a lumped mass (plan A §6).
     Explicit {
         t_end: f64,
-        /// Fraction of the Irons critical step to take; 0.9 is the usual margin.
+        /// Maximum fraction of the Irons critical step; reduced uniformly to reach `t_end`.
+        /// 0.9 is the usual margin.
         dt_factor: f64,
         /// Initial velocity per DOF; `None` starts from rest.
         initial_velocity: Option<Vec<f64>>,
@@ -165,6 +167,29 @@ pub async fn run(
     }
 }
 
+/// A uniform time grid reaching the requested endpoint without exceeding the nominal step.
+/// One increment keeps the heat factorisation reusable and the explicit leapfrog centred.
+pub(crate) fn time_grid(max_dt: f64, t_end: f64) -> Result<(usize, f64), Error> {
+    if !max_dt.is_finite() || max_dt <= 0.0 || !t_end.is_finite() || t_end <= 0.0 {
+        return Err(Error::schema("a transient Step needs finite dt > 0 and tEnd > 0")
+            .at("dt")
+            .suggest("step.add with positive finite dt and tEnd"));
+    }
+    let steps = (t_end / max_dt).ceil().max(1.0);
+    // Every integer step index must fit both usize and the f64 time calculation. This
+    // also rejects overflow of the ratio instead of saturating a cast into a huge loop.
+    if steps >= (usize::MAX as f64).min(9_007_199_254_740_992.0) {
+        return Err(Error::schema("the requested time grid has too many steps to represent")
+            .at("dt")
+            .suggest("step.add with a larger dt or shorter tEnd"));
+    }
+    let mut steps = steps as usize;
+    // Division may round an almost-integral ratio down to an integer. Recheck the actual
+    // increment so rounding can never increase an explicit stability bound, even by one ulp.
+    steps += usize::from(t_end / steps as f64 > max_dt);
+    Ok((steps, t_end / steps as f64))
+}
+
 /// An empty Result of the right shape: the procedures fill in what they produce and leave the
 /// rest alone, so adding a field to `StepResult` does not touch five constructors.
 pub(crate) fn blank(solver: SolveInfo) -> StepResult {
@@ -206,5 +231,36 @@ pub(crate) fn report(
         Ok(())
     } else {
         Err(Error::cancelled())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::time_grid;
+    use crate::ErrorCode;
+
+    #[test]
+    fn time_grid_reaches_the_endpoint_without_rounding_above_the_step_bound() {
+        for (max_dt, t_end, count) in [(0.6, 1.0, 2), (0.4, 0.9, 3), (2.0, 0.25, 1), (0.5, 2.0, 4)] {
+            let (steps, dt) = time_grid(max_dt, t_end).unwrap();
+            assert_eq!(steps, count);
+            assert!(dt <= max_dt);
+            assert_eq!(dt, t_end / steps as f64);
+        }
+        // The raw ceil is 23, but dividing the endpoint by 23 is one ulp above max_dt.
+        let bound = 0.8750405597410305;
+        let (steps, dt) = time_grid(bound, 20.125932874043702).unwrap();
+        assert_eq!(steps, 24);
+        assert!(dt <= bound);
+    }
+
+    #[test]
+    fn unrepresentable_time_grids_are_structured_errors() {
+        for (dt, end) in [(0.0, 1.0), (1.0, 0.0), (f64::INFINITY, 1.0), (1.0, f64::NAN), (f64::MIN_POSITIVE, 1.0)] {
+            let error = time_grid(dt, end).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Schema);
+            assert_eq!(error.where_.as_deref(), Some("dt"));
+            assert!(error.suggestion.is_some());
+        }
     }
 }

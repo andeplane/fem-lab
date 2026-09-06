@@ -3,6 +3,7 @@
 //! `M` is the HRZ-lumped diagonal, so every step is a divide rather than a solve. The step size
 //! is Irons' bound `Δt = dt_factor · 2/ω_max` with `ω_max = max_e ω_max(e)`, which is an upper
 //! bound on the global maximum frequency and therefore a safe estimate of the stability limit.
+//! A uniform increment no larger than that bound is chosen to reach `t_end` exactly.
 //!
 //! Stability is watched, not assumed. For a linear undamped system the energy in the model can
 //! never exceed the work the loads have done (plus whatever it started with), so the monitor is
@@ -19,7 +20,7 @@ use crate::fem::loads::assemble_loads;
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, Per};
-use crate::procedure::{blank, report, vector_field, History, StepResult};
+use crate::procedure::{blank, report, time_grid, vector_field, History, StepResult};
 use crate::solve::SolveInfo;
 
 /// Energy above this multiple of what the loads can account for is a diverging integration.
@@ -68,8 +69,7 @@ pub fn run(
         .suggest("material.add with rho, e.g. \"7850 kg/m^3\""));
     }
     let dt_crit = 2.0 / omega_max;
-    let dt = dt_factor * dt_crit;
-    let n_steps = (t_end / dt).round().max(1.0) as usize;
+    let (n_steps, dt) = time_grid(dt_factor * dt_crit, t_end)?;
     let every = output_every.max(1);
 
     // Constrained DOFs are held at their prescribed value with zero velocity and acceleration.
@@ -130,7 +130,7 @@ pub fn run(
             .suggest(format!("step.add with dtFactor below {dt_factor}, e.g. 0.9")));
         }
         if step % every == 0 || step == n_steps {
-            history.times.push(step as f64 * dt);
+            history.times.push(if step == n_steps { t_end } else { step as f64 * dt });
             history.values.push(u.clone());
         }
         report(&mut progress, "solve", 0.1 + 0.8 * step as f64 / n_steps as f64, "stepping in time")?;

@@ -225,6 +225,12 @@ of the whole temperature. The temporal rate study is in
 `the_theta_method_converges_at_its_own_order_in_time`: Crank–Nicolson ≥ 1.8, backward Euler
 ≥ 0.8, against the same problem at Δt = 0.0625 s.
 
+E3 also checks the exact uniform-heating solution `T(x,t) = t` with source `q/(ρc_p) = 1 K/s`
+and a matching prescribed-temperature ramp, on two mesh sizes with both θ = 0.5 and θ = 1.
+Requested `(dt, tEnd)` pairs `(0.6, 1)`, `(0.4, 0.9)`, and `(2, 0.25)` must reach exactly
+`tEnd` in the saved history and the correct temperature at every node. The requested step is
+an upper bound; a uniform adjusted step preserves one reusable factorisation.
+
 ## F. Dynamics and explicit (phase 2, 6)
 
 | # | Case | Reference | Tolerance | Proves | Status |
@@ -234,6 +240,11 @@ of the whole temperature. The temporal rate study is in
 | F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
 | F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) | |
 | F4 | Two-block tie / bonded contact patch test | continuous stress across the tie | 1e-8 | constraints between bodies (phase 6) | |
+
+F2b's endpoint regression adds `u(t) = v₀t + gt²/2` on two mesh sizes at end times of 0.25,
+1.6 and 2.25 nominal stable steps. The final history time is exactly the requested endpoint,
+the whole displacement history follows the closed form, and the adjusted increment never
+exceeds `dtFactor · dt_crit`, including floating-point rounding at an almost-integral ratio.
 
 F1's initial velocity is `v₀ + ω × (x − c)`, which is in the null space of `K`, so a correct
 integrator translates and spins the block and never strains it: momentum and energy are
