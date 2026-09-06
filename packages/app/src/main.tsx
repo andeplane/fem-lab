@@ -6,9 +6,10 @@ import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { devApiKeys } from './dev-keys';
-import { appHostCommands, makeHostContext, type ViewerRef } from './host';
+import { appHostCommands, makeHostContext, noteAutosave, primeAutosave, type ViewerRef } from './host';
 import { ResultsView } from './results';
 import { ScriptHost } from './script-host';
+import { openShared } from './share';
 import { Store } from './store';
 import { App } from './ui/App';
 import './ui/style.css';
@@ -60,6 +61,7 @@ async function boot(): Promise<void> {
     store.set({ model, journal, script, objects, revision: (model as { revision: number }).revision });
     viewer.current?.setSurface(await transport.surface());
     await results.refresh();
+    noteAutosave(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? []);
   };
   const registry = new Registry({
     schema: schema as unknown as EngineSchema,
@@ -119,8 +121,10 @@ async function boot(): Promise<void> {
   if (devApiKeys()?.anthropic) store.log('engine', 'an ANTHROPIC_API_KEY from the dev shell is available to the assistant');
   await refresh();
 
+  await primeAutosave();
   const example = new URLSearchParams(location.search).get('example');
   if (example) await dispatch({ cmd: 'file.openExample', name: example });
+  await openShared({ dispatch }, location.hash);
 }
 
 if (typeof WebAssembly === 'undefined') {
