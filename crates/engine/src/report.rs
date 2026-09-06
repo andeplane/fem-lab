@@ -648,6 +648,11 @@ mod tests {
         reversed.constraints[0].on = "beam.xmax".into();
         reversed.loads[0].kind = LoadKind::Force { on: "beam.xmin".into(), total: [0.0, 0.0, -1000.0] };
         assert!(hand_calc(&reversed, &result).unwrap().contains("| Hand calculation | 0.19048 mm |"));
+        let mut axial = model.clone();
+        axial.loads[0].kind = LoadKind::Force { on: "beam.xmax".into(), total: [100000.0, 0.0, 0.0] };
+        let mut axial_result = result.clone();
+        axial_result.extremes[0].component = 0;
+        assert!(hand_calc(&axial, &axial_result).unwrap().contains("| Hand calculation | 0.047619 mm |"));
         let mut unused = model.clone();
         unused.loads.push(Load { name: "unused".into(), kind: LoadKind::Gravity { g: [0.0, 0.0, -9.81] } });
         assert_eq!(hand_calc(&unused, &result), hand_calc(&model, &result));
@@ -659,6 +664,7 @@ mod tests {
             }),
             ("2D idealisation", |m, _| m.idealisation = Idealisation::PlaneStrain),
             ("no body", |m, _| m.bodies.clear()),
+            ("not a box", |m, _| m.bodies[0].shape = Shape::Sphere { radius: 1.0, segments: None }),
             ("no material", |m, _| m.materials.clear()),
             ("missing Step", |m, _| m.steps.clear()),
             ("no active load", |m, _| m.steps[0].loads.clear()),
