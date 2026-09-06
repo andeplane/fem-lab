@@ -90,7 +90,7 @@ describe('benchmark comparison registry', () => {
     const reading = await readBenchmark(comparison, result(), query);
     expect(query).toHaveBeenCalledWith({ query: 'query.probe', field: 'stress', component: 1, at: ['47.5 mm', '0 mm', '100 mm'] });
     expect(reading.percent).toBeCloseTo(6.3625, 3);
-    expect(reading.pass).toBe(true);
+    expect(reading.pass).toBeNull();
   });
 
   it('compares a three-mesh Richardson limit with the analytical beam limit', async () => {
@@ -219,6 +219,16 @@ describe('Theory panel', () => {
     await waitFor(() => root.querySelector('.theory-values'), 'thermal expansion comparison');
     expect(root.querySelector('.theory-reference')?.textContent).toContain('uˣ at the free tip · 0.1656 mm');
     expect(root.querySelector('.theory-reference')?.textContent).not.toContain('no closed form');
+  });
+
+  it('shows the tube membrane estimate as informative without a green validation claim', async () => {
+    const benchmark = attachComparison(example('tube-under-pressure'), provenance());
+    const root = document.createElement('div');
+    render(<Theory benchmark={benchmark} result={result()} current={provenance()} query={async () => ({ value: { value: 71.1645, unit: 'MPa' } })} />, root);
+    await waitFor(() => root.querySelector('.theory-values'), 'tube estimate');
+    expect(root.textContent).toContain('no sourced pass/fail tolerance');
+    expect(root.querySelector('.surface.info')).not.toBeNull();
+    expect(root.querySelector('.surface.pass')).toBeNull();
   });
 
   it('explains why LE10 makes no live verification claim', () => {

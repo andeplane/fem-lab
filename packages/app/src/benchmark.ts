@@ -22,7 +22,9 @@ type Tolerance = { kind: 'percent'; value: number } | { kind: 'absolute'; value:
 export interface BenchmarkComparison {
   locator: Locator;
   reference: { values: number[]; unit: string; label: string };
-  tolerance: Tolerance;
+  tolerance?: Tolerance;
+  /** Explanation shown when a useful approximation has no sourced validation tolerance. */
+  informative?: string;
   magnitude?: boolean;
   source: string;
 }
@@ -116,7 +118,7 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
     reference: { values: [0.1904762], unit: 'mm', label: '|uᶻ| Richardson limit at the tip' },
     tolerance: { kind: 'percent', value: 0.2 },
     magnitude: true,
-    source: 'Euler–Bernoulli bending solution PL³/3EI · catalogue B1/B5',
+    source: 'Euler–Bernoulli bending solution PL³/3EI · catalogue B1; the bundled convergence example documents the ≤ 0.2% agreement',
   },
   'nafems-le1-membrane': {
     locator: { kind: 'probe', field: 'stress', component: 1, at: ['2 m', '0 m', '0 m'] },
@@ -137,8 +139,8 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
   'tube-under-pressure': {
     locator: { kind: 'probe', field: 'stress', component: 1, at: ['47.5 mm', '0 mm', '100 mm'] },
     reference: { values: [76], unit: 'MPa', label: 'σθ at the mid-wall, halfway from the base' },
-    tolerance: { kind: 'percent', value: 10 },
-    source: 'Thin-wall membrane estimate prₘ/t; t/rₘ = 0.105 sets its approximation scale, and the probe excludes the welded-base boundary layer',
+    informative: 'Thin-wall membrane estimate only; no sourced pass/fail tolerance is assigned.',
+    source: 'Thin-wall membrane estimate prₘ/t at the wall mid-surface; the probe is halfway from the welded-base boundary layer',
   },
 };
 
@@ -171,7 +173,7 @@ export interface BenchmarkReading {
   unit: string;
   percent: number;
   delta: number;
-  pass: boolean;
+  pass: boolean | null;
 }
 
 export type BenchmarkQuery = (q: Record<string, unknown> & { query: string }) => Promise<unknown>;
@@ -234,7 +236,7 @@ export async function readBenchmark(comparison: BenchmarkComparison, result: Res
   const delta = Math.max(...differences);
   const percent = Math.max(...percents);
   const tolerance = comparison.tolerance;
-  return { actual, reference: comparison.reference.values, unit: comparison.reference.unit, percent, delta, pass: tolerance.kind === 'percent' ? percent <= tolerance.value : tolerance.unit === comparison.reference.unit && delta <= tolerance.value };
+  return { actual, reference: comparison.reference.values, unit: comparison.reference.unit, percent, delta, pass: tolerance ? (tolerance.kind === 'percent' ? percent <= tolerance.value : tolerance.unit === comparison.reference.unit && delta <= tolerance.value) : null };
 }
 
 export function clearsBenchmark(command: string, output: unknown = true): boolean {

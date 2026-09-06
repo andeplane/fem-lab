@@ -81,10 +81,10 @@ export function Theory({ benchmark, result, study = null, current, query }: { be
             <span>difference</span>
             <strong class="mono">{formatNumber(visible.reading.percent)} %</strong>
           </div>
-          <div class={visible.reading.pass && !stale ? 'surface pass' : 'surface warn'}>
-            <span>{visible.reading.pass && !stale ? '✓' : '!'}</span>
+          <div class={visible.reading.pass === null && !stale ? 'surface info' : visible.reading.pass && !stale ? 'surface pass' : 'surface warn'}>
+            <span>{visible.reading.pass === null && !stale ? 'i' : visible.reading.pass && !stale ? '✓' : '!'}</span>
             <span class="mono">
-              {modified ? 'Model differs from the bundled benchmark · comparison is informative' : result.stale ? 'Result is stale · re-solve before claiming this comparison' : `${comparison.reference.label} · tolerance ${toleranceText(benchmark)}`}
+              {modified ? 'Model differs from the bundled benchmark · comparison is informative' : result.stale ? 'Result is stale · re-solve before claiming this comparison' : visible.reading.pass === null ? comparison.informative : `${comparison.reference.label} · tolerance ${toleranceText(benchmark)}`}
             </span>
           </div>
         </>
