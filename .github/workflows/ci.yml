@@ -36,18 +36,18 @@ jobs:
       - run: cargo test --workspace
       - run: cargo check -p femlab-engine -p femlab-geometry -p femlab-engine-wasm --target wasm32-unknown-unknown
       # 100 % on the library crates. Regions stand in for branches: llvm-cov measures branches only on nightly.
-      # bridge: src/gpu is covered in the gpu job below; delete this exclusion when the gpu job is made
-      # required (target: when it has been green three runs in a row)
+      # bridge: src/gpu is covered in the GPU job below; delete this exclusion when that job is
+      # required after ADR 0007's week-long green soak.
       - name: coverage
         if: matrix.os == 'ubuntu-latest'
         run: |
           cargo install cargo-llvm-cov --locked
-          cargo llvm-cov -p femlab-engine -p femlab-geometry --ignore-filename-regex 'src/gpu/' --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+          CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --ignore-filename-regex 'src/gpu/' --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
 
   # GPU kernels for real on a GPU-less runner: Mesa lavapipe is the Vulkan adapter (ADR 0007).
   # Backends::PRIMARY picks Vulkan on Linux; wgpu reads WGPU_BACKEND only through Backends::from_env, which we do not call.
   gpu:
-    name: gpu kernels on lavapipe (allowed to fail until green three runs in a row)
+    name: gpu kernels on lavapipe (advisory during week-long soak)
     runs-on: ubuntu-latest
     continue-on-error: true
     env:
@@ -64,8 +64,9 @@ jobs:
       - run: cargo install cargo-llvm-cov --locked
       # Coverage is measured in debug: release inlining mis-attributes regions and the job then
       # reports 99 % on lines that ran. The 66k-DOF D5 sibling is `#[ignore]`d out of that binary
-      # and run on its own in release, where it takes seconds instead of ten minutes.
-      - run: cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+      # and run on its own in release, where it takes seconds instead of ten minutes. Override
+      # the ordinary level-1 test profile here so instrumentation retains exact source regions.
+      - run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
       - run: cargo test --release -p femlab-engine --features gpu-tests --test gpu_kernels -- --ignored sixty_six --nocapture
 
   # The engine is a library with two hosts: the same Journal must hash identically natively and in wasm.
@@ -113,9 +114,8 @@ jobs:
             engine.schema.json
 
   windows:
-    name: windows (allowed to fail until gated)
+    name: windows
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
