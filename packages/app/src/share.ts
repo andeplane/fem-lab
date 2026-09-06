@@ -22,6 +22,8 @@
 // `noteAutosave` and `primeAutosave` are in `host.ts`, next to the `HostContext` that shares the
 // same autosave instance; `openShared` is here.
 import { FemError } from '@femlab/registry';
+import { z } from 'zod';
+import schema from '../../registry/src/generated/engine.schema.json';
 
 /** A Command in the app's wire shape — the same thing the Journal holds. */
 export type ShareCommand = { cmd: string } & Record<string, unknown>;
@@ -40,6 +42,24 @@ export interface Dispatcher {
 
 /** Fragments longer than this are refused: browsers and chat clients both start truncating. */
 export const MAX_FRAGMENT = 32 * 1024;
+/** Cap expansion before decoding JSON, even when a highly repetitive Journal compresses well. */
+export const MAX_JOURNAL_BYTES = 1024 * 1024;
+
+// Use the engine's generated schema, never the app's mixed engine/host registry. Journal
+// controls are not journal entries, and unsupported stubs cannot be replayed.
+const journalCommand = z.fromJSONSchema({
+  ...schema.commands,
+  oneOf: schema.commands.oneOf.filter((v) => !v.properties.cmd.const.startsWith('journal.') && !('x-status' in v && v['x-status'] === 'stub')),
+} as unknown as Parameters<typeof z.fromJSONSchema>[0]);
+
+/** Check the entire list before the first dispatch, including commands after a valid prefix. */
+function validateJournal(input: unknown): ShareCommand[] {
+  if (!Array.isArray(input)) throw new Error('not a list of engine Commands');
+  for (const [index, cmd] of input.entries()) {
+    if (!journalCommand.safeParse(cmd).success) throw new Error(`Command ${index + 1} is not a valid replayable engine Command`);
+  }
+  return input as ShareCommand[];
+}
 
 const RAW = 0x00;
 const DEFLATE = 0x01;
@@ -62,16 +82,26 @@ type ByteTransform = ReadableWritablePair<Uint8Array, Uint8Array>;
 const deflate = (): ByteTransform => new CompressionStream('deflate-raw') as unknown as ByteTransform;
 const inflate = (): ByteTransform => new DecompressionStream('deflate-raw') as unknown as ByteTransform;
 
-async function pipe(bytes: Uint8Array, transform: ByteTransform): Promise<Uint8Array> {
+async function pipe(bytes: Uint8Array, transform: ByteTransform, limit = Infinity): Promise<Uint8Array> {
   const source = new Blob([bytes as BlobPart]).stream() as unknown as ReadableStream<Uint8Array>;
   const chunks: Uint8Array[] = [];
   const reader = source.pipeThrough(transform).getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.length;
+      if (length > limit) {
+        await reader.cancel();
+        throw new Error(`Journal exceeds ${limit} bytes uncompressed`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
   }
-  const out = new Uint8Array(new ArrayBuffer(chunks.reduce((n, c) => n + c.length, 0)));
+  const out = new Uint8Array(new ArrayBuffer(length));
   let at = 0;
   for (const c of chunks) {
     out.set(c, at);
@@ -86,6 +116,9 @@ async function pipe(bytes: Uint8Array, transform: ByteTransform): Promise<Uint8A
  */
 async function encode(cmds: ShareCommand[]): Promise<string> {
   const json = new TextEncoder().encode(JSON.stringify(cmds));
+  if (json.length > MAX_JOURNAL_BYTES) {
+    throw new FemError('unsupported', `this Journal exceeds ${MAX_JOURNAL_BYTES} bytes uncompressed`, 'file.shareLink', 'file.save writes the whole Model to a file you can send instead');
+  }
   let flag = RAW;
   let body: Uint8Array = json;
   if (typeof CompressionStream === 'function') {
@@ -104,18 +137,17 @@ async function decode(payload: string): Promise<ShareCommand[]> {
   const body = bytes.subarray(1);
   let json: Uint8Array;
   if (flag === RAW) json = body;
-  else if (flag === DEFLATE) json = await pipe(body, inflate());
+  else if (flag === DEFLATE) json = await pipe(body, inflate(), MAX_JOURNAL_BYTES);
   else throw new Error(`unknown share encoding ${String(flag)}`);
+  if (json.length > MAX_JOURNAL_BYTES) throw new Error(`Journal exceeds ${MAX_JOURNAL_BYTES} bytes uncompressed`);
   const parsed: unknown = JSON.parse(new TextDecoder().decode(json));
-  if (!Array.isArray(parsed) || parsed.some((c) => typeof (c as ShareCommand | null)?.cmd !== 'string')) {
-    throw new Error('not a list of Commands');
-  }
-  return parsed as ShareCommand[];
+  return validateJournal(parsed);
 }
 
 /**
  * A URL that reopens this Journal: `<page>#j=<base64url>`, deflated where the browser has
- * `CompressionStream`. Refuses over `MAX_FRAGMENT` with the Command to use instead.
+ * `CompressionStream`. Refuses over `MAX_FRAGMENT` encoded or `MAX_JOURNAL_BYTES` uncompressed
+ * with the Command to use instead.
  */
 export async function shareUrl(cmds: ShareCommand[], base: string): Promise<string> {
   const payload = await encode(cmds);
@@ -133,17 +165,24 @@ export async function shareUrl(cmds: ShareCommand[], base: string): Promise<stri
 
 /** The Journal a `#j=…` fragment carries, or `null` when there is no share link in the URL. */
 export async function readShareFragment(hash: string): Promise<ShareCommand[] | null> {
-  const payload = /(?:^|[#&])j=([A-Za-z0-9\-_]+)/.exec(hash)?.[1];
-  if (!payload) return null;
+  const payload = /(?:^|[#&])j=([^&]*)/.exec(hash)?.[1];
+  if (payload === undefined) return null;
   try {
+    if (payload.length > MAX_FRAGMENT) throw new Error(`fragment exceeds ${MAX_FRAGMENT} characters`);
+    if (!/^[A-Za-z0-9\-_]+$/.test(payload)) throw new Error('invalid base64url payload');
     return await decode(payload);
   } catch (e) {
     throw new FemError('schema', `this share link is damaged: ${(e as Error).message}`, 'the #j= fragment', 'ask for the link again, or open the model file');
   }
 }
 
-/** Replay a shared or restored Journal onto the current Model, one Command at a time. */
+/** Validate a shared or restored engine Journal in full, then replay one Command at a time. */
 export async function applyShared(registry: Dispatcher, cmds: ShareCommand[]): Promise<number> {
+  try {
+    validateJournal(cmds);
+  } catch (e) {
+    throw new FemError('schema', (e as Error).message, 'the shared Journal', 'open a model file or share a valid engine Journal');
+  }
   for (const cmd of cmds) await registry.dispatch(cmd);
   return cmds.length;
 }
