@@ -100,9 +100,28 @@ function Script({ s, store, dispatch }: { s: UiState; store: Store; dispatch: Di
   );
 }
 
+function History({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  return (
+    <div class="rows" aria-label="autosave history">
+      <div class="section-label">Saved Journal revisions · newest first</div>
+      {s.autosaves.map((revision) => (
+        <Cmd key={revision.id} dispatch={dispatch} cmd="file.restore" class="jrow" args={{ id: revision.id }} title={`file.restore ${revision.id}`}>
+          <span class="no">{revision.commands}</span>
+          <span class="jcmd">{revision.name}</span>
+          <span class="jargs">{revision.commands} Commands</span>
+          <span class="jwho">autosave</span>
+          <span class="jtime">{new Date(revision.at).toLocaleString()}</span>
+        </Cmd>
+      ))}
+      {s.autosaves.length === 0 ? <div class="empty-note">No saved Journal revisions yet. Apply a Command with autosave enabled to create one.</div> : null}
+    </div>
+  );
+}
+
 export function Bottom({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
   const counts: Record<Tab, string> = {
     journal: String(s.journal?.entries.length ?? 0),
+    history: String(s.autosaves.length),
     script: 'ts',
     results: s.result ? (s.result.stale ? 'stale' : String(s.result.extremes.length)) : '—',
     checks: String((s.model?.warnings.length ?? 0) || 'ok'),
@@ -127,6 +146,7 @@ export function Bottom({ s, store, dispatch, query }: { s: UiState; store: Store
       </div>
       <div class="bottom-body">
         {s.tab === 'journal' ? <Journal s={s} dispatch={dispatch} /> : null}
+        {s.tab === 'history' ? <History s={s} dispatch={dispatch} /> : null}
         {s.tab === 'script' ? <Script s={s} store={store} dispatch={dispatch} /> : null}
         {s.tab === 'results' ? <Results s={s} dispatch={dispatch} query={query} /> : null}
         {s.tab === 'checks' ? <Checks s={s} dispatch={dispatch} query={query} /> : null}

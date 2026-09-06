@@ -756,7 +756,7 @@ code (same rule as engine Commands). `n` = number, `PanelId` = the `id` column o
 | `project.refresh` | `{}` | re-list files, re-read `AGENTS.md`/`CLAUDE.md` and `skills/*/SKILL.md` | yes |
 | `example.open` | `{ name: string }` | fetch `examples/<name>.json` → `importFile` | yes |
 | `solve.cancel` | `{}` | `transport.cancel()` | yes |
-| `ai.setKey` | `{ key: string \| null }` | localStorage; never journaled, never a tool, never in exports | no |
+| `ai.setKey` | `{ key: string \| null }` | sessionStorage (ADR 0016); never journaled, never a tool, never in exports | no |
 | `ai.setModel` | `{ model: string }` | model id for the agent (default `claude-opus-5`) | no |
 
 Host Queries (same file, same zod treatment, all `tool: true` unless noted): `query.screenshot
@@ -1041,6 +1041,13 @@ Playwright's smoke checks the DOM agrees (`[data-cmd]` set ⊆ registry).
 | Start / empty state (5.9) | three paths and a capability line | `chat.send`, `panel.toggle { examples }`, the geometry "Add…" form; reads `query.capabilities` |
 | Status bar (8) | progress from `dispatch` progress events, capability notes (no WebGPU → CPU; not isolated → single thread; not Chromium → best effort), engine local/remote, engine version | reads `query.capabilities` |
 
+Editing existing objects (#141) uses `form.edit { kind, name }` and the engine's
+`query.definition` to read an exact upsert Command from the current Model. Rounded
+`query.model` summaries only label rows; they never supply editable values. Definitions
+retain all shape, material, constraint, load and Step parameters after rename or duplicate.
+Structured SI quantities display as round-trippable unit text; a delayed edit response
+cannot replace a newer form. Imported internal-only shapes are refused explicitly.
+
 Hover highlighting (tree ↔ viewer) is transient view state with no control and no Command; the
 brief's "hover is view state" sentence covers it. Everything a click does is a row above.
 
@@ -1104,7 +1111,7 @@ as one `<context>` JSON block after the text. A leading `/name` (§7.8) is repla
 body as a preceding block. Nothing about the message layout is visual; the designer decides how
 chips look.
 
-Key in `localStorage['femlab.anthropicKey']`, never in the store snapshot, Journal, export or
+Keys in `sessionStorage['femlab.ai.key']` and `sessionStorage['femlab.ai.key.openai']` (ADR 0016), never in the store snapshot, Journal, export or
 screenshot. Phase 4's eval suite decides when the `?ai=1` flag is removed.
 
 Tests (vitest, no network): the loop against a fake `Anthropic` client that replays a scripted

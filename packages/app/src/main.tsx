@@ -1,3 +1,4 @@
+import { migratePersistentKeys } from './ai/key-storage';
 import { browserScriptValidator } from './script-validation-host';
 // Boot (plan B §7.4): capabilities → engine Worker → Registry → `window.fem` → `<App/>`.
 // The shell renders first and the engine arrives into it, so the start screen is on screen
@@ -13,7 +14,7 @@ import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { devApiKeys } from './dev-keys';
-import { appHostCommands, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
+import { appHostCommands, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
 import { ResultsView } from './results';
 import { ScriptHost } from './script-host';
 import { openShared } from './share';
@@ -33,6 +34,7 @@ const viewer: ViewerRef = { current: null };
 const root = document.getElementById('app')!;
 
 async function boot(): Promise<void> {
+  migratePersistentKeys();
   const host = readHostCaps();
   store.set({ hostCaps: host, notes: capabilityNotes(host, null) });
 
@@ -56,7 +58,11 @@ async function boot(): Promise<void> {
     browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })),
   );
 
-  const results = new ResultsView(store, transport, viewer);
+  const results = new ResultsView(store, transport, viewer, {
+    now: () => performance.now(),
+    schedule: (callback, ms) => setTimeout(callback, ms),
+    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  });
   const ctx = makeHostContext(store, transport, viewer, host, scripts, results);
   // One sink is enough: the transport runs one Command at a time, so `Solving n %` can only
   // ever be about the Command the person is waiting for.
@@ -79,6 +85,8 @@ async function boot(): Promise<void> {
     await results.refresh();
     // Where a project comes from: with none open and a non-empty Journal this creates one named
     // after the Model, and otherwise it debounces a write into the one that is open (issue #41).
+    noteAutosave(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? []);
+    store.set({ autosaves: autosaveHistory() });
     noteProject(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? [], (model as { hash: string | null }).hash);
   };
   const registry = new Registry({
@@ -100,19 +108,21 @@ async function boot(): Promise<void> {
    * transport, so without this the tree, the Journal and the new project all lag a Command
    * behind; `file.openExample` refreshes on its own way out and needs no row here.
    */
-  const REFRESHES = new Set(['file.export', 'file.open', 'example.open', 'project.new', 'project.open']);
+  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'example.open', 'project.new', 'project.open']);
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
   const dispatch: Registry['dispatch'] = async (cmd) => {
     store.set({ lastError: null });
     // Before, not after: `file.openExample` refreshes on its own way out, and by then the fork
     // has to have happened or the example is written over the project it replaced.
-    if (REPLACES_MODEL.has(cmd.cmd)) forkProject();
+    if (cmd.cmd === 'file.openExample') forkProject();
+    if (registry.describe(cmd.cmd).provider === 'engine' || ['file.open', 'file.restore', 'example.open', 'script.run'].includes(cmd.cmd)) results.invalidateTransient();
     // A long Command owns the Solve button and the solving card until it settles either way.
     const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
       const ack = await registry.dispatch(cmd);
+      if (REPLACES_MODEL.has(cmd.cmd) && cmd.cmd !== 'file.openExample') forkProject();
       store.log('command', cmd.cmd);
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, and `file.open` / `example.open` replace the engine Model and
@@ -149,6 +159,7 @@ async function boot(): Promise<void> {
 
   // The Recent projects list is what the start screen leads with, so it is read before the
   // 3.2 MB wasm module rather than after it.
+  void primeAutosave().then(() => store.set({ autosaves: autosaveHistory() })).catch((e: unknown) => store.fail(e));
   void primeProjects().catch((e: unknown) => store.fail(e));
 
   // Lazy, but not late: three.js is the chunk the very next click needs, so it is fetched now,
