@@ -57,4 +57,64 @@ test.describe('@cpu viewer layers', () => {
     await toggle(page, 'grid');
     await expect(grid).toHaveAttribute('aria-pressed', 'true');
   });
+
+  test('Viewer replacement objects retain real visibility state', async ({ page }) => {
+    await page.goto('./');
+    const states = await page.evaluate(async () => {
+      const root = new URL('./', location.href).pathname;
+      const manifest = (await (await fetch(`${root}.vite/manifest.json`)).json()) as Record<string, { file: string }>;
+      const { Viewer } = (await import(`${root}${manifest['src/viewer/viewer.ts']!.file}`)) as {
+        Viewer: new (canvas: HTMLCanvasElement) => unknown;
+      };
+      const canvas = document.createElement('canvas');
+      canvas.width = 320;
+      canvas.height = 240;
+      canvas.style.width = '320px';
+      canvas.style.height = '240px';
+      document.body.append(canvas);
+
+      const viewer = new Viewer(canvas) as unknown as {
+        setLayer(layer: string, on?: boolean): boolean;
+        setSurface(surface: unknown): void;
+        setMode(mode: 'geometry' | 'mesh' | 'results'): void;
+        setVisible(bodies: string[], on: boolean): void;
+        dispose(): void;
+        mesh: { visible: boolean } | null;
+        edges: { visible: boolean } | null;
+        grid: { visible: boolean } | null;
+        triad: { visible: boolean } | null;
+      };
+      const surface = {
+        positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]),
+        indices: new Uint32Array([0, 1, 2, 1, 3, 2]),
+        triBody: new Uint32Array([0, 1]),
+        triFace: new Uint32Array([0, 1]),
+        faceNames: ['body.a.face', 'body.b.face'],
+        bodyNames: ['body.a', 'body.b'],
+        source: 'geometry' as const,
+      };
+      const snapshot = () => ({
+        mesh: viewer.mesh?.visible ?? null,
+        edges: viewer.edges?.visible ?? null,
+        grid: viewer.grid?.visible ?? null,
+        axes: viewer.triad?.visible ?? null,
+      });
+
+      viewer.setSurface(surface);
+      for (const layer of ['mesh', 'edges', 'grid', 'axes']) viewer.setLayer(layer, false);
+      const hidden = snapshot();
+      viewer.setSurface(surface);
+      const afterSurface = snapshot();
+      viewer.setMode('mesh');
+      const afterMode = snapshot();
+      viewer.setVisible(['body.a'], false);
+      const afterBody = snapshot();
+      viewer.dispose();
+      canvas.remove();
+      return { hidden, afterSurface, afterMode, afterBody };
+    });
+
+    const hidden = { mesh: false, edges: false, grid: false, axes: false };
+    expect(states).toEqual({ hidden, afterSurface: hidden, afterMode: hidden, afterBody: hidden });
+  });
 });
