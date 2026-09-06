@@ -5,9 +5,11 @@ test.describe('@cpu viewer resource lifecycle', () => {
   test('replaces surfaces and modes without retaining owned GPU resources', async ({ page }) => {
     await page.goto('./');
     const result = await page.evaluate(async () => {
-      const root = new URL('./', location.href).pathname;
-      const manifest = (await (await fetch(`${root}.vite/manifest.json`)).json()) as Record<string, { file: string }>;
-      const { Viewer } = (await import(`${root}${manifest['src/viewer/viewer.ts']!.file}`)) as {
+      const viewerUrl = Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]'))
+        .map((link) => link.href)
+        .find((href) => /\/viewer-[^/]+\.js$/.test(href));
+      if (!viewerUrl) throw new Error('the built Viewer module was not preloaded');
+      const { Viewer } = (await import(viewerUrl)) as {
         Viewer: new (canvas: HTMLCanvasElement) => unknown;
       };
       const canvas = document.createElement('canvas');
