@@ -14,7 +14,7 @@ import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
 import { ExportModal } from './Export';
-import { Examples, Palette, Start } from './Overlays';
+import { Examples, Palette, Projects, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
 import { Cmd, useStore, type Dispatch } from './cmd';
@@ -64,7 +64,7 @@ export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionC
   if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
   else if (meta && key === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
   else if (meta && key === 'c' && selectionCount > 0) (e.preventDefault(), void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined));
-  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
+  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
 }
 
 const doc = schema as unknown as EngineSchema;
@@ -84,16 +84,13 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const mm = s.model?.units.length === 'mm';
   const stage = stageOf(s);
   const solveText = solveLabel(stage, s);
-  const modelName = s.model?.name ?? 'no model';
   const engineState = s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…';
   return (
     <header class="topbar">
       <div class="logo">
         <i /> FEM Lab
       </div>
-      <span class="mono model-name" title={modelName}>
-        {modelName}
-      </span>
+      <ProjectName s={s} dispatch={dispatch} />
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">
         <span>Search commands or ask in plain words</span>
         <span class="key">⌘K</span>
@@ -120,14 +117,20 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `${solveText} — solve.run ${step}`}>
         {solveText}
       </Cmd>
+      <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'projects' }} pressed={s.panels['projects'] === true} title="Every project saved in this browser">
+        Projects
+      </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'examples' }}>
         Examples
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.open" class="tbutton" args={{ picker: true }} title="Open a femlab/1 file">
         Open
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Save the Model and its Journal">
+      <Cmd dispatch={dispatch} cmd="project.save" class="tbutton" title="Write the open project now and take a fresh thumbnail">
         Save
+      </Cmd>
+      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Download the Model and its Journal as a femlab/1 file">
+        Save as file
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="A URL that reopens this Model (not built yet)">
         Share
@@ -145,6 +148,45 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         ✳ Assistant
       </Cmd>
     </header>
+  );
+}
+
+/**
+ * The project name, editable in place (`project.rename` on blur or Enter), and the saved chip
+ * next to it. There is no "unsaved" dot: the Journal is written into the open project after
+ * every Command, so there is no unsaved state, and a dot that lies is worse than no dot.
+ */
+function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const p = s.project;
+  const rename = (name: string): void => {
+    setDraft(null);
+    if (p && name.trim() && name.trim() !== p.name) void dispatch({ cmd: 'project.rename', name: name.trim() }).catch(() => undefined);
+  };
+  const chip = !p ? '' : p.autosave === false ? 'not saved — storage is off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const tone = !p || p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
+  const name = draft ?? p?.name ?? s.model?.name ?? 'no model';
+  return (
+    <span class="project-chip">
+      <input
+        class="mono model-name"
+        aria-label="project name"
+        data-cmd="project.rename"
+        disabled={p === null}
+        title={name}
+        value={name}
+        onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
+        onBlur={(e) => rename((e.target as HTMLInputElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') setDraft(null);
+        }}
+      />
+      <span class={`saved-chip ${tone}`} title={p ? `${chip} — ${p.commands} Commands in this browser` : 'no project yet'}>
+        <span class="dot" />
+        <span class="saved-text">{chip}</span>
+      </span>
+    </span>
   );
 }
 
@@ -539,14 +581,14 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   }, [dispatch, s.selection.refs.length, s.panels]);
 
   // One fragment for both states, with the overlays at fixed positions: the start screen
-  // offers "Start a tutorial", and a tutorial that begins there has to survive the switch to
+  // offers "Tutorials", and a tutorial that begins there has to survive the switch to
   // the workspace its first Command causes — which it only does if the node keeps its slot.
   return (
     <>
       {started ? (
         <div class="shell">
           <TopBar s={s} dispatch={dispatch} />
-          <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
+          <div class="under-bar">
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
               <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
@@ -562,14 +604,15 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
         <Start s={s} dispatch={dispatch} />
       )}
       <Examples s={s} dispatch={dispatch} />
+      <Projects s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
       {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
           opens on the start screen and keeps its conversation when the workspace comes up around
-          it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
-          layout of the design while the top bar stays full-width. Collapsing only hides the
-          drawer, preserving the conversation and any running turn. */}
+          it. `style.css` reserves its 392 px on `.workspace` when the window is wide enough, so
+          the five-column layout of the design holds and the top bar stays full-width. Collapsing
+          only hides the drawer, preserving the conversation and any running turn. */}
       {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}

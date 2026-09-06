@@ -202,7 +202,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     let handle: DirHandle;
     try {
       // The host Command owns this when the app wires it; until then the panel opens it itself.
-      await dispatch({ cmd: 'project.open', picker: true });
+      await dispatch({ cmd: 'folder.open', picker: true });
       return;
     } catch {
       handle = await pickFolder();
@@ -377,7 +377,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             <span class="paths">/{folder.name}</span>
           </Cmd>
         ) : (
-          <Cmd cmd="project.open" class="agents" title="Open a project folder" run={openFolder}>
+          <Cmd cmd="folder.open" class="agents" title="Open a folder on disk" run={openFolder}>
             <span class="mono">＋</span>
             <span class="file">open a project folder</span>
             <span class="count">for AGENTS.md, skills and files</span>

@@ -85,7 +85,7 @@ test.describe('@cpu the shell', () => {
     await page.goto('./');
 
     // The start screen is up before the engine is.
-    await expect(page.getByText('Open an example')).toBeVisible();
+    await expect(page.locator('.start')).toBeVisible();
     const painted = Date.now() - t0;
     const loadedFonts = await page.evaluate(async () => {
       const specs = ["400 12px 'IBM Plex Sans'", "500 12px 'IBM Plex Sans'", "600 12px 'IBM Plex Sans'", "400 12px 'IBM Plex Mono'", "500 12px 'IBM Plex Mono'", "600 12px 'IBM Plex Mono'"];
@@ -97,9 +97,9 @@ test.describe('@cpu the shell', () => {
       for (const weight of ['400', '500', '600']) expect(loadedFonts).toContain(`${family}:${weight}`);
     }
     await ready(page);
-    // `store.ready` flips the start screen's build control; before it, `model.new` is disabled
+    // `store.ready` flips the start screen's build control; before it, `project.new` is disabled
     // (asserting *that* would be a race against a fast engine, so only the flip is checked).
-    await expect(page.locator('button[title="model.new"]')).toBeEnabled();
+    await expect(page.locator('button[title="project.new"]')).toBeEnabled();
 
     // Reported, never asserted on: CI runners have no timing guarantees (AGENTS.md, ADR 0007).
     // What the budget cares about is the *gap* — the start screen minus the wasm.
@@ -218,7 +218,8 @@ test.describe('@cpu the shell', () => {
         await window.fem.dispatch(cmd as Parameters<typeof window.fem.dispatch>[0]);
       }
     }, longName);
-    await expect(page.locator('.model-name')).toHaveText(longName);
+    // The name is the project's, renameable in place, so it is an input rather than a span.
+    await expect(page.locator('.model-name')).toHaveValue(longName);
     await expect(page.locator('.model-name')).toHaveAttribute('title', longName);
     const solve = page.locator('button.solve');
     await expect(solve).toHaveText(/Solved/);

@@ -6,19 +6,29 @@ async function ready(page: Page): Promise<void> {
   await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
-async function persistedAutosave(page: Page): Promise<unknown> {
-  return page.evaluate(() => new Promise<unknown>((resolve, reject) => {
-    const opening = indexedDB.open('femlab', 1);
-    opening.onerror = () => reject(opening.error);
-    opening.onsuccess = () => {
-      const db = opening.result;
-      const tx = db.transaction('autosave', 'readonly');
-      const reading = tx.objectStore('autosave').get('last');
-      reading.onsuccess = () => resolve(reading.result);
-      reading.onerror = () => reject(reading.error);
-      tx.oncomplete = () => db.close();
-    };
-  }));
+async function persistedProject(page: Page): Promise<unknown> {
+  return page.evaluate(async () => {
+    const open = await window.fem.registry.query({ query: 'query.project' });
+    const id = (open as { id?: string } | null)?.id;
+    if (id === undefined) return null;
+    return new Promise<unknown>((resolve, reject) => {
+      const opening = indexedDB.open('femlab', 2);
+      opening.onerror = () => reject(opening.error);
+      opening.onsuccess = () => {
+        const db = opening.result;
+        const tx = db.transaction(['projects', 'journals'], 'readonly');
+        const meta = tx.objectStore('projects').get(id);
+        const journal = tx.objectStore('journals').get(id);
+        tx.oncomplete = () => {
+          db.close();
+          const m = meta.result as { name: string } | undefined;
+          if (!m) return resolve(null);
+          resolve({ name: m.name, cmds: (journal.result as { cmds: unknown[] } | undefined)?.cmds ?? [] });
+        };
+        tx.onerror = () => reject(tx.error);
+      };
+    });
+  });
 }
 
 /** A real file.save output, prepared before replacing it with the old, solved model. */
@@ -49,8 +59,8 @@ test.describe('@cpu opening a model file', () => {
       await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
       await expect(page.locator('button.solve')).toHaveClass(/solved/);
       await expect(page.locator('.legend')).toBeVisible();
-      await expect(page.locator('.topbar')).toContainText('cantilever');
-      await expect.poll(() => persistedAutosave(page)).toMatchObject({ name: 'cantilever' });
+      await expect(page.locator('.model-name')).toHaveValue('cantilever');
+      await expect.poll(() => persistedProject(page)).toMatchObject({ name: 'cantilever' });
       // Place the ray through the imported cube's centre. A stale cantilever surface cannot
       // produce an imported-cube pick, even if the tree and result legend refreshed correctly.
       await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setCamera', position: [3, -4, 3], target: [0.5, 0.5, 0.5] }));
@@ -64,7 +74,7 @@ test.describe('@cpu opening a model file', () => {
       }
 
       // No engine Command follows the import: each assertion reads the resulting state.
-      await expect(page.locator('.topbar')).toContainText('imported-model');
+      await expect(page.locator('.model-name')).toHaveValue('imported-model');
       await expect(page.locator('.tree')).toContainText('imported-cube');
       await expect(page.locator('.tree')).not.toContainText('steel');
       await expect(page.locator('.legend')).toHaveCount(0);
@@ -87,9 +97,9 @@ test.describe('@cpu opening a model file', () => {
 
       const expectedCommands = imported.journal.entries.map((entry) => entry.cmd);
       expect((await page.evaluate(() => window.fem.query.journal())).entries.map((entry) => entry.cmd)).toEqual(expectedCommands);
-      expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.autosave' }))).toMatchObject({ saved: { name: 'imported-model', commands: expectedCommands.length } });
-      // Autosave is debounced; verify the actual persisted Journal, not only its UI summary.
-      await expect.poll(() => persistedAutosave(page)).toMatchObject({ name: 'imported-model', cmds: expectedCommands });
+      expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.project' }))).toMatchObject({ name: 'imported-model', commands: expectedCommands.length });
+      // The save is debounced; verify the actual persisted Journal, not only its UI summary.
+      await expect.poll(() => persistedProject(page)).toMatchObject({ name: 'imported-model', cmds: expectedCommands });
     });
   }
 });

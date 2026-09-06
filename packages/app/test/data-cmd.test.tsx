@@ -222,23 +222,86 @@ describe('the shell', () => {
     render(null, root);
   });
 
-  it('keeps the drawer outside the workspace once a Model exists, and reserves its width', async () => {
+  it('keeps the drawer outside the workspace once a Model exists', async () => {
     const { root } = mount({ panels: { assistant: true } });
     for (let i = 0; i < 40 && !root.querySelector('aside.assistant'); i++) await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 5)));
     expect(root.querySelector('aside.assistant')).not.toBeNull();
     expect(root.querySelector('.workspace aside.assistant')).toBeNull();
-    expect(root.querySelector('.under-bar')!.className).toBe('under-bar with-assistant');
+    // A sibling of `.shell`, which is what lets it outlive the flip out of the start screen.
+    expect(root.querySelector('.shell ~ aside.assistant')).not.toBeNull();
   });
 
-  it('renders the start screen with its four paths before a Model exists', () => {
+  // Issue #41: the start screen leads with the assistant composer, then New project, then the
+  // Recent list, then the three cards. Every one of them is a Command with its own `data-cmd`.
+  it('renders the start screen in the issue’s reading order before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');
     document.body.append(root);
     render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} />, root);
-    expect(root.textContent).toContain('Open an example');
-    expect(root.textContent).toContain('Start a tutorial');
-    // The "start from geometry" card carries the model-name field, which is the same Command.
-    expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual(['panel.toggle', 'panel.toggle', 'model.new', 'model.new', 'panel.toggle']);
+    expect(root.querySelector('input.ask-field')!.getAttribute('placeholder')).toContain('Describe the part');
+    expect(root.textContent).toContain('New project');
+    expect(root.textContent).toContain('Projects you start are kept in this browser');
+    expect(root.textContent).toContain('Examples');
+    expect(root.textContent).toContain('Tutorials');
+    // Where a project goes is said out loud, whichever answer this browser gives.
+    expect(root.textContent).toMatch(/projects (saved in this browser|need browser storage)/);
+    // The composer's field and the project-name field carry the Command they feed.
+    expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
+      'chat.send',
+      'chat.send',
+      'project.new',
+      'project.new',
+      'file.open',
+      'panel.toggle',
+      'panel.toggle',
+    ]);
+  });
+
+  it('lists Recent projects as project.open cards, with rename and delete on each', () => {
+    const store = new Store();
+    const at = Date.now() - 4 * 60_000;
+    store.set({
+      projects: [
+        { id: 'a', name: 'corbel-ULS', at, createdAt: at, commands: 41, hash: 'h', thumbnail: null },
+        { id: 'b', name: 'cantilever', at: at - 86_400_000, createdAt: at, commands: 12, hash: 'h', thumbnail: 'data:image/webp;base64,AA' },
+      ],
+    });
+    const root = document.createElement('div');
+    document.body.append(root);
+    render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} />, root);
+    expect(root.textContent).toContain('corbel-ULS');
+    expect(root.textContent).toContain('41 Commands · edited 4 minutes ago');
+    expect(root.textContent).toContain('12 Commands · edited 1 day ago');
+    expect(root.querySelector('img.recent-thumb')!.getAttribute('src')).toBe('data:image/webp;base64,AA');
+    expect([...root.querySelectorAll('.recents [data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
+      'project.open',
+      'project.rename',
+      'project.delete',
+      'project.open',
+      'project.rename',
+      'project.delete',
+    ]);
+  });
+
+  it('puts the project name and its saved state in the top bar, and Projects reopens the list', () => {
+    const at = new Date('2026-09-06T12:04:00Z').getTime();
+    const { root } = mount({ project: { id: 'a', name: 'corbel-ULS', at, createdAt: at, commands: 41, hash: 'h', thumbnail: null, saving: false, autosave: true } });
+    const field = root.querySelector<HTMLInputElement>('input.model-name')!;
+    expect(field.value).toBe('corbel-ULS');
+    expect(field.getAttribute('data-cmd')).toBe('project.rename');
+    expect(root.querySelector('.saved-chip')!.textContent).toContain('saved');
+    const bar = [...root.querySelectorAll('.topbar [data-cmd]')].map((el) => el.getAttribute('data-cmd'));
+    expect(bar).toContain('project.rename');
+    expect(bar).toContain('project.save');
+    expect(bar).toContain('file.save');
+  });
+
+  it('says the project is saving, and says so plainly when the background save is off', () => {
+    const at = Date.now();
+    const meta = { id: 'a', name: 'x', at, createdAt: at, commands: 1, hash: null, thumbnail: null };
+    expect(mount({ project: { ...meta, saving: true, autosave: true } }).root.querySelector('.saved-chip')!.textContent).toContain('saving…');
+    document.body.innerHTML = '';
+    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('not saved — storage is off');
   });
 
   // Plan F · #43: the add chip is there with items in the group, and its menu is Commands.

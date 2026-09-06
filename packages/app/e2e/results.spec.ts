@@ -31,7 +31,7 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
     await ready(page);
 
     // 1 · the example, from the gallery, exactly as a person opens it.
-    await page.locator('button[data-cmd="panel.toggle"]', { hasText: 'Open an example' }).click();
+    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Examples' }).click();
     await page.locator('button[title="file.openExample cantilever"]').click();
     await expect(page.locator('.workspace')).toBeVisible();
 

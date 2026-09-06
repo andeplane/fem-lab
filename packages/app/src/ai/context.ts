@@ -4,7 +4,7 @@
 //
 // The blocks are emitted in a fixed order, most stable first, so the one cache breakpoint the
 // Anthropic adapter puts on the system prompt actually hits: blocks 1–2 change only on deploy,
-// 3–4 on `project.refresh`.
+// 3–4 on `folder.refresh`.
 import { FemError, parseMentions, stripDiscriminator, type MentionKind, type Registry, type Selection, type Skill } from '@femlab/registry';
 import type { ImageBlock, Message } from './provider';
 
@@ -159,7 +159,7 @@ export async function objectIndex(registry: Registry): Promise<IndexEntry[]> {
   };
   for (const body of model?.bodies ?? []) for (const face of body.faces ?? []) add({ ref: `face:${face}`, kind: 'face', name: face, summary: `face of ${body.name}` });
   for (const step of model?.steps ?? []) if (step.solved) add({ ref: `result:${step.name}`, kind: 'result', name: step.name, summary: `${step.procedure} Result` });
-  const project = (await registry.query({ query: 'query.project' }).catch(() => null)) as ProjectContext | null;
+  const project = (await registry.query({ query: 'query.folder' }).catch(() => null)) as ProjectContext | null;
   const files = (project?.files ?? []).map((f) => ({ ref: `file:${f.path}`, kind: 'file', name: f.path, summary: `${f.size} B · ${f.kind}` }));
   return [...objects, ...extra, ...files];
 }

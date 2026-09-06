@@ -20,7 +20,7 @@ test.describe('@cpu the guided tutorial', () => {
 
     // The start screen offers it, so the tutorial starts before any Model exists — which is
     // also what makes step 1 (`model.new`) a step and not something already satisfied.
-    await page.locator('button[data-cmd="panel.toggle"]', { hasText: 'Start a tutorial' }).click();
+    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Tutorials' }).click();
     await page.locator('.tutorial-pick', { hasText: 'Cantilever beam' }).click();
     await expect(page.locator('.tutorial-progress')).toHaveText('step 1 of 11');
 
@@ -45,7 +45,7 @@ test.describe('@cpu the guided tutorial', () => {
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
     await ready(page);
-    await page.locator('button[data-cmd="panel.toggle"]', { hasText: 'Start a tutorial' }).click();
+    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Tutorials' }).click();
     await page.locator('.tutorial-pick', { hasText: 'Cantilever beam' }).click();
     await expect(page.locator('.tutorial-progress')).toHaveText('step 1 of 11');
     for (let step = 1; step <= 10; step++) {
@@ -70,7 +70,7 @@ test.describe('@cpu the guided tutorial', () => {
     });
     await page.goto('./#tutorial=cantilever/3');
     await ready(page);
-    await page.locator('button[data-cmd="panel.toggle"]', { hasText: 'Start a tutorial' }).click();
+    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Tutorials' }).click();
     await expect(page.locator('.tutorial-progress')).toHaveText('step 1 of 11');
     await expect(page.locator('.tutorial-step-title')).toHaveText('Start a Model');
   });
@@ -90,7 +90,7 @@ test.describe('@cpu the guided tutorial', () => {
     await page.goto('./');
     await ready(page);
 
-    await page.locator('button[data-cmd="panel.toggle"]', { hasText: 'Start a tutorial' }).click();
+    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Tutorials' }).click();
     await page.locator('.tutorial-pick', { hasText: 'Cantilever beam' }).click();
     await expect(page.locator('.tutorial-progress')).toHaveText('step 1 of 11');
 
