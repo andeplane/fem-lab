@@ -1,6 +1,6 @@
 // Boot (plan B §7.4): capabilities → engine Worker → Registry → `window.fem` → `<App/>`.
 // The shell renders first and the engine arrives into it, so the start screen is on screen
-// before the 3.6 MB wasm module has finished downloading.
+// before the 3.2 MB wasm module has finished downloading.
 import { HOST_COMMANDS, Registry, makeFemProxy, type Capabilities, type EngineSchema, type Fem } from '@femlab/registry';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
@@ -34,7 +34,7 @@ async function boot(): Promise<void> {
   });
 
   // Queue `create` before anything else can be dispatched, but do not wait for it: the shell
-  // renders while the 3.6 MB wasm module is still on the wire, and the transport's queue keeps
+  // renders while the 3.2 MB wasm module is still on the wire, and the transport's queue keeps
   // any early `window.fem` call behind the engine's construction.
   const booted = transport.init();
 
@@ -106,6 +106,11 @@ async function boot(): Promise<void> {
   // as a click, so the Journal, the tree and the viewer surface all catch up either way.
   const panelRegistry = new Proxy(registry, { get: (t, k) => (k === 'dispatch' ? dispatch : Reflect.get(t, k, t)) });
   render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} registry={panelRegistry} />, root);
+
+  // Lazy, but not late: three.js is the chunk the very next click needs, so it is fetched now,
+  // in parallel with the wasm, rather than when the first Body appears. `<link rel=modulepreload>`
+  // in the built `index.html` (vite.config.ts) has already started this fetch by here.
+  void import('./viewer/viewer').catch(() => undefined);
 
   await booted;
   const engineCaps = (await query({ query: 'query.capabilities' })) as Capabilities;

@@ -15,11 +15,26 @@ test.describe('@cpu the shell', () => {
   test('boots, builds a Model from window.fem, and shows it', async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
+    const t0 = Date.now();
     await page.goto('./');
 
     // The start screen is up before the engine is.
     await expect(page.getByText('Open an example')).toBeVisible();
+    const painted = Date.now() - t0;
     await ready(page);
+    // `store.ready` flips the start screen's build control; before it, `model.new` is disabled
+    // (asserting *that* would be a race against a fast engine, so only the flip is checked).
+    await expect(page.locator('button[title="model.new"]')).toBeEnabled();
+
+    // Reported, never asserted on: CI runners have no timing guarantees (AGENTS.md, ADR 0007).
+    // What the budget cares about is the *gap* — the start screen minus the wasm.
+    const dcl = await page.evaluate(() => {
+      const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
+      return Math.round(nav.domContentLoadedEventEnd);
+    });
+    const line = `boot: DOMContentLoaded ${dcl} ms · start screen ${painted} ms · engine ready ${Date.now() - t0} ms (from goto)`;
+    console.log(line);
+    await testInfo.attach('boot-timings.txt', { body: line, contentType: 'text/plain' });
 
     await page.evaluate(() => window.fem.model.new({ name: 'smoke' }));
     await page.evaluate(() => window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] }));

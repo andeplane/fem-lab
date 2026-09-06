@@ -12,7 +12,8 @@
     "test": "vitest run",
     "typecheck": "tsc -p . --noEmit",
     "e2e": "playwright test",
-    "postbuild": "node scripts/check-no-secrets.mjs"
+    "postbuild": "node scripts/check-no-secrets.mjs",
+    "size": "node ../../tools/size-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
