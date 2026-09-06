@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('@cpu model.new can be reviewed and edited from the palette before the first Model', async ({ page }) => {
+test('@cpu model.new can be reviewed and edited from the palette before the first Model', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1800, height: 1000 });
   await page.goto('./');
   await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
@@ -27,7 +27,7 @@ test('@cpu model.new can be reviewed and edited from the palette before the firs
   const props = await page.locator('.props').boundingBox();
   const assistant = await drawer.boundingBox();
   expect(props!.x + props!.width).toBeLessThanOrEqual(assistant!.x);
-  await page.screenshot({ path: '/tmp/fem-207-premodel-preview.png' });
+  await page.screenshot({ path: testInfo.outputPath('premodel-preview.png') });
 
   await page.locator('.props button.apply').click();
   await expect(page.locator('.shell')).toBeVisible();

@@ -1235,7 +1235,7 @@ textarea:focus {
 }
 .start-layout.with-properties {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr) 308px;
 }
 .start-layout > .start {
   min-width: 0;
