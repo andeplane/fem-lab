@@ -28,6 +28,7 @@ export interface TurnResult {
   skills: string[];
   ms: number;
   usage: Usage;
+  /** Unknown if any attempted request ended without reporting its usage. */
   cost: number | null;
   /** The Journal entries this turn added, for the "Journal diff · this turn" card. */
   diff: JournalEntry[];
@@ -109,6 +110,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
     const pending: { id: string; name: string; input: unknown }[] = [];
     let text = '';
     let failed = false;
+    let receivedUsage = false;
     let continuation: Message['continuation'];
 
     for await (const event of provider.chat({ system, messages, tools, model, maxTokens, signal })) {
@@ -123,6 +125,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
       } else if (event.type === 'continuation') {
         continuation = event.continuation;
       } else if (event.type === 'usage') {
+        receivedUsage = true;
         usage.input += event.usage.input;
         usage.output += event.usage.output;
         usage.cacheRead += event.usage.cacheRead;
@@ -134,6 +137,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
         yield { type: 'error', message: event.message };
       }
     }
+    if (!receivedUsage) cost = null;
     if (signal?.aborted) {
       if (text) messages.push({ role: 'assistant', content: [{ type: 'text', text: text + '\n[Response interrupted before completion.]' }] });
       break;

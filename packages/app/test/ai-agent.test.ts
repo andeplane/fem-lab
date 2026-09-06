@@ -313,3 +313,36 @@ it('finishes an active tool on interruption, skips later tools and retains paire
     { type: 'tool_result', toolUseId: 'b', isError: true, content: expect.stringContaining('Interrupted before this tool started') },
   ]);
 });
+
+it.each([false, true])('marks unreported interrupted usage unknown (prior round: %s)', async (priorRound) => {
+  const { registry } = fixture();
+  const controller = new AbortController();
+  let round = 0;
+  const provider: Provider = { id: 'anthropic', models: [], async *chat() {
+    if (priorRound && round++ === 0) {
+      yield { type: 'tool_use', id: 'a', name: 'view_fit', input: {} };
+      yield { type: 'usage', usage: { input: 100, output: 20, cacheRead: 0 } };
+      yield { type: 'done', stopReason: 'tool_use' };
+    } else {
+      yield { type: 'text_delta', text: 'Partial answer' };
+      controller.abort();
+    }
+  } };
+  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: [], messages: [], signal: controller.signal })));
+  expect(turn.cost).toBeNull();
+  expect(turn.usage.input).toBe(priorRound ? 100 : 0);
+});
+
+it('retains known usage when interrupted between requests without starting another request', async () => {
+  const { registry } = fixture();
+  const controller = new AbortController();
+  vi.spyOn(registry, 'dispatch').mockImplementation(async () => { controller.abort(); return undefined; });
+  const { provider, seen } = fakeProvider([[
+    { type: 'tool_use', id: 'a', name: 'view_fit', input: {} },
+    { type: 'usage', usage: { input: 100, output: 20, cacheRead: 0 } },
+    { type: 'done', stopReason: 'tool_use' },
+  ]]);
+  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: [], messages: [], signal: controller.signal })));
+  expect(seen).toHaveLength(1);
+  expect(turn.cost).toBeCloseTo(0.001);
+});

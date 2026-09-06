@@ -54,7 +54,7 @@ const buffer = (text: string): void => {
   chatBridge.pending = text;
 };
 
-interface QueuedMessage { text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string | null }
+interface QueuedMessage { text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string }
 
 type Item =
   | { kind: 'user'; text: string; images: ImageBlock[] }
@@ -260,12 +260,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const runMessage = useCallback(
     async (job: QueuedMessage, signal: AbortSignal) => {
       const { text: line, images: attached, provider, model, key: apiKey } = job;
-      const providerImpl: Provider = provider === 'anthropic' ? anthropicProvider(apiKey ?? '') : openaiProvider(apiKey ?? '');
-      if (!apiKey) {
-        add({ kind: 'bad', text: `no ${provider} API key yet — open Settings and paste one; it stays in this browser` });
-        store.togglePanel('assistant.settings', true);
-        return;
-      }
+      const providerImpl: Provider = provider === 'anthropic' ? anthropicProvider(apiKey) : openaiProvider(apiKey);
       setBusy('thinking…');
       add({ kind: 'user', text: line, images: attached });
       let prose = '';
@@ -333,7 +328,13 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     }
     const selectedModel = store.state.assistantModel ?? model;
     const selectedProvider = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(selectedModel)) ?? provider;
-    queue.current.push({ text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: resolveKey(selectedProvider).key });
+    const apiKey = resolveKey(selectedProvider).key;
+    if (!apiKey) {
+      add({ kind: 'bad', text: `no ${selectedProvider} API key yet — open Settings and paste one; it stays in this browser` });
+      store.togglePanel('assistant.settings', true);
+      return;
+    }
+    queue.current.push({ text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: apiKey });
     followBottom.current = true;
     setQueued([...queue.current]);
     setDraft('');

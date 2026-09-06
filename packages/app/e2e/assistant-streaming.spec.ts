@@ -15,7 +15,7 @@ test('@cpu streams bounded tool cards and queues/interrupts with Enter', async (
         const emit = (event: unknown) => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
         emit({ type: 'response.output_text.delta', delta: first ? 'Sizing **108 mm** walls.' : 'Queued message received.' });
         if (first) {
-          emit({ type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', call_id: 'draft', name: 'script_run', arguments: '' } });
+          emit({ type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', call_id: 'draft', name: 'run_script', arguments: '' } });
           emit({ type: 'response.function_call_arguments.delta', output_index: 1, delta: JSON.stringify({ code: '// ' + 'large argument '.repeat(1500) }) });
           options?.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true });
         } else {

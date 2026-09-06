@@ -40,7 +40,7 @@ export function Prose({ text, streaming = false }: { text: string; streaming?: b
 }
 
 /** Keep large binary outputs out of the transcript without changing what the model receives. */
-export function toolDisplay(value: string): string {
+export function toolDisplay(value = ''): string {
   const display = value.replace(/data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]+/g, '[image data]');
   return display.slice(0, 12000) + (display.length > 12000 ? '\n… (display truncated)' : '');
 }

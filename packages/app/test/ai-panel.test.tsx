@@ -5,6 +5,7 @@ import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as anthropic from '../src/ai/anthropic';
+import * as context from '../src/ai/context';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { fakeTransport } from '../../registry/test/fakes';
 import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
@@ -453,6 +454,44 @@ describe('Assistant queue and model controls', () => {
     chatBridge.pending = null;
     localStorage.clear();
     localStorage.setItem('femlab.ai.key', 'test-key');
+  });
+
+  it('preserves a missing-key draft and image until the key is saved and the person retries', async () => {
+    localStorage.clear();
+    const image = { type: 'image' as const, mediaType: 'image/png' as const, base64: 'AAAA', caption: 'reference' };
+    const screenshot = vi.spyOn(context, 'screenshotBlock').mockResolvedValue(image);
+    const seen: import('../src/ai/provider').Message[][] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(req) { seen.push(structuredClone(req.messages)); yield { type: 'done', stopReason: 'end_turn' }; },
+    });
+    try {
+      const { root } = await mount();
+      root.querySelector<HTMLButtonElement>('button[data-cmd="query.screenshot"]')!.click();
+      await tick();
+      chatBridge.insertMention('body:beam');
+      await tick();
+      press(await type(root, 'build from this image'), 'Enter');
+      await tick();
+      expect(root.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('build from this image');
+      expect(root.querySelector('.tokens .token')?.textContent).toContain('body:beam');
+      expect(root.querySelector('.images img')?.getAttribute('src')).toContain('AAAA');
+      expect(root.querySelector('.bubble')).toBeNull();
+      expect(provider).not.toHaveBeenCalled();
+      const key = root.querySelector<HTMLInputElement>('.settings input[type="password"]')!;
+      key.value = 'test-key';
+      key.dispatchEvent(new Event('input', { bubbles: true }));
+      await tick();
+      root.querySelector<HTMLButtonElement>('[data-cmd="ai.setKey"]')!.click();
+      await tick();
+      press(root.querySelector('textarea')!, 'Enter');
+      await tick(); await tick();
+      expect(seen).toHaveLength(1);
+      expect(JSON.stringify(seen[0])).toContain('build from this image');
+      expect(JSON.stringify(seen[0])).toContain('body:beam');
+      expect(seen[0]![0]!.content).toContainEqual(image);
+      expect(root.querySelector('.images img')).toBeNull();
+    } finally { screenshot.mockRestore(); provider.mockRestore(); }
   });
 
   it('queues with Enter, then interrupts with empty Enter and starts the next message once', async () => {
