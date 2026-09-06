@@ -97,8 +97,8 @@ here at once, and the issue tracker is the only shared view of who is doing what
 - **Never check out a branch in the main checkout.** `~/projects/personal/fem-lab` (or wherever the
   repo was cloned) stays on `main`: it is the entry point people run the dev server from. Do your
   work in a worktree (`git worktree add ../fem-lab-<issue> -b <branch> origin/main`) and remove it
-  when the PR merges. Use a port of your own for any server you start, and never kill a process
-  you did not start.
+  when the PR merges. Use a port of your own for any server you start (`PW_PORT=<n> npm run e2e …`
+  gives Playwright its own preview ports), and never kill a process you did not start.
 - **Finish by closing.** The PR merge closes the issue and drops the label; if the work stops,
   remove the label and comment why. Never leave an `in progress` issue silent for a day.
 - **Labels mean something**: `bug`, `enhancement`; areas `engine`, `geometry`, `numerics`,
