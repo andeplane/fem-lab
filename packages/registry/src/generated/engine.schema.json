@@ -809,6 +809,36 @@
         ]
       },
       {
+        "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "string"
+          },
+          "emissivity": {
+            "type": "number",
+            "format": "double"
+          },
+          "tInf": {
+            "$ref": "#/$defs/Q_temperature"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "load.radiation"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "on",
+          "emissivity",
+          "tInf"
+        ]
+      },
+      {
         "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
         "type": "object",
         "properties": {
@@ -854,7 +884,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
         "type": "object",
         "properties": {
           "name": {
@@ -968,6 +998,23 @@
                 "type": "null"
               }
             ]
+          },
+          "nonlinearTolerance": {
+            "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
           },
           "cmd": {
             "type": "string",
@@ -3162,24 +3209,53 @@
           "step"
         ]
       },
-      "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
-        "type": "string",
-        "enum": [
-          "displacement",
-          "stress",
-          "stressUnaveraged",
-          "vonMises",
-          "principal",
-          "strain",
-          "reaction",
-          "temperature"
+      "FrameSample": {
+        "description": "How to select retained output; there is no temporal interpolation or extrapolation.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "const": "frame"
+              }
+            },
+            "required": [
+              "kind",
+              "index"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "time": {
+                "$ref": "#/$defs/Q_time"
+              },
+              "sampling": {
+                "$ref": "#/$defs/TimeSampling"
+              },
+              "kind": {
+                "type": "string",
+                "const": "time"
+              }
+            },
+            "required": [
+              "kind",
+              "time",
+              "sampling"
+            ]
+          }
         ]
       },
-      "Q_length": {
-        "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
+      "Q_time": {
+        "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
-        "x-dimension": "length"
+        "x-dimension": "time"
       },
       "Quantity": {
         "description": "A number with a unit, as text or as parts.",
@@ -3206,6 +3282,33 @@
             ]
           }
         ]
+      },
+      "TimeSampling": {
+        "description": "Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.\nNearest explicitly selects a retained time; equal-distance ties (within the same relative\nroundoff bound on the distances) choose the earlier frame.\nBoth reject times outside the retained interval (except endpoint conversion roundoff).",
+        "type": "string",
+        "enum": [
+          "exact",
+          "nearest"
+        ]
+      },
+      "Field": {
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "type": "string",
+        "enum": [
+          "displacement",
+          "stress",
+          "stressUnaveraged",
+          "vonMises",
+          "principal",
+          "strain",
+          "reaction",
+          "temperature"
+        ]
+      },
+      "Q_length": {
+        "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "length"
       },
       "ReportSection": {
         "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
@@ -3255,62 +3358,6 @@
             "type": "string",
             "const": "journal"
           }
-        ]
-      },
-      "FrameSample": {
-        "description": "How to select retained output; there is no temporal interpolation or extrapolation.",
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "index": {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              },
-              "kind": {
-                "type": "string",
-                "const": "frame"
-              }
-            },
-            "required": [
-              "kind",
-              "index"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "time": {
-                "$ref": "#/$defs/Q_time"
-              },
-              "sampling": {
-                "$ref": "#/$defs/TimeSampling"
-              },
-              "kind": {
-                "type": "string",
-                "const": "time"
-              }
-            },
-            "required": [
-              "kind",
-              "time",
-              "sampling"
-            ]
-          }
-        ]
-      },
-      "Q_time": {
-        "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
-        "$ref": "#/$defs/Quantity",
-        "x-dimension": "time"
-      },
-      "TimeSampling": {
-        "description": "Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.\nNearest explicitly selects a retained time; equal-distance ties (within the same relative\nroundoff bound on the distances) choose the earlier frame.\nBoth reject times outside the retained interval (except endpoint conversion roundoff).",
-        "type": "string",
-        "enum": [
-          "exact",
-          "nearest"
         ]
       }
     }
@@ -4950,6 +4997,36 @@
             ]
           },
           {
+            "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.radiation"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "emissivity",
+              "tInf"
+            ]
+          },
+          {
             "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
@@ -4995,7 +5072,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
             "type": "object",
             "properties": {
               "name": {
@@ -5109,6 +5186,23 @@
                     "type": "null"
                   }
                 ]
+              },
+              "nonlinearTolerance": {
+                "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
               },
               "cmd": {
                 "type": "string",
@@ -7112,6 +7206,147 @@
           "max"
         ]
       },
+      "FramesResult": {
+        "description": "`query.frames` response; stored components describe the unpadded History storage.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "field": {
+            "$ref": "#/$defs/Field"
+          },
+          "components": {
+            "description": "Public field layout, matching final FieldData (three components, zero-padded).",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "storedComponents": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "retainedBytes": {
+            "description": "Logical bytes of retained f64 times and unpadded primary values; excludes allocator\noverhead, spare capacity, final derived fields and temporary Query response copies.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/FrameStamp"
+            }
+          }
+        },
+        "required": [
+          "step",
+          "modelHash",
+          "stale",
+          "nodeCount",
+          "field",
+          "components",
+          "storedComponents",
+          "retainedBytes",
+          "frames"
+        ]
+      },
+      "FrameStamp": {
+        "description": "One retained frame's zero-based index and time in seconds and Model display units.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "timeSi": {
+            "type": "number",
+            "format": "double"
+          },
+          "time": {
+            "$ref": "#/$defs/Valued"
+          }
+        },
+        "required": [
+          "index",
+          "timeSi",
+          "time"
+        ]
+      },
+      "FrameResult": {
+        "description": "`query.frame` response: SI values in the existing component-fastest FieldData layout.",
+        "type": "object",
+        "properties": {
+          "sample": {
+            "$ref": "#/$defs/ResolvedFrame"
+          },
+          "field": {
+            "$ref": "#/$defs/Field"
+          },
+          "components": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "description": "SI unit for values: K for temperature, m for displacement, never a display unit.",
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "required": [
+          "sample",
+          "field",
+          "components",
+          "nodeCount",
+          "unit",
+          "values"
+        ]
+      },
+      "ResolvedFrame": {
+        "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "frame": {
+            "$ref": "#/$defs/FrameStamp"
+          }
+        },
+        "required": [
+          "step",
+          "modelHash",
+          "frame"
+        ]
+      },
       "ProbeResult": {
         "description": "`query.probe` response.",
         "type": "object",
@@ -7777,147 +8012,6 @@
           "markdown",
           "sections"
         ]
-      },
-      "FramesResult": {
-        "description": "`query.frames` response; stored components describe the unpadded History storage.",
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string"
-          },
-          "modelHash": {
-            "type": "string"
-          },
-          "stale": {
-            "type": "boolean"
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "field": {
-            "$ref": "#/$defs/Field"
-          },
-          "components": {
-            "description": "Public field layout, matching final FieldData (three components, zero-padded).",
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "storedComponents": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "retainedBytes": {
-            "description": "Logical bytes of retained f64 times and unpadded primary values; excludes allocator\noverhead, spare capacity, final derived fields and temporary Query response copies.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "frames": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/FrameStamp"
-            }
-          }
-        },
-        "required": [
-          "step",
-          "modelHash",
-          "stale",
-          "nodeCount",
-          "field",
-          "components",
-          "storedComponents",
-          "retainedBytes",
-          "frames"
-        ]
-      },
-      "FrameStamp": {
-        "description": "One retained frame's zero-based index and time in seconds and Model display units.",
-        "type": "object",
-        "properties": {
-          "index": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "timeSi": {
-            "type": "number",
-            "format": "double"
-          },
-          "time": {
-            "$ref": "#/$defs/Valued"
-          }
-        },
-        "required": [
-          "index",
-          "timeSi",
-          "time"
-        ]
-      },
-      "FrameResult": {
-        "description": "`query.frame` response: SI values in the existing component-fastest FieldData layout.",
-        "type": "object",
-        "properties": {
-          "sample": {
-            "$ref": "#/$defs/ResolvedFrame"
-          },
-          "field": {
-            "$ref": "#/$defs/Field"
-          },
-          "components": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "unit": {
-            "description": "SI unit for values: K for temperature, m for displacement, never a display unit.",
-            "type": "string"
-          },
-          "values": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "format": "double"
-            }
-          }
-        },
-        "required": [
-          "sample",
-          "field",
-          "components",
-          "nodeCount",
-          "unit",
-          "values"
-        ]
-      },
-      "ResolvedFrame": {
-        "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string"
-          },
-          "modelHash": {
-            "type": "string"
-          },
-          "frame": {
-            "$ref": "#/$defs/FrameStamp"
-          }
-        },
-        "required": [
-          "step",
-          "modelHash",
-          "frame"
-        ]
       }
     }
   },
@@ -8484,6 +8578,7 @@
           "constraint.rigid-modes",
           "solve.not-positive-definite",
           "solve.stalled",
+          "solve.diverged",
           "solve.too-large",
           "gpu.shader",
           "gpu.too-large",
@@ -9810,6 +9905,32 @@
               "on": {
                 "type": "string"
               },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "t_inf": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "radiation"
+              }
+            },
+            "required": [
+              "kind",
+              "on",
+              "emissivity",
+              "t_inf"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "string"
+              },
               "q": {
                 "type": "number",
                 "format": "double"
@@ -9952,6 +10073,21 @@
               "null"
             ],
             "format": "double"
+          },
+          "nonlinearTolerance": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
           }
         },
         "required": [
@@ -11297,6 +11433,36 @@
             ]
           },
           {
+            "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.radiation"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "emissivity",
+              "tInf"
+            ]
+          },
+          {
             "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
@@ -11342,7 +11508,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
             "type": "object",
             "properties": {
               "name": {
@@ -11456,6 +11622,23 @@
                     "type": "null"
                   }
                 ]
+              },
+              "nonlinearTolerance": {
+                "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
               },
               "cmd": {
                 "type": "string",

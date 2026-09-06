@@ -35,7 +35,7 @@ use femlab_engine::post::convergence::{observed_rate, richardson};
 use femlab_engine::post::probe::{path, probe};
 use femlab_engine::post::stress::{average_at_nodes, principal, stress_gp, von_mises};
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
-use femlab_engine::procedure::{self, heat, Step, StepResult};
+use femlab_engine::procedure::{self, heat, NonlinearControl, Step, StepResult};
 use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
 use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
 use femlab_engine::{OnProgress, Progress};
@@ -2858,7 +2858,7 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
     let names: Vec<&str> = [
         Step::Static { solver: opts },
         Step::Modal { n_modes: 3, shift: None, solver: opts },
-        Step::HeatSteady { solver: opts },
+        Step::HeatSteady { solver: opts, control: NonlinearControl::default() },
         Step::HeatTransient {
             dt: 1.0,
             t_end: 2.0,
@@ -2867,6 +2867,7 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
             output_every: 1,
             amplitude: None,
             solver: opts,
+            control: NonlinearControl::default(),
         },
         Step::Explicit { t_end: 1.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 },
     ]
@@ -3715,7 +3716,7 @@ fn run_step(p: &Problem<'_>, step: &Step) -> Result<StepResult, Error> {
 }
 
 fn steady() -> Step {
-    Step::HeatSteady { solver: SolveOptions::default() }
+    Step::HeatSteady { solver: SolveOptions::default(), control: NonlinearControl::default() }
 }
 
 /// The nodal temperature of a heat Result.
@@ -3976,6 +3977,7 @@ fn transient_heat_reaches_the_requested_endpoint_with_the_correct_temperature() 
                     output_every: 2,
                     amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, t_end], value: vec![0.0, t_end] }),
                     solver: SolveOptions::default(),
+                    control: NonlinearControl::default(),
                 };
                 let res = run_step(&p, &step).expect("a uniformly heated transient");
                 assert!(res.scalars["dt"] <= dt);
@@ -4062,6 +4064,7 @@ fn t3_probe(theta: f64, dt: f64, t_end: f64) -> (f64, f64, usize) {
         // 100 sin(π t / 40) is a period of 80 s on a prescribed 100 K.
         amplitude: Some(procedure::Amplitude::Sine { amplitude: 1.0, period: 80.0 }),
         solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
     };
     let res = run_step(&p, &step).expect("a well-posed transient");
     let rows = res.history.as_ref().expect("a transient keeps a history").times.len();
@@ -4092,6 +4095,7 @@ fn a_transient_needs_a_positive_step_and_reads_its_amplitude_table() {
         output_every: 1,
         amplitude: None,
         solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
     };
     let e = run_step(&p, &bad).expect_err("a zero step");
     assert_eq!(e.code, ErrorCode::Schema);
@@ -4112,6 +4116,7 @@ fn a_transient_needs_a_positive_step_and_reads_its_amplitude_table() {
         output_every: 4,
         amplitude: Some(table),
         solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
     };
     let res = run_step(&p, &step).expect("a well-posed transient");
     let h = res.history.as_ref().expect("a history");
@@ -4548,6 +4553,19 @@ fn the_heat_and_mass_assemblies_report_what_the_checks_would_have_caught() {
     p.heat_loads = vec![HeatLoad::Convection { faces: "nowhere".into(), h: 10.0, t_inf: 300.0 }];
     assert_eq!(heat::assemble(&p, &pat).expect_err("no such Set").code, ErrorCode::SetEmpty);
 
+    // The radiative face integral answers for the same three things, and it is the one the
+    // procedures call with an `expect` on the strength of the checks having run first.
+    let mut k = pat.csr.clone();
+    let mut f = vec![0.0; mesh.n_nodes()];
+    let t = vec![300.0; mesh.n_nodes()];
+    p.heat_loads = vec![HeatLoad::Radiation { faces: "nowhere".into(), emissivity: 0.9, t_inf: 300.0 }];
+    let missing = heat::add_radiation(&p, &pat, &t, &mut k, &mut f).expect_err("no such Set");
+    assert_eq!(missing.code, ErrorCode::SetEmpty);
+    p.heat_loads = vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: 0.9, t_inf: 300.0 }];
+    p.material_of_block = vec![None];
+    let no_material = heat::add_radiation(&p, &pat, &t, &mut k, &mut f).expect_err("no material");
+    assert_eq!((no_material.code, no_material.where_.as_deref()), (ErrorCode::ModelNoMaterial, Some("element 0")));
+
     // The consistent mass assembly the modal procedure uses reports the same thing.
     let structural = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
     let mut no_material = structural;
@@ -4605,6 +4623,7 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
         output_every: 1,
         amplitude: None,
         solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
     };
     let steps: Vec<(&Problem<'_>, Step)> = vec![
         (&hot, steady()),
@@ -4858,6 +4877,7 @@ fn simplex_transient_capacity_converges_to_the_forced_slab_fourier_solution() {
                 output_every: 10000,
                 amplitude: None,
                 solver: SolveOptions::default(),
+                control: NonlinearControl::default(),
             };
             let res = run_step(&p, &step).expect("heated slab");
             // Every structured simplex has equal volume. Integrate T_h using exact
@@ -4977,4 +4997,325 @@ fn consistent_quadratic_gravity_distribution_remains_unchanged() {
         assert!((f[2 * i + 1] - expected).abs() < 1e-10);
         assert_eq!(f[2 * i], 0.0);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Radiation (#79). The Stefan-Boltzmann constant is repeated here on purpose: a test that read
+// it from the engine would agree with the engine by construction.
+const SIGMA: f64 = 5.670_374_419e-8;
+
+/// The bits `face_integrals` produced on a distorted hex8 face before the convection and
+/// radiation integrals were merged into `face_film`, captured from the previous implementation.
+/// Index and value; every other entry was exactly zero.
+const CONVECTION_MAT_BITS: [(usize, u64); 16] = [
+    (9, 4600136902572446901),
+    (10, 4595601230127101423),
+    (13, 4595429395609894819),
+    (14, 4590893701533684511),
+    (17, 4595601230127101423),
+    (18, 4600072756936496938),
+    (21, 4590893701533684510),
+    (22, 4595365206712215196),
+    (41, 4595429395609894820),
+    (42, 4590893701533684510),
+    (45, 4599729087902083732),
+    (46, 4595193372195008592),
+    (49, 4590893701533684511),
+    (50, 4595365206712215196),
+    (53, 4595193372195008592),
+    (54, 4599664855742674446),
+];
+const CONVECTION_VEC_BITS: [(usize, u64); 4] =
+    [(1, 4605360167270343204), (2, 4605312047227948316), (5, 4605054295452138411), (6, 4605006132148013862)];
+
+/// The eight corners of the distorted hex the captured bits came from.
+const FILM_COORDS: [f64; 24] = [
+    0.0, 0.0, 0.0, 1.3, 0.1, -0.2, 1.1, 1.7, 0.3, 0.2, 1.4, 0.05, 0.05, -0.1, 2.1, 1.4, 0.2, 1.9, 1.2, 1.6, 2.3, 0.1,
+    1.5, 2.0,
+];
+
+/// Generalising the convection face integral into `face_film` changed no number: the constant
+/// film reproduces the captured bits exactly, and it still does when the temperature field it is
+/// handed is wildly non-zero, because a constant film reads the temperature and ignores it.
+#[test]
+fn a_constant_film_reproduces_the_convection_face_integral_bit_for_bit() {
+    let material = conductor(45.0, 7800.0, 460.0);
+    let c = ElementCtx {
+        coords: &FILM_COORDS,
+        material: &material,
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::IncompatibleModes,
+        temperature: None,
+        t_ref: 0.0,
+    };
+    let mut mat = vec![0.0; 64];
+    let mut load = vec![0.0; 8];
+    femlab_engine::fem::heat::face_integrals(ElementKind::Hex8, &c, 3, &mut mat, &mut load)
+        .expect("a well-shaped face");
+    for &(i, bits) in &CONVECTION_MAT_BITS {
+        assert_eq!(mat[i].to_bits(), bits, "mat[{i}] = {}", mat[i]);
+    }
+    for &(i, bits) in &CONVECTION_VEC_BITS {
+        assert_eq!(load[i].to_bits(), bits, "vec[{i}] = {}", load[i]);
+    }
+    assert_eq!(mat.iter().filter(|v| **v != 0.0).count(), CONVECTION_MAT_BITS.len());
+    assert_eq!(load.iter().filter(|v| **v != 0.0).count(), CONVECTION_VEC_BITS.len());
+
+    let t_nodes = [301.0, 455.0, 12.0, -7.0, 900.0, 1.5, 260.0, 33.0];
+    let (mut mat2, mut load2) = (vec![0.0; 64], vec![0.0; 8]);
+    femlab_engine::fem::heat::face_film(ElementKind::Hex8, &c, 3, &t_nodes, &|_| (1.0, 1.0), &mut mat2, &mut load2)
+        .expect("a well-shaped face");
+    assert_eq!(mat2, mat);
+    assert_eq!(load2, load);
+
+    // A film that does depend on the temperature does not produce the same numbers, so the
+    // bit-identity above is a statement about constant films and not about a dead argument.
+    let (mut mat3, mut load3) = (vec![0.0; 64], vec![0.0; 8]);
+    femlab_engine::fem::heat::face_film(ElementKind::Hex8, &c, 3, &t_nodes, &|t| (t, 2.0 * t), &mut mat3, &mut load3)
+        .expect("a well-shaped face");
+    assert!(mat3 != mat && load3 != load);
+}
+
+/// A radiating slab's surface temperature by bisection on `k (T0 − T_L)/L = σ ε (T_L⁴ − T∞⁴)`.
+/// The whole oracle is this scalar equation; it knows nothing about finite elements.
+fn radiating_slab_surface(k: f64, length: f64, t0: f64, t_inf: f64, emissivity: f64) -> f64 {
+    let fourth = |t: f64| t * t * t * t;
+    let residual = |t: f64| k * (t0 - t) / length - SIGMA * emissivity * (fourth(t) - fourth(t_inf));
+    let (mut lo, mut hi) = (t_inf, t0);
+    // 200 halvings take the bracket far below one ulp of the answer.
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if residual(mid) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+fn tight() -> NonlinearControl {
+    NonlinearControl { tol: 1e-12, max_iterations: 100 }
+}
+
+/// Benchmark E6: a slab held at `T0` on one face and radiating to `T∞` from the other. The
+/// steady flux is the same through every section, so the surface temperature solves a scalar
+/// equation the test bisects independently; the conduction profile is linear, so quad4
+/// reproduces it exactly and the answer must not move with the mesh. At convergence the heat
+/// entering through the held face equals the power the surface radiates away, which is the
+/// conservation oracle for the nonlinear film.
+#[test]
+fn a_radiating_slab_reaches_the_surface_temperature_a_bisection_predicts() {
+    let (k, length, height, t0, t_inf, emissivity) = (55.6, 0.1, 0.02, 1000.0, 300.0, 0.98);
+    let want = radiating_slab_surface(k, length, t0, t_inf, emissivity);
+    let fourth = |t: f64| t * t * t * t;
+    let mut answers = Vec::new();
+    for n in [4usize, 8, 16] {
+        let mesh = Structured { kind: ElementKind::Quad4, n: [n, 2, 1] }.box_([length, height, 0.0]);
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::PlaneStrain,
+            conductor(k, 7800.0, 460.0),
+            vec![hold("hot", "xmin", t0)],
+            vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity, t_inf }],
+        );
+        let step = Step::HeatSteady { solver: SolveOptions::default(), control: tight() };
+        let res = run_step(&p, &step).expect("a radiating face holds the temperature");
+        let got = temperature_at(&mesh, &res, [length, 0.5 * height, 0.0]);
+        assert!((got - want).abs() <= 1e-9 * want, "n = {n}: {got} against the bisection {want}");
+        // The Picard passes are reported, and a fourth-power law is not solved in one.
+        let passes = res.scalars["nonlinear_iterations"];
+        assert!(passes > 1.0 && passes <= 100.0, "{passes} passes");
+        // Conservation: heat in through the support = power radiated from the far face, whose
+        // area is `height` times the unit out-of-plane thickness of a plane-strain model.
+        // A Constraint's thermal reaction is the heat it *removes*, so heat entering through the
+        // hot face is negative and its magnitude is the power the far face radiates away.
+        let radiated = SIGMA * emissivity * (fourth(got) - fourth(t_inf)) * height;
+        let through_support = -res.reactions[0].1[0];
+        assert!(
+            (through_support - radiated).abs() <= 1e-9 * radiated,
+            "n = {n}: {through_support} W in, {radiated} W radiated"
+        );
+        answers.push(got);
+    }
+    // A linear profile is in the quad4 space, so refining must not move the answer at all.
+    assert!((answers[1] - answers[0]).abs() <= 1e-9, "{answers:?}");
+    assert!((answers[2] - answers[0]).abs() <= 1e-9, "{answers:?}");
+}
+
+/// A steady Step whose boundaries are one convection face, one radiating face and a volumetric
+/// source: nothing holds the temperature by Dirichlet, and the two films between them must carry
+/// away exactly the heat the source puts in. Both face temperatures are uniform, so the balance
+/// is closed with two closed-form face fluxes and no engine quantity on the right-hand side.
+#[test]
+fn a_source_between_a_convecting_and_a_radiating_face_balances_exactly() {
+    let (k, length, height) = (20.0, 0.2, 0.05);
+    let (h, film_t_inf, emissivity, rad_t_inf, q) = (25.0, 300.0, 0.7, 400.0, 2.0e5);
+    let mesh = Structured { kind: ElementKind::Quad4, n: [8, 2, 1] }.box_([length, height, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(k, 7800.0, 460.0),
+        Vec::new(),
+        vec![
+            HeatLoad::Convection { faces: "xmin".into(), h, t_inf: film_t_inf },
+            HeatLoad::Radiation { faces: "xmax".into(), emissivity, t_inf: rad_t_inf },
+            HeatLoad::Source { bodies: vec!["bar".to_string()], q },
+        ],
+    );
+    // The two films are the only thing holding the temperature, and that is well posed.
+    assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
+    let step = Step::HeatSteady { solver: SolveOptions::default(), control: tight() };
+    let res = run_step(&p, &step).expect("two films hold the temperature");
+    let cold = temperature_at(&mesh, &res, [0.0, 0.5 * height, 0.0]);
+    let hot = temperature_at(&mesh, &res, [length, 0.5 * height, 0.0]);
+    let fourth = |t: f64| t * t * t * t;
+    let convected = h * (cold - film_t_inf) * height;
+    let radiated = SIGMA * emissivity * (fourth(hot) - fourth(rad_t_inf)) * height;
+    let supplied = q * length * height;
+    assert!(
+        (convected + radiated - supplied).abs() <= 1e-9 * supplied,
+        "{convected} W + {radiated} W against {supplied} W in"
+    );
+}
+
+/// The lumped closed form of a block that radiates from one face into a 0 K sink:
+/// `dT/dt = −c T⁴` with `c = σ ε A / (ρ c_p V)`, so `T(t) = T0 (1 + 3 c T0³ t)^(−1/3)`.
+fn radiating_block_temperature(c: f64, t0: f64, time: f64) -> f64 {
+    t0 * libm::cbrt(1.0 / (1.0 + 3.0 * c * t0 * t0 * t0 * time))
+}
+
+/// One transient run of the radiating block: the relative error of its final temperature
+/// against the closed form.
+fn radiating_block_error(theta: f64, dt: f64, t_end: f64) -> f64 {
+    // The conductivity is deliberately enormous so the block stays isothermal to 1e-7 (its
+    // radiative Biot number is 6e-6) and what is left to measure is the time integrator alone.
+    let (k, rho, cp, length, height, t0) = (1.0e4, 100.0, 100.0, 0.001, 0.001, 1000.0);
+    let mesh = Structured { kind: ElementKind::Quad4, n: [2, 1, 1] }.box_([length, height, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(k, rho, cp),
+        Vec::new(),
+        vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: 1.0, t_inf: 0.0 }],
+    );
+    let step = Step::HeatTransient {
+        dt,
+        t_end,
+        theta,
+        initial: t0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control: NonlinearControl { tol: 1e-9, max_iterations: 50 },
+    };
+    let res = run_step(&p, &step).expect("a radiating face holds the temperature");
+    // A / V is 1 / length for a face of the full cross-section.
+    let c = SIGMA / (rho * cp * length);
+    let want = radiating_block_temperature(c, t0, t_end);
+    let got = temperature_at(&mesh, &res, [0.5 * length, 0.5 * height, 0.0]);
+    (got - want).abs() / want
+}
+
+/// Benchmark E7: an insulated block radiating from one face into a 0 K sink cools by
+/// `dT/dt = −c T⁴`, whose closed form is `T(t) = T0 (1 + 3 c T0³ t)^(−1/3)` — a fourth-power
+/// oracle that no linearised film can reproduce by accident. Halving the increment must fall on
+/// the θ-method's own rate: first order at θ = 1, second at θ = 0.5.
+#[test]
+fn a_radiating_block_follows_its_analytic_cooling_curve_at_the_theta_method_rate() {
+    let t_end = 1.0;
+    for (theta, floor) in [(1.0, 0.85), (0.5, 1.7)] {
+        let errors: Vec<f64> = [0.02, 0.01, 0.005].iter().map(|&dt| radiating_block_error(theta, dt, t_end)).collect();
+        let rate = |a: f64, b: f64| libm::log2(a / b);
+        assert!(rate(errors[0], errors[1]) > floor, "theta {theta}: {errors:?}");
+        assert!(rate(errors[1], errors[2]) > floor, "theta {theta}: {errors:?}");
+        assert!(errors[2] < errors[1] && errors[1] < errors[0], "theta {theta}: {errors:?}");
+    }
+    // Crank-Nicolson at the finest increment is on the closed form to better than 0.1 %.
+    assert!(radiating_block_error(0.5, 0.005, t_end) < 1e-3);
+}
+
+/// A face whose film is negative makes the system indefinite whatever the temperature, and both
+/// radiating procedures let the factorisation error out rather than taking the host down with it.
+/// The Command boundary refuses a negative emissivity, so only a direct Problem can get here —
+/// which is exactly the malformed-extension case the linear paths already guard against.
+#[test]
+fn a_radiating_step_propagates_a_factorisation_failure() {
+    let mesh = Structured { kind: ElementKind::Quad4, n: [2, 1, 1] }.box_([0.1, 0.02, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(55.6, 7800.0, 460.0),
+        vec![hold("hot", "xmin", 1000.0)],
+        vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: -1e12, t_inf: 300.0 }],
+    );
+    let control = NonlinearControl::default();
+    let steady_error = run_step(&p, &Step::HeatSteady { solver: SolveOptions::default(), control: control.clone() })
+        .expect_err("a negative film cannot be factorised");
+    assert_eq!(steady_error.code, ErrorCode::SolveNotPositiveDefinite);
+    let transient = Step::HeatTransient {
+        dt: 1.0,
+        t_end: 1.0,
+        theta: 1.0,
+        initial: 300.0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control,
+    };
+    let transient_error = run_step(&p, &transient).expect_err("a negative film cannot be factorised");
+    assert_eq!(transient_error.code, ErrorCode::SolveNotPositiveDefinite);
+}
+
+/// A budget of one pass cannot converge a fourth-power film, and both radiating procedures say
+/// so with the same code, a `where` that names the increment, and a suggestion.
+#[test]
+fn a_radiation_step_that_runs_out_of_passes_is_solve_diverged() {
+    let mesh = Structured { kind: ElementKind::Quad4, n: [2, 1, 1] }.box_([0.1, 0.02, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(55.6, 7800.0, 460.0),
+        vec![hold("hot", "xmin", 1000.0)],
+        vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: 0.98, t_inf: 300.0 }],
+    );
+    let stingy = NonlinearControl { tol: 1e-12, max_iterations: 1 };
+    let steady_error = run_step(&p, &Step::HeatSteady { solver: SolveOptions::default(), control: stingy.clone() })
+        .expect_err("one pass cannot converge a fourth-power film");
+    assert_eq!(steady_error.code, ErrorCode::SolveDiverged);
+    assert_eq!(steady_error.where_.as_deref(), Some("heat-steady"));
+    assert!(steady_error.suggestion.expect("a way out").contains("nonlinearMaxIterations"));
+    let transient = Step::HeatTransient {
+        dt: 1.0,
+        t_end: 2.0,
+        theta: 1.0,
+        initial: 300.0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control: stingy,
+    };
+    let transient_error = run_step(&p, &transient).expect_err("one pass cannot converge an increment either");
+    assert_eq!(transient_error.code, ErrorCode::SolveDiverged);
+    assert_eq!(transient_error.where_.as_deref(), Some("heat-transient increment 1"));
 }
