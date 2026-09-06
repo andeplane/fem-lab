@@ -2397,6 +2397,65 @@ fn a_static_step_after_a_heat_step_turns_temperature_into_stress() {
     assert!((sigma + 126.0).abs() <= 0.02 * 126.0, "σ_xx = {sigma} MPa");
 }
 
+fn solved_thermal_chain() -> Engine {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"left","on":"bar.xmin"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold","hot"],
+            "loads":[],"output":["temperature"]}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"conduct",
+            "constraints":["left"],"loads":[]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    e
+}
+
+fn assert_stale_predecessor(e: &mut Engine) {
+    let stale = err(e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert_eq!(stale.code, ErrorCode::ResultStale);
+    assert_eq!(stale.where_.as_deref(), Some("step 'stress'"));
+    assert!(stale.cause.contains("step 'conduct'"), "{}", stale.cause);
+    assert_eq!(stale.suggestion.as_deref(), Some("solve.run on step 'conduct' again"));
+}
+
+/// A chained solve must never attach an old nodal field to a new Mesh: refinement used to
+/// panic while gathering temperatures by the new node ids.
+#[test]
+fn a_chained_step_refuses_a_predecessor_result_from_before_mesh_refinement() {
+    let mut e = solved_thermal_chain();
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":20,"ny":1,"nz":1}}}"#);
+    assert_stale_predecessor(&mut e);
+}
+
+/// Equal field and Mesh lengths do not prove compatibility: geometry and material edits can
+/// keep every node id while invalidating the predecessor's temperature field.
+#[test]
+fn a_chained_step_refuses_a_stale_same_node_count_temperature_field() {
+    let mut e = solved_thermal_chain();
+    let nodes = mesh_summary(&mut e).nodes;
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["2 m","100 mm","100 mm"]}"#);
+    assert_eq!(mesh_summary(&mut e).nodes, nodes, "fixed division counts preserve the node count");
+    assert_stale_predecessor(&mut e);
+
+    // Re-solving makes the chain valid for the changed geometry; a material edit stales it
+    // again without changing any part of the Mesh.
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+            "alpha":"1.2e-5 1/K","k":"90 W/(m K)","cp":"460 J/(kg K)"}"#,
+    );
+    assert_eq!(mesh_summary(&mut e).nodes, nodes);
+    assert_stale_predecessor(&mut e);
+}
+
 /// An explicit Step falls under gravity by exactly `g t²/2`, which is what central differences
 /// give for a constant acceleration, and a Step that names no `tEnd` says so.
 #[test]
