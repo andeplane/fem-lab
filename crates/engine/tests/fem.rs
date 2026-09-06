@@ -1562,9 +1562,9 @@ fn msh_round_trips_annulus_and_elliptic_annulus() {
 #[test]
 fn msh_round_trips_a_two_block_mesh_with_a_block_partial_elem_set() {
     // Two disjoint hex8 blocks. "all" spans both (whole-mesh entities pick it up); "half" spans
-    // only block 0's elements, which the writer can represent (the whole block is covered);
-    // "mixed" covers only element 0 of block 0, which is NOT block-aligned and so is dropped on
-    // write — a documented limitation no mesher in this codebase runs into.
+    // only block 0's elements; "mixed" covers only element 0 of block 0. The latter forces the
+    // writer to split the original element block into physical entities without changing element
+    // order. "pins" is an independent node-only physical group.
     let a = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 1.0, 1.0]);
     let b = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
     let n_nodes_a = a.n_nodes() as u32;
@@ -1578,7 +1578,7 @@ fn msh_round_trips_a_two_block_mesh_with_a_block_partial_elem_set() {
             ElementBlock { kind: ElementKind::Hex8, conn: a.blocks[0].conn.clone(), first_elem: 0 },
             ElementBlock { kind: ElementKind::Hex8, conn: conn_b, first_elem: 2 },
         ],
-        node_sets: BTreeMap::new(),
+        node_sets: BTreeMap::from([("pins".to_string(), vec![0, n_nodes_a])]),
         elem_sets: BTreeMap::from([
             ("all".to_string(), (0..3u32).collect()),
             ("half".to_string(), (0..2u32).collect()),
@@ -1587,18 +1587,15 @@ fn msh_round_trips_a_two_block_mesh_with_a_block_partial_elem_set() {
         face_sets: BTreeMap::new(),
     };
     let text = write_msh(&m);
-    // every set gets a $PhysicalNames entry regardless of whether any entity ends up tagged
-    // with it, so check that "mixed" is unreferenced rather than absent from the text
-    assert!(text.contains("\"all\""));
-    assert!(text.contains("\"half\""));
     let back = read_msh(&text).unwrap();
+    assert_eq!(back.coords, m.coords);
+    for elem in 0..m.n_elems() as u32 {
+        assert_eq!(back.elem_nodes(elem), m.elem_nodes(elem), "element {elem}");
+    }
     assert_eq!(back.elem_sets.get("all"), Some(&(0..3u32).collect::<Vec<_>>()));
     assert_eq!(back.elem_sets.get("half"), Some(&(0..2u32).collect::<Vec<_>>()));
-    assert!(
-        !back.elem_sets.contains_key("mixed"),
-        "a set not aligned to a whole block must be dropped, not partly written: {:?}",
-        back.elem_sets
-    );
+    assert_eq!(back.elem_sets.get("mixed"), Some(&vec![0]));
+    assert_eq!(back.node_sets.get("pins"), Some(&vec![0, n_nodes_a]));
 }
 
 // ---------------------------------------------------------------- msh: read errors
@@ -1710,12 +1707,6 @@ fn read_msh_rejects_a_malformed_entities_header() {
 }
 
 #[test]
-fn read_msh_rejects_point_entities() {
-    let (good, _) = good_msh_text();
-    assert_schema_err(&set_line_after(&good, "$Entities", 1, "1 1 1 0"), "point entities");
-}
-
-#[test]
 fn read_msh_rejects_an_entity_line_with_too_few_tokens() {
     let (good, _) = good_msh_text();
     assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0"), "malformed entity line");
@@ -1731,12 +1722,6 @@ fn read_msh_rejects_an_entity_line_whose_physical_tag_count_overruns_the_line() 
 fn read_msh_rejects_a_malformed_nodes_header() {
     let (good, _) = good_msh_text();
     assert_schema_err(&set_line_after(&good, "$Nodes", 1, "1 3 1"), "malformed $Nodes header");
-}
-
-#[test]
-fn read_msh_rejects_more_than_one_nodes_entity_block() {
-    let (good, _) = good_msh_text();
-    assert_schema_err(&set_line_after(&good, "$Nodes", 1, "2 3 1 3"), "a single $Nodes entity block");
 }
 
 #[test]

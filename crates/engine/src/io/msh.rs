@@ -6,15 +6,12 @@
 //! [`gmsh_permutation`] is derived from the two elements' edge lists at compile time rather than
 //! hand-copied as a flat table, so it is provably the mapping its doc comment claims.
 //!
-//! Every element set and face set becomes a `$PhysicalNames` entry. An element block's entity
-//! carries the tags of every element set that contains *all* of that block's elements (a set
-//! that only partly covers a block is not representable and is silently dropped on write — no
-//! mesher in this codebase ever produces one). A face set has no elements of its own, so it is
-//! written the way Gmsh itself represents a named boundary: as extra lower-dimensional elements
-//! (Gmsh type ids `line2`=1, `tri3`=2, `quad4`=3, `line3`=8, `tri6`=9, `quad8`=16) whose entity
-//! carries the physical tag; reading matches them back to a real element face by its corner
-//! nodes. Node sets are not written; a face set's node set is reconstructed as the union of its
-//! faces' nodes, which is what every mesher here already keeps in step with the face set.
+//! Every node, element and face set becomes a `$PhysicalNames` entry. Element blocks are split
+//! into contiguous entity blocks where necessary, so a physical group keeps an exact partial
+//! block membership. A face set is written the way Gmsh represents a named boundary: as extra
+//! lower-dimensional elements (Gmsh type ids `line2`=1, `tri3`=2, `quad4`=3, `line3`=8,
+//! `tri6`=9, `quad8`=16). A node set becomes physical point entities with Gmsh point elements
+//! (type 15). Reading maps all three representations back to the corresponding Mesh sets.
 
 use std::collections::BTreeMap;
 
@@ -75,7 +72,11 @@ fn facekind_of_gmsh_type(t: u32) -> Option<FaceKind> {
 }
 
 fn gmsh_type_n_nodes(t: u32) -> Option<usize> {
-    kind_of_gmsh_type(t).map(ElementKind::n_nodes).or_else(|| facekind_of_gmsh_type(t).map(FaceKind::n_nodes))
+    if t == 15 {
+        Some(1)
+    } else {
+        kind_of_gmsh_type(t).map(ElementKind::n_nodes).or_else(|| facekind_of_gmsh_type(t).map(FaceKind::n_nodes))
+    }
 }
 
 // ---------------------------------------------------------------- Abaqus -> Gmsh permutation
@@ -182,6 +183,7 @@ struct Entity {
     dim: u8,
     tag: u32,
     phys: Vec<u32>,
+    point: [f64; 3],
 }
 
 /// One Gmsh MSH 4.1 ASCII file (see the module doc for the physical-group/entity scheme).
@@ -190,9 +192,15 @@ pub fn write_msh(mesh: &Mesh) -> String {
     let bbox = format!("{} {} {} {} {} {}", lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
 
     let mut phys_lines = String::new();
+    let mut node_tag: BTreeMap<&str, u32> = BTreeMap::new();
     let mut face_tag: BTreeMap<&str, u32> = BTreeMap::new();
     let mut elem_tag: BTreeMap<&str, u32> = BTreeMap::new();
     let mut n_phys = 0u32;
+    for name in mesh.node_sets.keys() {
+        n_phys += 1;
+        node_tag.insert(name.as_str(), n_phys);
+        phys_lines.push_str(&format!("0 {n_phys} \"{name}\"\n"));
+    }
     for name in mesh.face_sets.keys() {
         n_phys += 1;
         face_tag.insert(name.as_str(), n_phys);
@@ -204,18 +212,69 @@ pub fn write_msh(mesh: &Mesh) -> String {
         phys_lines.push_str(&format!("{} {n_phys} \"{name}\"\n", mesh.dim));
     }
 
-    let mut entities: Vec<Entity> = Vec::new();
-    for (i, blk) in mesh.blocks.iter().enumerate() {
-        let start = blk.first_elem;
-        let end = start + blk.n_elems() as u32;
-        let phys: Vec<u32> = mesh
-            .elem_sets
-            .iter()
-            .filter(|(_, set)| (start..end).all(|e| set.binary_search(&e).is_ok()))
-            .map(|(name, _)| elem_tag[name.as_str()])
-            .collect();
-        entities.push(Entity { dim: mesh.dim as u8, tag: (i + 1) as u32, phys });
+    struct ElementGroup {
+        tag: u32,
+        block: usize,
+        first: usize,
+        len: usize,
+        phys: Vec<u32>,
     }
+    let phys_of_elem = |elem: u32| -> Vec<u32> {
+        mesh.elem_sets
+            .iter()
+            .filter(|(_, set)| set.binary_search(&elem).is_ok())
+            .map(|(name, _)| elem_tag[name.as_str()])
+            .collect()
+    };
+    let mut element_groups: Vec<ElementGroup> = Vec::new();
+    for (block, blk) in mesh.blocks.iter().enumerate() {
+        let mut first = 0;
+        while first < blk.n_elems() {
+            let phys = phys_of_elem(blk.first_elem + first as u32);
+            let mut end = first + 1;
+            while end < blk.n_elems() && phys_of_elem(blk.first_elem + end as u32) == phys {
+                end += 1;
+            }
+            element_groups.push(ElementGroup {
+                tag: (element_groups.len() + 1) as u32,
+                block,
+                first,
+                len: end - first,
+                phys,
+            });
+            first = end;
+        }
+    }
+    struct NodeGroup {
+        tag: u32,
+        node: u32,
+        phys: Vec<u32>,
+    }
+    let mut node_groups = Vec::new();
+    let mut ungrouped_nodes = Vec::new();
+    for node in 0..mesh.n_nodes() as u32 {
+        let phys: Vec<u32> = mesh
+            .node_sets
+            .iter()
+            .filter(|(_, set)| set.binary_search(&node).is_ok())
+            .map(|(name, _)| node_tag[name.as_str()])
+            .collect();
+        if phys.is_empty() {
+            ungrouped_nodes.push(node);
+        } else {
+            node_groups.push(NodeGroup { tag: (node_groups.len() + 1) as u32, node, phys });
+        }
+    }
+    let mut entities: Vec<Entity> = node_groups
+        .iter()
+        .map(|g| Entity { dim: 0, tag: g.tag, phys: g.phys.clone(), point: mesh.node(g.node) })
+        .collect();
+    entities.extend(element_groups.iter().map(|g| Entity {
+        dim: mesh.dim as u8,
+        tag: g.tag,
+        phys: g.phys.clone(),
+        point: [0.0; 3],
+    }));
     struct FaceGroup {
         tag: u32,
         phys: u32,
@@ -234,7 +293,7 @@ pub fn write_msh(mesh: &Mesh) -> String {
         }
     }
     for g in &face_groups {
-        entities.push(Entity { dim: mesh.dim as u8 - 1, tag: g.tag, phys: vec![g.phys] });
+        entities.push(Entity { dim: mesh.dim as u8 - 1, tag: g.tag, phys: vec![g.phys], point: [0.0; 3] });
     }
 
     let mut s = String::new();
@@ -249,36 +308,56 @@ pub fn write_msh(mesh: &Mesh) -> String {
     s.push_str(&format!("{} {} {} {}\n", count_at(0), count_at(1), count_at(2), count_at(3)));
     for d in 0..=3u8 {
         for e in entities.iter().filter(|e| e.dim == d) {
-            s.push_str(&format!("{} {bbox} {}", e.tag, e.phys.len()));
+            if d == 0 {
+                s.push_str(&format!("{} {} {} {} {}", e.tag, e.point[0], e.point[1], e.point[2], e.phys.len()));
+            } else {
+                s.push_str(&format!("{} {bbox} {}", e.tag, e.phys.len()));
+            }
             for p in &e.phys {
                 s.push_str(&format!(" {p}"));
             }
-            s.push_str(" 0\n");
+            if d == 0 {
+                s.push('\n');
+            } else {
+                s.push_str(" 0\n");
+            }
         }
     }
     s.push_str("$EndEntities\n");
 
     s.push_str("$Nodes\n");
     let n_nodes = mesh.n_nodes();
-    s.push_str(&format!("1 {n_nodes} 1 {n_nodes}\n"));
-    s.push_str(&format!("{} 1 0 {n_nodes}\n", mesh.dim));
-    for n in 1..=n_nodes as u32 {
-        s.push_str(&format!("{n}\n"));
-    }
-    for c in mesh.coords.chunks_exact(3) {
+    let n_node_blocks = node_groups.len() + usize::from(!ungrouped_nodes.is_empty());
+    s.push_str(&format!("{n_node_blocks} {n_nodes} 1 {n_nodes}\n"));
+    for g in &node_groups {
+        s.push_str(&format!("0 {} 0 1\n{}\n", g.tag, g.node + 1));
+        let c = mesh.node(g.node);
         s.push_str(&format!("{} {} {}\n", c[0], c[1], c[2]));
+    }
+    if !ungrouped_nodes.is_empty() {
+        s.push_str(&format!("{} 1 0 {}\n", mesh.dim, ungrouped_nodes.len()));
+        for &node in &ungrouped_nodes {
+            s.push_str(&format!("{}\n", node + 1));
+        }
+        for &node in &ungrouped_nodes {
+            let c = mesh.node(node);
+            s.push_str(&format!("{} {} {}\n", c[0], c[1], c[2]));
+        }
     }
     s.push_str("$EndNodes\n");
 
     s.push_str("$Elements\n");
     let n_volume = mesh.n_elems();
     let n_face: usize = face_groups.iter().map(|g| g.faces.len()).sum();
-    s.push_str(&format!("{} {} 1 {}\n", mesh.blocks.len() + face_groups.len(), n_volume + n_face, n_volume + n_face));
+    let n_point = node_groups.len();
+    let n_elements = n_volume + n_face + n_point;
+    s.push_str(&format!("{} {n_elements} 1 {n_elements}\n", element_groups.len() + face_groups.len() + n_point));
     let mut tag = 1u32;
-    for (i, blk) in mesh.blocks.iter().enumerate() {
+    for g in &element_groups {
+        let blk = &mesh.blocks[g.block];
         let perm = gmsh_permutation(blk.kind);
-        s.push_str(&format!("{} {} {} {}\n", mesh.dim, i + 1, gmsh_type(blk.kind), blk.n_elems()));
-        for en in blk.conn.chunks_exact(blk.kind.n_nodes()) {
+        s.push_str(&format!("{} {} {} {}\n", mesh.dim, g.tag, gmsh_type(blk.kind), g.len));
+        for en in blk.conn.chunks_exact(blk.kind.n_nodes()).skip(g.first).take(g.len) {
             s.push_str(&tag.to_string());
             for &p in perm {
                 s.push_str(&format!(" {}", en[p as usize] + 1));
@@ -297,6 +376,10 @@ pub fn write_msh(mesh: &Mesh) -> String {
             s.push('\n');
             tag += 1;
         }
+    }
+    for g in &node_groups {
+        s.push_str(&format!("0 {} 15 1\n{tag} {}\n", g.tag, g.node + 1));
+        tag += 1;
     }
     s.push_str("$EndElements\n");
     s
@@ -351,9 +434,8 @@ struct RawBlock {
 }
 
 /// Reads the subset of Gmsh MSH 4.1 ASCII this crate writes (see the module doc): `$MeshFormat`,
-/// `$PhysicalNames`, `$Entities`, one `$Nodes` entity block, and `$Elements`. Anything outside
-/// that — a binary file, an unknown element type, a point entity, a missing section — is a
-/// `Schema` error naming the line.
+/// `$PhysicalNames`, `$Entities`, `$Nodes`, and `$Elements`. Anything outside that — a binary
+/// file, an unknown element type or a missing section — is a `Schema` error naming the line.
 pub fn read_msh(text: &str) -> Result<Mesh, Error> {
     let mut ls = Lines::new(text);
 
@@ -399,23 +481,24 @@ pub fn read_msh(text: &str) -> Result<Mesh, Error> {
         return Err(err_at(line, "malformed $Entities header"));
     }
     let counts: Vec<usize> = t.iter().map(|s| parse_tok(s, line)).collect::<Result<_, _>>()?;
-    if counts[0] != 0 {
-        return Err(err_at(line, "point entities are not supported"));
-    }
     let mut entities: BTreeMap<(u8, u32), Vec<u32>> = BTreeMap::new();
-    for (d, &count) in counts.iter().enumerate().skip(1) {
+    for (d, &count) in counts.iter().enumerate() {
         for _ in 0..count {
             let (line, l) = ls.next()?;
             let tk = tokens(l);
-            if tk.len() < 8 {
+            let n_phys_at = if d == 0 { 4 } else { 7 };
+            if tk.len() <= n_phys_at {
                 return Err(err_at(line, "malformed entity line"));
             }
             let tag: u32 = parse_tok(tk[0], line)?;
-            let n_p: usize = parse_tok(tk[7], line)?;
-            if tk.len() < 8 + n_p + 1 {
+            let n_p: usize = parse_tok(tk[n_phys_at], line)?;
+            let phys_at = n_phys_at + 1;
+            let trailing = usize::from(d != 0);
+            if tk.len() < phys_at + n_p + trailing {
                 return Err(err_at(line, "malformed entity line"));
             }
-            let phys: Vec<u32> = tk[8..8 + n_p].iter().map(|s| parse_tok(s, line)).collect::<Result<_, _>>()?;
+            let phys: Vec<u32> =
+                tk[phys_at..phys_at + n_p].iter().map(|s| parse_tok(s, line)).collect::<Result<_, _>>()?;
             entities.insert((d as u8, tag), phys);
         }
     }
@@ -428,36 +511,35 @@ pub fn read_msh(text: &str) -> Result<Mesh, Error> {
         return Err(err_at(line, "malformed $Nodes header"));
     }
     let n_blocks: usize = parse_tok(t[0], line)?;
-    if n_blocks != 1 {
-        return Err(err_at(line, "only a single $Nodes entity block is supported"));
-    }
-    let (line, hdr) = ls.next()?;
-    let t = tokens(hdr);
-    if t.len() != 4 {
-        return Err(err_at(line, "malformed node entity-block header"));
-    }
-    if t[2] != "0" {
-        return Err(err_at(line, "parametric nodes are not supported"));
-    }
-    let n_nodes: usize = parse_tok(t[3], line)?;
-    let mut tag_to_id: BTreeMap<u64, u32> = BTreeMap::new();
-    for i in 0..n_nodes {
-        let (line, l) = ls.next()?;
-        let ftag: u64 = parse_tok(l, line)?;
-        tag_to_id.insert(ftag, i as u32);
-    }
-    let mut coords = Vec::with_capacity(3 * n_nodes);
-    for _ in 0..n_nodes {
-        let (line, l) = ls.next()?;
-        let tk = tokens(l);
-        if tk.len() != 3 {
-            return Err(err_at(line, "malformed node coordinates"));
+    let mut nodes: Vec<(u64, [f64; 3])> = Vec::new();
+    for _ in 0..n_blocks {
+        let (line, hdr) = ls.next()?;
+        let t = tokens(hdr);
+        if t.len() != 4 {
+            return Err(err_at(line, "malformed node entity-block header"));
         }
-        for s in tk {
-            coords.push(parse_tok::<f64>(s, line)?);
+        if t[2] != "0" {
+            return Err(err_at(line, "parametric nodes are not supported"));
+        }
+        let n_in_block: usize = parse_tok(t[3], line)?;
+        let mut tags = Vec::with_capacity(n_in_block);
+        for _ in 0..n_in_block {
+            let (line, l) = ls.next()?;
+            tags.push(parse_tok(l, line)?);
+        }
+        for tag in tags {
+            let (line, l) = ls.next()?;
+            let tk = tokens(l);
+            if tk.len() != 3 {
+                return Err(err_at(line, "malformed node coordinates"));
+            }
+            nodes.push((tag, [parse_tok(tk[0], line)?, parse_tok(tk[1], line)?, parse_tok(tk[2], line)?]));
         }
     }
     expect_section(&mut ls, "$EndNodes")?;
+    nodes.sort_by_key(|n| n.0);
+    let tag_to_id: BTreeMap<u64, u32> = nodes.iter().enumerate().map(|(i, n)| (n.0, i as u32)).collect();
+    let coords: Vec<f64> = nodes.iter().flat_map(|n| n.1).collect();
 
     expect_section(&mut ls, "$Elements")?;
     let (line, hdr) = ls.next()?;
@@ -550,7 +632,8 @@ pub fn read_msh(text: &str) -> Result<Mesh, Error> {
     for r in &raw {
         let is_volume = r.entity_dim as usize == mesh_dim;
         let is_face = r.entity_dim as usize + 1 == mesh_dim;
-        if is_volume {
+        let is_point = r.entity_dim == 0 && r.gmsh_type == 15;
+        if is_volume || is_point {
             continue;
         }
         if !is_face {
@@ -578,11 +661,26 @@ pub fn read_msh(text: &str) -> Result<Mesh, Error> {
     }
 
     let mut node_sets: BTreeMap<String, Vec<u32>> = BTreeMap::new();
+    for r in &raw {
+        if r.entity_dim != 0 {
+            continue;
+        }
+        let phys = entities.get(&(0, r.entity_tag)).cloned().unwrap_or_default();
+        for en in &r.elems {
+            for &p in &phys {
+                let name =
+                    phys_names.get(&p).ok_or_else(|| err_at(r.line, format!("physical tag {p} is not declared")))?;
+                node_sets.entry(name.clone()).or_default().push(en[0]);
+            }
+        }
+    }
     for (name, faces) in &face_sets {
         let mut nodes: Vec<u32> = faces.iter().flat_map(|&f| mesh.face_nodes(f)).collect();
-        nodes.sort_unstable();
-        nodes.dedup();
-        node_sets.insert(name.clone(), nodes);
+        node_sets.entry(name.clone()).or_default().append(&mut nodes);
+    }
+    for set in node_sets.values_mut() {
+        set.sort_unstable();
+        set.dedup();
     }
 
     mesh.elem_sets = elem_sets;
