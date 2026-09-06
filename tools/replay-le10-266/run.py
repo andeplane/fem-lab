@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='fem-266-replay-') as directory:
         if threads is not None:
             command.extend(['--threads', str(threads)])
         controls.append((f'baseline-direct-{threads or "default"}', command))
-    for mode in ['seq', 'rayon1', 'rayon4']:
+    for mode in ['seq', 'rayon1', 'rayon4', 'factor4-solve-seq', 'factor-seq-solve4']:
         controls.append((f'captured-matrix-{mode}', [str(args.replay.resolve()), str(matrix), mode]))
     for name, command in controls:
         print(f'\n===== {name} =====', flush=True)

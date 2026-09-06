@@ -18,28 +18,28 @@ class RunnerTests(unittest.TestCase):
                 runpy.run_path(script, run_name='__main__')
         return stopped.exception.code, run, output.getvalue()
 
-    def test_all_six_successes_are_required(self):
-        code, run, output = self.run_controls([subprocess.CompletedProcess([], 0) for _ in range(6)])
+    def test_all_eight_successes_are_required(self):
+        code, run, output = self.run_controls([subprocess.CompletedProcess([], 0) for _ in range(8)])
         self.assertEqual(code, 0)
-        self.assertEqual(run.call_count, 6)
+        self.assertEqual(run.call_count, 8)
         self.assertIn('baseline-direct-default', output)
         self.assertIn('captured-matrix-rayon4', output)
         self.assertNotIn('--threads', run.call_args_list[0].args[0])
         self.assertEqual(run.call_args_list[1].args[0][-2:], ['--threads', '1'])
         self.assertEqual(run.call_args_list[2].args[0][-2:], ['--threads', '4'])
-        self.assertEqual([call.args[0][-1] for call in run.call_args_list[3:]], ['seq', 'rayon1', 'rayon4'])
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list[3:]], ['seq', 'rayon1', 'rayon4', 'factor4-solve-seq', 'factor-seq-solve4'])
 
     def test_failure_does_not_skip_remaining_controls_or_report_success(self):
-        code, run, output = self.run_controls([subprocess.CompletedProcess([], 1)] + [subprocess.CompletedProcess([], 0) for _ in range(5)])
+        code, run, output = self.run_controls([subprocess.CompletedProcess([], 1)] + [subprocess.CompletedProcess([], 0) for _ in range(7)])
         self.assertEqual(code, 1)
-        self.assertEqual(run.call_count, 6)
+        self.assertEqual(run.call_count, 8)
         self.assertIn('baseline-direct-default: exit_code=1', output)
-        self.assertIn('captured-matrix-rayon4: exit_code=0', output)
+        self.assertIn('captured-matrix-factor-seq-solve4: exit_code=0', output)
 
     def test_timeout_does_not_skip_remaining_controls_or_report_success(self):
-        code, run, output = self.run_controls([subprocess.TimeoutExpired('baseline-cli', 1200)] + [subprocess.CompletedProcess([], 0) for _ in range(5)])
+        code, run, output = self.run_controls([subprocess.TimeoutExpired('baseline-cli', 1200)] + [subprocess.CompletedProcess([], 0) for _ in range(7)])
         self.assertEqual(code, 1)
-        self.assertEqual(run.call_count, 6)
+        self.assertEqual(run.call_count, 8)
         self.assertIn('baseline-direct-default: exit_code=124', output)
 
     def test_rejects_a_changed_fixture_before_running_controls(self):

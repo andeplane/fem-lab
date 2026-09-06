@@ -111,7 +111,11 @@ The capture reproduces the independent LE10 stress and force balance and has
 original-operator residual 1.19e-12; replay requires residual below 1e-10. All
 variants run on one machine with CPU/SIMD capabilities logged, and any failed
 variant fails the diagnostic job. This distinguishes platform factorization
-from assembly without weakening the physical Benchmark.
+from assembly without weakening the physical Benchmark. The first same-machine
+Windows run reproduced residual 0.489816 in standalone Rayon4 while Seq/Rayon1
+passed near 1e-12. Mixed Seq-factor/Rayon4-solve and Rayon4-factor/Seq-solve
+controls now distinguish the two phases without changing the captured operator,
+acceptance thresholds or original CLI baseline.
 
 ## B. Beams and locking (phase 1–2)
 

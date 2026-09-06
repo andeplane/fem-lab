@@ -16,12 +16,14 @@ fn read_u64(input: &mut &[u8]) -> u64 {
 }
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let path = args.get(1).expect("replay <FEM266K1.csr> [seq|rayon1|rayon4]");
+    let path = args.get(1).expect("replay <FEM266K1.csr> [seq|rayon1|rayon4|factor4-solve-seq|factor-seq-solve4]");
     let mode = args.get(2).map(String::as_str).unwrap_or("rayon4");
-    let par = match mode {
-        "seq" => Par::Seq,
-        "rayon1" => Par::rayon(1),
-        "rayon4" => Par::rayon(4),
+    let (factor_mode, solve_mode, factor_par, solve_par) = match mode {
+        "seq" => ("seq", "seq", Par::Seq, Par::Seq),
+        "rayon1" => ("rayon1", "rayon1", Par::rayon(1), Par::rayon(1)),
+        "rayon4" => ("rayon4", "rayon4", Par::rayon(4), Par::rayon(4)),
+        "factor4-solve-seq" => ("rayon4", "seq", Par::rayon(4), Par::Seq),
+        "factor-seq-solve4" => ("seq", "rayon4", Par::Seq, Par::rayon(4)),
         _ => panic!("unknown parallelism"),
     };
     let bytes = std::fs::read(path).unwrap();
@@ -37,7 +39,7 @@ fn main() {
     let reference: Vec<f64> = (0..n).map(|_| f64::from_bits(read_u64(&mut input))).collect();
     assert!(input.is_empty());
     println!(
-        "os={} arch={} mode={mode} n={n} nnz={nnz} available_threads={:?}",
+        "os={} arch={} mode={mode} factor={factor_mode} solve={solve_mode} n={n} nnz={nnz} available_threads={:?}",
         std::env::consts::OS,
         std::env::consts::ARCH,
         std::thread::available_parallelism()
@@ -51,11 +53,14 @@ fn main() {
     );
     let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
     pool.install(|| {
-        faer::set_global_parallelism(par);
+        // faer 0.24.4 reads global parallelism separately in numeric LLT and SolveCore.
+        // Each control is a fresh process: changing it here cannot race another solve.
+        faer::set_global_parallelism(factor_par);
         let symbolic = faer::sparse::SymbolicSparseColMatRef::new_checked(n, n, &ptr, None, &indices);
         let matrix = faer::sparse::SparseColMatRef::new(symbolic, &values);
         let symbolic = SymbolicLlt::try_new(matrix.symbolic(), Side::Lower).unwrap();
         let factor = Llt::try_new_with_symbolic(symbolic, matrix, Side::Lower).unwrap();
+        faer::set_global_parallelism(solve_par);
         let mut answer = Mat::from_fn(n, 1, |i, _| rhs[i]);
         factor.solve_in_place(answer.as_mut());
         let mut r2 = 0.0;
