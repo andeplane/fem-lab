@@ -227,7 +227,7 @@ impl Engine {
         let proc_step = procedure_step(&step, opts)?;
         // A chained Step reads the Result of the Step it names; without one it cannot run.
         let prev = match &step.after {
-            Some(name) => Some(self.results.get(name).map(|(_, r)| r.clone()).ok_or_else(|| {
+            Some(name) => Some(self.results.get(name).map(|r| r.result.clone()).ok_or_else(|| {
                 Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
                     .at(format!("step '{}'", step.name))
                     .suggest(format!("solve.run on step '{name}' first"))
@@ -248,9 +248,8 @@ impl Engine {
             procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        let hash = crate::hash::result_hash(&self.model);
-        self.results.insert(step.name.clone(), (hash, result));
-        Ok(Output::Solve { summary: self.result_summary(&step.name) })
+        self.retain_result(step.name.clone(), result);
+        Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)) })
     }
 
     /// `study.converge`: re-mesh at every size, re-solve the Step, and report the trend
@@ -337,8 +336,7 @@ impl Engine {
         let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
-            let hash = crate::hash::result_hash(&self.model);
-            self.results.insert(step.name, (hash, last.expect("at least two sizes ran")));
+            self.retain_result(step.name, last.expect("at least two sizes ran"));
         } else {
             self.model.mesh = Some(settings);
             self.mesh = None;
@@ -397,24 +395,15 @@ impl Engine {
 
     /// The stored Result of a Step, or `not-found` naming the Steps that have one.
     pub(crate) fn stored<'e>(&'e self, step: Option<&str>) -> Result<(&'e str, &'e String, &'e StepResult), Error> {
-        let name: &'e str = match step {
-            Some(n) => self.results.get_key_value(n).map(|(k, _)| k.as_str()).unwrap_or(""),
-            None => self
-                .last_solved()
-                .ok_or_else(|| Error::new(ErrorCode::NotFound, "no Step has been solved yet").suggest("solve.run"))?,
-        };
-        let known: Vec<&str> = self.results.keys().map(String::as_str).collect();
-        let (hash, res) = self.results.get(name).ok_or_else(|| {
-            Error::not_found("result", step.unwrap_or(name), &known).suggest("solve.run on that Step first")
-        })?;
-        Ok((name, hash, res))
+        let record = self.record(step, None)?;
+        Ok((&record.step, &record.input_hash, &record.result))
     }
 
     /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
     /// changed coordinates or connectivity; the Model hash covers every mesh input.
     pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
         let (name, hash, result) = self.stored(step)?;
-        if *hash != self.model_hash() {
+        if *hash != crate::hash::result_hash(&self.model) {
             return Err(Error::new(
                 ErrorCode::ResultStale,
                 format!("step '{name}' has a Result that does not match the current Model state"),
@@ -457,8 +446,13 @@ impl Engine {
     /// `query.result`: what the Step produced, in the Model's display units. The Step must
     /// have a Result: every caller has just stored one or resolved it through [`Engine::stored`].
     pub(crate) fn result_summary(&self, step: &str) -> ResultSummary {
-        let (name, hash, res) = self.stored(Some(step)).expect("the caller resolved this Step");
-        let m = &self.model;
+        self.selected_summary(Some(step), None).expect("the caller resolved this Step")
+    }
+
+    pub(crate) fn selected_summary(&self, step: Option<&str>, id: Option<&str>) -> Result<ResultSummary, Error> {
+        let record = self.record(step, id)?;
+        let (name, hash, res) = (&record.step, &record.input_hash, &record.result);
+        let m = if id.is_some() { &record.model } else { &self.model };
         let applied = ["x", "y", "z"].map(|a| res.scalars[&format!("applied_total_{a}")]);
         let mut sum = applied;
         for (_, r) in &res.reactions {
@@ -473,9 +467,10 @@ impl Engine {
             .flat_map(|(_, r)| r.iter())
             .chain(applied.iter())
             .fold(f64::MIN_POSITIVE, |acc, x| acc.max(x.abs()));
-        ResultSummary {
+        Ok(ResultSummary {
+            result_id: record.id.clone(),
             step: name.to_string(),
-            revision: self.revision(),
+            revision: if id.is_some() { record.revision } else { self.revision() },
             stale: *hash != crate::hash::result_hash(&self.model),
             solver: res.solver.solver.to_string(),
             iterations: res.solver.iterations as u32,
@@ -499,7 +494,7 @@ impl Engine {
                 })
                 .collect(),
             balance: residual / biggest,
-        }
+        })
     }
 }
 

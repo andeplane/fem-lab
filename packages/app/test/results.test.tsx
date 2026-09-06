@@ -17,6 +17,7 @@ const mm = (value: number): Valued => ({ value, unit: 'mm' });
 const kN = (value: number): Valued => ({ value, unit: 'kN' });
 
 const RESULT: ResultSummary = {
+  resultId: 'result-1',
   step: 'static',
   revision: 10,
   stale: false,

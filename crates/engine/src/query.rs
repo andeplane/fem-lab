@@ -44,8 +44,30 @@ pub enum Query {
     #[serde(rename = "query.result", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ResultSummary"))]
     Result {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
+    },
+
+    /// Catalogue of the eight most recent successful solve instances, oldest first. Reads do
+    /// not extend retention. Evicted ids are unavailable; Model import/new clears records.
+    #[serde(rename = "query.results")]
+    #[schemars(extend("x-returns" = "RetainedResults"))]
+    Results {},
+
+    /// A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
+    /// Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
+    /// omitted ids refuse stale Results. Transient samples use query.frame's existing protocol.
+    #[serde(rename = "query.field", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "ResultField"))]
+    Field {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
+        field: String,
     },
 
     /// Catalogue of retained transient primary-field frames (default: last solved Step).
@@ -54,6 +76,9 @@ pub enum Query {
     #[serde(rename = "query.frames", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "FramesResult"))]
     Frames {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
     },
@@ -64,10 +89,13 @@ pub enum Query {
     /// policy as sampled probe/path. Values are SI,
     /// component-fastest, with three components per node, matching final FieldData: a 2D
     /// displacement has zero z; temperature occupies x with zero y/z. Defaults to the retained
-    /// primary field. Derived fields were not retained and are refused. Refuses result.stale.
+    /// primary field. Derived fields were not retained and are refused. Omitted resultId refuses result.stale.
     #[serde(rename = "query.frame", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "FrameResult"))]
     Frame {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,10 +109,13 @@ pub enum Query {
     /// A field value interpolated at a point (default: the last solved Step). Component
     /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
-    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
+    /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.probe", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ProbeResult"))]
     Probe {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
         field: Field,
@@ -97,10 +128,13 @@ pub enum Query {
 
     /// A field sampled at `n` points along the line from `from` to `to`, for a line plot.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
-    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
+    /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.path", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "PathResult"))]
     Path {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
         field: Field,
@@ -325,6 +359,8 @@ pub struct Extreme {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultSummary {
+    /// Opaque identity scoped to the Engine instance that produced this solve.
+    pub result_id: String,
     pub step: String,
     pub revision: u32,
     pub stale: bool,
@@ -397,6 +433,8 @@ pub struct FrameStamp {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedFrame {
+    /// Opaque identity scoped to the Engine instance that produced this solve.
+    pub result_id: String,
     pub step: String,
     pub model_hash: String,
     pub frame: FrameStamp,
@@ -406,6 +444,8 @@ pub struct ResolvedFrame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FramesResult {
+    /// Opaque identity scoped to the Engine instance that produced this solve.
+    pub result_id: String,
     pub step: String,
     pub model_hash: String,
     pub stale: bool,
@@ -537,6 +577,8 @@ pub enum QueryResult {
     Mesh(MeshSummary),
     Set(SetInfo),
     Result(ResultSummary),
+    Results(RetainedResults),
+    Field(ResultField),
     Frames(FramesResult),
     Frame(FrameResult),
     Probe(ProbeResult),
@@ -575,7 +617,7 @@ pub enum Output {
         name: String,
     },
     Solve {
-        summary: ResultSummary,
+        summary: Box<ResultSummary>,
     },
     Study {
         report: StudyReport,
@@ -662,4 +704,47 @@ mod tests {
         let stub = variants.iter().find(|v| v["properties"]["cmd"]["const"] == "plugin.load").unwrap();
         assert_eq!(stub["x-status"], "stub");
     }
+}
+
+/// One immutable solve instance. Byte counts describe payloads, not allocator or peak memory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedResult {
+    pub id: String,
+    pub step: String,
+    pub solved_revision: u32,
+    pub model_name: String,
+    pub model_hash: String,
+    pub input_hash: String,
+    pub stale: bool,
+    pub nodes: usize,
+    pub elements: usize,
+    /// f64 arrays in final fields, modes, frequencies and transient History.
+    pub field_bytes: u64,
+    /// Numeric coordinates, connectivity and resolved geometry Sets; excludes container overhead.
+    pub mesh_bytes: u64,
+    /// Serialized solved Model metadata size, not its in-memory allocation size.
+    pub model_json_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedResults {
+    pub limit: usize,
+    pub records: Vec<RetainedResult>,
+}
+
+/// Final scientific values are f64 SI in component-fastest entity order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultField {
+    pub result_id: String,
+    pub step: String,
+    pub field: String,
+    pub components: usize,
+    pub per: String,
+    pub entity_count: usize,
+    pub node_count: usize,
+    pub unit: String,
+    pub values: Vec<f64>,
 }

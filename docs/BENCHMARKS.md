@@ -390,3 +390,23 @@ prove is the same either way.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+
+### Immutable solve records (#280)
+
+`retained_cases` uses independent Fourier conduction `T(x)=273.15+q*x/k` on a one-metre
+bar at 2, 4 and 8 divisions with conductivity 45, 90 and 180 W/(m K). The same engine retains
+each solve, changes the live mesh and display units, then reads every old nodal field, probe
+and path against its own analytical solution and saved Celsius metadata. Exact mesh counts
+and numeric payload dimensions prevent attaching an old array to a newer mesh.
+
+A second three-mesh series uses `rho*cp*dT/dt=q`, giving uniform `T=300+2*t` K with
+rho=10 kg/m³, cp=2 J/(kg K), q=40 W/m³ and a matching prescribed-temperature ramp.
+Every retained index and exact physical-time selection carries the same solve identity,
+mesh and temperature, including Celsius scientific probes after the live Model switches to
+Kelvin. These fields are exactly representable on all three meshes, so no mesh-dependent
+reference is substituted for the conservation law.
+
+Lifecycle checks retain equal-input solves as distinct instances, verify FIFO eviction at
+eight records, reject absent or mismatched selectors, preserve records on failed solves,
+and prove Model new/import/replay do not recycle old ids or change Journal hashes.

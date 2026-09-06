@@ -4,7 +4,7 @@ use crate::command::Field;
 use crate::engine::{display, Engine};
 use crate::error::{Error, ErrorCode};
 use crate::post::FieldData;
-use crate::procedure::{vector_field, History};
+use crate::procedure::vector_field;
 use crate::query::{FrameResult, FrameSample, FrameStamp, FramesResult, ResolvedFrame, TimeSampling};
 use crate::units::{Dim, Time};
 
@@ -45,45 +45,42 @@ fn time_index(times: &[f64], time: f64, sampling: TimeSampling) -> Result<usize,
 }
 
 impl Engine {
-    /// Metadata uses the stored primary field's shape, never a possibly edited current Mesh.
-    fn history(&self, step: Option<&str>) -> Result<(&str, &String, &History, usize), Error> {
-        let (name, hash, result) = self.stored(step)?;
-        let history = result.history.as_ref().ok_or_else(|| {
-            Error::new(ErrorCode::Unsupported, format!("step '{name}' has no retained transient frames"))
-                .at("step")
-                .suggest("solve.run on a heat-transient or explicit Step")
-        })?;
-        let nodes = result.fields[&history.field].len();
-        Ok((name, hash, history, nodes))
+    /// Metadata and explicit selections read the immutable solved record.
+    fn frame_stamp(model: &crate::model::Model, index: usize, time: f64) -> FrameStamp {
+        FrameStamp { index: index as u32, time_si: time, time: display(model, time, Time::DIM) }
     }
 
-    fn frame_stamp(&self, index: usize, time: f64) -> FrameStamp {
-        FrameStamp { index: index as u32, time_si: time, time: display(&self.model, time, Time::DIM) }
-    }
-
-    pub(crate) fn query_frames(&self, step: Option<&str>) -> Result<FramesResult, Error> {
-        let (name, hash, history, nodes) = self.history(step)?;
+    pub(crate) fn query_frames(&self, step: Option<&str>, id: Option<&str>) -> Result<FramesResult, Error> {
+        let record = self.record(step, id)?;
+        let history = record.history()?;
+        let nodes = record.built.mesh.n_nodes();
+        let model = if id.is_some() { &record.model } else { &self.model };
         Ok(FramesResult {
-            step: name.into(),
-            model_hash: hash.clone(),
-            stale: *hash != self.model_hash(),
+            result_id: record.id.clone(),
+            step: record.step.clone(),
+            model_hash: record.model_hash.clone(),
+            stale: record.input_hash != crate::hash::result_hash(&self.model),
             node_count: nodes,
             field: history.field,
             components: 3,
             stored_components: history.values[0].len() / nodes,
             retained_bytes: 8 * (history.times.len() + history.values.iter().map(Vec::len).sum::<usize>()) as u64,
-            frames: history.times.iter().enumerate().map(|(i, t)| self.frame_stamp(i, *t)).collect(),
+            frames: history.times.iter().enumerate().map(|(i, t)| Self::frame_stamp(model, i, *t)).collect(),
         })
     }
 
     pub(crate) fn sampled_frame(
         &self,
         step: Option<&str>,
+        id: Option<&str>,
         field: Option<Field>,
         sample: &FrameSample,
     ) -> Result<(FieldData, ResolvedFrame, Field), Error> {
-        self.current_result(step)?;
-        let (name, hash, history, nodes) = self.history(step)?;
+        let record = self.selected_record(step, id)?;
+        let name = &record.step;
+        let history = record.history()?;
+        let nodes = record.built.mesh.n_nodes();
+        let model = if id.is_some() { &record.model } else { &self.model };
         let selected = field.unwrap_or(history.field);
         if selected != history.field {
             return Err(Error::new(
@@ -105,9 +102,10 @@ impl Engine {
                 .suggest("query.frames lists zero-based retained indices")
         })?;
         let resolved = ResolvedFrame {
-            step: name.into(),
-            model_hash: hash.clone(),
-            frame: self.frame_stamp(index, history.times[index]),
+            result_id: record.id.clone(),
+            step: name.clone(),
+            model_hash: record.model_hash.clone(),
+            frame: Self::frame_stamp(model, index, history.times[index]),
         };
         Ok((vector_field(values, values.len() / nodes), resolved, selected))
     }
@@ -115,6 +113,7 @@ impl Engine {
     pub(crate) fn query_frame(
         &self,
         step: Option<&str>,
+        id: Option<&str>,
         index: Option<u32>,
         sample: Option<FrameSample>,
         field: Option<Field>,
@@ -128,7 +127,7 @@ impl Engine {
                     .suggest("query.frames, then query.frame with index or a physical-time sample"));
             }
         };
-        let (values, sample, field) = self.sampled_frame(step, field, &selected)?;
+        let (values, sample, field) = self.sampled_frame(step, id, field, &selected)?;
         Ok(FrameResult {
             sample,
             field,

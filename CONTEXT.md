@@ -147,3 +147,21 @@ _Avoid_: example, demo, validation case, verification case
 **Convergence study**:
 The same Benchmark run at several mesh sizes to show the error shrinks at the expected
 rate. A Benchmark that only passes at one mesh size is not a Benchmark.
+
+
+## Retained solve instances
+
+An immutable **Result record** owns one successful solve's Step, revision, Model identity,
+Result-input fingerprint, Model metadata, exact BuiltMesh and StepResult. Its opaque Result id
+is local to the Engine instance. Equal-input re-solves have different ids; ids are not recycled
+on Model new/import/replay. Those operations clear records. The eight most recent successful
+records are retained, oldest first; reads do not pin records and failures do not evict them.
+`query.results` reports the catalogue, limit and scoped payload accounting. Field/history and
+mesh numeric payload bytes and serialized Model metadata bytes are separate measurements,
+not a measured allocator or process peak.
+
+`resultId` on Result, field, probe, path and frame Queries selects that solved context, including
+its mesh and display units, even after edits. The default per-Step selection retains existing
+stale-field safeguards. A supplied Step must match the id. Missing/evicted ids are errors;
+old values are never attached to current geometry. The existing FrameSample time/index rules
+remain canonical. See ADR0018 and issue #280.

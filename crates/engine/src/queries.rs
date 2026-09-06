@@ -66,19 +66,24 @@ impl Engine {
             })),
             Query::Mesh {} => self.query_mesh().map(QueryResult::Mesh),
             Query::Set { name } => self.query_set(&name).map(QueryResult::Set),
-            Query::Result { step } => {
-                let name = self.stored(step.as_deref())?.0.to_string();
-                Ok(QueryResult::Result(self.result_summary(&name)))
+            Query::Result { step, result_id } => {
+                self.selected_summary(step.as_deref(), result_id.as_deref()).map(QueryResult::Result)
             }
-            Query::Frames { step } => self.query_frames(step.as_deref()).map(QueryResult::Frames),
-            Query::Frame { step, index, sample, field } => {
-                self.query_frame(step.as_deref(), index, sample, field).map(QueryResult::Frame)
+            Query::Results {} => Ok(QueryResult::Results(self.query_results())),
+            Query::Field { step, result_id, field } => {
+                self.query_field(step.as_deref(), result_id.as_deref(), &field).map(QueryResult::Field)
             }
-            Query::Probe { step, field, component, sample, at } => {
-                self.query_probe(step.as_deref(), field, component, sample.as_ref(), at).map(QueryResult::Probe)
+            Query::Frames { step, result_id } => {
+                self.query_frames(step.as_deref(), result_id.as_deref()).map(QueryResult::Frames)
             }
-            Query::Path { step, field, component, sample, from, to, n } => self
-                .query_path(step.as_deref(), field, component, sample.as_ref(), [from, to], n)
+            Query::Frame { step, result_id, index, sample, field } => {
+                self.query_frame(step.as_deref(), result_id.as_deref(), index, sample, field).map(QueryResult::Frame)
+            }
+            Query::Probe { step, result_id, field, component, sample, at } => self
+                .query_probe(step.as_deref(), result_id.as_deref(), field, component, sample.as_ref(), at)
+                .map(QueryResult::Probe),
+            Query::Path { step, result_id, field, component, sample, from, to, n } => self
+                .query_path((step.as_deref(), result_id.as_deref()), field, component, sample.as_ref(), [from, to], n)
                 .map(QueryResult::Path),
             Query::Cost { step } => self.query_cost(&step).map(QueryResult::Cost),
             Query::Report { step, include } => {
@@ -378,26 +383,27 @@ impl Engine {
     /// The nodal field a probe or a path samples, plus its display unit, refusing a Result
     /// whose Mesh is no longer the one it was solved on.
     fn sampled(
-        &mut self,
+        &self,
         step: Option<&str>,
+        id: Option<&str>,
         field: Field,
         sample: Option<&FrameSample>,
-    ) -> Result<(FieldData, String, Option<ResolvedFrame>), Error> {
-        self.current_result(step)?;
+    ) -> Result<(FieldData, String, Option<ResolvedFrame>, &crate::retained::ResultRecord), Error> {
+        let record = self.selected_record(step, id)?;
         let (f, resolved) = match sample {
             Some(sample) => {
-                let (f, resolved, _) = self.sampled_frame(step, Some(field), sample)?;
+                let (f, resolved, _) = self.sampled_frame(step, id, Some(field), sample)?;
                 (f, Some(resolved))
             }
-            None => (self.field(step, field)?.clone(), None),
+            None => (record.named_field(&crate::solve_run::field_name(field))?.0.clone(), None),
         };
         if f.per != crate::post::Per::Node {
             return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal field"))
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
-        let unit = display(&self.model, 0.0, crate::solve_run::field_dimension(field)).unit;
-        self.mesh().expect("a Result with the current Model hash was solved on this Mesh");
-        Ok((f, unit, resolved))
+        let model = if id.is_some() { &record.model } else { &self.model };
+        let unit = display(model, 0.0, crate::solve_run::field_dimension(field)).unit;
+        Ok((f, unit, resolved, record))
     }
 
     /// One component of a sampled value: the named one, or the magnitude of a vector.
@@ -412,42 +418,46 @@ impl Engine {
     fn query_probe(
         &mut self,
         step: Option<&str>,
+        id: Option<&str>,
         field: Field,
         component: Option<u8>,
         sample: Option<&FrameSample>,
         at: [Q<Length>; 3],
     ) -> Result<ProbeResult, Error> {
-        let (f, unit, sample) = self.sampled(step, field, sample)?;
+        let (f, unit, sample, record) = self.sampled(step, id, field, sample)?;
         let x = si3(&at)?;
-        let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
+        let mesh = &record.built.mesh;
+        let model = if id.is_some() { &record.model } else { &self.model };
         let (elem, v) = crate::post::probe::probe(mesh, &f, x).ok_or_else(|| {
             Error::new(ErrorCode::NotFound, "the point is outside the mesh").at("at").suggest("query.mesh reports bbox")
         })?;
-        let value = display(&self.model, Engine::pick(&v, component), crate::solve_run::field_dimension(field));
+        let value = display(model, Engine::pick(&v, component), crate::solve_run::field_dimension(field));
         Ok(ProbeResult { sample, value: Valued { value: value.value, unit }, element: elem, interpolated: true })
     }
 
     /// `query.path`: a field sampled along a line.
     fn query_path(
         &mut self,
-        step: Option<&str>,
+        selection: (Option<&str>, Option<&str>),
         field: Field,
         component: Option<u8>,
         sample: Option<&FrameSample>,
         line: [[Q<Length>; 3]; 2],
         n: u32,
     ) -> Result<PathResult, Error> {
-        let (f, unit, sample) = self.sampled(step, field, sample)?;
+        let (step, id) = selection;
+        let (f, unit, sample, record) = self.sampled(step, id, field, sample)?;
         let (a, b) = (si3(&line[0])?, si3(&line[1])?);
         let dim = crate::solve_run::field_dimension(field);
-        let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
+        let mesh = &record.built.mesh;
+        let model = if id.is_some() { &record.model } else { &self.model };
         let samples = crate::post::probe::path(mesh, &f, a, b, n as usize);
         Ok(PathResult {
             sample,
             s: samples.iter().map(|(s, _)| *s).collect(),
             values: samples
                 .iter()
-                .map(|(_, v)| v.as_ref().map(|v| display(&self.model, Engine::pick(v, component), dim).value))
+                .map(|(_, v)| v.as_ref().map(|v| display(model, Engine::pick(v, component), dim).value))
                 .collect(),
             unit,
         })

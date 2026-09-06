@@ -12,6 +12,7 @@ const kN = (value: number) => ({ value, unit: 'kN' });
 const mm = (value: number) => ({ value, unit: 'mm' });
 
 export const RESULT: ResultSummary = {
+  resultId: 'result-1',
   step: 'static',
   revision: 10,
   stale: false,
