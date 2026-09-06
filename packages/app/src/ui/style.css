@@ -202,9 +202,9 @@ textarea:focus {
   font-weight: 600;
 }
 .logo i {
-  width: 12px;
-  height: 12px;
-  background: var(--accent);
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--accent);
   transform: rotate(45deg);
   display: inline-block;
 }
