@@ -343,6 +343,21 @@ monitor is an energy balance — for a linear undamped system the energy in the 
 exceed the work the loads have done, so `E > 1e3 · max(E₀, |W|)` is the test — which is what
 lets a Step that starts from rest under a load be watched at all.
 
+F1/F2b also regress uniform gravity with the same HRZ inertia used by explicit dynamics (#278).
+Every retained nodal displacement equals `v₀ t + g t²/2` within `1e-10 tEnd` m for all eight
+structural element families, every applicable idealisation (axial translation for axisymmetry),
+1/2/4 cells along the bar, two CFL factors and two endpoint ratios. Total momentum matches the
+independent weight impulse `ρ V g (t + dt/2)` plus initial momentum; the reported velocity is
+staggered by half a step. One- and four-thread histories must be bit-identical. Public mapped
+and swept Commands additionally check free fall from rest at three requested times for quad4,
+quad8, hex8 and hex20, with 1/2/4 cells and a `1e-12 m` displacement tolerance.
+
+The consistent static/modal gravity distribution remains unchanged: an affine unit quad8 has
+corner loads `−ρ A g/12` and midside loads `ρ A g/3`, checked individually. Using that distribution
+with positive HRZ masses in explicit dynamics previously made quadratic corner nodes move
+against gravity. Explicit now assembles `m_i g` using its actual inertia; other load types retain
+the common consistent assembly.
+
 ## G. Shells and plates (phase 8)
 
 | # | Case | Reference | Tolerance |
