@@ -273,6 +273,124 @@ fn bench_runs_the_committed_cases_and_reports() {
 #[test]
 fn stubs_say_what_is_planned() {
     femlab().args(["serve", "--port", "1234"]).assert().code(2).stderr(contains("phase S"));
-    femlab().arg("mcp").assert().code(2).stderr(contains("phase 4.10")).stderr(contains("none"));
-    femlab().args(["mcp", "--project", "somewhere"]).assert().code(2).stderr(contains("somewhere"));
+}
+
+/// `femlab export` against committed reference files, one per format.
+///
+/// The references are written with `--skip-solves`, so every number in them comes from the
+/// geometry and the Journal and is bit-identical on any machine; a solved Result would put a
+/// solver residual in the calculation note and float bits in the VTU payload, which is a
+/// reference file that fails on somebody else's laptop rather than a test. The solved paths are
+/// asserted below by content, and byte-for-byte in `crates/engine/tests/registry.rs`.
+///
+/// Regenerate every reference with:
+///   FEMLAB_BLESS=1 cargo test -p femlab --test cli export_writes
+#[test]
+fn export_writes_every_format_and_matches_the_reference_files() {
+    let here = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let fixture = here.join("fixtures").join("two-hex.json");
+    let golden = here.join("golden");
+    let dir = scratch("export");
+    let bless = std::env::var_os("FEMLAB_BLESS").is_some();
+    std::fs::create_dir_all(&golden).unwrap();
+    for (format, name) in [
+        ("vtu", "two-hex.vtu"),
+        ("msh", "two-hex.msh"),
+        ("inp", "two-hex.inp"),
+        ("stl", "two-hex.stl"),
+        ("report", "two-hex.md"),
+        ("script", "two-hex.ts"),
+        ("journal", "two-hex.femlab.json"),
+    ] {
+        let out = dir.join(name);
+        femlab()
+            .args([
+                "export",
+                fixture.to_str().unwrap(),
+                "--format",
+                format,
+                "--skip-solves",
+                "--cpu",
+                "--threads",
+                "1",
+                "--out",
+                out.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+        let got = std::fs::read_to_string(&out).unwrap();
+        let want = golden.join(name);
+        if bless {
+            std::fs::write(&want, &got).unwrap();
+            continue;
+        }
+        let expected = std::fs::read_to_string(&want)
+            .unwrap_or_else(|e| panic!("{}: {e}; regenerate with FEMLAB_BLESS=1", want.display()));
+        assert_eq!(got, expected, "{name} differs from its reference; regenerate with FEMLAB_BLESS=1");
+    }
+    // without --out the artefact goes to stdout, which is what a pipe wants
+    femlab()
+        .args(["export", fixture.to_str().unwrap(), "--format", "script", "--cpu"])
+        .assert()
+        .success()
+        .stdout(contains("await fem.geometry.addBox"));
+    // solved: the note carries the reaction balance and the hand calculation, and the VTU the fields
+    let out = femlab()
+        .args(["export", fixture.to_str().unwrap(), "--format", "report", "--cpu", "--threads", "1"])
+        .assert()
+        .success();
+    let note = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(note.contains("### Step `static`"), "{note}");
+    assert!(note.contains("— **pass** (tolerance 1e-9)."), "{note}");
+    assert!(note.contains("### Hand calculation for step `static`"), "{note}");
+    femlab()
+        .args(["export", fixture.to_str().unwrap(), "--format", "vtu", "--step", "static", "--cpu"])
+        .assert()
+        .success()
+        .stdout(contains("VonMises"));
+    // a Step with no Result, an unreadable file and an unwritable destination all say why
+    femlab()
+        .args(["export", fixture.to_str().unwrap(), "--format", "vtu", "--step", "nope", "--cpu"])
+        .assert()
+        .code(1)
+        .stderr(contains("not-found"));
+    femlab().args(["export", "no-such-file.json", "--format", "msh"]).assert().code(1).stderr(contains("cannot read"));
+    femlab()
+        .args([
+            "export",
+            fixture.to_str().unwrap(),
+            "--format",
+            "msh",
+            "--cpu",
+            "--out",
+            dir.join("no").join("such").join("dir").join("x.msh").to_str().unwrap(),
+        ])
+        .assert()
+        .code(1)
+        .stderr(contains("cannot write"));
+    // a Journal that does not replay is an error, not a half-written file
+    let broken = dir.join("broken.json");
+    std::fs::write(&broken, r#"[{"cmd":"material.assign","material":"gold","bodies":["nope"]}]"#).unwrap();
+    femlab().args(["export", broken.to_str().unwrap(), "--format", "msh", "--cpu"]).assert().code(1);
+}
+
+/// `femlab mcp` execs the Node server; without one it says how to install it and exits 2.
+#[test]
+fn mcp_runs_the_node_server_or_says_how_to_install_it() {
+    let dir = scratch("mcp");
+    femlab()
+        .args(["mcp", "--project", dir.to_str().unwrap()])
+        .env("FEMLAB_MCP", dir.join("nothing-here.js"))
+        .assert()
+        .code(2)
+        .stderr(contains("npx femlab-mcp"));
+    // a server that is there is run with this process's stdio and its exit code is ours
+    let stub = dir.join("stub.js");
+    std::fs::write(&stub, "console.error('stub ' + process.argv.slice(2).join(' ')); process.exit(0);\n").unwrap();
+    femlab()
+        .args(["mcp", "--project", dir.to_str().unwrap()])
+        .env("FEMLAB_MCP", &stub)
+        .assert()
+        .success()
+        .stderr(contains(format!("stub --project {}", dir.display())));
 }
