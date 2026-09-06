@@ -87,7 +87,7 @@ describe('the agent loop', () => {
       FINAL_ROUND,
     ]);
     const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
-    expect(turn.calls[0]?.ok).toBe(false);
+    expect(turn.calls[0]?.status).toBe('failed');
     expect(host.script.run).not.toHaveBeenCalled();
     expect(transport.dispatch).not.toHaveBeenCalled();
     const result = seen[1]!.messages[2]!.content[0] as { isError: boolean; content: string };
@@ -102,7 +102,8 @@ describe('the agent loop', () => {
     const events = await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: 'rules', tools: toToolDefinitions(registry), messages }));
 
     expect(dispatched.map((c) => c.cmd)).toEqual(['geometry.addBox']);
-    expect(events.filter((e) => e.type === 'tool_end')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'tool_start').map((e) => e.call.status)).toEqual(['pending', 'pending']);
+    expect(events.filter((e) => e.type === 'tool_end').map((e) => e.call.status)).toEqual(['succeeded', 'succeeded']);
     // The second request carries: the person's turn, the assistant turn, one message of results.
     expect(seen[1]!.messages).toHaveLength(3);
     const results = seen[1]!.messages[2]!;
@@ -119,7 +120,7 @@ describe('the agent loop', () => {
     expect(failed.isError).toBe(true);
     expect(JSON.parse(failed.content)).toEqual({ code: 'schema', cause: 'size must be three lengths', where: 'size', suggestion: 'pass size as ["1 m", "1 m", "1 m"]' });
     const call = turnOf(events).calls[0]!;
-    expect(call).toMatchObject({ tool: 'geometry_addBox', command: 'geometry.addBox', ok: false });
+    expect(call).toMatchObject({ tool: 'geometry_addBox', command: 'geometry.addBox', status: 'failed' });
   });
 
   it('computes the Journal diff of the turn and how many steps undo it', async () => {
@@ -232,9 +233,21 @@ describe('the agent loop', () => {
     ]);
     const events = await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] }));
     const calls = turnOf(events).calls;
-    expect(calls[0]).toMatchObject({ command: 'script.run', ok: true });
-    expect(calls[1]).toMatchObject({ command: 'not_a_tool', ok: false });
+    expect(calls[0]).toMatchObject({ command: 'script.run', status: 'succeeded' });
+    expect(calls[1]).toMatchObject({ command: 'not_a_tool', status: 'failed' });
     expect(JSON.parse((seen[1]!.messages[2]!.content[1] as { content: string }).content).code).toBe('not-found');
+  });
+
+  it('marks a partially successful script as failed while preserving receipts and output', async () => {
+    const { registry } = fixture();
+    vi.spyOn(registry, 'dispatch').mockResolvedValue({ result: null, console: ['built one body'], error: 'line 2: no such Set', journalEntries: [JOURNALS[1]!.entries[1]!] });
+    const { provider, seen } = fakeProvider([[{ type: 'tool_use', id: 'script', name: 'run_script', input: { code: 'buildThenFail()' } }], FINAL_ROUND]);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    expect(turn.calls[0]!.status).toBe('failed');
+    expect(JSON.parse(turn.calls[0]!.result)).toMatchObject({ error: 'line 2: no such Set', console: ['built one body'] });
+    expect(turn.diff).toEqual([JOURNALS[1]!.entries[1]!]);
+    expect(turn.undoSteps).toBe(1);
+    expect(seen[1]!.messages.at(-1)!.content[0]).toMatchObject({ type: 'tool_result', isError: true });
   });
 
   it('counts the skills the model loaded itself', async () => {
@@ -276,4 +289,60 @@ describe('the agent loop', () => {
     expect(turn.diff).toEqual([]);
     expect(turn.undoSteps).toBe(0);
   });
+});
+
+it('finishes an active tool on interruption, skips later tools and retains paired results', async () => {
+  const { registry } = fixture({ journals: [{ hash: 'same', entries: [], revision: 0, canUndo: false, canRedo: false }] });
+  const controller = new AbortController();
+  const dispatch = vi.spyOn(registry, 'dispatch').mockImplementation(async () => {
+    controller.abort();
+    return undefined;
+  });
+  const { provider, seen } = fakeProvider([[
+    { type: 'tool_use', id: 'a', name: 'view_fit', input: {} },
+    { type: 'tool_use', id: 'b', name: 'view_fit', input: {} },
+    { type: 'done', stopReason: 'tool_use' },
+  ]]);
+  const messages: Message[] = [];
+  const events = await drain(runTurn({ registry, provider, model: 'test', system: '', tools: [], messages, signal: controller.signal }));
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(seen).toHaveLength(1);
+  expect(turnOf(events).calls.map(c => c.status)).toEqual(['succeeded', 'cancelled']);
+  expect(messages[1]!.content).toEqual([
+    { type: 'tool_result', toolUseId: 'a', content: 'null' },
+    { type: 'tool_result', toolUseId: 'b', isError: true, content: expect.stringContaining('Interrupted before this tool started') },
+  ]);
+});
+
+it.each([false, true])('marks unreported interrupted usage unknown (prior round: %s)', async (priorRound) => {
+  const { registry } = fixture();
+  const controller = new AbortController();
+  let round = 0;
+  const provider: Provider = { id: 'anthropic', models: [], async *chat() {
+    if (priorRound && round++ === 0) {
+      yield { type: 'tool_use', id: 'a', name: 'view_fit', input: {} };
+      yield { type: 'usage', usage: { input: 100, output: 20, cacheRead: 0 } };
+      yield { type: 'done', stopReason: 'tool_use' };
+    } else {
+      yield { type: 'text_delta', text: 'Partial answer' };
+      controller.abort();
+    }
+  } };
+  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: [], messages: [], signal: controller.signal })));
+  expect(turn.cost).toBeNull();
+  expect(turn.usage.input).toBe(priorRound ? 100 : 0);
+});
+
+it('retains known usage when interrupted between requests without starting another request', async () => {
+  const { registry } = fixture();
+  const controller = new AbortController();
+  vi.spyOn(registry, 'dispatch').mockImplementation(async () => { controller.abort(); return undefined; });
+  const { provider, seen } = fakeProvider([[
+    { type: 'tool_use', id: 'a', name: 'view_fit', input: {} },
+    { type: 'usage', usage: { input: 100, output: 20, cacheRead: 0 } },
+    { type: 'done', stopReason: 'tool_use' },
+  ]]);
+  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: [], messages: [], signal: controller.signal })));
+  expect(seen).toHaveLength(1);
+  expect(turn.cost).toBeCloseTo(0.001);
 });

@@ -101,7 +101,7 @@ describe('animation capture', () => {
         return task(document.createElement('canvas'));
       },
     } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
     const recording = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
     expect(store.state).toMatchObject({ capturingAnimation: true, playing: false });
     c.frame(1100);
@@ -117,7 +117,7 @@ describe('animation capture', () => {
     const c = controlled();
     const store = new Store();
     store.set({ fieldKey: 'vonMises', result: { step: 'static', history: [] } as never });
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: null }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: null }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
     await expect(ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 })).rejects.toMatchObject({ code: 'export.unavailable', suggestion: expect.stringContaining('modal Step') });
   });
 
@@ -127,7 +127,7 @@ describe('animation capture', () => {
     store.set({ fieldKey: 'mode:1', result: null });
     const animationState = vi.fn();
     const viewer = { animationState } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
 
     await expect(ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 })).rejects.toMatchObject({
       code: 'export.unavailable',
@@ -149,7 +149,7 @@ describe('animation capture', () => {
       restoreAnimation: (state: unknown) => restored.push(state),
       atCaptureSize: (_width: number, _height: number, task: (canvas: HTMLCanvasElement) => Promise<unknown>) => task(document.createElement('canvas')),
     } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
 
     const failed = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
     c.fail('encoder stopped');
@@ -181,7 +181,7 @@ describe('animation capture', () => {
         return task(document.createElement('canvas'));
       },
     } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
 
     const first = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
     const overlap = ctx.view.captureAnimation({ width: 1920, height: 1080, fps: 30, duration: 4 });
@@ -195,26 +195,15 @@ describe('animation capture', () => {
     expect(store.state).toMatchObject({ capturingAnimation: false, playing: true, phase: 0.33 });
   });
 
-  it('honours an explicit modal target and rejects missing Step or mode targets', async () => {
+  it('forwards the explicit animation target through the current Result host', async () => {
     const store = new Store();
-    store.set({ result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] } as never });
-    const animate = vi.fn();
-    const phase = vi.fn();
-    const showField = vi.fn(async ({ field }: { field: string }) => store.set({ fieldKey: field }));
-    const viewer = { animate, setPhase: phase } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, { showField } as never);
+    const animate = vi.fn(async () => undefined);
+    const viewer = {} as Viewer;
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, { animate } as never);
+    const request = { step: 'modes', mode: 2, playing: false, speed: 1.5, frame: 75 };
 
-    await ctx.view.animate({ step: 'modes', mode: 2, playing: true, speed: 1.5 });
-    expect(showField).toHaveBeenCalledWith({ field: 'mode:2' });
-    expect(animate).toHaveBeenCalledWith(true, 1.5);
-    await ctx.view.animate({ step: 'modes', mode: 1, playing: false, frame: 75 });
-    expect(phase).toHaveBeenCalledWith(0.75);
-    expect(store.state).toMatchObject({ playing: false, phase: 0.75 });
-    await ctx.view.animate({ step: 'modes', mode: 1, playing: false });
-    expect(showField).toHaveBeenCalledTimes(2);
+    await ctx.view.animate(request);
 
-    await expect(ctx.view.animate({ step: 'other', mode: 1, playing: true })).rejects.toMatchObject({ code: 'not-found', where: "step 'other'" });
-    await expect(ctx.view.animate({ step: 'modes', mode: 3, playing: true })).rejects.toMatchObject({ code: 'not-found', where: 'mode 3' });
-    expect(showField).toHaveBeenCalledTimes(2);
+    expect(animate).toHaveBeenCalledWith(request);
   });
 });
