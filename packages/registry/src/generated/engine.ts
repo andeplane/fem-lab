@@ -1588,6 +1588,10 @@ export type Query =
       query: "query.journal";
     }
   | {
+      base: Journal;
+      query: "query.journalDiff";
+    }
+  | {
       query: "query.script";
     }
   | {
@@ -1639,113 +1643,6 @@ export type FrameSample =
  * Both reject times outside the retained interval (except endpoint conversion roundoff).
  */
 export type TimeSampling = "exact" | "nearest";
-/**
- * A number with a unit, as text or as parts.
- */
-export type Quantity =
-  | string
-  | {
-      value: number;
-      unit: string;
-    };
-/**
- * One section of the Markdown report. `query.report` writes the ones asked for in this order.
- */
-export type ReportSection =
-  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
-/**
- * Any Query response.
- */
-export type QueryResult =
-  | ModelSummary
-  | ObjectDefinition
-  | MeshSummary
-  | SetInfo
-  | ResultSummary
-  | FramesResult
-  | FrameResult
-  | ProbeResult
-  | PathResult
-  | CostEstimate
-  | JournalDump
-  | ScriptText
-  | Converted
-  | MaterialLibrary
-  | ObjectList
-  | Capabilities
-  | ReportText;
-/**
- * Mesher settings, SI.
- */
-export type MesherSettings =
-  | {
-      size?: number | null;
-      /**
-       * @minItems 3
-       * @maxItems 3
-       */
-      counts?: [number, number, number] | null;
-      kind: "lattice";
-    }
-  | {
-      body: string;
-      blocks: QuadBlock[];
-      kind: "mapped";
-    }
-  | {
-      of: string;
-      size: number;
-      refine: RefineBox[];
-      kind: "free";
-    }
-  | {
-      base: MesherSettings;
-      sweep: Sweep;
-      kind: "sweep";
-    };
-/**
- * The shape of one block edge between its two corners.
- */
-export type Curve =
-  | {
-      kind: "line";
-    }
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      center: [number, number];
-      ccw: boolean;
-      kind: "arc";
-    }
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      center: [number, number];
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      semi_axes: [number, number];
-      kind: "ellipse";
-    };
-/**
- * How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
- */
-export type Sweep =
-  | {
-      layers: number;
-      height: number;
-      kind: "extrude";
-    }
-  | {
-      segments: number;
-      angle_deg: number;
-      kind: "revolve";
-    };
 /**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  */
@@ -2596,6 +2493,114 @@ export type RegionPredicate2 =
       kind: "body";
     };
 /**
+ * A number with a unit, as text or as parts.
+ */
+export type Quantity =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * One section of the Markdown report. `query.report` writes the ones asked for in this order.
+ */
+export type ReportSection =
+  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
+/**
+ * Any Query response.
+ */
+export type QueryResult =
+  | ModelSummary
+  | ObjectDefinition
+  | MeshSummary
+  | SetInfo
+  | ResultSummary
+  | FramesResult
+  | FrameResult
+  | ProbeResult
+  | PathResult
+  | CostEstimate
+  | JournalDump
+  | JournalDiff
+  | ScriptText
+  | Converted
+  | MaterialLibrary
+  | ObjectList
+  | Capabilities
+  | ReportText;
+/**
+ * Mesher settings, SI.
+ */
+export type MesherSettings =
+  | {
+      size?: number | null;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      counts?: [number, number, number] | null;
+      kind: "lattice";
+    }
+  | {
+      body: string;
+      blocks: QuadBlock[];
+      kind: "mapped";
+    }
+  | {
+      of: string;
+      size: number;
+      refine: RefineBox[];
+      kind: "free";
+    }
+  | {
+      base: MesherSettings;
+      sweep: Sweep;
+      kind: "sweep";
+    };
+/**
+ * The shape of one block edge between its two corners.
+ */
+export type Curve =
+  | {
+      kind: "line";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      ccw: boolean;
+      kind: "arc";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      semi_axes: [number, number];
+      kind: "ellipse";
+    };
+/**
+ * How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
+ */
+export type Sweep =
+  | {
+      layers: number;
+      height: number;
+      kind: "extrude";
+    }
+  | {
+      segments: number;
+      angle_deg: number;
+      kind: "revolve";
+    };
+/**
  * What a Command produced beyond changing the Model.
  */
 export type Output =
@@ -3176,6 +3181,20 @@ export interface RefineBoxSpec {
       };
 }
 /**
+ * Append-only list of applied Commands (undo truncates it).
+ */
+export interface Journal {
+  entries: JournalEntry[];
+}
+/**
+ * One applied Command and the Model hash after it.
+ */
+export interface JournalEntry {
+  seq: number;
+  cmd: ModelFile_Command;
+  hashAfter: string;
+}
+/**
  * `query.model` response.
  */
 export interface ModelSummary {
@@ -3613,12 +3632,25 @@ export interface JournalDump {
   canRedo: boolean;
 }
 /**
- * One applied Command and the Model hash after it.
+ * `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
+ * comparison rather than a text diff that aligns similar Commands after histories diverge.
  */
-export interface JournalEntry {
-  seq: number;
-  cmd: ModelFile_Command;
-  hashAfter: string;
+export interface JournalDiff {
+  /**
+   * Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied
+   * `seq` can therefore change this hash without changing `sharedEntries`.
+   */
+  baseHash: string;
+  currentHash: string;
+  sharedEntries: number;
+  /**
+   * The base Journal's ordered tail after `sharedEntries`.
+   */
+  removed: JournalEntry[];
+  /**
+   * The current Journal's ordered tail after `sharedEntries`.
+   */
+  added: JournalEntry[];
 }
 /**
  * `query.script` response.
@@ -4067,10 +4099,4 @@ export interface Step {
 export interface PluginRecord {
   name: string;
   sha256: string;
-}
-/**
- * Append-only list of applied Commands (undo truncates it).
- */
-export interface Journal {
-  entries: JournalEntry[];
 }
