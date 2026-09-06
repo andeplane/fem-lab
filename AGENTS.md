@@ -78,6 +78,26 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
   `_ => panic!()` arms and `unwrap_or_else(|| panic!())` (their never-taken arms count).
   Unreachable code is designed out (restructure), never excluded.
 
+## Issues are the unit of work
+
+Everything happens through GitHub issues on `andeplane/fem-lab`; many people and agents work
+here at once, and the issue tracker is the only shared view of who is doing what.
+
+- **No work without an issue.** A bug you find, a feature you are asked for, a plan you are
+  writing: file the issue first (`gh issue create`), with the symptom or the ask, the cause if
+  known, and how it will be verified. Then work. Split anything that takes more than a day.
+- **Take an issue by labelling it `in progress`** the moment you start (planning counts). Do
+  not start on an issue that already carries the label; message its owner instead.
+- **Branch and PR carry the number**: `fix/36-lazy-initialiser`, PR body ends with
+  `Closes #36`. One issue per PR unless the issues are inseparable; say so in the body.
+- **Finish by closing.** The PR merge closes the issue and drops the label; if the work stops,
+  remove the label and comment why. Never leave an `in progress` issue silent for a day.
+- **Labels mean something**: `bug`, `enhancement`; areas `engine`, `geometry`, `numerics`,
+  `app`, `ux`, `ai`, `tutorials`, `ci`, `docs`; `release-blocker` for what gates a public launch;
+  `in progress` as above. Add an area label to every issue you file.
+- **Plans link both ways.** A plan in `docs/plans/` names the issues it covers; each of those
+  issues links the plan. Reviews of a plan are comments on the issue.
+
 ## Working
 
 - Ponytail applies to code, never to verification: fewest files, no speculative abstractions,
