@@ -75,7 +75,7 @@ layout and member idealisations) must not be presented as implemented reference 
 - [#175](https://github.com/andeplane/fem-lab/issues/175): Assistant background must use the viewer-well token; PR #181 is reviewed but not yet merged.
 - [#183](https://github.com/andeplane/fem-lab/issues/183): the LE10 support definition and reference must agree before using it to validate the tetrahedral capability. Numerical completion remains unproven.
 
-## Integration checkpoints
+## Earlier integration checkpoints
 
 - #4 now passes native simplex face/heat tests, the Tet10 three-mesh convergence study,
   and Tri3/Tri6 edge/replay checks. A simplex Journal has matching per-entry hashes on
@@ -119,7 +119,7 @@ gallery presentation (#30), and the integrated workflow checks, are still open r
   first Model is invisible because Properties only mounts in the workspace; the start-screen
   workflow needs a visible form without losing the stable Assistant conversation.
 
-## Latest review checkpoints
+## Earlier review checkpoints
 
 - #98 / PR #153 merged at `3917bf42fe93052f4daf2fbb49557c273c070d1a` after review
   and all seven CI checks. Deformation previews live and commits one final host Command.
@@ -153,6 +153,59 @@ gallery presentation (#30), and the integrated workflow checks, are still open r
   reused; children #243–#246 cover typed frame/time reads, memory, host parity and playback.
   The plan is not evidence of implemented transient playback and does not close #9.
 
-The current local checkout on `fix/156-ai-tool-schemas` predates the merged Assistant placement
-fix. Its bottom-left drawer is not evidence that PR #89 changed main incorrectly; final
-conformance checks must run the integrated merged application.
+The initially inspected `fix/156-ai-tool-schemas` checkout predated the merged Assistant
+placement fix. Final conformance checks must run the integrated merged application.
+
+
+## PR integration review — 6 September 2026
+
+The checkpoints above are historical evidence. The current queue is being integrated with
+main `c20f0f8`; local test success is not a merge or final design acceptance. PR #107 remains
+draft until its complete matrix is verified on merged main.
+
+- PR #223 now consolidates #4, #183 and #266, preserving their complete histories. The
+  Windows defect was isolated to parallel numeric factorization in faer 0.24.4; ADR0019
+  records per-call sequential factorization on Windows, parallel triangular solves, and a
+  residual acceptance guard. Original Hex8, Hex20 and Tet10 oracles and tolerances remain
+  unchanged. GPU-inclusive coverage is 100% (27,372 regions, 1,451 functions, 12,476 lines),
+  and all three CLI fixtures pass. Two independent reviewers approved the aggregate.
+  Exact WASM checks and Chromium simplex cases pass. PRs #200 and #300 must stay open
+  until #223 merges, then close as integrated; they are not separate remaining fixes.
+- PR #135 retains the producing one-based Journal revision while matching zero-based
+  Journal rows. Native stale/undo and convergence tests pass. Fresh WASM semantically
+  retains revision 10 after an edit, and seven Results/tutorial Chromium cases pass.
+- PR #163 passes 644 app tests, registry coverage at 100%, and the full-screen 820 px paper,
+  decoded viewer image, print dispatch and close lifecycle in Chromium. Requested screenshot
+  dimensions are addressed by PR #236, whose two actual PNG/animation scenarios pass.
+- PR #158 integrates pending/failed tool status with script-validation diagnostics and the
+  previously stacked streaming-prose change. Script failures retain partial Journal receipts.
+- PR #237 preserves the Result-validity hash through current-result and predecessor checks.
+  Exact WASM keeps all 3,075 displacement values unchanged after renaming the Model; 640
+  app tests and six production Chromium save/rename scenarios pass.
+- PR #195 preserves the exact producer through its Journal interaction changes. Fresh WASM
+  supplies overlapping Set memberships and passes semantic provenance checks; eight
+  Journal/Results/tutorial browser scenarios pass.
+- PR #227 preserves the live Journal and a separate editable draft. CodeMirror carries the
+  registered `script.setSource` marker, and native editing shortcuts remain local to editors.
+  The actual edit/highlight/run/stop flow passes Chromium; 642 app tests pass after the
+  independently reviewed #313 tutorial-fixture teardown fix.
+- PR #238 regenerates 22 real 320 × 180 viewer PNGs, totaling about 41 kB, without solves
+  or invented contours. The final packaged gallery passes filter, lazy-image, reference
+  rendering and example-open browser checks. CI and deployment both build before thumbnail
+  generation and rebuild to package the generated images.
+- PR #199 retains 16 validation comparisons, five explicitly unavailable comparisons and
+  an informational tube estimate. Successful project replacement clears prior metadata;
+  failed replacement preserves it. Public `example.open` input parity remains tracked by
+  #250 / PR #268 and must preserve the metadata lifecycle when the changes integrate.
+- PRs #134, #233, #221 and #213 are undergoing current-main integration and exact-artifact
+  verification; prior branch results do not replace their final CI or merged-main checks.
+
+Full Playwright collection exposed shared blocker #325: a test imported the Vite-only
+application dependency graph through Store. The independently reviewed PR #326 extracts
+plain tab constants and preserves Store exports. The fix is being carried into these PRs;
+all required CI jobs and their individual steps must pass on each final head before merge.
+
+Local Rust compilation is serialized. Worktrees share one build target, but an observed
+cross-worktree cache reuse produced stale WASM despite a successful build. Engine-changing
+builds now invalidate the engine's WASM package artifacts, verify source compilation, and
+exercise the generated module semantically before browser acceptance.
