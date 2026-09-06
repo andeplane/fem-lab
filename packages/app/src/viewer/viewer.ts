@@ -481,11 +481,13 @@ export class Viewer {
     const g = out.getContext('2d');
     if (!g) throw new FemError('unsupported', 'a 2D canvas is required to draw the requested legend or title', 'query.screenshot', 'query.screenshot without a legend or title');
     g.drawImage(this.canvas, 0, 0);
-    if (legend) drawLegend(g, out.width, out.height, legend);
+    // A title owns the first line. Start the legend beneath it so both remain distinct even in
+    // a small requested image; the colour bar contracts before it clips at the bottom.
+    if (legend) drawLegend(g, out.width, out.height, legend, title ? 78 : 56);
     if (title) {
       g.font = '16px sans-serif';
       g.fillStyle = '#101218ee';
-      g.fillRect(12, 12, Math.min(out.width - 24, g.measureText(title).width + 20), 30);
+      g.fillRect(12, 12, Math.max(0, Math.min(out.width - 24, g.measureText(title).width + 20)), 30);
       g.fillStyle = '#e9edf3';
       g.fillText(title, 22, 33, Math.max(1, out.width - 44));
     }
@@ -554,10 +556,9 @@ export class Viewer {
 }
 
 /** The legend the screenshot burns in: gradient bar, title, unit and six ticks, in one column. */
-function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: LegendBurn): void {
+function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: LegendBurn, top = 56): void {
   const x = w - 132;
-  const top = 56;
-  const barH = Math.max(120, Math.min(300, h - 160));
+  const barH = Math.max(24, Math.min(300, h - top - 104));
   const stops = MAPS[l.colormap];
   const grad = g.createLinearGradient(0, top + barH, 0, top);
   stops.forEach((c, i) => grad.addColorStop(i / (stops.length - 1), c));
@@ -569,8 +570,9 @@ function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: Legend
   g.font = '13px ui-monospace, monospace';
   g.fillText(`${l.title} ${l.unit}`.trim(), x - 8, top - 14);
   g.font = '11px ui-monospace, monospace';
-  for (let i = 0; i < 6; i++) {
-    const t = i / 5;
+  const ticks = Math.max(2, Math.min(6, Math.floor(barH / 18) + 1));
+  for (let i = 0; i < ticks; i++) {
+    const t = i / (ticks - 1);
     g.fillStyle = i === 0 ? '#e2703a' : '#8b929d';
     g.fillText(String(Number((l.max - (l.max - l.min) * t).toPrecision(4))), x + 22, top + barH * t + 4);
   }

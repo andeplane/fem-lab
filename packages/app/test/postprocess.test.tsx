@@ -312,6 +312,20 @@ describe('the deformation bar', () => {
     expect(store.state.phase).toBe(0.75);
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it('rolls a rejected phase preview back to the acknowledged state', async () => {
+    const { root, store } = mount({ result: modal, fieldKey: 'mode:2', phase: 0.25 });
+    const viewer = { current: { animate: vi.fn(), setPhase: vi.fn() } };
+    const dispatch = vi.fn(async () => { throw new Error('rejected'); });
+    render(<App store={store} dispatch={dispatch} viewer={viewer as never} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    const phase = root.querySelector<HTMLInputElement>('input.phase')!;
+    phase.value = '80';
+    phase.dispatchEvent(new Event('input', { bubbles: true }));
+    phase.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(store.state.phase).toBe(0.25));
+    expect(store.state.playing).toBe(false);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, 0.25);
+  });
 });
 
 describe('the convergence study, through the same chart', () => {

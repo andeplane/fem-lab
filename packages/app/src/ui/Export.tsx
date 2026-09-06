@@ -3,7 +3,7 @@
 // and pressing "Export selected" dispatches one `file.export` per ticked row — no batching
 // Command, because each file is its own artefact and its own Journal line.
 import { EXPORT_FORMATS, type ExportFormatRow } from '@femlab/registry';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import type { Store, UiState } from '../store';
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
@@ -35,10 +35,8 @@ const SCALES = [1, 2];
  * takes `width` and `height`; each chip requests an exact multiple of the canvas CSS size.
  * The same dimensions are passed by the row export and Export selected actions.
  */
-function Resolution({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
-  const canvas = typeof document === 'undefined' ? null : document.querySelector('.viewer canvas');
-  const w = canvas?.clientWidth || 1280;
-  const h = canvas?.clientHeight || 720;
+function Resolution({ s, store, dispatch, query, size }: { s: UiState; store: Store; dispatch: Dispatch; query: Query; size: ImageSize }) {
+  const { width: w, height: h } = size;
   return (
     <div class="segmented" role="group" aria-label="image resolution">
       {SCALES.map((n) => (
@@ -63,6 +61,36 @@ function Resolution({ s, store, dispatch, query }: { s: UiState; store: Store; d
   );
 }
 
+interface ImageSize { width: number; height: number }
+
+/** Track the canvas content box while the dialog is open, so its visible Command stays exact
+ *  when a window resize or docked panel changes the viewer underneath the modal. */
+function useCanvasSize(open: boolean): ImageSize {
+  const measure = (): ImageSize => {
+    const canvas = typeof document === 'undefined' ? null : document.querySelector<HTMLCanvasElement>('.viewer canvas');
+    return { width: Math.max(1, Math.round(canvas?.clientWidth || 1280)), height: Math.max(1, Math.round(canvas?.clientHeight || 720)) };
+  };
+  const [size, setSize] = useState<ImageSize>(measure);
+  useEffect(() => {
+    if (!open) return;
+    const canvas = document.querySelector<HTMLCanvasElement>('.viewer canvas');
+    if (!canvas) return;
+    const update = () => {
+      const next = measure();
+      setSize((old) => old.width === next.width && old.height === next.height ? old : next);
+    };
+    update();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(update);
+      observer.observe(canvas);
+      return () => observer.disconnect();
+    }
+    addEventListener('resize', update);
+    return () => removeEventListener('resize', update);
+  }, [open]);
+  return size;
+}
+
 /** A data-URL PNG onto the person's disk. `file.export` does the same for the formats the
  *  engine writes; a Query hands back bytes rather than writing them, so this is its other half. */
 function save(name: string, png: string): void {
@@ -72,12 +100,12 @@ function save(name: string, png: string): void {
 
 export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
   const [ticked, setTicked] = useState<string[]>([]);
+  const canvasSize = useCanvasSize(s.panels['export'] === true);
   if (s.panels['export'] !== true) return null;
   const ctx = { hasMesh: Boolean(s.model?.meshSettings), hasResult: s.result !== null };
   const step = s.result?.step;
   const image = () => {
-    const canvas = document.querySelector<HTMLCanvasElement>('.viewer canvas');
-    return { width: Math.max(1, Math.round((canvas?.clientWidth || 1280) * s.screenshotScale)), height: Math.max(1, Math.round((canvas?.clientHeight || 720) * s.screenshotScale)) };
+    return { width: canvasSize.width * s.screenshotScale, height: canvasSize.height * s.screenshotScale };
   };
   const close = { cmd: 'panel.toggle', panel: 'export', open: false };
   const runAll = (): void => {
@@ -115,7 +143,7 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
                   <span class="export-name">{row.name}</span>
                   <span class="export-note">{why ?? row.note}</span>
                   <span class="mono export-cmd">{line(spec)}</span>
-                  {row.format === 'png' ? <Resolution s={s} store={store} dispatch={dispatch} query={query} /> : null}
+                  {row.format === 'png' ? <Resolution s={s} store={store} dispatch={dispatch} query={query} size={canvasSize} /> : null}
                   <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null} title={line(spec)}>
                     export
                   </Cmd>

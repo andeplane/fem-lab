@@ -52,6 +52,10 @@ test('@cpu screenshot requests render exact pixels and restore the interactive c
   const png = await readFile((await file.path())!);
   expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([712, 456]);
   await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'export', open: true }));
+  // The modal remains mounted across a real viewer resize; its next Command must use the new
+  // content box rather than the dimensions captured when it opened.
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await expect.poll(() => page.locator('.viewer canvas').evaluate((canvas) => canvas.clientWidth)).toBeLessThan(1000);
   const dimensions = await page.locator('.viewer canvas').evaluate((canvas) => [canvas.clientWidth * 2, canvas.clientHeight * 2]);
   const row = page.locator('.export-row').filter({ has: page.locator('.ext', { hasText: '.png' }) });
   for (const button of [row.getByRole('button', { name: '2×', exact: true }), row.getByRole('button', { name: 'export', exact: true })]) {
@@ -107,4 +111,27 @@ test('@cpu animation selects the requested mode and scrubs real geometry through
   await page.mouse.up();
   await expect.poll(() => page.evaluate(() => (window as unknown as { phaseCommands: unknown[] }).phaseCommands.length)).toBe(1);
   expect(await page.evaluate(() => window.fem.query.journal())).toEqual(original);
+
+  // Native cancellation restores the acknowledged phase without a Command.
+  const acknowledgedPhase = await page.locator('.deform-bar input.phase').inputValue();
+  await page.evaluate(() => { (window as unknown as { phaseCommands: unknown[] }).phaseCommands = []; });
+  await page.mouse.move(phase.x + phase.width * 0.2, phase.y + phase.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(phase.x + phase.width * 0.7, phase.y + phase.height / 2, { steps: 4 });
+  await page.locator('.deform-bar input.phase').dispatchEvent('pointercancel', { pointerId: 1, pointerType: 'mouse', isPrimary: true });
+  await page.mouse.up();
+  await expect(page.locator('.deform-bar input.phase')).toHaveValue(acknowledgedPhase);
+  expect(await page.evaluate(() => (window as unknown as { phaseCommands: unknown[] }).phaseCommands)).toEqual([]);
+
+  // A newer mode Command invalidates the old pointer gesture. Releasing that old pointer must
+  // not pause or scrub the newly selected mode.
+  await page.mouse.move(phase.x + phase.width * 0.2, phase.y + phase.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(phase.x + phase.width * 0.7, phase.y + phase.height / 2, { steps: 4 });
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.animate', step: 'modes', mode: 1, playing: true, speed: 2 }));
+  await page.mouse.up();
+  await expect(page.locator('.deform-bar button[data-cmd="view.animate"]')).toHaveAttribute('title', 'pause');
+  expect(await page.evaluate(() => (window as unknown as { phaseCommands: unknown[] }).phaseCommands)).toEqual([
+    { cmd: 'view.animate', step: 'modes', mode: 1, playing: true, speed: 2 },
+  ]);
 });
