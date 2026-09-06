@@ -130,6 +130,8 @@ export interface UiState {
   playing: boolean;
   /** Where in one sweep the scrub sits, in turns 0…1. */
   phase: number;
+  /** True while Chromium is encoding the viewer canvas as WebM. */
+  capturingAnimation: boolean;
   /** Pixels per CSS pixel a saved PNG is rendered at: the export dialog's 1× / 2×. */
   screenshotScale: number;
   animationSpeed: number;
@@ -239,6 +241,7 @@ export const initialState: UiState = {
   yieldStress: null,
   playing: false,
   phase: 0,
+  capturingAnimation: false,
   screenshotScale: 1,
   animationSpeed: 1,
   reportReady: false,

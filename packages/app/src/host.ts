@@ -4,7 +4,9 @@
 import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import { storeKey } from './ai/key-storage';
+import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
+import { choiceOf } from './fields';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
@@ -135,6 +137,7 @@ export function makeHostContext(
   results?: ResultsView,
   save: Autosave = autosave,
   printPage: () => void = () => window.print(),
+  captureEnvironment: AnimationCaptureEnvironment = browserAnimationCaptureEnvironment(),
 ): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
@@ -158,6 +161,7 @@ export function makeHostContext(
     onChange: () => store.set({ projects: own.list(), project: own.current() }),
   });
   projects = own;
+  const capture = new AnimationCapture(captureEnvironment);
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -219,6 +223,28 @@ export function makeHostContext(
         const burn = o.legend === false ? null : results?.legendBurn();
         return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
+      captureAnimation: (o) =>
+        capture.run(async (record) => {
+          const s = store.state;
+          const mode = choiceOf(s.fieldKey).mode;
+          const modes = s.result?.frequencies?.length ?? 0;
+          if (mode === undefined || mode < 1 || mode > modes) {
+            throw new FemError('export.unavailable', 'the selected field is not a mode in the current modal Result', 'file.export', 'solve a modal Step and select one of its mode fields');
+          }
+          const target = v();
+          const before = target.animationState();
+          const ui = { playing: s.playing, phase: s.phase };
+          store.set({ capturingAnimation: true, playing: false });
+          target.setPhase(0);
+          try {
+            const webm = await target.atCaptureSize(o.width, o.height, (canvas) => record(canvas, o, (phase) => target.setPhase(phase)));
+            return { webm };
+          } finally {
+            target.restoreAnimation(before);
+            store.set({ capturingAnimation: false, ...ui });
+          }
+        }),
+      cancelAnimationCapture: () => capture.cancel(),
     },
     selection: {
       set: (s) => store.select(s),
