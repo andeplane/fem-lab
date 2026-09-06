@@ -466,9 +466,8 @@ export class Viewer {
   /**
    * The design's ▶ on the deformation bar: sweep the drawn deformation through
    * `A·sin(2π f t)` and back, one second a cycle at `speed` 1. That is exactly right for a
-   * mode shape, which is defined only up to an amplitude; a transient Result keeps only its
-   * final field (the engine stores no per-frame arrays), so there the sweep is the amplitude
-   * growing and shrinking, not a replay of the history — the bar says so.
+   * mode shape, which is defined only up to an amplitude. Transient playback does not use this
+   * method: it needs the retained field at each physical time.
    *
    * Pausing puts the shape back where `setDeformed` left it, so a paused viewer and a viewer
    * that never played show the same picture.

@@ -28,7 +28,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'view.toggle': { layer: 'mesh' },
   'view.setVisible': { bodies: ['beam'], on: false },
   'view.setTheme': { theme: 'dark' },
-  'view.animate': { step: 'static', playing: true },
+  'view.animate': { step: 'modes', mode: 1, playing: true },
   'selection.set': { bodies: ['beam'], mode: 'add' },
   'selection.clear': {},
   'selection.setPickTarget': { target: 'face' },
@@ -142,6 +142,12 @@ describe('Registry', () => {
     const root = (await registry.query({ query: 'query.screenshot', width: 'wide' }).catch((e: unknown) => e)) as FemError;
     expect(root.code).toBe('schema');
     await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 0, height: 720 } })).rejects.toMatchObject({ code: 'schema', where: 'spec', suggestion: expect.stringContaining("describe('file.export')") });
+    for (const input of [
+      { cmd: 'view.animate', step: 'modes', playing: true },
+      { cmd: 'view.animate', step: 'modes', mode: 0, playing: true },
+      { cmd: 'view.animate', step: 'modes', mode: 1, playing: true, speed: 0 },
+      { cmd: 'view.animate', step: 'modes', mode: 1, playing: false, frame: 101 },
+    ]) await expect(registry.dispatch(input)).rejects.toMatchObject({ code: 'schema' });
     // a union that matches no member reports at the root: `where` is null
     const union = (await registry.dispatch({ cmd: 'view.showField', nothing: true }).catch((e: unknown) => e)) as FemError;
     expect(union.toJSON()).toMatchObject({ code: 'schema', where: null });

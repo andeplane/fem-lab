@@ -102,7 +102,7 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
   const ctx = {
     hasMesh: Boolean(s.model?.meshSettings),
     hasResult: s.result !== null,
-    hasAnimation: s.fieldKey.startsWith('mode:'),
+    hasAnimation: s.result !== null && s.fieldKey.startsWith('mode:'),
   };
   const step = s.result?.step;
   const close = { cmd: 'panel.toggle', panel: 'export', open: false };

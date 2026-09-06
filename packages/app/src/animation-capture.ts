@@ -23,19 +23,31 @@ export interface CaptureOptions {
   duration: number;
 }
 
+export type RecordAnimation = (canvas: HTMLCanvasElement, options: CaptureOptions, drawPhase: (turns: number) => void) => Promise<Uint8Array | null>;
+
 /**
  * One active recording, driven with explicit deformation phases. MediaRecorder only encodes the
  * canvas; the phase sweep stays the same viewer operation used by the scrubber and play button.
  */
 export class AnimationCapture {
-  private cancelActive: (() => void) | null = null;
+  private active: { cancel: (() => void) | null } | null = null;
 
   constructor(private readonly env: AnimationCaptureEnvironment) {}
 
-  record(canvas: HTMLCanvasElement, options: CaptureOptions, drawPhase: (turns: number) => void): Promise<Uint8Array | null> {
-    if (this.cancelActive) {
+  async run<T>(task: (record: RecordAnimation) => Promise<T>): Promise<T> {
+    if (this.active) {
       throw new FemError('in-use', 'an animation recording is already in progress', 'file.export', 'cancel it with file.cancelAnimationCapture before starting another');
     }
+    const slot = { cancel: null as (() => void) | null };
+    this.active = slot;
+    try {
+      return await task((canvas, options, drawPhase) => this.record(slot, canvas, options, drawPhase));
+    } finally {
+      if (this.active === slot) this.active = null;
+    }
+  }
+
+  private record(slot: { cancel: (() => void) | null }, canvas: HTMLCanvasElement, options: CaptureOptions, drawPhase: (turns: number) => void): Promise<Uint8Array | null> {
     return new Promise((resolve, reject) => {
       let frame = 0;
       let cancelled = false;
@@ -46,7 +58,7 @@ export class AnimationCapture {
         if (settled) return;
         settled = true;
         this.env.cancelFrame(frame);
-        this.cancelActive = null;
+        slot.cancel = null;
         if (error) reject(error);
         else resolve(result);
       };
@@ -71,7 +83,7 @@ export class AnimationCapture {
           },
           failed: (cause) => fail(new FemError('export.unavailable', `Chromium could not encode the WebM recording: ${cause}`, 'file.export', 'export a PNG, or retry in a current Chromium browser')),
         });
-        this.cancelActive = () => {
+        slot.cancel = () => {
           cancelled = true;
           if (!stopping) {
             stopping = true;
@@ -102,8 +114,8 @@ export class AnimationCapture {
   }
 
   cancel(): boolean {
-    if (!this.cancelActive) return false;
-    this.cancelActive();
+    if (!this.active?.cancel) return false;
+    this.active.cancel();
     return true;
   }
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment, type CaptureCallbacks, type CaptureRecorder } from '../src/animation-capture';
 import { makeHostContext } from '../src/host';
 import { Store } from '../src/store';
@@ -40,7 +40,7 @@ describe('animation capture', () => {
     const c = controlled();
     const capture = new AnimationCapture(c.env);
     const phases: number[] = [];
-    const recorded = capture.record(document.createElement('canvas'), { fps: 24, duration: 1 }, (phase) => phases.push(phase));
+    const recorded = capture.run((record) => record(document.createElement('canvas'), { fps: 24, duration: 1 }, (phase) => phases.push(phase)));
     c.frame(600);
     c.frame(1100);
     expect(c.stops()).toBe(1);
@@ -53,7 +53,7 @@ describe('animation capture', () => {
   it('cancels an active recording without returning a partial file', async () => {
     const c = controlled();
     const capture = new AnimationCapture(c.env);
-    const recorded = capture.record(document.createElement('canvas'), { fps: 30, duration: 4 }, () => undefined);
+    const recorded = capture.run((record) => record(document.createElement('canvas'), { fps: 30, duration: 4 }, () => undefined));
     expect(capture.cancel()).toBe(true);
     expect(c.stops()).toBe(1);
     c.complete([1, 2, 3]);
@@ -63,12 +63,13 @@ describe('animation capture', () => {
   it('rejects overlap, encoder errors and empty recordings with structured recovery', async () => {
     const c = controlled();
     const capture = new AnimationCapture(c.env);
-    const first = capture.record(document.createElement('canvas'), { fps: 30, duration: 4 }, () => undefined);
-    expect(() => capture.record(document.createElement('canvas'), { fps: 30, duration: 4 }, () => undefined)).toThrowError(expect.objectContaining({ code: 'in-use' }));
+    const first = capture.run((record) => record(document.createElement('canvas'), { fps: 30, duration: 4 }, () => undefined));
+    const overlap = capture.run((record) => record(document.createElement('canvas'), { fps: 30, duration: 4 }, () => undefined));
+    await expect(overlap).rejects.toMatchObject({ code: 'in-use' });
     c.fail('codec failed');
     await expect(first).rejects.toMatchObject({ code: 'export.unavailable', cause: expect.stringContaining('codec failed') });
 
-    const empty = capture.record(document.createElement('canvas'), { fps: 30, duration: 4 }, () => undefined);
+    const empty = capture.run((record) => record(document.createElement('canvas'), { fps: 30, duration: 4 }, () => undefined));
     c.complete([]);
     await expect(empty).rejects.toMatchObject({ code: 'export.unavailable', cause: expect.stringContaining('empty WebM') });
   });
@@ -146,5 +147,55 @@ describe('animation capture', () => {
       { playing: false, phase: 0.62, speed: 1 },
       { playing: false, phase: 0.62, speed: 1 },
     ]);
+  });
+
+  it('rejects an overlapping host capture before it changes dimensions, phase, or UI state', async () => {
+    const c = controlled();
+    const store = new Store();
+    store.set({ fieldKey: 'mode:1', result: { step: 'modes' } as never, playing: true, phase: 0.33 });
+    const phases: number[] = [];
+    const sizes: number[][] = [];
+    const viewer = {
+      animationState: () => ({ playing: true, phase: 0.33, speed: 1 }),
+      setPhase: (phase: number) => phases.push(phase),
+      restoreAnimation: () => undefined,
+      atCaptureSize: (width: number, height: number, task: (canvas: HTMLCanvasElement) => Promise<unknown>) => {
+        sizes.push([width, height]);
+        return task(document.createElement('canvas'));
+      },
+    } as unknown as Viewer;
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, c.env);
+
+    const first = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
+    const overlap = ctx.view.captureAnimation({ width: 1920, height: 1080, fps: 30, duration: 4 });
+    await expect(overlap).rejects.toMatchObject({ code: 'in-use' });
+    expect(sizes).toEqual([[640, 360]]);
+    expect(phases).toEqual([0, 0]);
+    expect(store.state).toMatchObject({ capturingAnimation: true, playing: false, phase: 0.33 });
+    c.complete([1, 2, 3]);
+    await expect(first).resolves.toEqual({ webm: Uint8Array.from([1, 2, 3]) });
+    expect(sizes).toEqual([[640, 360]]);
+    expect(store.state).toMatchObject({ capturingAnimation: false, playing: true, phase: 0.33 });
+  });
+
+  it('honours an explicit modal target and rejects missing Step or mode targets', async () => {
+    const store = new Store();
+    store.set({ result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] } as never });
+    const animate = vi.fn();
+    const phase = vi.fn();
+    const showField = vi.fn(async () => undefined);
+    const viewer = { animate, setPhase: phase } as unknown as Viewer;
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, { showField } as never);
+
+    await ctx.view.animate({ step: 'modes', mode: 2, playing: true, speed: 1.5 });
+    expect(showField).toHaveBeenCalledWith({ field: 'mode:2' });
+    expect(animate).toHaveBeenCalledWith(true, 1.5);
+    await ctx.view.animate({ step: 'modes', mode: 1, playing: false, frame: 75 });
+    expect(phase).toHaveBeenCalledWith(0.75);
+    expect(store.state).toMatchObject({ playing: false, phase: 0.75 });
+
+    await expect(ctx.view.animate({ step: 'other', mode: 1, playing: true })).rejects.toMatchObject({ code: 'not-found', where: "step 'other'" });
+    await expect(ctx.view.animate({ step: 'modes', mode: 3, playing: true })).rejects.toMatchObject({ code: 'not-found', where: 'mode 3' });
+    expect(showField).toHaveBeenCalledTimes(2);
   });
 });

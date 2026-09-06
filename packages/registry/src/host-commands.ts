@@ -33,7 +33,7 @@ export const DeformScale = z.union([z.number(), z.literal('auto'), z.literal('tr
 export const ClipPlane = z.object({ normal: vec3, offset: z.number() });
 export const Layer = z.enum(['mesh', 'edges', 'loads', 'constraints', 'sets', 'legend', 'axes', 'grid']);
 export const Theme = z.enum(['dark', 'light']);
-export const Animation = z.object({ step: z.string(), mode: int.optional(), playing: z.boolean(), speed: z.number().optional(), frame: int.optional() });
+export const Animation = z.object({ step: z.string().min(1), mode: int.min(1), playing: z.boolean(), speed: z.number().positive().optional(), frame: int.min(0).max(100).optional() });
 export const SelectionInput = z.object({
   bodies: z.array(z.string()).optional(),
   faces: z.array(z.string()).optional(),
@@ -124,7 +124,7 @@ export interface HostContext {
     toggle(layer: z.output<typeof Layer>, on?: boolean): void;
     setVisible(bodies: string[], on: boolean): void;
     setTheme(t: z.output<typeof Theme>): void;
-    animate(a: z.output<typeof Animation>): void;
+    animate(a: z.output<typeof Animation>): void | Promise<void>;
     camera(): z.output<typeof CameraState>;
     screenshot(o: z.output<typeof ScreenshotOptions>): Promise<{ png: string }>;
     captureAnimation(o: z.output<typeof AnimationCaptureOptions>): Promise<{ webm: Uint8Array | null }>;
@@ -337,7 +337,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.toggle', 'Show or hide an overlay layer: mesh, edges, loads, constraints, sets, legend, axes or grid. Omit `on` to flip the current state.', z.object({ layer: Layer, on: z.boolean().optional() }), ({ layer, on }, ctx) => ctx.view.toggle(layer, on)),
   def('view.setVisible', 'Show or hide the named bodies in the viewer (the tree\'s eye icon). Hidden bodies stay in the Model and in every solve; only the display changes.', z.object({ bodies: z.array(z.string()), on: z.boolean() }), ({ bodies, on }, ctx) => ctx.view.setVisible(bodies, on)),
   def('view.setTheme', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
-  def('view.animate', 'Play, pause or scrub an animation of a Step: a mode shape (`mode`) or a transient history, with `speed` and an explicit `frame`. Available once dynamics land; the row exists so the control has a Command.', Animation, (a, ctx) => ctx.view.animate(a)),
+  def('view.animate', 'Play, pause or scrub one mode shape. `step` and one-based `mode` explicitly select the solved modal result; `speed` must be positive and `frame` is a phase percentage from 0 through 100 that pauses on that frame. Transient playback uses its own physical-time Command once retained frames are available.', Animation, (a, ctx) => ctx.view.animate(a)),
   def('selection.set', 'Select bodies, faces (named face Sets) and Sets by name, never by id. `mode` is replace (default), add or remove, like shift-click; the selection drives `view.fit` and `@selection` in the chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
   def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),

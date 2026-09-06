@@ -373,9 +373,8 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 
 /**
  * The deformation bar: play / pause, the phase scrub, the scale slider, true scale and the
- * screenshot. ▶ sweeps the drawn shape through `A·sin(2πt)`, which is what a mode shape means;
- * a transient Result keeps only its final field, so the sweep there is the amplitude rather
- * than a replay of the history, and the bar's own title says so.
+ * screenshot. ▶ sweeps a mode through `A·sin(2πt)`, which is what a mode shape means. A
+ * transient Result is not offered here until retained frames can drive its actual history.
  */
 function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
   const previewStart = useRef<number | null>(null);
@@ -394,24 +393,25 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
   };
   const step = s.result?.step ?? '';
   const mode = choiceOf(s.fieldKey).mode;
-  const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
-  const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
+  const sweeps = mode !== undefined;
   return (
     <div class="deform-bar">
-      <Cmd
-        dispatch={dispatch}
-        cmd="view.animate"
-        class="tbutton"
-        args={{ step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }}
-        pressed={s.playing}
-        title={s.playing ? 'pause' : `sweep ${what}`}
-        onRun={() => {
-          store.set({ playing: !s.playing });
-          void dispatch({ cmd: 'view.animate', step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
-        }}
-      >
-        {s.playing ? '❚❚' : '▶'}
-      </Cmd>
+      {mode === undefined ? null : (
+        <Cmd
+          dispatch={dispatch}
+          cmd="view.animate"
+          class="tbutton"
+          args={{ step, mode, playing: !s.playing }}
+          pressed={s.playing}
+          title={s.playing ? 'pause' : `sweep mode ${mode}`}
+          onRun={() => {
+            store.set({ playing: !s.playing });
+            void dispatch({ cmd: 'view.animate', step, mode, playing: !s.playing }).catch(() => undefined);
+          }}
+        >
+          {s.playing ? '❚❚' : '▶'}
+        </Cmd>
+      )}
       {sweeps ? (
         <input
           type="range"
@@ -428,7 +428,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
             // call is what makes it visible until the host forwards `frame` to the viewer.
             store.set({ phase: turns, playing: false });
             viewer.current?.setPhase(turns);
-            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
+            void dispatch({ cmd: 'view.animate', step, mode, playing: false, frame: Math.round(turns * 100) }).catch(() => undefined);
           }}
         />
       ) : null}

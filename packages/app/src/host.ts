@@ -146,7 +146,14 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
       },
-      animate: (a) => {
+      animate: async (a) => {
+        const result = store.state.result;
+        if (!result) throw new FemError('export.unavailable', 'there is no solved modal Result to animate', `step '${a.step}'`, 'solve the modal Step before calling view.animate');
+        if (result.step !== a.step) throw new FemError('not-found', `the displayed Result belongs to step '${result.step}', not '${a.step}'`, `step '${a.step}'`, `call view.animate with step: '${result.step}'`);
+        if (!result.frequencies || a.mode > result.frequencies.length) throw new FemError('not-found', `step '${a.step}' has no mode ${a.mode}`, `mode ${a.mode}`, `choose a mode from 1 through ${result.frequencies?.length ?? 0}`);
+        if (!results) throw new FemError('unsupported', 'this host cannot select a modal Result field', 'view.animate', `call view.showField with field: 'mode:${a.mode}'`);
+        v();
+        await results.showField({ field: `mode:${a.mode}` });
         if (a.frame !== undefined) {
           store.set({ phase: a.frame / 100, playing: false });
           return v().setPhase(a.frame / 100);
@@ -159,22 +166,23 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         const burn = o.legend === false ? null : results?.legendBurn();
         return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o.width, o.height) };
       },
-      captureAnimation: async (o) => {
-        const s = store.state;
-        if (!s.fieldKey.startsWith('mode:')) throw new FemError('export.unavailable', 'the selected Result field is not a mode shape that can be recorded', 'file.export', 'solve a modal Step and select one of its mode fields');
-        const target = v();
-        const before = target.animationState();
-        const ui = { playing: s.playing, phase: s.phase };
-        store.set({ capturingAnimation: true, playing: false });
-        target.setPhase(0);
-        try {
-          const webm = await target.atCaptureSize(o.width, o.height, (canvas) => capture.record(canvas, o, (phase) => target.setPhase(phase)));
-          return { webm };
-        } finally {
-          target.restoreAnimation(before);
-          store.set({ capturingAnimation: false, ...ui });
-        }
-      },
+      captureAnimation: (o) =>
+        capture.run(async (record) => {
+          const s = store.state;
+          if (!s.fieldKey.startsWith('mode:')) throw new FemError('export.unavailable', 'the selected Result field is not a mode shape that can be recorded', 'file.export', 'solve a modal Step and select one of its mode fields');
+          const target = v();
+          const before = target.animationState();
+          const ui = { playing: s.playing, phase: s.phase };
+          store.set({ capturingAnimation: true, playing: false });
+          target.setPhase(0);
+          try {
+            const webm = await target.atCaptureSize(o.width, o.height, (canvas) => record(canvas, o, (phase) => target.setPhase(phase)));
+            return { webm };
+          } finally {
+            target.restoreAnimation(before);
+            store.set({ capturingAnimation: false, ...ui });
+          }
+        }),
       cancelAnimationCapture: () => capture.cancel(),
     },
     selection: {

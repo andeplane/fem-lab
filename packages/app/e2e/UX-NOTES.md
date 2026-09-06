@@ -71,10 +71,9 @@ under `e2e/fixtures/` found four more.
   study and the sampled path.
 - **Frequencies table** — one row per natural frequency of a modal Step, with its period and a
   `view.showField { field: "mode:k" }` chip.
-- **Mode shape and transient animation** — ▶ / ❚❚ and a phase scrub on the deformation bar.
-  A mode shape is drawn as its own deformation and swept through `A·sin(2πt)`.
-  `Engine::field_named` exposes `mode:k` but no per-frame transient arrays, so for a transient
-  Step the sweep is the amplitude of the final field, and the control says so.
+- **Mode-shape animation** — ▶ / ❚❚ and a phase scrub on the deformation bar. A selected mode
+  is drawn as its own deformation and swept through `A·sin(2πt)`. Transient history remains a
+  plot until retained frame playback can show the actual fields.
 - **Derived fields** — `n_y = f_y / σ_vM` and `σ/f_y`, computed in the app from von Mises and
   the smallest positive `yield` in `query.model`'s current material rows, converted to SI
   from their display stress units. The legend opens clamped at 1 for a utilisation and

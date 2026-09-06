@@ -243,17 +243,19 @@ describe('the deformation bar', () => {
     return { root, store };
   };
 
-  it('offers play, and no scrub, for a plain static Result', () => {
+  it('does not offer animation for a plain static Result', () => {
     const { root } = mount({ result: RESULT });
     const bar = root.querySelector('.deform-bar')!;
-    expect(bar.querySelector('[data-cmd="view.animate"]')!.textContent).toBe('▶');
+    expect(bar.querySelector('[data-cmd="view.animate"]')).toBeNull();
     expect(bar.querySelector('input.phase')).toBeNull();
   });
 
-  it('offers the scrub once the Result is a mode shape or has a history', () => {
+  it('offers the scrub for a mode shape without implying final-only transient playback', () => {
     expect(mount({ result: modal, fieldKey: 'mode:2' }).root.querySelector('.deform-bar input.phase')).not.toBeNull();
     document.body.innerHTML = '';
-    expect(mount({ result: transient }).root.querySelector('.deform-bar input.phase')).not.toBeNull();
+    const transientBar = mount({ result: transient }).root.querySelector('.deform-bar')!;
+    expect(transientBar.querySelector('input.phase')).toBeNull();
+    expect(transientBar.querySelector('[data-cmd="view.animate"]')).toBeNull();
   });
 
   it('flips to pause, and says which shape it sweeps', () => {
@@ -264,11 +266,6 @@ describe('the deformation bar', () => {
     expect(store.state.playing).toBe(true);
     render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
     expect(root.querySelector('.deform-bar [data-cmd="view.animate"]')!.textContent).toBe('❚❚');
-  });
-
-  it('tells the truth about a transient sweep: the Result keeps one field', () => {
-    const { root } = mount({ result: transient });
-    expect(root.querySelector<HTMLButtonElement>('.deform-bar [data-cmd="view.animate"]')!.title).toContain('the sweep is the amplitude');
   });
 
   it('offers explicit WebM resolutions and a registry-callable cancel while recording', () => {
