@@ -8,7 +8,7 @@ import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import { Store } from '../src/store';
-import { App } from '../src/ui/App';
+import { App, handleGlobalKey, isEditableTarget } from '../src/ui/App';
 import type { WorkerTransport } from '../src/worker-transport';
 
 // `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40
@@ -42,7 +42,10 @@ const transport = { dispatch: async () => undefined, query: async () => undefine
  * each bottom tab and the ⌘K palette. If any of them names a Command the registry does not
  * have, the first test below fails.
  */
-function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLElement; registry: Registry; store: Store } {
+function mount(
+  patch: Partial<Parameters<Store['set']>[0]> = {},
+  dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> = async () => undefined,
+): { root: HTMLElement; registry: Registry; store: Store } {
   const store = new Store();
   const viewer = { current: null };
   const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
@@ -55,7 +58,7 @@ function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLEl
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
-  render(<App store={store} dispatch={async () => undefined} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root);
+  render(<App store={store} dispatch={dispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root);
   return { root, registry, store };
 }
 
@@ -105,6 +108,69 @@ describe('the shell', () => {
     // here, not written here, so this check skips their subtrees rather than their module.
     const bare = [...root.querySelectorAll('button')].filter((b) => !b.hasAttribute('data-cmd') && !b.closest('.tutorial-panel, .tour-callout'));
     expect(bare.map((b) => b.textContent)).toEqual([]);
+  });
+
+  it('leaves undo and copy to editable controls, including nested contenteditable text', async () => {
+    const dispatch = vi.fn(async () => undefined);
+    const events: KeyboardEvent[] = [];
+    const input = document.createElement('input');
+    const textarea = document.createElement('textarea');
+    const editor = document.createElement('div');
+    editor.setAttribute('contenteditable', 'true');
+    const child = document.createElement('span');
+    editor.append(child);
+
+    for (const target of [input, textarea, editor, child]) {
+      for (const key of ['z', 'c']) {
+        const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, ctrlKey: true });
+        events.push(event);
+        target.addEventListener('keydown', (e) => handleGlobalKey(e, dispatch, 1, {}), { once: true });
+        target.dispatchEvent(event);
+      }
+    }
+    await Promise.resolve();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(events.every((event) => !event.defaultPrevented)).toBe(true);
+  });
+
+  it('recognizes a contenteditable false island inside an editor as non-editable', () => {
+    const editor = document.createElement('div');
+    editor.setAttribute('contenteditable', 'true');
+    const island = document.createElement('div');
+    island.setAttribute('contenteditable', 'false');
+    const child = document.createElement('span');
+    island.append(child);
+    editor.append(island);
+    expect(isEditableTarget(editor)).toBe(true);
+    expect(isEditableTarget(child)).toBe(false);
+  });
+
+  it('does not handle a shortcut another listener has already cancelled', () => {
+    const dispatch = vi.fn(async () => undefined);
+    const event = new KeyboardEvent('keydown', { cancelable: true, key: 'z', ctrlKey: true });
+    event.preventDefault();
+    handleGlobalKey(event, dispatch, 1, {});
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('handles undo, redo and copy from the workspace and claims their browser shortcuts', async () => {
+    const dispatch = vi.fn(async () => undefined);
+    const workspace = document.createElement('div');
+    const events: KeyboardEvent[] = [];
+    workspace.addEventListener('keydown', (e) => {
+      events.push(e);
+      handleGlobalKey(e, dispatch, 1, {});
+    });
+    const undo = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'z', ctrlKey: true });
+    const redo = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'z', ctrlKey: true, shiftKey: true });
+    const copy = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'c', ctrlKey: true });
+    workspace.dispatchEvent(undo);
+    workspace.dispatchEvent(redo);
+    workspace.dispatchEvent(copy);
+    expect(dispatch).toHaveBeenNthCalledWith(1, { cmd: 'journal.undo', steps: 1 });
+    expect(dispatch).toHaveBeenNthCalledWith(2, { cmd: 'journal.redo', steps: 1 });
+    expect(dispatch).toHaveBeenNthCalledWith(3, { cmd: 'clipboard.copy', what: { kind: 'selection' } });
+    expect(events.map((event) => event.defaultPrevented)).toEqual([true, true, true]);
   });
 
   it('shows the model, the revision and the tree the engine reported', () => {
