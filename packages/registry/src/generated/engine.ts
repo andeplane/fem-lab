@@ -1599,6 +1599,10 @@ export type Query =
       query: "query.convert";
     }
   | {
+      name?: string | null;
+      query: "query.materialLibrary";
+    }
+  | {
       kinds?: ObjectKind[] | null;
       query: "query.objects";
     }
@@ -1670,6 +1674,7 @@ export type QueryResult =
   | JournalDump
   | ScriptText
   | Converted
+  | MaterialLibrary
   | ObjectList
   | Capabilities
   | ReportText;
@@ -3658,6 +3663,174 @@ export interface ScriptText {
 export interface Converted {
   value: number;
   unit: string;
+}
+/**
+ * `query.materialLibrary` response.
+ */
+export interface MaterialLibrary {
+  entries: MaterialLibraryEntry[];
+  sources: MaterialCitation[];
+}
+/**
+ * A documented catalogue entry. Every optional property serializes as a value or `null`.
+ */
+export interface MaterialLibraryEntry {
+  id: string;
+  name: string;
+  aliases: string[];
+  specification: string;
+  productForm: string;
+  condition: string;
+  temperature?:
+    | (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    | null;
+  temperatureBasis: string;
+  E?: SourcedStress | null;
+  nu?: SourcedRatio | null;
+  rho?: SourcedDensity | null;
+  alpha?: SourcedThermalExpansion | null;
+  k?: SourcedConductivity | null;
+  cp?: SourcedSpecificHeat | null;
+  yield?: SourcedStress | null;
+  /**
+   * Limitations that prevent a reported value from being treated as a generic default.
+   */
+  limitations: string[];
+  /**
+   * Ready to copy into `material.add.source` with the applicable reported values.
+   */
+  materialAddSource: string;
+}
+export interface SourcedStress {
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedRatio {
+  /**
+   * A dimensionless with unit, e.g. "0.3". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedDensity {
+  /**
+   * A density with unit, e.g. "7850 kg/m^3". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedThermalExpansion {
+  /**
+   * A thermal expansion with unit, e.g. "1.2e-5 1/K". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedConductivity {
+  /**
+   * A conductivity with unit, e.g. "50 W/(m K)". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedSpecificHeat {
+  /**
+   * A specific heat with unit, e.g. "460 J/(kg K)". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+/**
+ * One primary source used by [`MaterialLibrary`]. Property `source` fields name its `id`.
+ */
+export interface MaterialCitation {
+  id: string;
+  organization: string;
+  title: string;
+  url: string;
+  locator: string;
+  retrievedOn: string;
 }
 /**
  * `query.objects` response.

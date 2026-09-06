@@ -734,7 +734,7 @@
         ]
       },
       {
-        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
+        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
         "type": "object",
         "properties": {
           "name": {
@@ -826,7 +826,7 @@
         ]
       },
       {
-        "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+        "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
         "type": "object",
         "properties": {
           "name": {
@@ -871,7 +871,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
         "type": "object",
         "properties": {
           "name": {
@@ -3137,6 +3137,26 @@
         "x-returns": "Converted"
       },
       {
+        "description": "Primary-source material data with dimensions, grade, condition, temperature and a source\nfor every reported property. With no `name`, lists the stable catalogue. With a canonical\nid, name or unambiguous alias, returns that entry. Missing properties are explicit nulls:\nnever infer them before material.add. Copy the entry's `materialAddSource` into that\nCommand's `source` so the Journal preserves provenance.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "type": "string",
+            "const": "query.materialLibrary"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "x-returns": "MaterialLibrary"
+      },
+      {
         "description": "Every nameable thing in the Model as `@`-mention references (`body:beam`, `set:beam.top`,\n`material:steel`, `journal:12`), with a one-line summary each; the mention picker's index.",
         "type": "object",
         "properties": {
@@ -3415,6 +3435,9 @@
       },
       {
         "$ref": "#/$defs/Converted"
+      },
+      {
+        "$ref": "#/$defs/MaterialLibrary"
       },
       {
         "$ref": "#/$defs/ObjectList"
@@ -5818,7 +5841,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {
@@ -5910,7 +5933,7 @@
             ]
           },
           {
-            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
               "name": {
@@ -5955,7 +5978,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
             "type": "object",
             "properties": {
               "name": {
@@ -7742,6 +7765,323 @@
         "required": [
           "value",
           "unit"
+        ]
+      },
+      "MaterialLibrary": {
+        "description": "`query.materialLibrary` response.",
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MaterialLibraryEntry"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MaterialCitation"
+            }
+          }
+        },
+        "required": [
+          "entries",
+          "sources"
+        ]
+      },
+      "MaterialLibraryEntry": {
+        "description": "A documented catalogue entry. Every optional property serializes as a value or `null`.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "specification": {
+            "type": "string"
+          },
+          "productForm": {
+            "type": "string"
+          },
+          "condition": {
+            "type": "string"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "temperatureBasis": {
+            "type": "string"
+          },
+          "E": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedStress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nu": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedRatio"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rho": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedDensity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alpha": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedThermalExpansion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "k": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedConductivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cp": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedSpecificHeat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "yield": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedStress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limitations": {
+            "description": "Limitations that prevent a reported value from being treated as a generic default.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "materialAddSource": {
+            "description": "Ready to copy into `material.add.source` with the applicable reported values.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "aliases",
+          "specification",
+          "productForm",
+          "condition",
+          "temperatureBasis",
+          "limitations",
+          "materialAddSource"
+        ]
+      },
+      "SourcedStress": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_stress"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "SourcedRatio": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_dimensionless"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "Q_dimensionless": {
+        "description": "A dimensionless with unit, e.g. \"0.3\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "dimensionless"
+      },
+      "SourcedDensity": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_density"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "SourcedThermalExpansion": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_thermal_expansion"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "SourcedConductivity": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_conductivity"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "SourcedSpecificHeat": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_specific_heat"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "MaterialCitation": {
+        "description": "One primary source used by [`MaterialLibrary`]. Property `source` fields name its `id`.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "locator": {
+            "type": "string"
+          },
+          "retrievedOn": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization",
+          "title",
+          "url",
+          "locator",
+          "retrievedOn"
         ]
       },
       "ObjectList": {
@@ -11143,7 +11483,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {
@@ -11235,7 +11575,7 @@
             ]
           },
           {
-            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
               "name": {
@@ -11280,7 +11620,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
             "type": "object",
             "properties": {
               "name": {

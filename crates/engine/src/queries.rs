@@ -56,6 +56,9 @@ impl Engine {
                 let converted = units::convert(si, &to, Some(from.dim))?;
                 Ok(QueryResult::Converted(Converted { value: converted, unit: to }))
             }
+            Query::MaterialLibrary { name } => {
+                crate::material_library::query(name.as_deref()).map(QueryResult::MaterialLibrary)
+            }
             Query::Objects { kinds } => Ok(QueryResult::Objects(self.query_objects(kinds.as_deref()))),
             Query::Capabilities {} => Ok(QueryResult::Capabilities(Capabilities {
                 gpu: self.gpu.is_some(),

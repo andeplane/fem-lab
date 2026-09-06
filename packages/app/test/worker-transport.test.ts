@@ -141,18 +141,19 @@ describe('WorkerTransport', () => {
     expect((replay!.payload as { entries: { cmd: Command }[] }).entries.map((e) => (e.cmd as unknown as { cmd: string }).cmd)).toEqual(['model.new', 'geometry.addBox']);
   });
 
-  it('replays only up to the revision an undo left behind, keeping the entries a redo needs', async () => {
+  it('retains the redo tail and supplies the active revision separately', async () => {
     const { transport, workers } = make((req, reply) => {
       const p = req.payload as { cmd?: string; seq?: number };
       if (req.op !== 'dispatch') return reply(ok(req.id, null));
-      if (p.cmd === 'journal.undo') return reply(ok(req.id, ack({ seq: -1, revision: 1 })));
+      if (p.cmd === 'journal.undo') return reply(ok(req.id, ack({ seq: 1, revision: 1 })));
       return reply(ok(req.id, ack({ seq: p.seq ?? 0, revision: (p.seq ?? 0) + 1 })));
     });
     await transport.dispatch({ cmd: 'model.new', name: 'x', seq: 0 } as unknown as Command);
     await transport.dispatch({ cmd: 'geometry.addBox', name: 'b', seq: 1 } as unknown as Command);
     await transport.dispatch({ cmd: 'journal.undo' } as unknown as Command);
     await transport.cancel();
-    expect((workers[1]!.sent[1]!.payload as { entries: unknown[] }).entries).toHaveLength(1);
+    expect((workers[1]!.sent[1]!.payload as { entries: unknown[] }).entries).toHaveLength(2);
+    expect(workers[1]!.sent[1]!.payload).toMatchObject({ revision: 1 });
   });
 
   it('restarts the engine after a wasm panic, reports it once, and keeps working', async () => {
@@ -197,6 +198,20 @@ describe('WorkerTransport', () => {
     await Promise.resolve();
     workers[0]!.onerror?.({ message: 'out of memory' } as ErrorEvent);
     await expect(call).rejects.toMatchObject({ code: 'internal' });
+  });
+
+  it('ignores a terminated worker error while the replacement is recovering', async () => {
+    const { transport, workers } = make(() => undefined);
+    const recovered = transport.cancel();
+    await Promise.resolve();
+    const replacement = workers[1]!;
+    workers[0]!.onerror?.({ message: 'late old-worker error' } as ErrorEvent);
+    const create = replacement.sent[0]!;
+    replacement.onmessage?.({ data: ok(create.id, null) } as MessageEvent<AppRes>);
+    await vi.waitFor(() => expect(replacement.sent).toHaveLength(2));
+    const replay = replacement.sent[1]!;
+    replacement.onmessage?.({ data: ok(replay.id, null) } as MessageEvent<AppRes>);
+    await expect(recovered).resolves.toBeUndefined();
   });
 
   it('ignores replies for calls it has already settled', async () => {
@@ -250,13 +265,24 @@ it('does not record undo/redo acks as new Journal entries', async () => {
   expect(spy).toHaveBeenCalled();
 });
 
-it('returns the import boundary Journal and uses its normalized entries for cancel replay', async () => {
+it('commits the normalized import Journal before cancellation can snapshot it', async () => {
   const journal = { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'normalized', description: null }, hashAfter: 'normalized-hash' }] };
-  const { transport, workers } = make((req, reply) => reply(ok(req.id, req.op === 'importFile' ? { ...ack(), journal } : {})));
+  let finishImport!: () => void;
+  const { transport, workers } = make((req, reply) => {
+    if (req.op === 'importFile') finishImport = () => reply(ok(req.id, { ...ack(), journal }));
+    else reply(ok(req.id, {}));
+  });
   await transport.init();
-  const file = { format: 'femlab/1', engineVersion: '0', model: {}, journal: { entries: [] } } as never;
-  expect((await transport.importFile(file)).journal).toEqual(journal);
-  await transport.cancel();
+  const file = { format: 'femlab/1', engineVersion: '0', model: {}, journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'source' }, hashAfter: 'source-hash' }] } };
+  const importing = transport.importFile(file as never);
+  file.journal.entries[0]!.cmd.name = 'mutated caller';
+  await vi.waitFor(() => expect(finishImport).toBeTypeOf('function'));
+  expect(workers[0]!.sent.find(req => req.op === 'importFile')!.payload).toMatchObject({ journal: { entries: [{ cmd: { name: 'source' } }] } });
+  finishImport();
+  // Cancel in the same task as delivery, before importFile's async continuation runs.
+  const cancelled = transport.cancel();
+  expect((await importing).journal).toEqual(journal);
+  await cancelled;
   const replay = workers.at(-1)!.sent.find((r) => r.op === 'replay');
-  expect(replay?.payload).toMatchObject({ entries: journal.entries });
+  expect(replay?.payload).toMatchObject({ entries: journal.entries, revision: 1 });
 });

@@ -17,7 +17,7 @@ it('keeps the MCP registry responsive during infinite loops, in a disposable pro
   try {
     const outfile = path.join(dir, 'server.mjs');
     await build({ entryPoints: ['test/fixtures/script-server.ts'], outfile, bundle: true, platform: 'node', format: 'esm' });
-    const { stdout } = await promisify(execFile)(process.execPath, [outfile, path.resolve('dist/script-worker.js')], { timeout: 10_000 });
+    const { stdout } = await promisify(execFile)(process.execPath, [outfile, path.resolve('dist/script-worker.js'), path.resolve('dist/script-validation-worker.js')], { timeout: 10_000 });
     expect(JSON.parse(stdout)).toEqual({ responsive: true, timedOut: true, after: 'still alive' });
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

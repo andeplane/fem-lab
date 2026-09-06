@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 /** A provider stream, never a live API request. The tool still runs against real browser wasm. */
 function response(tool: boolean): string {
