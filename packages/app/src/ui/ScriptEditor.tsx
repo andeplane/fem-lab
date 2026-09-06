@@ -46,7 +46,7 @@ export default function ScriptEditor({ value, onChange }: ScriptEditorProps) {
           javascript({ typescript: true }),
           syntaxHighlighting(femLabHighlight),
           keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
-          EditorView.contentAttributes.of({ 'aria-label': 'TypeScript editor', class: 'script-edit', spellcheck: 'false' }),
+          EditorView.contentAttributes.of({ 'data-cmd': 'script.setSource', 'aria-label': 'TypeScript editor', class: 'script-edit', spellcheck: 'false' }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) change.current(update.state.doc.toString());
           }),

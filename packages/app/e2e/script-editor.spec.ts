@@ -30,6 +30,7 @@ test.describe('@cpu Script editor', () => {
     await page.getByRole('button', { name: 'edit this script' }).click();
 
     const editor = page.locator('.script-edit');
+    await expect(editor).toHaveAttribute('data-cmd', 'script.setSource');
     await expect(editor).toHaveAttribute('contenteditable', 'true');
     const draft = 'const marker: string = "draft";\n// keep me\nreturn marker;';
     await replace(editor, page, draft);

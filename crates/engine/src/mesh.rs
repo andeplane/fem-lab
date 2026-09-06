@@ -122,6 +122,18 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
         if resolved.is_empty() {
             return Err(set_empty(model, &mesh, &named.name, probe));
         }
+        // Keep the format-specific Mesh maps in step with the richer resolved Set. Face Sets
+        // carry their nodes; element regions carry both their elements and their nodes; a
+        // region that catches no element is a node-only Set.
+        if !resolved.faces.is_empty() {
+            mesh.face_sets.insert(named.name.clone(), resolved.faces.clone());
+        }
+        if !resolved.nodes.is_empty() {
+            mesh.node_sets.insert(named.name.clone(), resolved.nodes.clone());
+        }
+        if !resolved.elems.is_empty() {
+            mesh.elem_sets.insert(named.name.clone(), resolved.elems.clone());
+        }
         sets.insert(named.name.clone(), resolved);
     }
     Ok(BuiltMesh { mesh, body_of_block, sets })
@@ -167,6 +179,13 @@ fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result
                     return Err(Error::not_found("body", of, &model.names(ObjectKind::Body)).at("mesher.of"));
                 }
             };
+            // A sketch the triangulator cannot take fails with the loop and segment it is at,
+            // rather than the size the user did not get wrong.
+            sketch.check().map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.cause)
+                    .at(format!("shape.sketch.{}", e.where_))
+                    .suggest(e.suggestion)
+            })?;
             let part = free(sketch, *size, quadratic, refine).map_err(|e| {
                 Error::new(ErrorCode::MeshFailed, e.0)
                     .at("mesher.size")

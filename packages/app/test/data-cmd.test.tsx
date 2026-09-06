@@ -1,14 +1,15 @@
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
-import { HOST_COMMANDS, Registry, type EngineSchema, type ModelSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type EngineSchema, type JournalDump, type ModelSummary, type ResultSummary } from '@femlab/registry';
 import { h, render } from 'preact';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'preact/test-utils';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import { Store } from '../src/store';
-import { App, ownsEditingShortcuts } from '../src/ui/App';
+import { App, handleGlobalKey, isEditableTarget } from '../src/ui/App';
 import type { WorkerTransport } from '../src/worker-transport';
 
 // `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40
@@ -37,12 +38,41 @@ const model = (): ModelSummary =>
 
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
 
+const journal = (...commands: Record<string, unknown>[]): JournalDump =>
+  ({
+    entries: commands.map((cmd, seq) => ({ seq, cmd, hashAfter: `h${seq}` })),
+    revision: commands.length,
+    canUndo: commands.length > 0,
+    canRedo: false,
+  }) as unknown as JournalDump;
+
+const result = (step: string, stale: boolean, producingSeq: number): ResultSummary =>
+  ({
+    step,
+    revision: producingSeq + 1,
+    stale,
+    solver: 'cpu-direct',
+    iterations: 1,
+    residual: 0,
+    timeMs: 1,
+    extremes: [],
+    reactions: [],
+    appliedTotal: [0, 0, 0].map((value) => ({ value, unit: 'N' })),
+    balance: 0,
+  }) as unknown as ResultSummary;
+
+const boundarySeq = (root: HTMLElement): string | undefined => root.querySelector('.boundary')?.previousElementSibling?.querySelector('.no')?.textContent ?? undefined;
+const staleSeqs = (root: HTMLElement): string[] => [...root.querySelectorAll('.jrow.stale .no')].map((el) => el.textContent ?? '');
+
 /**
  * The whole shell with every panel showing at once: the tree, the generated Properties form,
  * each bottom tab and the ⌘K palette. If any of them names a Command the registry does not
  * have, the first test below fails.
  */
-function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLElement; registry: Registry; store: Store } {
+function mount(
+  patch: Partial<Parameters<Store['set']>[0]> = {},
+  dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> = vi.fn(async () => undefined),
+): { root: HTMLElement; registry: Registry; store: Store; dispatch: typeof dispatch } {
   const store = new Store();
   const viewer = { current: null };
   const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
@@ -55,19 +85,37 @@ function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLEl
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
-  render(<App store={store} dispatch={async () => undefined} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root);
-  return { root, registry, store };
+  act(() => render(<App store={store} dispatch={dispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root));
+  return { root, registry, store, dispatch };
+}
+
+async function cleanupShells() {
+  // Removing DOM alone leaves subscriptions, effects and lazy imports alive past the test.
+  await act(async () => {
+    for (const root of [...document.body.children]) render(null, root);
+  });
+  document.body.replaceChildren();
 }
 
 describe('the shell', () => {
-  beforeEach(() => {
-    document.body.innerHTML = '';
+  afterEach(cleanupShells);
+
+  it('releases shell keyboard handlers before removing its DOM', async () => {
+    const { dispatch } = mount();
+    await act(async () => {});
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({ cmd: 'panel.toggle', panel: 'palette' });
+    await cleanupShells();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(document.body.children).toHaveLength(0);
   });
 
-  it('names only Commands the registry has on every clickable, in every panel', () => {
+  it('names only Commands the registry has on every clickable, in every panel', async () => {
     const seen = new Set<string>();
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
-      document.body.innerHTML = '';
+      await cleanupShells();
       const { root, registry } = mount({ tab, panels: { palette: true } });
       const { commands, queries } = registry.list();
       const known = new Set([...commands, ...queries].map((d) => d.name));
@@ -105,6 +153,69 @@ describe('the shell', () => {
     // here, not written here, so this check skips their subtrees rather than their module.
     const bare = [...root.querySelectorAll('button')].filter((b) => !b.hasAttribute('data-cmd') && !b.closest('.tutorial-panel, .tour-callout'));
     expect(bare.map((b) => b.textContent)).toEqual([]);
+  });
+
+  it('leaves undo and copy to editable controls, including nested contenteditable text', async () => {
+    const dispatch = vi.fn(async () => undefined);
+    const events: KeyboardEvent[] = [];
+    const input = document.createElement('input');
+    const textarea = document.createElement('textarea');
+    const editor = document.createElement('div');
+    editor.setAttribute('contenteditable', 'true');
+    const child = document.createElement('span');
+    editor.append(child);
+
+    for (const target of [input, textarea, editor, child]) {
+      for (const key of ['z', 'c']) {
+        const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, ctrlKey: true });
+        events.push(event);
+        target.addEventListener('keydown', (e) => handleGlobalKey(e, dispatch, 1, {}), { once: true });
+        target.dispatchEvent(event);
+      }
+    }
+    await Promise.resolve();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(events.every((event) => !event.defaultPrevented)).toBe(true);
+  });
+
+  it('recognizes a contenteditable false island inside an editor as non-editable', () => {
+    const editor = document.createElement('div');
+    editor.setAttribute('contenteditable', 'true');
+    const island = document.createElement('div');
+    island.setAttribute('contenteditable', 'false');
+    const child = document.createElement('span');
+    island.append(child);
+    editor.append(island);
+    expect(isEditableTarget(editor)).toBe(true);
+    expect(isEditableTarget(child)).toBe(false);
+  });
+
+  it('does not handle a shortcut another listener has already cancelled', () => {
+    const dispatch = vi.fn(async () => undefined);
+    const event = new KeyboardEvent('keydown', { cancelable: true, key: 'z', ctrlKey: true });
+    event.preventDefault();
+    handleGlobalKey(event, dispatch, 1, {});
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('handles undo, redo and copy from the workspace and claims their browser shortcuts', async () => {
+    const dispatch = vi.fn(async () => undefined);
+    const workspace = document.createElement('div');
+    const events: KeyboardEvent[] = [];
+    workspace.addEventListener('keydown', (e) => {
+      events.push(e);
+      handleGlobalKey(e, dispatch, 1, {});
+    });
+    const undo = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'z', ctrlKey: true });
+    const redo = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'z', ctrlKey: true, shiftKey: true });
+    const copy = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'c', ctrlKey: true });
+    workspace.dispatchEvent(undo);
+    workspace.dispatchEvent(redo);
+    workspace.dispatchEvent(copy);
+    expect(dispatch).toHaveBeenNthCalledWith(1, { cmd: 'journal.undo', steps: 1 });
+    expect(dispatch).toHaveBeenNthCalledWith(2, { cmd: 'journal.redo', steps: 1 });
+    expect(dispatch).toHaveBeenNthCalledWith(3, { cmd: 'clipboard.copy', what: { kind: 'selection' } });
+    expect(events.map((event) => event.defaultPrevented)).toEqual([true, true, true]);
   });
 
   it('shows the model, the revision and the tree the engine reported', () => {
@@ -150,9 +261,20 @@ describe('the shell', () => {
     editor.contentEditable = 'true';
     const token = document.createElement('span');
     editor.append(token);
-    expect(ownsEditingShortcuts(input)).toBe(true);
-    expect(ownsEditingShortcuts(token)).toBe(true);
-    expect(ownsEditingShortcuts(root)).toBe(false);
+    expect(isEditableTarget(input)).toBe(true);
+    expect(isEditableTarget(token)).toBe(true);
+    expect(isEditableTarget(root)).toBe(false);
+  });
+
+  // plan E — the tutorial spotlight finds "the + add material chip" from a Command id alone by
+  // reading `data-opens`, so that attribute is under the same invariant as `data-cmd`.
+  it('names only Commands the registry has on every data-opens, and puts it only on form.open', () => {
+    const { root, registry } = mount();
+    const known = new Set(registry.list().commands.map((d) => d.name));
+    const opens = [...root.querySelectorAll('[data-opens]')];
+    expect(opens.length).toBeGreaterThan(0);
+    expect(opens.filter((el) => el.getAttribute('data-cmd') !== 'form.open').map((el) => el.getAttribute('data-opens'))).toEqual([]);
+    expect([...new Set(opens.map((el) => el.getAttribute('data-opens')!))].filter((c) => !known.has(c))).toEqual([]);
   });
 
   // Issue #40: the drawer used to be a column of `.workspace`, which only exists once a Model
@@ -173,22 +295,173 @@ describe('the shell', () => {
     render(null, root);
   });
 
-  it('keeps the drawer outside the workspace once a Model exists, and reserves its width', async () => {
+  it('keeps the drawer outside the workspace once a Model exists', async () => {
     const { root } = mount({ panels: { assistant: true } });
     for (let i = 0; i < 40 && !root.querySelector('aside.assistant'); i++) await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 5)));
     expect(root.querySelector('aside.assistant')).not.toBeNull();
     expect(root.querySelector('.workspace aside.assistant')).toBeNull();
-    expect(root.querySelector('.under-bar')!.className).toBe('under-bar with-assistant');
+    // A sibling of `.shell`, which is what lets it outlive the flip out of the start screen.
+    expect(root.querySelector('.shell ~ aside.assistant')).not.toBeNull();
   });
 
-  it('renders the start screen with its four paths before a Model exists', () => {
+  it('shows the Result boundary for a fresh solve', () => {
+    const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' });
+    const { root } = mount({ journal: entries, result: result('static', false, 1) });
+    expect(boundarySeq(root)).toBe('1');
+    expect(staleSeqs(root)).toEqual([]);
+  });
+
+  it('marks only rows after a stale Result and moves the boundary when that Step is re-solved', () => {
+    const staleJournal = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'geometry.addBox', name: 'after' });
+    const stale = mount({ journal: staleJournal, result: result('static', true, 1) }).root;
+    expect(boundarySeq(stale)).toBe('1');
+    expect(staleSeqs(stale)).toEqual(['2']);
+
+    const resolvedJournal = journal(...staleJournal.entries.map((entry) => entry.cmd as unknown as Record<string, unknown>), { cmd: 'solve.run', step: 'static' });
+    const resolved = mount({ journal: resolvedJournal, result: result('static', false, 3) }).root;
+    expect(boundarySeq(resolved)).toBe('3');
+    expect(staleSeqs(resolved)).toEqual([]);
+  });
+
+  it('attributes the boundary to the current Result and does not invent one after undo', () => {
+    const twoSteps = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'solve.run', step: 'modal' });
+    const currentStatic = mount({ journal: twoSteps, result: result('static', false, 1) }).root;
+    expect(boundarySeq(currentStatic)).toBe('1');
+
+    const undone = journal({ cmd: 'model.new', name: 'demo' });
+    expect(boundarySeq(mount({ journal: undone, result: result('static', false, undone.revision) }).root)).toBeUndefined();
+    expect(boundarySeq(mount({ journal: twoSteps, result: null }).root)).toBeUndefined();
+  });
+
+  it('does not attribute an undone re-solve to an older solve of the same Step', () => {
+    const solvedTwice = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'solve.run', step: 'static' },
+      { cmd: 'load.traction', name: 'p', on: 'beam.top', total: ['0 N', '0 N', '-2 kN'] },
+      { cmd: 'solve.run', step: 'static' },
+    );
+    expect(boundarySeq(mount({ journal: solvedTwice, result: result('static', false, 3) }).root)).toBe('3');
+
+    const undone = journal(...solvedTwice.entries.slice(0, -1).map((entry) => entry.cmd as unknown as Record<string, unknown>));
+    expect(boundarySeq(mount({ journal: undone, result: result('static', false, 3) }).root)).toBeUndefined();
+  });
+
+  it('attributes a retained convergence Result only to its exact producing study', () => {
+    const converged = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'study.converge', step: 'static', sizes: ['50 mm', '25 mm'], quantity: { kind: 'max', field: 'vonMises' }, restore: false },
+    );
+    expect(boundarySeq(mount({ journal: converged, result: result('static', false, 1) }).root)).toBe('1');
+
+    const restoring = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'study.converge', step: 'static', sizes: ['50 mm', '25 mm'], quantity: { kind: 'max', field: 'vonMises' }, restore: true },
+    );
+    // A restoring study never produces a cached Result, even if inconsistent host data points
+    // at that exact Journal line.
+    expect(boundarySeq(mount({ journal: restoring, result: result('static', false, 1) }).root)).toBeUndefined();
+  });
+
+  // Issue #41: the start screen leads with the assistant composer, then New project, then the
+  // Recent list, then the three cards. Every one of them is a Command with its own `data-cmd`.
+  it('renders the start screen in the issue’s reading order before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');
     document.body.append(root);
     render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} />, root);
-    expect(root.textContent).toContain('Open an example');
-    expect(root.textContent).toContain('Start a tutorial');
-    // The "start from geometry" card carries the model-name field, which is the same Command.
-    expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual(['panel.toggle', 'panel.toggle', 'model.new', 'model.new', 'panel.toggle']);
+    expect(root.querySelector('input.ask-field')!.getAttribute('placeholder')).toContain('Describe the part');
+    expect(root.textContent).toContain('New project');
+    expect(root.textContent).toContain('Projects you start are kept in this browser');
+    expect(root.textContent).toContain('Examples');
+    expect(root.textContent).toContain('Tutorials');
+    // Where a project goes is said out loud, whichever answer this browser gives.
+    expect(root.textContent).toMatch(/projects (saved in this browser|need browser storage)/);
+    // The composer's field and the project-name field carry the Command they feed.
+    expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
+      'chat.send',
+      'chat.send',
+      'project.new',
+      'project.new',
+      'file.open',
+      'panel.toggle',
+      'panel.toggle',
+    ]);
+  });
+
+  it('lists Recent projects as project.open cards, with rename and delete on each', () => {
+    const store = new Store();
+    const at = Date.now() - 4 * 60_000;
+    store.set({
+      projects: [
+        { id: 'a', name: 'corbel-ULS', at, createdAt: at, commands: 41, hash: 'h', thumbnail: null },
+        { id: 'b', name: 'cantilever', at: at - 86_400_000, createdAt: at, commands: 12, hash: 'h', thumbnail: 'data:image/webp;base64,AA' },
+      ],
+    });
+    const root = document.createElement('div');
+    document.body.append(root);
+    render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} />, root);
+    expect(root.textContent).toContain('corbel-ULS');
+    expect(root.textContent).toContain('41 Commands · edited 4 minutes ago');
+    expect(root.textContent).toContain('12 Commands · edited 1 day ago');
+    expect(root.querySelector('img.recent-thumb')!.getAttribute('src')).toBe('data:image/webp;base64,AA');
+    expect([...root.querySelectorAll('.recents [data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual([
+      'project.open',
+      'project.rename',
+      'project.delete',
+      'project.open',
+      'project.rename',
+      'project.delete',
+    ]);
+  });
+
+  it('puts the project name and its saved state in the top bar, and Projects reopens the list', () => {
+    const at = new Date('2026-09-06T12:04:00Z').getTime();
+    const { root } = mount({ project: { id: 'a', name: 'corbel-ULS', at, createdAt: at, commands: 41, hash: 'h', thumbnail: null, saving: false, autosave: true } });
+    const field = root.querySelector<HTMLInputElement>('input.model-name')!;
+    expect(field.value).toBe('corbel-ULS');
+    expect(field.getAttribute('data-cmd')).toBe('project.rename');
+    expect(root.querySelector('.saved-chip')!.textContent).toContain('saved');
+    const bar = [...root.querySelectorAll('.topbar [data-cmd]')].map((el) => el.getAttribute('data-cmd'));
+    expect(bar).toContain('project.rename');
+    expect(bar).toContain('project.save');
+    expect(bar).toContain('file.save');
+  });
+
+  it('says the project is saving, and says so plainly when the background save is off', async () => {
+    const at = Date.now();
+    const meta = { id: 'a', name: 'x', at, createdAt: at, commands: 1, hash: null, thumbnail: null };
+    expect(mount({ project: { ...meta, saving: true, autosave: true } }).root.querySelector('.saved-chip')!.textContent).toContain('saving…');
+    await cleanupShells();
+    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('not saved — storage is off');
+  });
+
+  // Plan F · #43: the add chip is there with items in the group, and its menu is Commands.
+  it('offers the shape menu from the Geometry chip even though the group already has a body', async () => {
+    const { root, registry } = mount();
+    const known = new Set(registry.list().commands.map((d) => d.name));
+    const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
+    expect(chip).toBeTruthy();
+    chip.click();
+    await new Promise((r) => setTimeout(r, 20));
+    const menu = [...root.querySelectorAll('.add-menu [data-cmd]')];
+    expect(menu.map((el) => el.textContent)).toEqual(['▭box', '⬭cylinder', '◯sphere', '▱sheet', '⬒extrude', '◑revolve', '⬬union', '⊖subtract', '⊗intersect', '⇲transform', '∖cut']);
+    expect(menu.map((el) => el.getAttribute('data-cmd')!).filter((c) => !known.has(c))).toEqual([]);
+  });
+
+  // Issue #211: a menu closes on Escape and gives focus back to the chip that opened it.
+  it('closes the shape menu on Escape and returns focus to the chip', async () => {
+    const { root } = mount();
+    const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
+    chip.click();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(root.querySelector('.add-menu')).toBeTruthy();
+
+    // From inside the menu, which is where the keystroke actually lands.
+    const item = root.querySelector<HTMLElement>('.add-menu [data-cmd]')!;
+    item.focus();
+    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(root.querySelector('.add-menu')).toBeNull();
+    expect(document.activeElement).toBe(chip);
   });
 });

@@ -1,16 +1,15 @@
-// The share link and the autosave (PLAN.md 5.8). Both are pure enough to test without a browser:
-// the fragment is bytes in and Commands out, and the autosave writes to an injected `JournalStore`.
+// The share link (PLAN.md 5.8): pure enough to test without a browser, bytes in and Commands out.
+// The background save that used to live in the other half of `share.ts` is now `projects.ts`,
+// and `test/projects.test.ts` covers it against the real IndexedDB.
 import { describe, expect, it, vi } from 'vitest';
-import {
-  MAX_FRAGMENT,
-  applyShared,
-  makeAutosave,
-  memoryStore,
-  openShared,
-  readShareFragment,
-  shareUrl,
-  type ShareCommand,
-} from '../src/share';
+import { deflateRawSync } from 'node:zlib';
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { HOST_COMMANDS } from '@femlab/registry';
+import { appHostCommands } from '../src/host';
+import { Store } from '../src/store';
+import type { WorkerTransport } from '../src/worker-transport';
+import { MAX_FRAGMENT, MAX_JOURNAL_BYTES, applyShared, openShared, readShareFragment, shareUrl, type ShareCommand } from '../src/share';
 
 const CMDS: ShareCommand[] = [
   { cmd: 'model.new', name: 'beam' },
@@ -19,6 +18,20 @@ const CMDS: ShareCommand[] = [
 ];
 
 const BASE = 'https://andeplane.github.io/fem-lab/';
+
+// Deliberately independent of the production encoder: untrusted links need not use shareUrl.
+function fragment(input: unknown, compressed = false): string {
+  const json = Buffer.from(JSON.stringify(input));
+  const body = compressed ? deflateRawSync(json) : json;
+  return `#j=${Buffer.concat([Buffer.from([compressed ? 1 : 0]), body]).toString('base64url')}`;
+}
+
+const hostCommands = [
+  ...HOST_COMMANDS,
+  ...appHostCommands(new Store(), {} as WorkerTransport, { current: null }, async () => undefined),
+];
+const journals = path.resolve(import.meta.dirname, '../../../crates/engine/benches/journals');
+const fixtures = readdirSync(journals).filter((name) => name.endsWith('.json') && !name.endsWith('.meta.json'));
 
 describe('share link', () => {
   it('round-trips a Journal through the URL fragment', async () => {
@@ -53,7 +66,7 @@ describe('share link', () => {
   });
 
   it('refuses a Journal too big for a URL, and says what to do instead', async () => {
-    const huge: ShareCommand[] = Array.from({ length: 40_000 }, (_, i) => ({
+    const huge: ShareCommand[] = Array.from({ length: 6_000 }, (_, i) => ({
       cmd: 'geometry.nameRegion',
       // random-ish text so it does not simply deflate away
       name: `r${i}${Math.random().toString(36)}`,
@@ -112,109 +125,112 @@ describe('share link', () => {
     expect(seen).toHaveLength(3);
     await expect(applyShared(registry, [])).resolves.toBe(0);
   });
-});
 
-describe('autosave', () => {
-  /** A fake clock: the debounce fires when the test says so, not when the wall clock says so. */
-  function fakeTimers() {
-    let pending: (() => void) | null = null;
-    return {
-      setTimer: (fn: () => void) => {
-        pending = fn;
-        return 1;
-      },
-      clearTimer: () => {
-        pending = null;
-      },
-      tick: () => {
-        const fn = pending;
-        pending = null;
-        fn?.();
-      },
-      armed: () => pending !== null,
-    };
-  }
-
-  const journal = (n: number) => Array.from({ length: n }, (_, i) => ({ cmd: { cmd: 'model.new', name: `m${i}` } }));
-
-  it('writes the Journal once per burst, not once per Command', async () => {
-    const store = memoryStore();
-    const write = vi.spyOn(store, 'write');
-    const timers = fakeTimers();
-    const a = makeAutosave({ store, ...timers });
-
-    a.note('beam', journal(1));
-    a.note('beam', journal(2));
-    a.note('beam', journal(3));
-    expect(write).not.toHaveBeenCalled(); // still inside the debounce
-    timers.tick();
-    await a.flush();
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(await a.read()).toMatchObject({ name: 'beam', cmds: expect.any(Array) });
-    expect((await a.read())?.cmds).toHaveLength(3); // the newest state, not the first
+  it.each(hostCommands.map((d) => d.name))('rejects host Command %s before dispatching even a valid prefix', async (cmd) => {
+    const registry = { dispatch: vi.fn() };
+    await expect(openShared(registry, fragment([CMDS[0], { cmd, code: 'return 123' }]))).rejects.toMatchObject({ code: 'schema' });
+    expect(registry.dispatch).not.toHaveBeenCalled();
   });
 
-  it('flush writes a pending burst immediately, and is safe with nothing pending', async () => {
-    const store = memoryStore();
-    const timers = fakeTimers();
-    const a = makeAutosave({ store, ...timers });
-    await a.flush(); // nothing armed
-    expect(await a.read()).toBeNull();
-    a.note('beam', journal(2));
-    await a.flush();
-    expect((await a.read())?.cmds).toHaveLength(2);
-    expect(timers.armed()).toBe(false);
+  it.each([
+    { cmd: 'unknown.command' },
+    { cmd: 'journal.undo' },
+    { cmd: 'journal.redo' },
+    { cmd: 'plugin.load', name: 'code', kind: 'material', language: 'typescript', source: { inline: 'return 123' } },
+    { cmd: 'model.new' },
+    { cmd: 'model.new', name: 123 },
+    { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m'] },
+    { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m', { value: 'bad', unit: 'm' }] },
+    { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: '0.3' },
+    { cmd: 'model.setIdealisation', idealisation: { type: 'invented' } },
+    { query: 'query.model' },
+    { cmd: null },
+    null,
+    [],
+    'model.new',
+  ])('rejects invalid engine entry %j before dispatching', async (invalid) => {
+    const registry = { dispatch: vi.fn() };
+    for (const compressed of [false, true]) {
+      await expect(openShared(registry, fragment([...CMDS, invalid], compressed))).rejects.toMatchObject({ code: 'schema' });
+    }
+    expect(registry.dispatch).not.toHaveBeenCalled();
   });
 
-  it('is on by default, can be turned off, and turning it off drops what was pending', async () => {
-    const store = memoryStore();
-    const timers = fakeTimers();
-    const a = makeAutosave({ store, ...timers });
-    expect(a.enabled()).toBe(true);
-
-    a.note('beam', journal(1));
-    a.setEnabled(false);
-    expect(a.enabled()).toBe(false);
-    await a.flush();
-    expect(await a.read()).toBeNull();
-
-    a.note('beam', journal(1)); // ignored while off
-    timers.tick();
-    await a.flush();
-    expect(await a.read()).toBeNull();
-
-    a.setEnabled(true);
-    a.setEnabled(true); // idempotent, and does not arm a timer on its own
-    expect(timers.armed()).toBe(false);
-    a.note('beam', journal(4));
-    await a.flush();
-    expect((await a.read())?.cmds).toHaveLength(4);
-
-    await a.clear();
-    expect(await a.read()).toBeNull();
+  it('validates directly restored Journals before any dispatch too', async () => {
+    const registry = { dispatch: vi.fn() };
+    await expect(applyShared(registry, [...CMDS, { cmd: 'script.run', code: 'return 123' }])).rejects.toMatchObject({ code: 'schema' });
+    expect(registry.dispatch).not.toHaveBeenCalled();
   });
 
-  it('starts off when the browser remembered that choice', () => {
-    expect(makeAutosave({ store: memoryStore(), initiallyOn: false }).enabled()).toBe(false);
+  it('accepts independently encoded engine Journals with nested quantity parts in either encoding', async () => {
+    const cmds = [...CMDS, { cmd: 'geometry.addBox', name: 'second', size: [{ value: 2, unit: 'm' }, '1 m', '1 m'] }];
+    for (const compressed of [false, true]) {
+      const registry = { dispatch: vi.fn().mockResolvedValue(undefined) };
+      await expect(openShared(registry, fragment(cmds, compressed))).resolves.toBe(cmds.length);
+      expect(registry.dispatch.mock.calls.map(([cmd]) => cmd)).toEqual(cmds);
+    }
   });
 
-  it('reports a failed write instead of taking the model down with it', async () => {
-    const store = memoryStore();
-    store.write = () => Promise.reject(new Error('QuotaExceededError'));
-    const onError = vi.fn();
-    const timers = fakeTimers();
-    const a = makeAutosave({ store, onError, ...timers });
-    a.note('beam', journal(1));
-    await a.flush(); // must not reject
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'QuotaExceededError' }));
+  it.each(fixtures)('shares and restores the complete benchmark Journal %s', async (name) => {
+    const entries = JSON.parse(readFileSync(path.join(journals, name), 'utf8')) as { cmd: ShareCommand }[];
+    const cmds = entries.map((entry) => entry.cmd);
+    const registry = { dispatch: vi.fn().mockResolvedValue(undefined) };
+    await expect(openShared(registry, fragment(cmds, true))).resolves.toBe(cmds.length);
+    expect(registry.dispatch.mock.calls.map(([cmd]) => cmd)).toEqual(cmds);
+    registry.dispatch.mockClear();
+    await expect(applyShared(registry, cmds)).resolves.toBe(cmds.length);
+    expect(registry.dispatch.mock.calls.map(([cmd]) => cmd)).toEqual(cmds);
   });
 
-  it('uses a real timer by default, so the app needs no wiring', async () => {
-    const store = memoryStore();
-    const a = makeAutosave({ store, delayMs: 1 });
-    a.note('beam', journal(1));
-    await new Promise((r) => setTimeout(r, 10));
-    await a.flush();
-    expect(await a.read()).not.toBeNull();
+  it('refuses oversized encoded input before base64 decoding', async () => {
+    const decode = vi.spyOn(globalThis, 'atob');
+    const registry = { dispatch: vi.fn() };
+    try {
+      await expect(openShared(registry, `#j=${'A'.repeat(MAX_FRAGMENT + 1)}`)).rejects.toMatchObject({ code: 'schema' });
+      expect(decode).not.toHaveBeenCalled();
+      expect(registry.dispatch).not.toHaveBeenCalled();
+    } finally {
+      decode.mockRestore();
+    }
+  });
+
+  it.each(['#j=', '#j=AA!!', '#j=AA%20', '#j=AA='])('rejects malformed payload %s instead of ignoring or truncating it', async (hash) => {
+    await expect(readShareFragment(hash)).rejects.toMatchObject({ code: 'schema' });
+  });
+
+  it('accepts exactly the decompressed byte limit and rejects one byte more', async () => {
+    const overhead = Buffer.byteLength(JSON.stringify([{ cmd: 'model.new', name: '' }]));
+    const cmds = [{ cmd: 'model.new', name: 'x'.repeat(MAX_JOURNAL_BYTES - overhead) }];
+    expect(Buffer.byteLength(JSON.stringify(cmds))).toBe(MAX_JOURNAL_BYTES);
+    await expect(readShareFragment(fragment(cmds, true))).resolves.toEqual(cmds);
+    cmds[0]!.name += 'x';
+    const bomb = fragment(cmds, true);
+    expect(bomb.length).toBeLessThan(MAX_FRAGMENT);
+    const registry = { dispatch: vi.fn() };
+    await expect(openShared(registry, bomb)).rejects.toMatchObject({ code: 'schema', message: expect.stringContaining('uncompressed') });
+    expect(registry.dispatch).not.toHaveBeenCalled();
+    await expect(shareUrl(cmds, BASE)).rejects.toMatchObject({ code: 'unsupported', suggestion: expect.stringContaining('file.save') });
+  });
+
+  it('cancels decompression as soon as streamed output exceeds the limit', async () => {
+    const cancel = vi.fn();
+    class OversizedDecompression {
+      readable = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(MAX_JOURNAL_BYTES));
+          controller.enqueue(new Uint8Array(1));
+          // Deliberately never close: reading the whole stream would hang.
+        },
+        cancel,
+      });
+      writable = new WritableStream();
+    }
+    vi.stubGlobal('DecompressionStream', OversizedDecompression);
+    try {
+      await expect(readShareFragment(fragment(CMDS, true))).rejects.toMatchObject({ code: 'schema', message: expect.stringContaining('uncompressed') });
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
