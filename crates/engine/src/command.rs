@@ -268,6 +268,9 @@ pub enum MesherSpec {
     /// each entry of `refine` asks for a smaller size inside its box. Use it when the domain is
     /// too awkward to cover with mapped blocks; prefer mapped blocks when it is not, because
     /// they are exact and grade smoothly. The idealisation must be 2D, as the Body is.
+    /// Sheet translation, rotation about z and positive in-plane scaling are applied before
+    /// meshing. Size and refine boxes use world coordinates; curved boundaries are sampled
+    /// to one tenth of size in world space. Nested or out-of-plane transforms are unsupported.
     Free {
         of: String,
         size: Q<Length>,

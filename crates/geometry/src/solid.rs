@@ -399,16 +399,7 @@ impl Solid {
         // named or translated in-plane, is what the meshers consume.
         let (sketch, at, prefix) = sheet_leaf(shape, &Affine3::default(), "")?;
         let area = sketch.area()? * at.scale[0] * at.scale[1];
-        let mut loops = sketch.loops(sketch_chord_tol(&sketch, DEFAULT_SEGMENTS))?;
-        for l in &mut loops {
-            for p in &mut l.pts {
-                let q = at.apply([p[0], p[1], 0.0]);
-                *p = [q[0], q[1]];
-            }
-            for t in &mut l.tags {
-                *t = join(&prefix, t);
-            }
-        }
+        let loops = transformed_sheet_loops(&sketch, &at, &prefix, sketch_chord_tol(&sketch, DEFAULT_SEGMENTS))?;
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
         for p in &loops[0].pts {
@@ -507,7 +498,33 @@ impl Solid {
     }
 }
 
-fn sheet_leaf(shape: &Shape, at: &Affine3, prefix: &str) -> Result<(Sketch, Affine3, String), GeomError> {
+/// Sample in local coordinates, then apply the shared world-coordinate/tag transformation.
+/// Callers choose the tolerance: preview resolution or the mesher's world-space error bound.
+pub(crate) fn transformed_sheet_loops(
+    sketch: &Sketch,
+    at: &Affine3,
+    prefix: &str,
+    local_chord_tol: f64,
+) -> Result<Vec<Loop>, GeomError> {
+    let mut loops = sketch.loops(local_chord_tol)?;
+    for l in &mut loops {
+        for p in &mut l.pts {
+            let q = at.apply([p[0], p[1], 0.0]);
+            if q.iter().any(|coordinate| !coordinate.is_finite()) {
+                return Err(GeomError(
+                    "the Sheet transform produces non-finite coordinates; reduce its scale or translation".into(),
+                ));
+            }
+            *p = [q[0], q[1]];
+        }
+        for t in &mut l.tags {
+            *t = join(prefix, t);
+        }
+    }
+    Ok(loops)
+}
+
+pub(crate) fn sheet_leaf(shape: &Shape, at: &Affine3, prefix: &str) -> Result<(Sketch, Affine3, String), GeomError> {
     match shape {
         Shape::Sheet { sketch } => Ok((sketch.clone(), at.clone(), prefix.to_string())),
         Shape::Named { name, shape } => sheet_leaf(shape, at, name),
@@ -685,6 +702,13 @@ mod tests {
             Solid::evaluate(&Shape::Revolve { sketch: Sketch::rect(1.0, 2.0), angle: 360.0, segments: Some(64) })
                 .unwrap();
         assert!((disc.volume() - 2.0 * PI).abs() < 0.02);
+    }
+
+    #[test]
+    fn sheet_loop_transform_refuses_overflow() {
+        let at = Affine3 { scale: [1e308, 1.0, 1.0], ..Default::default() };
+        let error = transformed_sheet_loops(&Sketch::rect(2.0, 1.0), &at, "", 0.1).unwrap_err();
+        assert!(error.0.contains("non-finite coordinates"));
     }
 
     #[test]

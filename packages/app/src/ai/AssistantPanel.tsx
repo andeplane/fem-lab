@@ -5,7 +5,8 @@
 import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { Store, UiState } from '../store';
+import { verificationState, type AssistantVerification, type Store, type UiState } from '../store';
+
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
 import './assistant.css';
@@ -61,7 +62,7 @@ interface QueuedMessage { text: string; images: ImageBlock[]; provider: Provider
 type Item =
   | { kind: 'user'; text: string; images: ImageBlock[] }
   | { kind: 'prose'; text: string }
-  | { kind: 'verify'; rows: VerifyRow[] }
+  | { kind: 'verify'; record: AssistantVerification }
   | { kind: 'skill'; name: string; note: string }
   | { kind: 'tool'; call: ToolCall }
   | { kind: 'diff'; entries: JournalEntry[]; steps: number; journal: string | null }
@@ -260,6 +261,14 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     if (owner) { setProvider(owner); setModel(ui.assistantModel); }
   }, [ui.assistantModel]);
   useEffect(() => () => { queue.current = []; activeRequest.current?.abort(); }, []);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const focusDraft = useRef(false);
+  useLayoutEffect(() => {
+    if (focusDraft.current && !hidden) {
+      composer.current?.focus();
+      focusDraft.current = false;
+    }
+  });
 
   const key = resolveKey(provider);
   const openPanel = (name: string, fallback = false) => ui.panels[`assistant.${name}`] ?? fallback;
@@ -314,9 +323,15 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       setBusy('thinking…');
       add({ kind: 'user', text: line, images: attached });
       let prose = '';
+      let proseContext: Omit<AssistantVerification, 'rows'> | null = null;
       const finishProse = () => {
-        if (prose.trim()) flushProse(prose, add);
+        if (prose.trim()) flushProse(prose, add, (rows) => {
+          const record = { rows, ...proseContext! };
+          store.set({ assistantVerifications: [...store.state.assistantVerifications, record] });
+          return record;
+        });
         prose = '';
+        proseContext = null;
         setStreaming('');
       };
       try {
@@ -329,6 +344,10 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         const system = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
         for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current, signal })) {
           if (event.type === 'text') {
+            if (!proseContext) {
+              const state = store.state;
+              proseContext = { model: state.model?.name ?? null, revision: state.revision, journalHash: state.journal?.hash ?? null, result: state.result ? { step: state.result.step, revision: state.result.revision } : null };
+            }
             prose += event.text;
             setStreaming(streamingProse(prose));
             setBusy('writing…');
@@ -414,12 +433,17 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       store.togglePanel('assistant', true);
       void send(text);
     };
-    chatBridge.insertMention = insert;
-    chatBridge.setDraft = setDraft;
+    chatBridge.setDraft = (text) => {
+      store.togglePanel('assistant', true);
+      setDraft(text);
+      store.togglePanel('assistant.skills', false);
+      focusDraft.current = true;
+    };
     if (chatBridge.pendingDraft !== null) {
-      setDraft(chatBridge.pendingDraft);
+      chatBridge.setDraft(chatBridge.pendingDraft);
       chatBridge.pendingDraft = null;
     }
+    chatBridge.insertMention = insert;
     chatBridge.clear = () => {
       chatBridge.pending = null;
       if (activeRequest.current) return;
@@ -434,6 +458,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     return () => {
       chatBridge.send = buffer;
       chatBridge.setDraft = (text: string): void => { chatBridge.pendingDraft = text; };
+
     };
   });
 
@@ -459,19 +484,19 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     : [];
   const slash = /^\/(\S*)$/.exec(draft);
   const slashKey = slash ? `/${slash[1]!}` : null;
-  const skillRows: Row[] = (slash && dismissed !== slashKey ? skills.filter((s) => s.name.startsWith(slash[1]!)) : []).map((s) => ({
+  const skillRows: Row[] = (openPanel('skills') ? enabled : slash && dismissed !== slashKey ? enabled.filter((s) => s.name.startsWith(slash[1]!)) : []).map((s) => ({
     key: s.name,
     kind: s.source,
     name: s.name,
     meta: s.description,
     cmd: 'chat.setDraft',
-    run: () => void dispatch({ cmd: 'chat.setDraft', text: `/${s.name} ` }),
+    run: () => void dispatch({ cmd: 'chat.setDraft', text: `/${s.name} ${draft.replace(/^\/\S*\s*/, '')}` }),
   }));
   // Only one is ever open, so one cursor serves both.
   const menu = groupRows(mentionRows.length > 0 ? mentionRows : skillRows);
   const cursor = menu.flat.length === 0 ? 0 : Math.min(active, menu.flat.length - 1);
 
-  const compose = () => [...tokens.map((t) => `@${t}`), draft].join(' ').trim();
+  const compose = () => [draft, ...tokens.map((t) => `@${t}`)].join(' ').trim();
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
 
   return (
@@ -527,7 +552,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
       }}>
         {items.map((item, i) => (
-          <Item key={i} item={item} registry={registry} dispatch={dispatch} />
+          <Item key={i} item={item} registry={registry} dispatch={dispatch} state={ui} />
         ))}
         {streaming ? <Prose streaming text={streaming} /> : null}
         {busy ? (
@@ -543,7 +568,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
           and needs no offsets. The transcript shifts up when it opens — that is the trade. */}
       {menu.flat.length > 0 ? (
         <div class="popover">
-          <div class="hint">{mentionRows.length > 0 ? `@${query} — reference anything in the Model, the Journal or the project folder` : `/${slash![1]} — a skill is loaded into the turn it is used in`}</div>
+          <div class="hint">{mentionRows.length > 0 ? `@${query} — reference anything in the Model, the Journal or the project folder` : `/${slash?.[1] ?? 'skill'} — a skill is loaded into the turn it is used in`}</div>
           <div class="list">
             {menu.groups.map((group) => (
               <div class="group" key={group.kind}>
@@ -579,6 +604,13 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
           </div>
         ) : null}
 
+        <div class="suggestions" aria-label="Prompt suggestions">
+          {(items.some((item) => item.kind === 'user')
+            ? [{ label: 'Check this Model', text: 'Inspect the current Model and identify checks to run before trusting its results.' }, { label: 'Explain the next step', text: 'Explain the next useful modeling or verification step and why.' }]
+            : [{ label: 'Build a cantilever', text: 'Help me build a cantilever beam. Ask for the dimensions, material and load that you need.' }, { label: 'Inspect this Model', text: 'Inspect the current Model and explain its geometry, materials, boundary conditions and loads.' }]
+          ).map((suggestion) => <Cmd key={suggestion.label} cmd="chat.setDraft" disabled={busy !== ''} run={() => dispatch({ cmd: 'chat.setDraft', text: suggestion.text })}>{suggestion.label}</Cmd>)}
+        </div>
+
         <div class="box">
           <div class="tokens">
             {tokens.map((t) => (
@@ -588,6 +620,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
               </span>
             ))}
             <textarea
+              ref={composer}
               rows={1}
               placeholder={items.length === 0 ? 'Describe the model, or ask for a check…' : 'Reply, or ask for the next step…'}
               value={draft}
@@ -659,6 +692,9 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             </Cmd>
             <Cmd cmd="chat.insertMention" title="Reference the current selection" disabled={ui.selection.refs.length === 0} run={() => void Promise.all(ui.selection.refs.map((ref) => dispatch({ cmd: 'chat.insertMention', ref })))}>
               @selection
+            </Cmd>
+            <Cmd cmd="panel.toggle" title="Choose a skill for this draft" disabled={busy !== ''} run={() => dispatch({ cmd: 'panel.toggle', panel: 'assistant.skills' })}>
+              /skill
             </Cmd>
             <Cmd
               cmd="query.screenshot"
@@ -758,13 +794,13 @@ function streamingProse(text: string): string {
 }
 
 /** Prose is split on its `<verification>` block, so the card and the sentences both survive. */
-function flushProse(text: string, add: (item: Item) => void): void {
+function flushProse(text: string, add: (item: Item) => void, record: (rows: VerifyRow[]) => AssistantVerification): void {
   const { rows, prose } = parseVerification(text);
   if (prose) add({ kind: 'prose', text: prose });
-  if (rows.length > 0) add({ kind: 'verify', rows });
+  if (rows.length > 0) add({ kind: 'verify', record: record(rows) });
 }
 
-function Item({ item, registry, dispatch }: { item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
+function Item({ item, registry, dispatch, state }: { state: UiState; item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
   const [undoState, setUndoState] = useState<'ready' | 'pending' | 'done' | 'failed'>('ready');
   const [undoError, setUndoError] = useState('');
   if (item.kind === 'user') {
@@ -794,10 +830,11 @@ function Item({ item, registry, dispatch }: { item: Item; registry: Registry; di
       <div class="card verify">
         <div class="head">
           <span>◎</span>
-          <span>VERIFICATION</span>
+          <span>VERIFICATION · also in Checks</span>
         </div>
+        <div class="out">Assistant-reported · not independently verified<br />{verificationState(item.record, state)}</div>
         <div class="rows">
-          {item.rows.map((row, i) => (
+          {item.record.rows.map((row, i) => (
             <div key={i}>
               <span class={`icon ${row.status}`}>{row.status === 'ok' ? '✓' : row.status === 'warn' ? '!' : '✕'}</span>
               <span class="what">{row.what}</span>

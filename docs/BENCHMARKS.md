@@ -541,6 +541,35 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
 
+### Transformed Sheet free meshing (#230)
+
+A 2×2 m square with a centered 1×1 m square hole, scaled (2,3), rotated 90°
+about z and translated (5,7) m, has area 18 m² and bounds [−1,5]×[7,11] m.
+`transformed_sheets_mesh_in_world_space_with_oriented_hole_boundaries` checks that
+area, positive signed triangle Jacobians, empty hole, exact named boundary lines,
+world-size area bounds and local refinement in world coordinates. Both tri3 and
+tri6 run at sizes 0.8, 0.4 and 0.2 m; quadratic midpoints retain the edge ordering.
+The engine regression runs the shared tagged polygon at 1, 0.5 and 0.25 m, checks
+outer lengths (6,4,6,4) m and hole perimeter 10 m, with each tag qualified once.
+
+`transformed_curved_holes_resample_as_world_element_size_decreases` scales a
+10×10 m square with a unit-radius circular hole into a 20×30 m rectangle with
+an elliptical hole of radii 2 and 3 m. At world sizes 2, 1 and 0.5 m its area
+converges from above to 600−6π m². The error is bounded by 0.4π·size m², and
+every quadratic boundary node stays within the normalized chord bound. Sampling
+uses local tolerance 0.1·size/max(scale_x,scale_y), which bounds world error after
+rotation and nonuniform scaling. This is mesh-dependent sampling, independent of
+the fixed display preview. Unsupported nested/out-of-plane transforms remain
+explicit errors, with engine command rejection preserving Model and Journal.
+
+### Transformed Sheet arithmetic guard (#230, #274)
+
+Finite scale and translation inputs that overflow world coordinates return structured errors
+before triangulation. A never-panic property exercises multiplication and addition overflow,
+linear/quadratic meshing and shared Solid evaluation. Registry checks verify rejected geometry
+leaves the Model and Journal unchanged. Existing transformed-hole area, boundary, refinement
+and convergence oracles continue to check ordinary geometry.
+
 ## Unmeshed Sheet preview (#154)
 
 The tagged square-with-hole fixture has outer area 4 m² and hole area 1 m².
