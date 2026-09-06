@@ -2,6 +2,7 @@
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
 import type { AutosaveState, AutosaveVersion, Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { PaletteIntent } from './ai/palette-intent';
 import type { HostCaps } from './capabilities';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
@@ -56,6 +57,7 @@ export interface UiState {
   autosaves: AutosaveVersion[];
   /** Session mirror of the ai.setModel host Command, shared with the Assistant. */
   assistantModel: string | null;
+  paletteIntent: PaletteIntent | null;
   /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
   folder: ProjectFolder | null;
   /** One available catalog; project skills override built-ins by name. */
@@ -176,6 +178,7 @@ export const initialState: UiState = {
   autosave: null,
   autosaves: [],
   assistantModel: null,
+  paletteIntent: null,
   folder: null,
   skills: BUILTIN_SKILLS,
   ready: false,
