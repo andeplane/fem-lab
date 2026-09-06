@@ -35,6 +35,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'selection.setPickTarget': { target: 'face' },
   'panel.toggle': { panel: 'palette', open: true },
   'panel.resize': { panel: 'tree', size: 300 },
+  'report.print': {},
   'query.validateScript': { code: '1 + 1' },
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
@@ -206,6 +207,12 @@ describe('Registry', () => {
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
     expect(host.script.setSource).toHaveBeenCalledWith('x', undefined);
+  });
+
+  it('opens the host print path for the calculation note', async () => {
+    const { registry, host } = make();
+    await registry.dispatch({ cmd: 'report.print' });
+    expect(host.report.print).toHaveBeenCalledOnce();
   });
 
   it('skill.invoke returns the body or a not-found error listing the skills', async () => {

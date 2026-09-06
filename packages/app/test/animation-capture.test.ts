@@ -120,7 +120,7 @@ describe('animation capture', () => {
         return task(document.createElement('canvas'));
       },
     } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, undefined, c.env);
     const recording = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
     expect(store.state).toMatchObject({ capturingAnimation: true, playing: false });
     c.frame(1100);
@@ -136,7 +136,7 @@ describe('animation capture', () => {
     const c = controlled();
     const store = new Store();
     store.set({ fieldKey: 'vonMises', result: { step: 'static', history: [] } as never });
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: null }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: null }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, undefined, c.env);
     await expect(ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 })).rejects.toMatchObject({ code: 'export.unavailable', suggestion: expect.stringContaining('modal Step') });
   });
 
@@ -146,7 +146,7 @@ describe('animation capture', () => {
     store.set({ fieldKey: 'mode:1', result: null });
     const animationState = vi.fn();
     const viewer = { animationState } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, undefined, c.env);
 
     await expect(ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 })).rejects.toMatchObject({
       code: 'export.unavailable',
@@ -168,7 +168,7 @@ describe('animation capture', () => {
       restoreAnimation: (state: unknown) => restored.push(state),
       atCaptureSize: (_width: number, _height: number, task: (canvas: HTMLCanvasElement) => Promise<unknown>) => task(document.createElement('canvas')),
     } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, undefined, c.env);
 
     const failed = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
     c.fail('encoder stopped');
@@ -201,7 +201,7 @@ describe('animation capture', () => {
       restoreAnimation: (state: unknown) => restored.push(state),
       atCaptureSize: (_width: number, _height: number, task: (canvas: HTMLCanvasElement) => Promise<unknown>) => task(document.createElement('canvas')),
     } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, undefined, env);
 
     const first = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
     expect(ctx.view.cancelAnimationCapture()).toBe(true);
@@ -230,7 +230,7 @@ describe('animation capture', () => {
         return task(document.createElement('canvas'));
       },
     } as unknown as Viewer;
-    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, c.env);
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, undefined, c.env);
 
     const first = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
     const overlap = ctx.view.captureAnimation({ width: 1920, height: 1080, fps: 30, duration: 4 });
