@@ -1,12 +1,22 @@
 //! Lossless editable Commands, read from the current Model rather than display summaries.
 use crate::command::*;
 use crate::model::{Amplitude, ConstraintKind, LoadKind, Model, SetSource};
-use crate::units::{Length, Q};
+use crate::units::{Dim, Length, Q};
 use crate::{Error, ErrorCode};
 use femlab_geometry::{FacePredicate as Face, RegionPredicate as Region, Segment, Shape, Sketch};
 
 fn length(v: f64) -> Q<Length> {
     Q::new(v, "m")
+}
+
+/// An SI value written as text rather than as `{value, unit}` parts.
+///
+/// `serde_json`'s float parser is not correctly rounded, so a value that needs all seventeen
+/// significant digits — a second moment of area usually does — comes back one ulp away and the
+/// definition would not re-apply to the same Model. `Display` writes the shortest string that
+/// round-trips and Rust's own `str::parse` reads it back exactly, both ways.
+fn si_text<D: Dim>(v: f64, unit: &str) -> Q<D> {
+    Q::text(&format!("{v} {unit}"))
 }
 
 fn sketch(s: &Sketch) -> SketchSpec {
@@ -86,6 +96,24 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
         ObjectKind::Body => {
             let b = m.body(name).ok_or_else(missing)?;
             Command::GeometryAdd { name: b.name.clone(), shape: shape(&b.shape)? }
+        }
+        // A Section is stored as its resolved properties, so its definition comes back in the
+        // `generic` form: the same numbers, and re-applying it is exactly idempotent.
+        ObjectKind::Section => {
+            let x = m.section(name).ok_or_else(missing)?;
+            Command::SectionAdd {
+                name: x.name.clone(),
+                shape: SectionSpec::Generic {
+                    a: si_text(x.section.a, "m^2"),
+                    i_y: si_text(x.section.i_y, "m^4"),
+                    i_z: si_text(x.section.i_z, "m^4"),
+                    j: si_text(x.section.j, "m^4"),
+                    k_y: Some(x.section.k_y),
+                    k_z: Some(x.section.k_z),
+                    c_y: Some(si_text(x.section.c_y, "m")),
+                    c_z: Some(si_text(x.section.c_z, "m")),
+                },
+            }
         }
         ObjectKind::Material => {
             let x = m.material(name).ok_or_else(missing)?;

@@ -583,6 +583,46 @@ impl Engine {
                 self.model.materials.retain(|m| m.name != *name);
                 Ok(Output::None)
             }
+            Command::SectionAdd { name, shape } => {
+                check_name(name)?;
+                let section = crate::fem::section::properties(shape)?;
+                let named = crate::model::NamedSection { name: name.clone(), section };
+                Ok(upsert(&mut self.model.sections, named, |s| &s.name, ObjectKind::Section))
+            }
+            Command::SectionAssign { section, bodies } => {
+                self.model
+                    .section(section)
+                    .ok_or_else(|| Error::not_found("section", section, &self.model.names(ObjectKind::Section)))?;
+                // A Section belongs to explicit line geometry; a mesher's implicit Body is a
+                // surface and gets its cross-section from the idealisation, so it is not listed.
+                let known: Vec<&str> = self.model.bodies.iter().map(|b| b.name.as_str()).collect();
+                for b in bodies {
+                    if !known.contains(&b.as_str()) {
+                        return Err(Error::not_found("body", b, &known));
+                    }
+                }
+                for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
+                    b.section = Some(section.clone());
+                }
+                Ok(Output::None)
+            }
+            Command::SectionRemove { name } => {
+                self.model
+                    .section(name)
+                    .ok_or_else(|| Error::not_found("section", name, &self.model.names(ObjectKind::Section)))?;
+                let users: Vec<&str> = self
+                    .model
+                    .bodies
+                    .iter()
+                    .filter(|b| b.section.as_deref() == Some(name))
+                    .map(|b| b.name.as_str())
+                    .collect();
+                if !users.is_empty() {
+                    return Err(in_use("section", name, &users, "bodies"));
+                }
+                self.model.sections.retain(|s| s.name != *name);
+                Ok(Output::None)
+            }
             Command::MeshSet { mesher, order, formulation } => {
                 let order = order.unwrap_or(1);
                 if !(1..=2).contains(&order) {
@@ -898,8 +938,13 @@ impl Engine {
         let dim = shape.dim();
         let _ = Solid::evaluate(&Shape::Named { name: name.to_string(), shape: Box::new(shape.clone()) })
             .map_err(|e| geom_error(e, "shape"))?;
-        let body =
-            Body { name: name.to_string(), shape, material: self.model.body(name).and_then(|b| b.material.clone()) };
+        let old = self.model.body(name);
+        let body = Body {
+            name: name.to_string(),
+            shape,
+            material: old.and_then(|b| b.material.clone()),
+            section: old.and_then(|b| b.section.clone()),
+        };
         let _ = dim;
         self.invalidate_geometry();
         Ok(upsert(&mut self.model.bodies, body, |b| &b.name, ObjectKind::Body))
@@ -1140,6 +1185,18 @@ impl Engine {
                     m.mesher_material = Some(to.into());
                 }
             }
+            ObjectKind::Section => {
+                for sec in &mut m.sections {
+                    if sec.name == name {
+                        sec.name = to.into();
+                    }
+                }
+                for b in &mut m.bodies {
+                    if b.section.as_deref() == Some(name) {
+                        b.section = Some(to.into());
+                    }
+                }
+            }
             ObjectKind::Set => {
                 for s in &mut m.sets {
                     if s.name == name {
@@ -1246,6 +1303,11 @@ impl Engine {
                 let mut x = m.material(name).expect("checked").clone();
                 x.name = as_.into();
                 m.materials.push(x);
+            }
+            ObjectKind::Section => {
+                let mut x = m.section(name).expect("checked").clone();
+                x.name = as_.into();
+                m.sections.push(x);
             }
             ObjectKind::Set => {
                 let mut x = m.sets.iter().find(|s| s.name == name).expect("checked").clone();

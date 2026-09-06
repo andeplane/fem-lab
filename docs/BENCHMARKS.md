@@ -161,10 +161,29 @@ Gauss tables are positive and cover these factors; stiffness/recovery retains it
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
+| B20 | Section library: A, I_y, I_z, J of every `section.add` shape | closed forms (Roark for the rectangle's J), and the I-section against the IPE 200 datasheet A = 2850 mm², I_y = 19.43e6 mm⁴, I_z = 1.424e6 mm⁴ | exact against the closed forms (1e-12 rel); within 6 % *below* the datasheet | the section library a line member integrates with | engine test |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
 motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
 refinements n=4,8,16 give rates about 2.00 for tri3/tet4 and 4.02/4.05 for tri6/tet10.
+
+B20 (`section_properties_match_their_closed_forms_and_a_datasheet`) checks every
+`SectionSpec` arm against an oracle written from the geometry rather than from the
+library: the rectangle and the circle against their textbook formulas, the square's
+torsion constant against Roark's 0.1406 s⁴ (the library's fit gives 0.14083, and the
+exact Saint-Venant series 0.140577, so the gate is 3e-4 on that ratio), the tube as the
+solid circle minus its bore, the I-section as two flange rectangles plus a web by the
+parallel-axis theorem, and the channel through the vanishing first moment about its own
+centroid. The I-section is then cross-checked against the **IPE 200** datasheet
+(A = 2850 mm², I_y = 19.43e6 mm⁴, I_z = 1.424e6 mm⁴). The library models square corners
+and a rolled profile has root fillets, which only ever add material, so the gate is
+*signed*: the computed value must be below the datasheet and by less than 6 %. It comes
+out 4.4 % low on A, 5.0 % on I_y and 0.3 % on I_z. The shear factors are the classical
+Timoshenko–Reissner values (5/6 rectangle, 0.9 circle, 0.5 thin tube, area ratios for the
+I and the channel), **not** Cowper's ν-dependent ones, which at ν = 0.3 are 0.850 and
+0.886; `section.add`'s doc string says which convention it is. The shear centre and
+warping torsion are not modelled, so an open section gets the thin-strip St Venant
+torsion constant only.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the

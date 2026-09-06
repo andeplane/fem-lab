@@ -505,6 +505,21 @@ impl Engine {
                 });
             }
         }
+        if want(ObjectKind::Section) {
+            for sec in &m.sections {
+                objects.push(ObjectRef {
+                    ref_: format!("section:{}", sec.name),
+                    kind: "section".into(),
+                    name: sec.name.clone(),
+                    summary: format!(
+                        "A = {} m^2, Iy = {} m^4, Iz = {} m^4",
+                        units::fmt_sig(sec.section.a, 4),
+                        units::fmt_sig(sec.section.i_y, 4),
+                        units::fmt_sig(sec.section.i_z, 4)
+                    ),
+                });
+            }
+        }
         if want(ObjectKind::Set) {
             for s in &m.sets {
                 objects.push(ObjectRef {

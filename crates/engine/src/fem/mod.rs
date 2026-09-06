@@ -15,4 +15,5 @@ pub mod loads;
 pub mod material;
 pub mod problem;
 pub mod quadrature;
+pub mod section;
 pub mod shape;

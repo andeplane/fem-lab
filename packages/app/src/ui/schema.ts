@@ -22,6 +22,8 @@ const DIMENSIONS: Record<string, { si: string; exp: [number, number, number, num
   heat_flux: { si: 'W/m^2', exp: [0, 1, -3, 0] },
   heat_source: { si: 'W/m^3', exp: [-1, 1, -3, 0] },
   frequency: { si: 'Hz', exp: [0, 0, -1, 0] },
+  area: { si: 'm^2', exp: [2, 0, 0, 0] },
+  second_moment: { si: 'm^4', exp: [4, 0, 0, 0] },
   dimensionless: { si: '', exp: [0, 0, 0, 0] },
 };
 

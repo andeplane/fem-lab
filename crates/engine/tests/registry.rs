@@ -5255,6 +5255,63 @@ fn convergence_studies_reject_modal_and_chained_steps_without_mutation() {
 }
 
 #[test]
+fn sections_are_named_assigned_removed_and_listed_like_materials() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"truss"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","0.1 m","0.1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"section.add","name":"bar","shape":{"kind":"circle","radius":"25 mm"}}"#);
+    // Re-issuing edits in place, exactly as material.add does.
+    let a = ok(&mut e, r#"{"cmd":"section.add","name":"bar","shape":{"kind":"circle","radius":"20 mm"}}"#);
+    assert_eq!(a.output, Output::Replaced { kind: ObjectKind::Section, name: "bar".into() });
+    assert_eq!(e.model().sections.len(), 1);
+    assert!((e.model().section("bar").unwrap().section.a - std::f64::consts::PI * 0.02 * 0.02).abs() < 1e-18);
+
+    let QueryResult::Objects(o) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Section]) }).unwrap() else {
+        panic!("objects")
+    };
+    assert_eq!(o.objects.len(), 1);
+    assert_eq!(o.objects[0].ref_, "section:bar");
+    assert!(o.objects[0].summary.contains("A = 0.001257 m^2"), "{}", o.objects[0].summary);
+
+    ok(&mut e, r#"{"cmd":"section.assign","section":"bar","bodies":["beam"]}"#);
+    assert_eq!(e.model().body("beam").unwrap().section.as_deref(), Some("bar"));
+    // A rename follows the assignment and leaves every other Section alone.
+    ok(&mut e, r#"{"cmd":"section.add","name":"keep","shape":{"kind":"circle","radius":"1 mm"}}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"section","name":"bar","to":"rod"}"#);
+    assert_eq!(e.model().names(ObjectKind::Section), ["rod", "keep"]);
+    ok(&mut e, r#"{"cmd":"section.remove","name":"keep"}"#);
+    assert_eq!(e.model().body("beam").unwrap().section.as_deref(), Some("rod"));
+    let er = err(&mut e, r#"{"cmd":"section.remove","name":"rod"}"#);
+    assert_eq!(er.code, ErrorCode::InUse);
+    assert!(er.cause.contains("beam"), "{}", er.cause);
+
+    // Unknown names on either side are NotFound, and neither changes the Model.
+    let hash = e.model_hash();
+    assert_eq!(err(&mut e, r#"{"cmd":"section.remove","name":"ghost"}"#).code, ErrorCode::NotFound);
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"section.assign","section":"ghost","bodies":["beam"]}"#).code,
+        ErrorCode::NotFound
+    );
+    let er = err(&mut e, r#"{"cmd":"section.assign","section":"rod","bodies":["ghost"]}"#);
+    assert_eq!(er.code, ErrorCode::NotFound);
+    assert!(er.suggestion.as_deref().unwrap().contains("beam"), "{er:?}");
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"section.add","name":"a.b","shape":{"kind":"circle","radius":"1 mm"}}"#).code,
+        ErrorCode::Schema
+    );
+    // A shape that cannot exist is refused at the Command boundary, located in the shape.
+    let er = err(&mut e, r#"{"cmd":"section.add","name":"flat","shape":{"kind":"circle","radius":"0 mm"}}"#);
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::Schema, Some("shape.radius")));
+    assert_eq!(e.model_hash(), hash, "a refused Command changes nothing");
+
+    // Reassigning frees the first Section, which can then be removed.
+    ok(&mut e, r#"{"cmd":"section.add","name":"other","shape":{"kind":"rectangle","width":"1 mm","height":"2 mm"}}"#);
+    ok(&mut e, r#"{"cmd":"section.assign","section":"other","bodies":["beam"]}"#);
+    ok(&mut e, r#"{"cmd":"section.remove","name":"rod"}"#);
+    assert_eq!(e.model().names(ObjectKind::Section), ["other"]);
+}
+
+#[test]
 fn editable_definitions_preserve_every_public_object_variant() {
     let cases: Vec<serde_json::Value> =
         serde_json::from_str(include_str!("../../../tools/fixtures/editable-definitions.json")).unwrap();
@@ -5308,7 +5365,12 @@ fn definitions_refuse_internal_imported_shapes_without_erasing_face_tags() {
     for shape in shapes {
         let mut e = engine();
         let mut file = e.export_file();
-        file.model.bodies.push(femlab_engine::model::Body { name: "imported".into(), shape, material: None });
+        file.model.bodies.push(femlab_engine::model::Body {
+            name: "imported".into(),
+            shape,
+            material: None,
+            section: None,
+        });
         e.import_file(file).unwrap();
         let before = e.model().clone();
         let error = e.query(Query::Definition { kind: ObjectKind::Body, name: "imported".into() }).unwrap_err();

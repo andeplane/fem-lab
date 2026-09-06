@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use femlab_engine::command::Formulation;
-use femlab_engine::command::{Field, Solver};
+use femlab_engine::command::{Field, SectionSpec, Solver};
 use femlab_engine::fem::assembly::{
     assemble_stiffness, expand, pattern, reactions, reduce, resolve, Assembled, Csr, Pattern, ResolvedConstraints,
 };
@@ -24,6 +24,7 @@ use femlab_engine::fem::problem::{Constraint, Problem};
 use femlab_engine::fem::quadrature::{
     gauss_legendre, Rule, HEX_2X2X2, HEX_3X3X3, QUAD_2X2, QUAD_3X3, TET_1, TET_4, TRI_1, TRI_3,
 };
+use femlab_engine::fem::section::{properties, Section};
 use femlab_engine::fem::shape::{
     centre_xi, dshape_of, face_dshape_of, face_rule_of, face_shape_of, in_reference, node_xi, rule_of, shape_of, Hex20,
     Hex8, Line2, Line3, Quad4, Quad4F, Quad8, Quad8F, RefElement, RefFace, Tet10, Tet4, Tri3, Tri3F, Tri6, Tri6F,
@@ -37,6 +38,7 @@ use femlab_engine::post::stress::{average_at_nodes, principal, stress_gp, von_mi
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
 use femlab_engine::procedure::{self, heat, Step, StepResult};
 use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
+use femlab_engine::units::{Length, Q};
 use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
 use femlab_engine::{OnProgress, Progress};
 use femlab_geometry::mesh::{ElementKind, FaceKind};
@@ -4976,5 +4978,307 @@ fn consistent_quadratic_gravity_distribution_remains_unchanged() {
         let expected = if corner { -weight / 12.0 } else { weight / 3.0 };
         assert!((f[2 * i + 1] - expected).abs() < 1e-10);
         assert_eq!(f[2 * i], 0.0);
+    }
+}
+
+// ---------------------------------------------------------------- section library
+
+fn mm(v: f64) -> Q<Length> {
+    Q::new(v, "mm")
+}
+
+fn props(spec: SectionSpec) -> Section {
+    properties(&spec).expect("a valid section")
+}
+
+fn spec_error(spec: SectionSpec) -> Error {
+    properties(&spec).expect_err("an invalid section")
+}
+
+/// Every closed form of the library against an oracle written from the geometry, and the
+/// I-section against the IPE 200 datasheet (Benchmark B20).
+#[test]
+fn section_properties_match_their_closed_forms_and_a_datasheet() {
+    // Rectangle 60 x 100 mm: A = bh, I_y = bh^3/12 about the width axis, I_z = hb^3/12.
+    let (b, h) = (0.060, 0.100);
+    let r = props(SectionSpec::Rectangle { width: mm(60.0), height: mm(100.0) });
+    assert!((r.a - b * h).abs() < 1e-18, "{r:?}");
+    assert!((r.i_y - b * h * h * h / 12.0).abs() < 1e-18, "{r:?}");
+    assert!((r.i_z - h * b * b * b / 12.0).abs() < 1e-18, "{r:?}");
+    assert_eq!((r.c_y, r.c_z), (0.5 * b, 0.5 * h));
+    assert_eq!((r.k_y, r.k_z), (5.0 / 6.0, 5.0 / 6.0));
+    // Roark's rectangle torsion constant is 0.1406 s^4 for a square, whichever side is longer.
+    let square = props(SectionSpec::Rectangle { width: mm(50.0), height: mm(50.0) });
+    // Roark fits 0.14083 where the exact Saint-Venant series gives 0.140577.
+    assert!((square.j / 0.050f64.powi(4) - 0.1406).abs() < 3e-4, "{}", square.j);
+    let tall = props(SectionSpec::Rectangle { width: mm(100.0), height: mm(60.0) });
+    assert!((tall.j - r.j).abs() < 1e-18, "the torsion constant does not depend on which side is which");
+
+    // Circle: A = pi r^2, I = pi r^4 / 4 both ways, J = 2I (the polar moment).
+    let rad = 0.025;
+    let c = props(SectionSpec::Circle { radius: mm(25.0) });
+    assert!((c.a - PI * rad * rad).abs() < 1e-18, "{c:?}");
+    assert!((c.i_y - PI * rad.powi(4) / 4.0).abs() < 1e-20, "{c:?}");
+    assert_eq!((c.i_y, c.j), (c.i_z, 2.0 * c.i_y));
+    assert_eq!((c.c_y, c.c_z, c.k_y, c.k_z), (rad, rad, 0.9, 0.9));
+
+    // Tube 50 mm outside diameter, 5 mm wall: the solid circle minus the bore.
+    let t = props(SectionSpec::Tube { radius: mm(25.0), thickness: mm(5.0) });
+    let bore = 0.020;
+    assert!((t.a - PI * (rad * rad - bore * bore)).abs() < 1e-18, "{t:?}");
+    assert!((t.i_y - PI * (rad.powi(4) - bore.powi(4)) / 4.0).abs() < 1e-20, "{t:?}");
+    assert_eq!((t.j, t.k_y, t.k_z), (2.0 * t.i_y, 0.5, 0.5));
+
+    // IPE 200: h = 200, b = 100, t_w = 5.6, t_f = 8.5 mm. The datasheet gives
+    // A = 2850 mm^2, I_y = 19.43e6 mm^4, I_z = 1.424e6 mm^4. The library models square
+    // corners and the real profile has root fillets, so it lands just below on all three.
+    let i = props(SectionSpec::I {
+        height: mm(200.0),
+        width: mm(100.0),
+        web_thickness: mm(5.6),
+        flange_thickness: mm(8.5),
+    });
+    let (hw, tw, tf, bf) = (0.200 - 2.0 * 0.0085, 0.0056, 0.0085, 0.100);
+    assert!((i.a - (2.0 * bf * tf + hw * tw)).abs() < 1e-18, "{i:?}");
+    // The fillets only ever add material, so a square-cornered model must land below the
+    // datasheet on all three, and by no more than the fillets are worth.
+    for (got, book, what) in [(i.a, 2850e-6, "A"), (i.i_y, 19.43e-6, "I_y"), (i.i_z, 1.424e-6, "I_z")] {
+        let short = 1.0 - got / book;
+        assert!((0.0..0.06).contains(&short), "{what} = {got} is {:.2} % off the IPE 200 datasheet", 100.0 * short);
+    }
+    // The oracle: two flange rectangles about the section's own axis, plus the web.
+    let i_y_oracle = 2.0 * (bf * tf.powi(3) / 12.0 + bf * tf * (0.5 * (0.200 - tf)).powi(2)) + tw * hw.powi(3) / 12.0;
+    assert!((i.i_y / i_y_oracle - 1.0).abs() < 1e-12, "{} vs {i_y_oracle}", i.i_y);
+    assert!((i.i_z - (2.0 * tf * bf.powi(3) + hw * tw.powi(3)) / 12.0).abs() < 1e-20, "{i:?}");
+    assert!((i.j - (2.0 * bf * tf.powi(3) + hw * tw.powi(3)) / 3.0).abs() < 1e-20, "{i:?}");
+    assert!((i.k_z - hw * tw / i.a).abs() < 1e-12 && (i.k_y - 2.0 * bf * tf / i.a).abs() < 1e-12, "{i:?}");
+    assert_eq!((i.c_y, i.c_z), (0.050, 0.100));
+
+    // Channel 200 x 75 mm: the centroid moves off the web, and c_y is the far side of it.
+    let ch = props(SectionSpec::Channel {
+        height: mm(200.0),
+        width: mm(75.0),
+        web_thickness: mm(8.0),
+        flange_thickness: mm(12.0),
+    });
+    let (h, bw, tw, tf) = (0.200, 0.075 - 0.008, 0.008, 0.012);
+    let (a_web, a_fl) = (h * tw, 2.0 * bw * tf);
+    assert!((ch.a - (a_web + a_fl)).abs() < 1e-18, "{ch:?}");
+    let y_bar = (a_web * 0.5 * tw + a_fl * (tw + 0.5 * bw)) / ch.a;
+    // The first moment about the centroid vanishes: the independent check on y_bar.
+    let first = a_web * (0.5 * tw - y_bar) + a_fl * (tw + 0.5 * bw - y_bar);
+    assert!(first.abs() < 1e-18, "{first}");
+    assert!(ch.c_y > 0.5 * 0.075, "an unsymmetric channel's far fibre is past the middle: {}", ch.c_y);
+    assert!((ch.c_y - (0.075 - y_bar)).abs() < 1e-15, "{ch:?}");
+    assert_eq!(ch.c_z, 0.5 * h);
+    assert!(
+        (ch.i_z
+            - (h * tw.powi(3) / 12.0
+                + a_web * (0.5 * tw - y_bar).powi(2)
+                + 2.0 * (tf * bw.powi(3) / 12.0 + bw * tf * (tw + 0.5 * bw - y_bar).powi(2))))
+        .abs()
+            < 1e-20,
+        "{ch:?}"
+    );
+    assert!(
+        (ch.i_y - (tw * h.powi(3) / 12.0 + 2.0 * (bw * tf.powi(3) / 12.0 + bw * tf * (0.5 * (h - tf)).powi(2)))).abs()
+            < 1e-20,
+        "{ch:?}"
+    );
+    assert!((ch.j - (h * tw.powi(3) + 2.0 * bw * tf.powi(3)) / 3.0).abs() < 1e-20, "{ch:?}");
+    assert!((ch.k_y - a_fl / ch.a).abs() < 1e-12 && (ch.k_z - a_web / ch.a).abs() < 1e-12, "{ch:?}");
+
+    // Generic: the numbers pass through untouched, with the documented defaults.
+    let g = props(SectionSpec::Generic {
+        a: Q::new(2850.0, "mm^2"),
+        i_y: Q::new(19.43e6, "mm^4"),
+        i_z: Q::new(1.424e6, "mm^4"),
+        j: Q::new(6.98e4, "mm^4"),
+        k_y: None,
+        k_z: None,
+        c_y: None,
+        c_z: None,
+    });
+    assert!((g.a - 2850e-6).abs() < 1e-18 && (g.i_y - 19.43e-6).abs() < 1e-20, "{g:?}");
+    assert_eq!((g.k_y, g.k_z, g.c_y, g.c_z), (5.0 / 6.0, 5.0 / 6.0, 0.0, 0.0));
+    let g = props(SectionSpec::Generic {
+        a: Q::new(1.0, "m^2"),
+        i_y: Q::new(2.0, "m^4"),
+        i_z: Q::new(3.0, "m^4"),
+        j: Q::new(4.0, "m^4"),
+        k_y: Some(0.4),
+        k_z: Some(1.0),
+        c_y: Some(mm(30.0)),
+        c_z: Some(mm(0.0)),
+    });
+    assert_eq!((g.k_y, g.k_z, g.c_y, g.c_z), (0.4, 1.0, 0.030, 0.0));
+}
+
+#[test]
+fn a_section_that_cannot_exist_is_a_located_schema_error() {
+    // Every dimension of every shape is checked where it is named, so a zero in any one of
+    // them says which one.
+    let zero = mm(0.0);
+    let cases: [(SectionSpec, &str, &str); 22] = [
+        (SectionSpec::Tube { radius: zero.clone(), thickness: mm(1.0) }, "shape.radius", "must be positive"),
+        (SectionSpec::Tube { radius: mm(10.0), thickness: zero.clone() }, "shape.thickness", "must be positive"),
+        (
+            SectionSpec::I { height: zero.clone(), width: mm(10.0), web_thickness: mm(1.0), flange_thickness: mm(1.0) },
+            "shape.height",
+            "must be positive",
+        ),
+        (
+            SectionSpec::I { height: mm(20.0), width: zero.clone(), web_thickness: mm(1.0), flange_thickness: mm(1.0) },
+            "shape.width",
+            "must be positive",
+        ),
+        (
+            SectionSpec::I {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: zero.clone(),
+                flange_thickness: mm(1.0),
+            },
+            "shape.webThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::I {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: mm(1.0),
+                flange_thickness: zero.clone(),
+            },
+            "shape.flangeThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: zero.clone(),
+                width: mm(10.0),
+                web_thickness: mm(1.0),
+                flange_thickness: mm(1.0),
+            },
+            "shape.height",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: mm(20.0),
+                width: zero.clone(),
+                web_thickness: mm(1.0),
+                flange_thickness: mm(1.0),
+            },
+            "shape.width",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: zero.clone(),
+                flange_thickness: mm(1.0),
+            },
+            "shape.webThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel { height: mm(20.0), width: mm(10.0), web_thickness: mm(1.0), flange_thickness: zero },
+            "shape.flangeThickness",
+            "must be positive",
+        ),
+        (SectionSpec::Rectangle { width: mm(0.0), height: mm(1.0) }, "shape.width", "must be positive"),
+        (SectionSpec::Rectangle { width: mm(1.0), height: mm(-1.0) }, "shape.height", "must be positive"),
+        (SectionSpec::Circle { radius: Q::new(1.0, "kg") }, "shape.radius", "expected a length"),
+        (SectionSpec::Tube { radius: mm(10.0), thickness: mm(10.0) }, "shape.radius - thickness", "must be positive"),
+        (
+            SectionSpec::I { height: mm(20.0), width: mm(10.0), web_thickness: mm(1.0), flange_thickness: mm(10.0) },
+            "shape.height - 2 flangeThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::I { height: mm(20.0), width: mm(10.0), web_thickness: mm(1000.0), flange_thickness: mm(1.0) },
+            "shape.width - webThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: mm(1.0),
+                flange_thickness: mm(1000.0),
+            },
+            "shape.height - 2 flangeThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: mm(1000.0),
+                flange_thickness: mm(1.0),
+            },
+            "shape.width - webThickness",
+            "must be positive",
+        ),
+        (generic_with(0.0, 1.0, 1.0, 1.0, None, None), "shape.a", "must be positive"),
+        (generic_with(1.0, 0.0, 1.0, 1.0, None, None), "shape.iY", "must be positive"),
+        (generic_with(1.0, 1.0, -1.0, 1.0, None, None), "shape.iZ", "must be positive"),
+        (generic_with(1.0, 1.0, 1.0, 0.0, None, None), "shape.j", "must be positive"),
+    ];
+    for (spec, where_, cause) in cases {
+        let e = spec_error(spec);
+        assert_eq!(e.where_.as_deref(), Some(where_));
+        assert!(e.cause.contains(cause), "{where_}: {}", e.cause);
+    }
+    for (k, where_) in [(Some(0.0), "shape.kY"), (Some(1.5), "shape.kZ")] {
+        let spec = if where_ == "shape.kY" {
+            generic_with(1.0, 1.0, 1.0, 1.0, k, None)
+        } else {
+            generic_with(1.0, 1.0, 1.0, 1.0, None, k)
+        };
+        let e = spec_error(spec);
+        assert_eq!(e.where_.as_deref(), Some(where_));
+        assert!(e.cause.contains("must be in (0, 1]"), "{}", e.cause);
+    }
+    // A negative extreme fibre is a wrong section; a bad unit on one is a dimension error.
+    let mut spec = generic_with(1.0, 1.0, 1.0, 1.0, None, None);
+    if let SectionSpec::Generic { c_y, c_z, .. } = &mut spec {
+        *c_y = Some(mm(-1.0));
+        *c_z = Some(Q::new(1.0, "s"));
+    }
+    let e = spec_error(spec.clone());
+    assert_eq!(e.where_.as_deref(), Some("shape.cY"));
+    assert!(e.cause.contains("zero or positive"), "{}", e.cause);
+    if let SectionSpec::Generic { c_y, .. } = &mut spec {
+        *c_y = None;
+    }
+    assert_eq!(spec_error(spec).where_.as_deref(), Some("shape.cZ"));
+    // A wrong dimension on the area and the moments is located too.
+    for (field, at) in [(0usize, "shape.a"), (1, "shape.iY"), (2, "shape.iZ"), (3, "shape.j")] {
+        let mut spec = generic_with(1.0, 1.0, 1.0, 1.0, None, None);
+        if let SectionSpec::Generic { a, i_y, i_z, j, .. } = &mut spec {
+            let wrong = "s";
+            match field {
+                0 => *a = Q::new(1.0, wrong),
+                1 => *i_y = Q::new(1.0, wrong),
+                2 => *i_z = Q::new(1.0, wrong),
+                _ => *j = Q::new(1.0, wrong),
+            }
+        }
+        assert_eq!(spec_error(spec).where_.as_deref(), Some(at));
+    }
+}
+
+fn generic_with(a: f64, i_y: f64, i_z: f64, j: f64, k_y: Option<f64>, k_z: Option<f64>) -> SectionSpec {
+    SectionSpec::Generic {
+        a: Q::new(a, "m^2"),
+        i_y: Q::new(i_y, "m^4"),
+        i_z: Q::new(i_z, "m^4"),
+        j: Q::new(j, "m^4"),
+        k_y,
+        k_z,
+        c_y: None,
+        c_z: None,
     }
 }

@@ -250,6 +250,20 @@ export type Command =
       cmd: "material.remove";
     }
   | {
+      name: string;
+      shape: SectionSpec;
+      cmd: "section.add";
+    }
+  | {
+      section: string;
+      bodies: string[];
+      cmd: "section.assign";
+    }
+  | {
+      name: string;
+      cmd: "section.remove";
+    }
+  | {
       mesher: MesherSpec;
       order?: number | null;
       formulation?: Formulation | null;
@@ -624,7 +638,7 @@ export type IdealisationSpec =
 /**
  * Kinds of nameable objects in a Model.
  */
-export type ObjectKind = "body" | "material" | "set" | "constraint" | "load" | "step";
+export type ObjectKind = "body" | "material" | "section" | "set" | "constraint" | "load" | "step";
 /**
  * A shape with unit strings; the geometry crate's `Shape` is its SI form.
  */
@@ -1131,6 +1145,212 @@ export type RegionPredicate =
   | {
       name: string;
       kind: "body";
+    };
+/**
+ * A cross-section for line members (trusses and frames). The library turns the shape into the
+ * area, the two second moments, the St Venant torsion constant, the shear correction factors
+ * and the extreme-fibre distances a line element integrates with.
+ *
+ * Local axes: `y` is the section's width direction and `z` its height, both through the
+ * centroid. `iY` bends about local y (deflection along z, the strong axis of an I-section) and
+ * `iZ` about local z. The shear centre and warping torsion are not modelled, so an open
+ * section (`i`, `channel`) gets the thin-strip torsion constant only, which under-predicts the
+ * torsional stiffness of a channel and ignores the twist a load through the centroid causes.
+ * `kY`/`kZ` are the classical Timoshenko-Reissner shear factors (5/6 for a rectangle, 0.9 for
+ * a circle, 0.5 for a thin tube, area ratios for the I and the channel), not Cowper's
+ * nu-dependent values, which at nu = 0.3 are 0.850 and 0.886.
+ */
+export type SectionSpec =
+  | {
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      width:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      height:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "rectangle";
+    }
+  | {
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      radius:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "circle";
+    }
+  | {
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      radius:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      thickness:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "tube";
+    }
+  | {
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      height:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      width:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      webThickness:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      flangeThickness:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "i";
+    }
+  | {
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      height:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      width:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      webThickness:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      flangeThickness:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kind: "channel";
+    }
+  | {
+      /**
+       * A area with unit, e.g. "2000 mm^2". Any unit of the right dimension is accepted.
+       */
+      a:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+       */
+      iY:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+       */
+      iZ:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+       */
+      j:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      kY?: number | null;
+      kZ?: number | null;
+      cY?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cZ?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      kind: "generic";
     };
 /**
  * The mesher and its settings.
@@ -1969,6 +2189,20 @@ export type ModelFile_Command =
   | {
       name: string;
       cmd: "material.remove";
+    }
+  | {
+      name: string;
+      shape: SectionSpec;
+      cmd: "section.add";
+    }
+  | {
+      section: string;
+      bodies: string[];
+      cmd: "section.assign";
+    }
+  | {
+      name: string;
+      cmd: "section.remove";
     }
   | {
       mesher: MesherSpec;
@@ -3882,6 +4116,11 @@ export interface Model {
   cuts?: Cut[];
   sets?: NamedSet[];
   materials?: Material[];
+  /**
+   * Skipped when empty, so a Model with no line members hashes exactly as it did before
+   * Sections existed and every committed Journal hash still holds.
+   */
+  sections?: NamedSection[];
   constraints?: Constraint[];
   loads?: Load[];
   steps?: Step[];
@@ -3912,12 +4151,16 @@ export interface UnitSet1 {
   acceleration?: string | null;
 }
 /**
- * A Body: one named shape with a material.
+ * A Body: one named shape with a material, and a Section when it is made of line members.
  */
 export interface Body {
   name: string;
   shape: Shape;
   material?: string | null;
+  /**
+   * The cross-section of its line members; unused by a solid or sheet Body.
+   */
+  section?: string | null;
 }
 /**
  * A closed outer loop and zero or more hole loops.
@@ -3976,6 +4219,50 @@ export interface Material {
   cp?: number | null;
   yield?: number | null;
   source?: string | null;
+}
+/**
+ * A named cross-section, resolved to SI properties by the section library.
+ */
+export interface NamedSection {
+  name: string;
+  section: Section;
+}
+/**
+ * One cross-section in SI, in the member's local axes. See the module docs for the axes.
+ */
+export interface Section {
+  /**
+   * Cross-sectional area, m².
+   */
+  a: number;
+  /**
+   * Second moment of area about local y, m⁴.
+   */
+  iY: number;
+  /**
+   * Second moment of area about local z, m⁴.
+   */
+  iZ: number;
+  /**
+   * St Venant torsion constant, m⁴.
+   */
+  j: number;
+  /**
+   * Shear correction factor for shear along local y.
+   */
+  kY: number;
+  /**
+   * Shear correction factor for shear along local z.
+   */
+  kZ: number;
+  /**
+   * Distance from the centroid to the furthest fibre along local y, m.
+   */
+  cY: number;
+  /**
+   * Distance from the centroid to the furthest fibre along local z, m.
+   */
+  cZ: number;
 }
 /**
  * A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
