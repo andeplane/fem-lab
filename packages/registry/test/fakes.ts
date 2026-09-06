@@ -74,9 +74,9 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       screenshot: vi.fn(async () => ({ png: 'data:image/png;base64,QUJD' })),
     },
     selection: { set: vi.fn(), clear: vi.fn(), setPickTarget: vi.fn(), get: vi.fn(() => ({ bodies: ['beam'], faces: ['beam.top'], sets: [], refs: ['body:beam', 'face:beam.top'] })) },
-    panels: { toggle: vi.fn() },
+    panels: { toggle: vi.fn(), resize: vi.fn() },
     script: { validate: vi.fn(async () => ({ ok: true, diagnostics: [] })), run: vi.fn(async () => ({ result: 1, console: [] })), stop: vi.fn(), setSource: vi.fn() },
-    chat: { send: vi.fn(), insertMention: vi.fn(), clear: vi.fn() },
+    chat: { send: vi.fn(), insertMention: vi.fn(), setDraft: vi.fn(), clear: vi.fn() },
     skills: vi.fn(() => [{ name: 'beam-theory-check', description: 'Compare a cantilever with Euler–Bernoulli beam theory.', when: 'a beam', body: '# Steps', source: 'builtin' as const }]),
     clipboard: { writeText: vi.fn(async () => undefined) },
     files: {
