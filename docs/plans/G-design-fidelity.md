@@ -13,6 +13,44 @@ against `ac3c0a3` and the Assistant placement branch `6baf96b`; concurrent PRs m
 checked again on merged main. Chromium screenshots of the reference and a solved cantilever
 were inspected at 1600 × 1000. A screenshot of one state does not verify the other states.
 
+## Current integration status — 6 September, main `a1921db`
+
+This checkpoint supersedes the delivery status in the historical observations below.
+The audit remains open: passing feature tests do not prove the complete design matrix.
+
+- PR #213 reached main at `0208e45`, delivering palette intent and the pre-Model form
+  (#95 and #207). Its seven affected Linux Chromium cases passed. PR #163 reached main
+  at `ae88aa3`, delivering the report. PR #299 reached main at `4004150`, delivering
+  retained transient frames. PR #135 reached main at `a1921db`, delivering Journal
+  provenance and the previously stacked PR #195 interaction changes (#91 and #172).
+- PRs #167, #179 and #181 had merged into intermediate branches without delivering their
+  Assistant composer, shared Checks and background changes to main. Draft PR #356 now
+  carries that preserved implementation history. At `9451c50`, 89 affected unit tests and
+  four Linux Chromium cases pass, including keyboard composition, streaming interruption,
+  conversation persistence, and verification rows becoming stale after a real Model edit.
+  This is branch evidence; #96, #139 and #175 are not yet delivered to main.
+- PR #227 integrates current main at `398fcec`. App and registry types, code generation,
+  55 affected app tests, 26 registry tests, build, secret scan and size checks pass. Its
+  Linux Chromium editor scenario verifies highlighting, clipboard/undo, draft retention,
+  line-number alignment, error locations, execution and cancellation. This PR remains open.
+- The Assistant and Script integrations use PR #135's runtime after matching all 194
+  recorded source inputs and nine artifact hashes. Their production files also match
+  host and Linux byte-for-byte (125 and 126 files respectively). No new native build was
+  substituted for the existing verification evidence.
+- Main `a1921db` has passing native platform and replay-parity checks, but its web job
+  fails on four unhandled `setSelection` errors from the incomplete postprocess test fake.
+  Deployment separately fails in thumbnail generation. Recovery PR #355 is coordinating
+  those repairs. The thumbnail fix generated all 22 PNGs on Linux, but main CI and
+  deployment are not yet green. Feature merges are paused pending that evidence.
+- PRs #199, #200, #221, #223, #227, #233 and #237 remain pending, along with the other
+  Results, example, and Assistant integrations owned by concurrent workers. Final rendered
+  comparison and the complete workflow matrix must run against their integrated main.
+
+Existing successful checks may be reused when their relevant inputs are unchanged; local
+checks must cover the affected integration and missing CI steps. An unhandled test error
+or failed deployment is a failure even when individual assertions pass. A merge into a
+feature branch is not evidence that its changes reached main.
+
 ## Requirements and evidence still needed
 
 | Handoff requirement | Current evidence / gap | Issue and acceptance evidence |
