@@ -460,6 +460,43 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
 
+### Procedure-aware convergence studies (#115)
+
+`convergence_studies_use_the_heat_operator_and_one_temperature_dof` uses a 1 m
+rod with 0°C ends, conductivity 45 W/(m K) and source 900 W/m³. The independent
+solution is T(x)=10x(1−x) °C. At x=1/3 m, linear interpolation on h=1/2, 1/4,
+1/8 m meshes has error 20h²/9 °C: the study must report second-order convergence
+and extrapolate to 20/9 °C. Its thermal DOF counts are 12, 45 and 225, with one
+unknown per node. Both restore modes preserve the intended mesh/Result pairing.
+
+`convergence_studies_keep_transient_initial_time_and_amplitude_settings` checks
+uniform T=10t K heating with q=ρc·10 and matching end ramps. The time integrator
+is exact for this linear function: all three meshes reach 20 K at 2 s and 40 K
+at 4 s, retaining the configured zero initial state, 0.25 s time step and output
+cadence. `convergence_studies_use_explicit_dynamics_for_a_falling_block` checks
+u_z=−gt²/2 at t=1 ms on 1³, 2³ and 4³ meshes, within 1%, without static supports.
+
+Modal amplitude studies and chained Steps explicitly return `unsupported` before
+changing Model, Journal or stored fields. Frequencies need a mode-aware quantity;
+chained studies need dependency results recomputed on each refinement. The current
+command instead directs callers to explicit per-mesh solve.run sequences.
+
+### Thermal reaction power and display units (#120)
+
+For a `1 × 0.1 × 0.1 m` bar with `k=45 W/(m K)`, a `1000 W/m²` end flux
+removes exactly `10 W` at the held cold end. With convection instead (`h=50 W/(m² K)`,
+`T_inf=100 °C`, cold end `0 °C`), the exact series thermal resistance gives
+`Q=A*(T_inf-T_cold)/(L/k+1/h)=23.6842105263 W`. Both cases run on two and four axial
+elements. Reaction sums and each of four equal cold-node shares match these independent
+power values to `1e-9 W`; positive reaction retains the current removed-heat convention.
+
+Result totals/extremes, probes and paths report W independently of force=N/kN and convert
+to kW when the power display unit changes. The raw field stays SI, the VTU array is labelled
+`ReactionPower_W`, and the report/viewer label its scalar as power. Mechanical reactions
+retain force units and their vector components. [Issue #208](https://github.com/andeplane/fem-lab/issues/208)
+separately tracks the existing balance diagnostic sign, net-convection and transient-storage
+defects; the physical reaction checks here do not treat that diagnostic as an oracle.
+
 ### Automatic hand-reference applicability (#149)
 
 `automatic_hand_checks_require_the_steps_actual_supports_and_end_load` checks the

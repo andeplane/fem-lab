@@ -5,6 +5,7 @@
 import init, { Engine, version } from './generated/wasm/femlab_engine_wasm.js';
 import wasmUrl from './generated/wasm/femlab_engine_wasm_bg.wasm?url';
 import { siUnitOf } from './fields';
+import type { ResultSummary } from '@femlab/registry';
 import type { AppReq, AppRes } from './protocol';
 import { toStructured } from './protocol';
 import { restoreHistory } from './recovery';
@@ -82,8 +83,11 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
         if (i === 0 || v < min) min = v;
         if (i === 0 || v > max) max = v;
       }
+      const reactionQuantity = field === 'reaction'
+        ? (JSON.parse(need().query(JSON.stringify({ query: 'query.result', step }))) as ResultSummary).reactionQuantity
+        : 'force';
       return {
-        value: { min, max, unit: siUnitOf(field as never) },
+        value: { min, max, unit: siUnitOf(field, reactionQuantity) },
         buffers: [{ name: 'values', dtype: 'f32' as const, length: values.length }],
         raw: [values.buffer as ArrayBuffer],
       };
