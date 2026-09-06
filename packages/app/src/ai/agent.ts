@@ -142,7 +142,11 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
       try {
         const value = await callTool(registry, p.name, p.input);
         call.result = JSON.stringify(value ?? null);
-        if (p.name === RUN_SCRIPT) owned.push(...((value as ScriptResult)?.journalEntries ?? []));
+        if (p.name === RUN_SCRIPT) {
+          const script = value as ScriptResult;
+          owned.push(...(script?.journalEntries ?? []));
+          if (script?.error) call.ok = false;
+        }
         else if ('journaled' in registry.describe(call.command) && (registry.describe(call.command) as { journaled: boolean }).journaled) {
           const ack = value as Ack;
           owned.push({ seq: ack.seq, hashAfter: ack.hash, cmd: { cmd: call.command, ...(p.input as Record<string, unknown>) } as Command });
