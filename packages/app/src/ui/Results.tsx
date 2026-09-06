@@ -235,8 +235,7 @@ const PLOT = { w: 260, h: 108, l: 46, r: 8, t: 10, b: 20 };
 
 /** `n` round ticks spanning `lo…hi`, and where each sits as a fraction of the axis. */
 export function axisTicks(lo: number, hi: number, n = 5): { at: number; text: string }[] {
-  const span = hi - lo || 1;
-  return Array.from({ length: n }, (_, i) => ({ at: i / (n - 1), text: formatNumber(lo + (span * i) / (n - 1)) }));
+  return Array.from({ length: n }, (_, i) => ({ at: i / (n - 1), text: formatNumber(lo + ((hi - lo) * i) / (n - 1)) }));
 }
 
 export interface ChartProps {
