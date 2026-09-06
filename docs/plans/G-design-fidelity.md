@@ -83,6 +83,9 @@ layout and member idealisations) must not be presented as implemented reference 
   100% (25,193 regions, 1,331 functions, 11,322 lines). PR #223 (`370dfea`) also passes
   391 app tests and two real Chromium Tet4/Tet10 preview/Apply cases. It awaits dependency
   merges (#159 and #200), retargeting and CI; this is not yet a delivered capability.
+- #266 blocks #223: Windows CLI benchmarks return incorrect Hex20/Tet10 LE10 stresses
+  and force-balance errors of 0.224 and 0.679. Local CPU passes do not clear this failure.
+  The cause is under investigation; tolerances and independent references remain unchanged.
 - #183 / PR #200 corrects the LE10 boundary-condition/reference mismatch and has passed
   independent review. CI and merge remain pending. #4 integrates this correction locally.
 - #172 / PR #195 (`4a173c1`) passed review after semantic selection, transient highlight
