@@ -1062,7 +1062,7 @@
         ]
       },
       {
-        "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false.",
+        "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false. Uses the Step's actual procedure: static and steady heat\nmeasure equilibrium fields; transient heat and explicit dynamics measure the final\nfield at the configured tEnd with the Step's time settings unchanged. Modal Steps are\nunsupported because a mode amplitude is not a mesh-independent quantity; compare\nfrequencies with solve.run/query.result instead. Steps with after are unsupported:\nsolve their dependencies and target at each mesh explicitly.",
         "type": "object",
         "properties": {
           "step": {
@@ -5053,7 +5053,7 @@
             ]
           },
           {
-            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false.",
+            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false. Uses the Step's actual procedure: static and steady heat\nmeasure equilibrium fields; transient heat and explicit dynamics measure the final\nfield at the configured tEnd with the Step's time settings unchanged. Modal Steps are\nunsupported because a mode amplitude is not a mesh-independent quantity; compare\nfrequencies with solve.run/query.result instead. Steps with after are unsupported:\nsolve their dependencies and target at each mesh explicitly.",
             "type": "object",
             "properties": {
               "step": {
@@ -11239,7 +11239,7 @@
             ]
           },
           {
-            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false.",
+            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false. Uses the Step's actual procedure: static and steady heat\nmeasure equilibrium fields; transient heat and explicit dynamics measure the final\nfield at the configured tEnd with the Step's time settings unchanged. Modal Steps are\nunsupported because a mode amplitude is not a mesh-independent quantity; compare\nfrequencies with solve.run/query.result instead. Steps with after are unsupported:\nsolve their dependencies and target at each mesh explicitly.",
             "type": "object",
             "properties": {
               "step": {

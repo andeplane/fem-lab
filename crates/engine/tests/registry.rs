@@ -5024,6 +5024,172 @@ fn automatic_hand_checks_require_the_steps_actual_supports_and_end_load() {
     }
 }
 
+/// A source-heated rod has T(x)=q*x*(L-x)/(2*k), with 0°C ends. Linear nodal
+/// interpolation at x=L/3 has the independent error q*h²/(9*k) on these meshes.
+#[test]
+fn convergence_studies_use_the_heat_operator_and_one_temperature_dof() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"left","on":"bar.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"900 W/m^3"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["left","right"],"loads":["source"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    let original_model = e.model_hash();
+    let original = e.field(Some("heat"), Field::Temperature).unwrap().data.clone();
+    for restore in [true, false] {
+        let r = study(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"study.converge","step":"heat","sizes":["0.5 m","0.25 m","0.125 m"],
+          "quantity":{{"kind":"probe","field":"temperature","at":["0.3333333333333333 m","0.05 m","0.05 m"]}},"restore":{restore}}}"#
+            ),
+        );
+        assert_eq!(r.unit, "degC");
+        for (i, row) in r.rows.iter().enumerate() {
+            let h = [0.5_f64, 0.25, 0.125][i];
+            let expected = 20.0 / 9.0 - 20.0 * h * h / 9.0;
+            assert!((row.value - expected).abs() < 1e-9, "{row:?}, expected {expected} degC");
+            assert_eq!(row.dofs, [12, 45, 225][i]);
+        }
+        assert!((r.extrapolated.unwrap() - 20.0 / 9.0).abs() < 1e-8);
+        assert!((r.observed_rate.unwrap() - 2.0).abs() < 1e-7);
+        if restore {
+            assert_eq!(e.model_hash(), original_model);
+            assert_eq!(e.field(Some("heat"), Field::Temperature).unwrap().data, original);
+        } else {
+            assert_eq!(e.mesh().unwrap().mesh.n_nodes(), 225);
+            assert!(!result_of(&mut e, Some("heat")).stale);
+            assert!(
+                (probe_at(&mut e, "heat", Field::Temperature, None, ["0.3333333333333333 m", "0.05 m", "0.05 m"])
+                    - r.rows[2].value)
+                    .abs()
+                    < 1e-9
+            );
+        }
+    }
+}
+
+/// Uniform heating T=10t K: q=rho*cp*10 and the same ramp at both ends. The
+/// time integration is exact for this linear function, independently of mesh and theta.
+#[test]
+fn convergence_studies_keep_transient_initial_time_and_amplitude_settings() {
+    for end in [2.0, 4.0] {
+        let mut e = engine();
+        heat_bar(&mut e);
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"temperature":"K"}}"#);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+        ok(&mut e, r#"{"cmd":"constraint.temperature","name":"left","on":"bar.xmin","value":"100 K"}"#);
+        ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":"100 K"}"#);
+        ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"36110000 W/m^3"}"#);
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["left","right"],"loads":["source"],
+            "dt":"0.25 s","tEnd":"{end} s","theta":0.5,"initial":"0 K","outputEvery":3,
+            "amplitude":{{"kind":"table","t":["0 s","10 s"],"value":[0.0,1.0]}}}}"#
+            ),
+        );
+        let r = study(
+            &mut e,
+            r#"{"cmd":"study.converge","step":"warm","sizes":["0.5 m","0.25 m","0.125 m"],
+            "quantity":{"kind":"probe","field":"temperature","at":["0.5 m","0.05 m","0.05 m"]},"restore":false}"#,
+        );
+        assert_eq!(r.unit, "K");
+        for row in &r.rows {
+            assert!((row.value - 10.0 * end).abs() < 1e-8, "{row:?}");
+        }
+        let summary = result_of(&mut e, Some("warm"));
+        assert_eq!(summary.history.last().unwrap().time.value, end);
+        assert_eq!(summary.history[1].time.value, 0.75);
+        assert_eq!(summary.history[0].max.value, 0.0);
+    }
+}
+
+#[test]
+fn convergence_studies_use_explicit_dynamics_for_a_falling_block() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"drop-study"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["0.1 m","0.1 m","0.1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"1 ms","dtFactor":0.8}"#,
+    );
+    let r = study(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"fall","sizes":["0.1 m","0.05 m","0.025 m"],
+        "quantity":{"kind":"probe","field":"displacement","component":2,"at":["0.05 m","0.05 m","0.05 m"]},"restore":false}"#,
+    );
+    let expected = -0.5 * 9.81 * 1e-6;
+    for row in &r.rows {
+        assert!((row.value - expected).abs() < 0.01 * expected.abs(), "{row:?}");
+    }
+    assert_eq!(result_of(&mut e, Some("fall")).solver, "cpu-explicit");
+}
+
+#[test]
+fn convergence_studies_reject_modal_and_chained_steps_without_mutation() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":12,"ny":1,"nz":1}},"order":2}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"bar.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["cold","hot"],"loads":[]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"chain","procedure":"static","after":"heat","constraints":["root"],"loads":[]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root"],"loads":[],"nModes":1}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"chain"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    // Euler–Bernoulli f1=β1²/(2πL²)*sqrt(EI/(rho*A)), β1=1.8751040687.
+    let frequency = result_of(&mut e, Some("modes")).frequencies[0].value;
+    let reference = 1.8751040687_f64.powi(2) / (2.0 * std::f64::consts::PI)
+        * (210e9_f64 * 0.1_f64.powi(2) / (12.0 * 7850.0)).sqrt();
+    assert!(rel(frequency, reference) < 0.02, "{frequency} Hz vs {reference} Hz");
+    let mode = e.field(Some("modes"), Field::Displacement).unwrap().data.clone();
+    let before = e.export_file();
+    let heat = e.field(Some("heat"), Field::Temperature).unwrap().data.clone();
+    let displacement = e.field(Some("chain"), Field::Displacement).unwrap().data.clone();
+    for (step, location) in [("modes", "step.procedure"), ("chain", "step.after")] {
+        let error = err(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"study.converge","step":"{step}","sizes":["0.1 m","0.05 m"],"quantity":{{"kind":"max","field":"displacement"}},"restore":false}}"#
+            ),
+        );
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(error.where_.as_deref(), Some(location));
+        assert!(error.cause.contains(step));
+        assert!(error.suggestion.unwrap().contains("solve.run"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), serde_json::to_value(&before).unwrap());
+        assert_eq!(e.field(Some("heat"), Field::Temperature).unwrap().data, heat);
+        assert_eq!(e.field(Some("chain"), Field::Displacement).unwrap().data, displacement);
+        assert_eq!(e.field(Some("modes"), Field::Displacement).unwrap().data, mode);
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"no-clock","procedure":"heat-transient","constraints":["cold","hot"],"loads":[],"tEnd":"1 s"}"#,
+    );
+    let before = e.export_file();
+    let missing = err(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"no-clock","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"temperature"}}"#,
+    );
+    assert_eq!((missing.code, missing.where_.as_deref()), (ErrorCode::Schema, Some("dt")));
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), serde_json::to_value(before).unwrap());
+}
+
 #[test]
 fn editable_definitions_preserve_every_public_object_variant() {
     let cases: Vec<serde_json::Value> =
@@ -5539,4 +5705,47 @@ fn implicit_body_thermal_loads_are_transactional_and_survive_undo_and_replay() {
         assert_implicit_expansion(&mut replay, "free", false);
         assert_implicit_source(&mut replay, 2, 2, swept);
     }
+}
+
+#[test]
+fn body_rename_and_duplicate_reject_cut_names_without_mutation() {
+    let mut e = engine();
+    for cmd in [
+        r#"{"cmd":"model.new","name":"cut identities"}"#,
+        r#"{"cmd":"geometry.addBox","name":"source","size":["1 m","1 m","1 m"]}"#,
+        r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"],"at":["2 m","0 m","0 m"]}"#,
+        r#"{"cmd":"geometry.subtractBox","name":"ownCut","from":"source","size":["0.2 m","0.2 m","2 m"],"at":["0.4 m","0.4 m","-0.5 m"]}"#,
+        r#"{"cmd":"geometry.subtractBox","name":"otherCut","from":"other","size":["0.2 m","0.2 m","2 m"],"at":["2.4 m","0.4 m","-0.5 m"]}"#,
+        r#"{"cmd":"geometry.nameFace","name":"top","of":"source","where":{"kind":"normal","normal":[0,0,1]}}"#,
+    ] {
+        ok(&mut e, cmd);
+    }
+    let surface = e.geometry_surface().unwrap();
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let model_query = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    for target in ["ownCut", "otherCut"] {
+        for (command, key) in [("model.rename", "to"), ("model.duplicate", "as")] {
+            let input = serde_json::json!({"cmd":command,"kind":"body","name":"source",key:target});
+            let error = err(&mut e, &input.to_string());
+            assert_eq!(error.code, ErrorCode::NameTaken);
+            assert_eq!(error.where_, Some(format!("body '{target}'")));
+            assert_eq!(e.geometry_surface().unwrap(), surface);
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+            assert_eq!(serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap(), model_query);
+        }
+    }
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"source","to":"renamed"}"#);
+    assert_eq!(e.model().cuts[0].from, "renamed");
+    ok(&mut e, r#"{"cmd":"model.duplicate","kind":"body","name":"renamed","as":"copy"}"#);
+    assert_eq!(e.model().bodies[2].name, "copy");
+    assert_eq!(e.model().cuts[2].name, "copy.ownCut");
+    assert_eq!(e.model().cuts[2].from, "copy");
+    let after = serde_json::to_value(e.export_file()).unwrap();
+    ok(&mut e, r#"{"cmd":"journal.undo","steps":2}"#);
+    assert_eq!(serde_json::to_value(e.model()).unwrap(), before["model"]);
+    ok(&mut e, r#"{"cmd":"journal.redo","steps":2}"#);
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), after);
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
+    assert_eq!(serde_json::to_value(replayed.export_file()).unwrap(), after);
 }
