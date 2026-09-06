@@ -1440,7 +1440,8 @@ export type Query =
     }
   | {
       step?: string | null;
-      index: number;
+      index?: number | null;
+      sample?: FrameSample | null;
       field?: Field | null;
       query: "query.frame";
     }

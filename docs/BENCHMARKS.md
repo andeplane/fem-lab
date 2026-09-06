@@ -300,6 +300,35 @@ nonintegral requested endpoint. Sampled probes read the same retained fields in 
 2D History stores two components and the response pads z to zero, exactly matching final
 FieldData. These tests depend on the separate #278 correction to quadratic gravity inertia.
 
+The host-parity check (#245), `tools/test-transient-replay.mjs`, records the uniform-heating
+and 2D/3D free-fall fixtures in Node WASM, then replays their full Journals natively with
+1/4 threads and in Node WASM. Chromium records the same cases through the real Worker and
+runs the same replay check on those exact entries. Both orders and 2/4 axial cells are
+checked at every retained time: model hashes and catalogue times are exact; fields must
+match both the independent `T=t` / `u_y=−4.905t²` oracles and each other within `1e-10 K` /
+`1e-12 m`. Probe/path values use the declared display units and `1e-9` absolute tolerance
+in Celsius/millimetres. Heat's requested dt=0.1 s and tEnd=0.35 s give four equal integration
+steps and retained times 0, 0.175, 0.35 s. Explicit ends at the SI conversion of 1.3 ms.
+Native CLI `run --query` accepts repeated schema-owned Queries and returns results in request
+order; MCP tool calls check the same analytical frame/probe values. Skip-solves replay must
+report missing Results. All frame reads leave the Journal unchanged.
+
+`query.frame` accepts exactly one of `index` or `sample`; time selection delegates the same
+Rust resolver as sampled probes/paths. A native regression checks exact unit conversion,
+nearest selection, an earlier midpoint tie, rejected missing/conflicting selectors and
+out-of-range/dimension errors against the uniform-heating oracle.
+
+The real WASM ownership test transfers each fresh f64 staging buffer, observes detachment,
+mutates the receiver's copy and verifies an unchanged repeated engine read. Chromium observes
+an 8-byte-per-value transferred Worker payload and an ordinary `number[]` public response.
+The normalized Rust response and JS f64 staging each contain `3*nodeCount` values; transfer
+moves the JS buffer, then the receiving host constructs the schema's `number[]`. That last
+allocation and its engine-dependent JS object overhead count in staging costs. This test
+measures payload byte lengths and ownership, **not** total process peak memory or garbage
+collection timing; #244 owns the allocation budget. The transport retains no frame cache.
+A repeated solve can retain the same `modelHash`, so playback hosts must invalidate their
+payload caches on every Solve Ack even when that hash is unchanged.
+
 ## G. Shells and plates (phase 8)
 
 | # | Case | Reference | Tolerance |

@@ -288,12 +288,15 @@ export interface Fem {
      */
     frames(args?: Omit<Extract<Query, { query: 'query.frames' }>, 'query'>): Promise<FramesResult>;
     /**
-     * One retained transient primary field, by zero-based retained index. Values are SI,
+     * One retained transient primary field. Supply exactly one of zero-based retained index
+     * or sample (retained index / physical time with exact or nearest selection). Time
+     * selection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation
+     * policy as sampled probe/path. Values are SI,
      * component-fastest, with three components per node, matching final FieldData: a 2D
      * displacement has zero z; temperature occupies x with zero y/z. Defaults to the retained
      * primary field. Derived fields were not retained and are refused. Refuses result.stale.
      */
-    frame(args: Omit<Extract<Query, { query: 'query.frame' }>, 'query'>): Promise<FrameResult>;
+    frame(args?: Omit<Extract<Query, { query: 'query.frame' }>, 'query'>): Promise<FrameResult>;
     /**
      * A field value interpolated at a point (default: the last solved Step). Component
      * indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.

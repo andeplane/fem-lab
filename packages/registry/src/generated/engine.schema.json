@@ -2791,7 +2791,7 @@
         "x-returns": "FramesResult"
       },
       {
-        "description": "One retained transient primary field, by zero-based retained index. Values are SI,\ncomponent-fastest, with three components per node, matching final FieldData: a 2D\ndisplacement has zero z; temperature occupies x with zero y/z. Defaults to the retained\nprimary field. Derived fields were not retained and are refused. Refuses result.stale.",
+        "description": "One retained transient primary field. Supply exactly one of zero-based retained index\nor sample (retained index / physical time with exact or nearest selection). Time\nselection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation\npolicy as sampled probe/path. Values are SI,\ncomponent-fastest, with three components per node, matching final FieldData: a 2D\ndisplacement has zero z; temperature occupies x with zero y/z. Defaults to the retained\nprimary field. Derived fields were not retained and are refused. Refuses result.stale.",
         "type": "object",
         "properties": {
           "step": {
@@ -2801,9 +2801,22 @@
             ]
           },
           "index": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "uint32",
             "minimum": 0
+          },
+          "sample": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/FrameSample"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "field": {
             "anyOf": [
@@ -2821,8 +2834,7 @@
           }
         },
         "required": [
-          "query",
-          "index"
+          "query"
         ],
         "x-returns": "FrameResult"
       },
@@ -3089,20 +3101,6 @@
       }
     ],
     "$defs": {
-      "Field": {
-        "description": "Result fields.",
-        "type": "string",
-        "enum": [
-          "displacement",
-          "stress",
-          "stressUnaveraged",
-          "vonMises",
-          "principal",
-          "strain",
-          "reaction",
-          "temperature"
-        ]
-      },
       "FrameSample": {
         "description": "How to select retained output; there is no temporal interpolation or extrapolation.",
         "oneOf": [
@@ -3183,6 +3181,20 @@
         "enum": [
           "exact",
           "nearest"
+        ]
+      },
+      "Field": {
+        "description": "Result fields.",
+        "type": "string",
+        "enum": [
+          "displacement",
+          "stress",
+          "stressUnaveraged",
+          "vonMises",
+          "principal",
+          "strain",
+          "reaction",
+          "temperature"
         ]
       },
       "Q_length": {

@@ -1,0 +1,96 @@
+[
+  {
+    "cmd": "model.new",
+    "name": "transient-heat"
+  },
+  {
+    "cmd": "model.setUnits",
+    "units": {
+      "temperature": "degC",
+      "length": "mm",
+      "time": "min"
+    }
+  },
+  {
+    "cmd": "geometry.addBox",
+    "name": "bar",
+    "size": [
+      "1 m",
+      "0.1 m",
+      "0.1 m"
+    ]
+  },
+  {
+    "cmd": "material.add",
+    "name": "mat",
+    "E": "1 MPa",
+    "nu": 0.25,
+    "rho": "2 kg/m^3",
+    "k": "6 W/(m*K)",
+    "cp": "3 J/(kg*K)"
+  },
+  {
+    "cmd": "material.assign",
+    "material": "mat",
+    "bodies": [
+      "bar"
+    ]
+  },
+  {
+    "cmd": "mesh.set",
+    "mesher": {
+      "kind": "lattice",
+      "size": {
+        "nx": 2,
+        "ny": 1,
+        "nz": 1
+      }
+    },
+    "order": 1
+  },
+  {
+    "cmd": "constraint.temperature",
+    "name": "ramp",
+    "on": "bar.xmin",
+    "value": "1 K"
+  },
+  {
+    "cmd": "load.heatSource",
+    "name": "source",
+    "bodies": [
+      "bar"
+    ],
+    "q": "6 W/m^3"
+  },
+  {
+    "cmd": "step.add",
+    "name": "warm",
+    "procedure": "heat-transient",
+    "constraints": [
+      "ramp"
+    ],
+    "loads": [
+      "source"
+    ],
+    "dt": "0.1 s",
+    "tEnd": "0.35 s",
+    "initial": "0 K",
+    "theta": 0.5,
+    "outputEvery": 2,
+    "amplitude": {
+      "kind": "table",
+      "t": [
+        "0 s",
+        "0.35 s"
+      ],
+      "value": [
+        0,
+        0.35
+      ]
+    }
+  },
+  {
+    "cmd": "solve.run",
+    "step": "warm"
+  }
+]
