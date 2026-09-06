@@ -1758,10 +1758,8 @@ button.solve.stale {
 /* ── plan D: the Assistant drawer, mounted at the top level (issue #40) ─────────────────── */
 /* The drawer is a fixed panel rather than a column, so it exists on the start screen too and
    survives the flip into the workspace. In the shell it starts under the 46 px top bar — the
-   design draws that bar full-width — and `.under-bar` reserves the 392 px it takes, so the
-   tree / viewer / properties / drawer row is the five-column layout of the design.
-   This block sits above the narrow-desktop media query rather than at the end of the file,
-   because that query has to be able to override it. */
+   design draws that bar full-width. When the three workspace tracks and drawer all fit,
+   `.workspace` reserves the 392 px it takes; at narrower widths the drawer overlays. */
 .assistant {
   position: fixed;
   top: 0;
@@ -1773,8 +1771,13 @@ button.solve.stale {
 .shell ~ .assistant {
   top: 46px;
 }
-.under-bar.with-assistant {
-  padding-right: 392px;
+.shell:has(.banner) ~ .assistant {
+  top: 78px;
+}
+@media (min-width: 1494px) {
+  #app:has(> .assistant:not([hidden])) .workspace {
+    margin-right: 392px;
+  }
 }
 
 /* ── narrow desktops ───────────────────────────────────────────────────────────────────── */
@@ -1809,10 +1812,6 @@ button.solve.stale {
   }
   .centre {
     grid-template-rows: minmax(320px, 1fr) 220px;
-  }
-  /* Too narrow for a fifth column: the drawer stops reserving space and overlays instead. */
-  .under-bar.with-assistant {
-    padding-right: 0;
   }
   .results {
     grid-template-columns: 1fr;
