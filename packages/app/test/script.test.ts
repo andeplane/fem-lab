@@ -169,6 +169,14 @@ describe('ScriptHost', () => {
     await expect(FakeWorker.last!.call('query', { query: 'query.model' })).rejects.toThrow('RPC reply exceeds');
     FakeWorker.last!.finish({ console: [] });
     await run;
+
+    const cyclic: { self?: unknown } = {};
+    cyclic.self = cyclic;
+    const nonJson = new ScriptHost(() => new FakeWorker() as unknown as Worker, async () => null, async () => cyclic);
+    run = nonJson.run('x');
+    await expect(FakeWorker.last!.call('query', { query: 'query.model' })).rejects.toThrow('RPC reply is not JSON');
+    FakeWorker.last!.finish({ console: [] });
+    await run;
   });
 
   it('rejects malformed runtime messages and reports startup and Worker errors', async () => {
