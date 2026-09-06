@@ -1,10 +1,12 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import { storeKey } from './ai/key-storage';
+import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
+import { choiceOf } from './fields';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
@@ -12,6 +14,7 @@ import { type Autosave, type ShareCommand, applyShared, indexedDbStore, makeAuto
 import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
+import { treeGroups } from './ui/Tree';
 import type { TransientInput } from './transient';
 
 /**
@@ -126,7 +129,17 @@ export function forkProject(): void {
   projects?.fork();
 }
 
-export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, save: Autosave = autosave): HostContext {
+export function makeHostContext(
+  store: Store,
+  transport: EngineTransport,
+  viewer: ViewerRef,
+  host: HostCaps,
+  scripts?: ScriptHost,
+  results?: ResultsView,
+  save: Autosave = autosave,
+  printPage: () => void = () => window.print(),
+  captureEnvironment: AnimationCaptureEnvironment = browserAnimationCaptureEnvironment(),
+): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
@@ -149,6 +162,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
     onChange: () => store.set({ projects: own.list(), project: own.current() }),
   });
   projects = own;
+  const capture = new AnimationCapture(captureEnvironment);
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -190,6 +204,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
         v().setVisible(bodies, on);
         store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
       },
+      highlight: (s) => viewer.current?.setHighlight(s),
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
@@ -210,16 +225,56 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
         const burn = o.legend === false ? null : results?.legendBurn();
         return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
+      captureAnimation: (o) =>
+        capture.run(async (record) => {
+          const s = store.state;
+          const mode = choiceOf(s.fieldKey).mode;
+          const modes = s.result?.frequencies?.length ?? 0;
+          if (mode === undefined || mode < 1 || mode > modes) {
+            throw new FemError('export.unavailable', 'the selected field is not a mode in the current modal Result', 'file.export', 'solve a modal Step and select one of its mode fields');
+          }
+          const target = v();
+          const before = target.animationState();
+          const ui = { playing: s.playing, phase: s.phase };
+          store.set({ capturingAnimation: true, playing: false });
+          target.setPhase(0);
+          try {
+            const webm = await target.atCaptureSize(o.width, o.height, (canvas) => record(canvas, o, (phase) => target.setPhase(phase)));
+            return { webm };
+          } finally {
+            target.restoreAnimation(before);
+            store.set({ capturingAnimation: false, ...ui });
+          }
+        }),
+      cancelAnimationCapture: () => capture.cancel(),
     },
     selection: {
-      set: (s) => store.select(s),
-      clear: () => store.set({ selection: EMPTY_SELECTION }),
+      set: async (s) => {
+        invalidateDefinition(store);
+        store.select(s);
+        const ref = s.refs?.[0];
+        const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => `${candidate.kind}:${candidate.name}` === ref) : undefined;
+        if (item?.cmd === 'form.edit') await editDefinition(store, transport, item.args as DefinitionTarget);
+        else if (item && !item.run) store.openForm(item.cmd, item.args);
+      },
+      clear: () => {
+        invalidateDefinition(store);
+        store.set({ selection: EMPTY_SELECTION });
+      },
       setPickTarget: (t) => store.set({ pickTarget: t }),
       get: (): Selection => store.state.selection,
     },
     panels: {
       toggle: (panel, open) => store.togglePanel(panel, open),
       resize: (panel, size) => store.resizePanel(panel, size),
+    },
+    report: {
+      print: () => {
+        if (!store.state.panels['report'] || !store.state.reportReady) {
+          throw new FemError('unsupported', 'the calculation note is not ready to print', 'report', 'open Report and wait for its paper and viewer figure');
+        }
+        printPage();
+      },
     },
     script: {
       validate: (code, timeoutMs) => {
@@ -360,6 +415,26 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
   };
 }
 
+type DefinitionTarget = { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+const definitionRequests = new WeakMap<Store, number>();
+
+function invalidateDefinition(store: Store): number {
+  const request = (definitionRequests.get(store) ?? 0) + 1;
+  definitionRequests.set(store, request);
+  return request;
+}
+
+/** Journal selection and form.edit share one request fence and the complete engine definition. */
+async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<void> {
+  const request = invalidateDefinition(store);
+  const previousForm = store.state.form;
+  const revision = store.state.revision;
+  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+  if (request !== definitionRequests.get(store) || store.state.form !== previousForm || store.state.revision !== revision) return;
+  const { cmd, ...args } = command;
+  store.openForm(cmd, args);
+}
+
 /**
  * Four Commands the design's shell needs that `@femlab/registry` does not declare: the display
  * mode segmented control, opening a bundled example that is a Journal rather than a saved
@@ -367,9 +442,32 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
-  let editRequest = 0;
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
+  let intentRun = 0;
   return [
+    {
+      name: 'palette.resolve',
+      description: 'Prepare natural-language intent as editable engine Command previews using the configured Assistant provider. Never executes the proposed Commands. Ambiguity and missing parameters are shown for clarification before opening Properties.',
+      schema: z.object({ text: z.string().min(1) }),
+      tool: false,
+      run: async (input) => {
+        const { text } = input as { text: string };
+        if (store.state.paletteIntent?.status === 'loading' && store.state.paletteIntent.text === text) return null;
+        const run = ++intentRun;
+        const base = { text, modelHash: store.state.model?.hash ?? null, proposals: [], clarification: '' };
+        store.set({ paletteIntent: { ...base, status: 'loading' } });
+        try {
+          if (!registry) throw new Error('Intent resolution is unavailable in this host.');
+          const { resolvePaletteIntent } = await import('./ai/palette-intent');
+          const result = await resolvePaletteIntent(text, registry(), store.state.objects);
+          if (run === intentRun) store.set({ paletteIntent: { ...base, ...result, status: 'ready' } });
+          return result;
+        } catch (error) {
+          if (run === intentRun) store.set({ paletteIntent: { ...base, status: 'error', clarification: error instanceof Error ? error.message : String(error) } });
+          return null;
+        }
+      },
+    },
     {
       name: 'view.setMode',
       description: 'Choose what the viewer draws: the Bodies (`geometry`), the Mesh (`mesh`) or the Result contours (`results`). Display only — the Model and the Journal are untouched and the mode survives every solve.',
@@ -386,16 +484,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
       schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
       tool: true,
-      run: async (input) => {
-        const target = input as { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
-        const request = ++editRequest;
-        const previousForm = store.state.form;
-        const revision = store.state.revision;
-        const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
-        if (request !== editRequest || store.state.form !== previousForm || store.state.revision !== revision) return;
-        const { cmd, ...args } = command;
-        store.openForm(cmd, args);
-      },
+      run: (input) => editDefinition(store, transport, input as DefinitionTarget),
     },
     {
       name: 'chat.setDraft',
