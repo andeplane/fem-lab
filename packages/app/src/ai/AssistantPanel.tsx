@@ -231,7 +231,10 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   // `chat.send` from a script, the palette or a viewer click reaches the same code the Send button
   // does — including one that arrived before this panel existed, which is what `pending` holds.
   useEffect(() => {
-    chatBridge.send = (text) => void send(text);
+    chatBridge.send = (text) => {
+      store.togglePanel('assistant', true);
+      void send(text);
+    };
     chatBridge.insertMention = insert;
     chatBridge.clear = () => {
       chatBridge.pending = null;

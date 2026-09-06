@@ -164,8 +164,9 @@ describe('the assistant drawer', () => {
   });
 
   it('hands chat.send from a script to the same code the Send button runs', async () => {
-    const { root } = await mount();
+    const { root, store } = await mount({ panels: { assistant: false } });
     chatBridge.send('hello from a script');
+    expect(store.state.panels['assistant']).toBe(true);
     await tick();
     expect(root.textContent).toContain('no anthropic API key yet');
     chatBridge.clear();
