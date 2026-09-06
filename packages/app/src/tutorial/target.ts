@@ -9,6 +9,9 @@ const FORM = '.props';
 /** A `highlight` that is a Command id rather than a raw CSS selector. */
 const IS_COMMAND = /^[\w.:-]+$/;
 
+/** The ⌘K field: the last rung, for a Command no control of its own runs yet (issue #43). */
+export const PALETTE = '.palette-field';
+
 /** The symbol an engineer writes for a field, where the JSON key is not it. */
 const LABELS: Record<string, string> = {
   nu: 'ν',
@@ -83,7 +86,7 @@ export function candidates(step: Step, form: { cmd: string } | null): string[] {
     if (IS_COMMAND.test(h)) out.push(`[data-cmd="${h}"]`, `[data-opens="${h}"]`);
     else out.push(h);
   }
-  out.push('.palette-field');
+  out.push(PALETTE);
   return out;
 }
 

@@ -183,6 +183,55 @@ describe('TutorialPanel', () => {
     await waitForText(progress, 'step 5 of');
   });
 
+  it('anchors the card beside the target and draws the spotlight over it (issues #38, #46)', async () => {
+    const target = document.createElement('button');
+    target.setAttribute('data-cmd', 'model.new');
+    target.textContent = 'New model';
+    document.body.append(target);
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Cantilever beam')), 'the cantilever tutorial'));
+    const card = await waitFor(() => root.querySelector<HTMLElement>('.tutorial-panel.anchored'), 'the card to anchor');
+    expect(card.getAttribute('style')).toMatch(/left: *\d+px; *top: *\d+px/);
+    expect(card.getAttribute('data-side')).toBe('right');
+    expect(root.querySelector('.tutorial-spot')).not.toBeNull();
+    // and it names the control in the app's own words rather than the Command id
+    expect(root.querySelector('.tutorial-where')!.textContent).toContain('New model');
+    target.remove();
+  });
+
+  it('stays docked when the step names a control that is nowhere on the page', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Cantilever beam')), 'the cantilever tutorial'));
+    await waitForText(progress, 'step 1 of');
+    expect(root.querySelector('.tutorial-panel.anchored')).toBeNull();
+    expect(root.querySelector('.tutorial-spot')).toBeNull();
+  });
+
+  it('moves focus to the target when nobody is typing, and never while somebody is', async () => {
+    const props = Object.assign(document.createElement('aside'), { className: 'props' });
+    const typing = document.createElement('input');
+    props.append(typing);
+    const target = document.createElement('button');
+    target.setAttribute('data-cmd', 'model.new');
+    document.body.append(props, target);
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    typing.focus();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Cantilever beam')), 'the cantilever tutorial'));
+    await waitFor(() => target.hasAttribute('data-tutorial-target'), 'the target to be highlighted');
+    expect(document.activeElement).toBe(typing); // the person was mid-edit: leave them alone
+    props.remove();
+    target.remove();
+  });
+
   it('Skip moves past a step without the Command ever appearing', async () => {
     const store = new Store();
     store.togglePanel('tutorial', true);
