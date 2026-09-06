@@ -74,7 +74,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
     },
     selection: { set: vi.fn(), clear: vi.fn(), setPickTarget: vi.fn(), get: vi.fn(() => ({ bodies: ['beam'], faces: ['beam.top'], sets: [], refs: ['body:beam', 'face:beam.top'] })) },
     panels: { toggle: vi.fn() },
-    script: { run: vi.fn(async () => ({ result: 1, console: [] })), stop: vi.fn(), setSource: vi.fn() },
+    script: { validate: vi.fn(async () => ({ ok: true, diagnostics: [] })), run: vi.fn(async () => ({ result: 1, console: [] })), stop: vi.fn(), setSource: vi.fn() },
     chat: { send: vi.fn(), insertMention: vi.fn(), clear: vi.fn() },
     skills: vi.fn(() => [{ name: 'beam-theory-check', description: 'Compare a cantilever with Euler–Bernoulli beam theory.', when: 'a beam', body: '# Steps', source: 'builtin' as const }]),
     clipboard: { writeText: vi.fn(async () => undefined) },
@@ -102,7 +102,10 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       delete: vi.fn(async (id: string) => {
         if (open?.id === id) open = null;
       }),
-      save: vi.fn(async () => current()),
+      save: vi.fn(async () => {
+        const project = current();
+        return project === null ? null : { ...project, journal: MODEL_FILE.journal };
+      }),
       list: vi.fn(() => (open === null ? [] : [open])),
       current: vi.fn(current),
     },

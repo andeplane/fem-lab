@@ -44,6 +44,15 @@ describe('palette intent resolution', () => {
     expect(f.transport.dispatch).not.toHaveBeenCalled();
   });
 
+  it('does not offer host Commands that Properties cannot render', async () => {
+    const f = setup({ proposals: [{ command: 'selection.set', argsJson: '{"bodies":["beam"]}' }], clarification: '' });
+    await expect(resolvePaletteIntent('select the beam', f.registry, [], f.provider)).rejects.toThrow('unknown Command');
+    expect(f.request().system).not.toContain('"command":"selection.set"');
+    expect(f.request().system).not.toContain('"command":"view.setMode"');
+    expect(f.request().system).toContain('Only the supplied engine Commands');
+    expect(f.transport.dispatch).not.toHaveBeenCalled();
+  });
+
   it('supports unrelated intents and keeps ambiguity and missing parameters in the preview', async () => {
     const f = setup({
       proposals: [

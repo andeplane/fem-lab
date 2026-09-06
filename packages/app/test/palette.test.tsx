@@ -131,6 +131,7 @@ it('routes a Journal object to its actual saved Command parameters', () => {
   expect(objectRoute({ ref: 'set:cut.*', kind: 'set', name: 'cut', summary: 'face family' }, store.state)).toBeNull();
   store.set({
     journal: {
+      hash: 'palette-fixture',
       entries: [{ seq: 1, hashAfter: 'h', cmd: { cmd: 'load.pressure', name: 'p', on: 'bearing_top', value: '2.4 MPa' } }],
       revision: 2,
       canUndo: true,

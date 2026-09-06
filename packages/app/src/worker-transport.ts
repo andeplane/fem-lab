@@ -19,6 +19,7 @@ interface Pending {
   resolve(v: unknown): void;
   reject(e: unknown): void;
   onProgress?: (p: Progress) => void;
+  committed?: (value: unknown) => void;
 }
 
 /** One Journal entry as `replay_hashes` wants it. */
@@ -45,6 +46,8 @@ export class WorkerTransport implements EngineTransport {
   private cancelling = false;
   /** Set while a crash is being recovered from, so the replay's own calls are not recovered. */
   private restarting = false;
+  /** Queued calls belong to the Worker generation in which they were submitted. */
+  private generation = 0;
   /**
    * One sink for every progress message. Calls are serialised, so at most one Command can be
    * reporting at a time and the app needs no per-call plumbing to drive `Solving n %`.
@@ -69,9 +72,8 @@ export class WorkerTransport implements EngineTransport {
   }
 
   async dispatch(cmd: Command, onProgress?: (p: Progress) => void): Promise<Ack> {
-    const ack = (await this.call('dispatch', cmd, onProgress)) as Ack;
-    this.record(cmd, ack);
-    return ack;
+    const saved = structuredClone(cmd);
+    return await this.call('dispatch', saved, onProgress, (value) => this.record(saved, value as Ack)) as Ack;
   }
 
   async query(q: Query): Promise<QueryResult> {
@@ -86,8 +88,11 @@ export class WorkerTransport implements EngineTransport {
     return this.call('field', { step, field, component }) as Promise<FieldData>;
   }
 
-  export(spec: ExportSpec): Promise<ExportedFile> {
-    return this.call('export', spec) as Promise<ExportedFile>;
+  async export(spec: ExportSpec): Promise<ExportedFile> {
+    const { format, step } = spec;
+    const ack = await this.dispatch({ cmd: 'mesh.export', format, ...(step === undefined ? {} : { step }) } as Command);
+    if (ack.output.type !== 'export') throw new FemError('internal', 'mesh.export did not return a file', 'mesh.export');
+    return { filename: ack.output.filename, mime: ack.output.mime, bytes: new TextEncoder().encode(ack.output.text) };
   }
 
   async exportFile(): Promise<ModelFile> {
@@ -95,10 +100,11 @@ export class WorkerTransport implements EngineTransport {
   }
 
   async importFile(file: ModelFile): Promise<Ack> {
-    const ack = (await this.call('importFile', file)) as Ack;
-    this.shadow = (file.journal?.entries ?? []) as unknown as ShadowEntry[];
-    this.revision = ack.revision;
-    return ack;
+    const saved = structuredClone(file);
+    return await this.call('importFile', saved, undefined, (value) => {
+      this.shadow = saved.journal.entries as unknown as ShadowEntry[];
+      this.revision = (value as Ack).revision;
+    }) as Ack;
   }
 
   /** Σ i for i in 1..=n on the engine's GPU; the `gpu` smoke calls it through `window.fem`. */
@@ -112,6 +118,8 @@ export class WorkerTransport implements EngineTransport {
    */
   async cancel(): Promise<void> {
     this.cancelling = true;
+    this.generation++;
+    this.worker.terminate();
     for (const [, p] of this.pending) p.reject(new FemError('cancelled', 'the running Command was cancelled', null, 'the Model is back at the last completed Command'));
     this.cancelling = false;
     await this.restart();
@@ -123,8 +131,12 @@ export class WorkerTransport implements EngineTransport {
     this.pending.clear();
     this.tail = Promise.resolve();
     this.worker = this.wire(this.spawn());
-    await this.call('create', this.opts);
-    await this.call('replay', { entries: this.shadow.slice(0, this.revision), ...this.opts });
+    this.cancelling = false;
+    // Queue the entire recovery before yielding, so a new caller cannot run between create
+    // and replay. Retain the redo tail and have the Worker undo it after rebuilding history.
+    const created = this.call('create', this.opts);
+    const replayed = this.call('replay', { entries: this.shadow.slice(), revision: this.revision, ...this.opts });
+    await Promise.all([created, replayed]);
   }
 
   /**
@@ -157,21 +169,26 @@ export class WorkerTransport implements EngineTransport {
       }
       this.pending.delete(res.id);
       if (!res.ok) return p.reject(new FemError(res.error.code, res.error.cause, res.error.where ?? null, res.error.suggestion ?? null));
-      p.resolve(res.raw ? decodeBulk({ value: res.value, buffers: res.buffers }, res.raw) : res.value);
+      const value = res.raw ? decodeBulk({ value: res.value, buffers: res.buffers }, res.raw) : res.value;
+      // Commit the shadow before exposing the acknowledgement or admitting a following call.
+      p.committed?.(value);
+      p.resolve(value);
     };
     worker.onerror = (e: ErrorEvent) => {
+      if (worker !== this.worker) return;
       for (const [, p] of this.pending) p.reject(new FemError('internal', `the engine Worker failed: ${e.message}`, 'engine.worker'));
       this.pending.clear();
     };
     return worker;
   }
 
-  private call(op: AppOp, payload?: unknown, onProgress?: (p: Progress) => void): Promise<unknown> {
+  private call(op: AppOp, payload?: unknown, onProgress?: (p: Progress) => void, committed?: (value: unknown) => void): Promise<unknown> {
+    const generation = this.generation;
     const run = () =>
       new Promise<unknown>((resolve, reject) => {
-        if (this.cancelling) return reject(new FemError('cancelled', 'the engine is restarting', null, 'retry once the Model has replayed'));
+        if (this.cancelling || generation !== this.generation) return reject(new FemError('cancelled', 'the engine is restarting', null, 'retry once the Model has replayed'));
         const id = this.nextId++;
-        this.pending.set(id, { resolve, reject, ...(onProgress ? { onProgress } : {}) });
+        this.pending.set(id, { resolve, reject, ...(onProgress ? { onProgress } : {}), ...(committed ? { committed } : {}) });
         this.worker.postMessage({ id, op, payload } satisfies AppReq);
       });
     // Queue, but never let one caller's rejection break the chain for the next.
@@ -181,8 +198,8 @@ export class WorkerTransport implements EngineTransport {
   }
 
   private record(cmd: Command, ack: Ack): void {
-    // undo/redo report the new revision and `seq: -1`; every other Command lands at its `seq`.
-    if (ack.seq >= 0) {
+    // Undo/redo report seq == revision, but are not Journal entries themselves.
+    if (cmd.cmd !== 'journal.undo' && cmd.cmd !== 'journal.redo') {
       this.shadow.length = ack.seq;
       this.shadow.push({ seq: ack.seq, cmd, hashAfter: ack.hash });
     }

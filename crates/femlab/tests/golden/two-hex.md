@@ -57,7 +57,7 @@ No named Sets beyond the automatic face Sets listed above.
 | min corner angle (degrees) | 90 |
 | worst elements | 0, 1 |
 
-Cost estimate: 36 equations, 1008 matrix non-zeros, 0.0126 MB, fits this host: true (cpu-direct on 36 equations with 1008 matrix non-zeros).
+Cost estimate: 36 equations, at most 1008 matrix non-zeros, at least 0.028 MB mandatory assembly storage. cpu-direct on 36 equations; matrix non-zeros 1008..1008; feasibility not established. Memory is an assembly lower bound; excludes mesh/model, element buffers, reduction, solver vectors, direct-factor fill/workspace and time history.
 
 ## Loads and constraints
 
