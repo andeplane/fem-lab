@@ -104,6 +104,27 @@ impl Engine {
         serde_json::to_string(&r).map_err(schema_err)
     }
 
+    /// The same schema-owned Query as `query`, with a frame's values copied into a fresh
+    /// Float64Array for Worker transfer. The retained History and wasm memory never escape.
+    /// Other Query responses retain their JSON shape. This is transport staging, not a
+    /// separate frame resolver or an f32 rendering conversion.
+    pub fn query_transfer(&mut self, query_json: String) -> Result<JsValue, JsValue> {
+        let q: Query = serde_json::from_str(&query_json).map_err(schema_err)?;
+        let result = self.inner.query(q).map_err(|e| throw(&e))?;
+        let (json, values) = match result {
+            femlab_engine::query::QueryResult::Frame(mut frame) => {
+                let values = std::mem::take(&mut frame.values);
+                (serde_json::to_string(&frame), Some(values))
+            }
+            other => (serde_json::to_string(&other), None),
+        };
+        let out = js_sys::JSON::parse(&json.map_err(schema_err)?)?;
+        if let Some(values) = values {
+            js_sys::Reflect::set(&out, &"values".into(), &js_sys::Float64Array::from(&values[..]))?;
+        }
+        Ok(out)
+    }
+
     /// What the viewer draws, as fresh typed arrays: the Mesh skin once the Model has mesh
     /// settings, otherwise the Bodies' geometry triangles and tagged Sheet outlines.
     /// `edges` contains vertex-index pairs, with `edgeSet`/`edgeBody` identifying each edge.
