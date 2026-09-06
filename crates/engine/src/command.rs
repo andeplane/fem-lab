@@ -268,6 +268,9 @@ pub enum MesherSpec {
     /// each entry of `refine` asks for a smaller size inside its box. Use it when the domain is
     /// too awkward to cover with mapped blocks; prefer mapped blocks when it is not, because
     /// they are exact and grade smoothly. The idealisation must be 2D, as the Body is.
+    /// Sheet translation, rotation about z and positive in-plane scaling are applied before
+    /// meshing. Size and refine boxes use world coordinates; curved boundaries are sampled
+    /// to one tenth of size in world space. Nested or out-of-plane transforms are unsupported.
     Free {
         of: String,
         size: Q<Length>,
@@ -1016,13 +1019,15 @@ pub enum Command {
 
     /// Re-mesh at each size, re-solve the Step and report the quantity of interest per size,
     /// the observed convergence rate and a Richardson estimate of the converged value. Sizes
-    /// should halve each time (three or more). Restores the previous mesh settings afterwards
-    /// unless `restore` is false. Uses the Step's actual procedure: static and steady heat
-    /// measure equilibrium fields; transient heat and explicit dynamics measure the final
-    /// field at the configured tEnd with the Step's time settings unchanged. Modal Steps are
-    /// unsupported because a mode amplitude is not a mesh-independent quantity; compare
-    /// frequencies with solve.run/query.result instead. Steps with after are unsupported:
-    /// solve their dependencies and target at each mesh explicitly.
+    /// may have unequal refinement ratios. Three distinct positive sizes are needed for a
+    /// finite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate
+    /// are unavailable. Restores the previous mesh settings afterwards unless `restore` is false.
+    /// Uses the Step's actual procedure: static and steady heat measure equilibrium fields;
+    /// transient heat and explicit dynamics measure the final field at the configured tEnd
+    /// with the Step's time settings unchanged. Modal Steps are unsupported because a mode
+    /// amplitude is not a mesh-independent quantity; compare frequencies with
+    /// solve.run/query.result instead. Steps with after are unsupported: solve their
+    /// dependencies and target at each mesh explicitly.
     #[serde(rename = "study.converge", rename_all = "camelCase")]
     StudyConverge {
         step: String,

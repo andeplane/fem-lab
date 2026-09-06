@@ -264,13 +264,15 @@ export interface Fem {
     /**
      * Re-mesh at each size, re-solve the Step and report the quantity of interest per size,
      * the observed convergence rate and a Richardson estimate of the converged value. Sizes
-     * should halve each time (three or more). Restores the previous mesh settings afterwards
-     * unless `restore` is false. Uses the Step's actual procedure: static and steady heat
-     * measure equilibrium fields; transient heat and explicit dynamics measure the final
-     * field at the configured tEnd with the Step's time settings unchanged. Modal Steps are
-     * unsupported because a mode amplitude is not a mesh-independent quantity; compare
-     * frequencies with solve.run/query.result instead. Steps with after are unsupported:
-     * solve their dependencies and target at each mesh explicitly.
+     * may have unequal refinement ratios. Three distinct positive sizes are needed for a
+     * finite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate
+     * are unavailable. Restores the previous mesh settings afterwards unless `restore` is false.
+     * Uses the Step's actual procedure: static and steady heat measure equilibrium fields;
+     * transient heat and explicit dynamics measure the final field at the configured tEnd
+     * with the Step's time settings unchanged. Modal Steps are unsupported because a mode
+     * amplitude is not a mesh-independent quantity; compare frequencies with
+     * solve.run/query.result instead. Steps with after are unsupported: solve their
+     * dependencies and target at each mesh explicitly.
      */
     converge(args: Omit<Extract<Command, { cmd: 'study.converge' }>, 'cmd'>): Promise<Ack>;
   };
