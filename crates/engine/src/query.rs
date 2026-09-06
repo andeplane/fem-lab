@@ -26,6 +26,14 @@ pub enum Query {
     #[schemars(extend("x-returns" = "ModelSummary"))]
     Model {},
 
+    /// The complete upsert Command for an existing object's current definition, with exact
+    /// SI quantities. Use it to populate an edit form; change its arguments and dispatch it
+    /// to apply. Display summaries are rounded and must never be used to reconstruct edits.
+    /// Auto-generated Sets and mesher-owned Bodies have no editable object definition.
+    #[serde(rename = "query.definition", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "ObjectDefinition"))]
+    Definition { kind: ObjectKind, name: String },
+
     /// Counts and sanity of the current Mesh (nodes, elements, element kind, DOF, bounding box,
     /// edge lengths, Sets with their resolved sizes, quality). Builds the Mesh if needed.
     #[serde(rename = "query.mesh")]
@@ -421,6 +429,7 @@ pub struct Capabilities {
 #[serde(untagged)]
 pub enum QueryResult {
     Model(ModelSummary),
+    Definition(ObjectDefinition),
     Mesh(MeshSummary),
     Set(SetInfo),
     Result(ResultSummary),
@@ -433,6 +442,12 @@ pub enum QueryResult {
     Objects(ObjectList),
     Capabilities(Capabilities),
     Report(ReportText),
+}
+
+/// Lossless input for editing one Model object through the same Command used to create it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ObjectDefinition {
+    pub command: Command,
 }
 
 /// Acknowledgement of a dispatched Command.

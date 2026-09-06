@@ -6,6 +6,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod command;
+mod definition;
 pub mod engine;
 pub mod error;
 pub mod fem;

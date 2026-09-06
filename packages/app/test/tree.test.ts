@@ -68,24 +68,20 @@ describe('treeGroups', () => {
     expect(g.items[0]!.remove).toBe('geometry.remove');
   });
 
-  it('reads a Body\'s size and position back out of its bounding box, so a click can edit it', () => {
+  it('requests a lossless definition by explicit object identity rather than bbox values', () => {
     expect(group(state(MODEL), 'Geometry').items[0]).toMatchObject({
-      cmd: 'geometry.addBox',
-      args: { name: 'beam', size: ['1000 mm', '100 mm', '100 mm'], at: ['0 mm', '0 mm', '0 mm'] },
+      cmd: 'form.edit', args: { kind: 'body', name: 'beam' }, run: true,
     });
-  });
-
-  it('survives a Model whose bounding box is not there yet', () => {
     const g = group(state({ ...MODEL, bodies: [{ ...MODEL.bodies[0]!, bbox: [] as never }] }), 'Geometry');
-    expect((g.items[0]!.args as { size: string[] }).size).toEqual(['', '', '']);
+    expect(g.items[0]!.args).toEqual({ kind: 'body', name: 'beam' });
   });
 
   it('summarises materials, constraints, loads, the mesh and the steps in display units', () => {
     const s = state(MODEL);
     expect(group(s, 'Materials').items[0]!.summary).toBe('E 210000 MPa · ν 0.3 · ρ 7850 kg/m^3 · on beam');
-    expect(group(s, 'Materials').items[0]!.args).toEqual({ name: 'steel', E: '210000 MPa', nu: 0.3, rho: '7850 kg/m^3' });
+    expect(group(s, 'Materials').items[0]!.args).toEqual({ kind: 'material', name: 'steel' });
     expect(group(s, 'Constraints').items[0]!.summary).toBe('fix ux, uy, uz on beam.xmin');
-    expect(group(s, 'Loads').items[0]).toMatchObject({ cmd: 'load.traction', summary: 'total [0, 0, -1] kN on beam.xmax' });
+    expect(group(s, 'Loads').items[0]).toMatchObject({ cmd: 'form.edit', summary: 'total [0, 0, -1] kN on beam.xmax' });
     expect(group(s, 'Mesh').items[0]!.summary).toBe('lattice · order 1 · incompatible-modes');
     expect(group(s, 'Steps').items[0]!.summary).toBe('static · 1 constraints · 1 loads · solved');
   });

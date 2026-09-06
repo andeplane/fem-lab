@@ -1415,6 +1415,11 @@ export type Query =
       query: "query.model";
     }
   | {
+      kind: ObjectKind;
+      name: string;
+      query: "query.definition";
+    }
+  | {
       query: "query.mesh";
     }
   | {
@@ -1572,6 +1577,7 @@ export type ReportSection =
  */
 export type QueryResult =
   | ModelSummary
+  | ObjectDefinition
   | MeshSummary
   | SetInfo
   | ResultSummary
@@ -3185,6 +3191,12 @@ export interface Warning {
   code: string;
   text: string;
   where?: string | null;
+}
+/**
+ * Lossless input for editing one Model object through the same Command used to create it.
+ */
+export interface ObjectDefinition {
+  command: Command;
 }
 /**
  * `query.mesh` response.
