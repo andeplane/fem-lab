@@ -79,15 +79,22 @@ layout and member idealisations) must not be presented as implemented reference 
 
 - #4 now passes native simplex face/heat tests, the Tet10 three-mesh convergence study,
   and Tri3/Tri6 edge/replay checks. A simplex Journal has matching per-entry hashes on
-  native 1 and 4 threads and verified wasm replay. Full GPU-inclusive LLVM coverage remains
-  open; this is not yet a delivered capability.
+  native 1 and 4 threads and verified wasm replay. GPU-inclusive LLVM coverage passed at
+  100% (25,193 regions, 1,331 functions, 11,322 lines). PR #223 (`370dfea`) also passes
+  391 app tests and two real Chromium Tet4/Tet10 preview/Apply cases. It awaits dependency
+  merges (#159 and #200), retargeting and CI; this is not yet a delivered capability.
 - #183 / PR #200 corrects the LE10 boundary-condition/reference mismatch and has passed
   independent review. CI and merge remain pending. #4 integrates this correction locally.
-- #172 / PR #195 remains under revision: semantic object selection, transient highlight
-  cleanup and named predicate Set rendering must pass review, beyond the body-only test.
-- #109 / PR #199 remains under revision: Result staleness and Journal identity must prevent
-  false current/pass claims; every omitted example comparison needs a specific justification.
-- #95 is being implemented with previewable parameterized intent and model-object routing.
+- #172 / PR #195 (`4a173c1`) passed review after semantic selection, transient highlight
+  cleanup, overlapping Set aliases and a linear membership index replaced the quadratic scan.
+  Current-head CI and its #135 dependency remain pending.
+- #109 / PR #199 (`37b7d0d`) resolves stale/altered-example green claims and supplies explicit
+  reasons for five unavailable comparisons. The thin-wall tube estimate is informational.
+  Review still requires query.probe to target the displayed Result Step explicitly.
+- #95 / PR #213 (`eee7e7d`) supplies previewable parameterized intent. Review found that
+  historical Journal arguments break live-object editing after rename; reuse the current
+  definition path from #141 / PR #214 before merging. #207 / PR #215 (`1e40911`) passed
+  review for pre-model Properties and retained Assistant state, pending its #213 dependency.
 - #101 / PR #134 was rebased to preserve the merged Assistant behavior; the resolution passed
   review and requires fresh CI. #92 / PR #140 likewise retains both camera and Assistant tests.
 
@@ -105,3 +112,23 @@ gallery presentation (#30), and the integrated workflow checks, are still open r
 - [#207](https://github.com/andeplane/fem-lab/issues/207): palette parameter preview before the
   first Model is invisible because Properties only mounts in the workspace; the start-screen
   workflow needs a visible form without losing the stable Assistant conversation.
+
+## Latest review checkpoints
+
+- #98 / PR #153 merged at `3917bf42fe93052f4daf2fbb49557c273c070d1a` after review
+  and all seven CI checks. Deformation previews live and commits one final host Command.
+- #210 / PR #221 (`9930ef6`) passed review. Effective pressure area uses existing boundary
+  quadrature for all four supported idealisations; 100% GPU-inclusive coverage, exact-area
+  tests and Chromium draft/remesh cases pass. Current-head CI remains pending.
+- #217 / PR #219 (`6d5b07f`) fixes a traced service-worker first-load race that failed PR #158
+  browser CI. Review and local headerless Chromium pass; do not treat a blind rerun as a fix.
+- #174 / PR #220 is under independent review. Findings include pointer-start focus/Escape,
+  a resize handle detached from the CSS-clamped bottom divider, and a handle class that
+  duplicates the Assistant selector. The owning coordinator is correcting these.
+- #173 / PR #227 adds the Script editor and passes its Chromium interaction cases. Review
+  requires the new live-Journal/draft view toggle to dispatch a real typed host Command.
+- #30 is assigned for real viewer-generated gallery thumbnails, filters and reference cards.
+
+The current local checkout on `fix/156-ai-tool-schemas` predates the merged Assistant placement
+fix. Its bottom-left drawer is not evidence that PR #89 changed main incorrectly; final
+conformance checks must run the integrated merged application.
