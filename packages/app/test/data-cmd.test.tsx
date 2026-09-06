@@ -1,3 +1,4 @@
+import { treeGroups } from '../src/ui/Tree';
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
@@ -352,4 +353,18 @@ describe('the shell', () => {
     expect(root.querySelector('.add-menu')).toBeNull();
     expect(document.activeElement).toBe(chip);
   });
+});
+
+it('names simplex element families and preserves the mesh editor arguments', () => {
+  for (const [idealisation, order, element] of [['solid3d', 1, 'Tet 4'], ['solid3d', 2, 'Tet 10'], ['planeStress', 1, 'Tri 3'], ['planeStress', 2, 'Tri 6']] as const) {
+    const store = new Store();
+    const current = model();
+    current.idealisation = idealisation;
+    current.meshSettings = { mesher: { kind: 'lattice', size: 1 }, order, formulation: 'incompatible-modes', simplices: true };
+    store.set({ model: current });
+    const row = treeGroups(store.state).find((group) => group.label === 'Mesh')!.items[0]!;
+    expect(row.summary).toContain(element);
+    expect(row.summary).not.toContain('incompatible-modes');
+    expect(row.args).toEqual(current.meshSettings);
+  }
 });

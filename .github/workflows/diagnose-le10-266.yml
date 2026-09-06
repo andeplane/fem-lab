@@ -1,0 +1,45 @@
+name: LE10 same-machine Windows discriminator (#266)
+on:
+  push:
+    branches: [codex/266-windows-direct-solve]
+    paths:
+      - tools/replay-le10-266/**
+      - .github/workflows/diagnose-le10-266.yml
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the immutable unguarded CLI baseline
+        uses: actions/checkout@v4
+        with:
+          ref: dab97bca748f3ff72527a60ae80737ff3d546d93
+          path: baseline
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: diagnose-le10-266
+      - name: Check diagnostic failure aggregation and fixture validation
+        run: python -B -m unittest discover -s tools/replay-le10-266 -p test_runner.py
+      - name: Record machine CPU identity
+        run: Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
+      - name: Build the immutable baseline and faer-only replay host
+        shell: bash
+        run: |
+          cargo clean --manifest-path baseline/Cargo.toml -p femlab-engine -p femlab-geometry -p femlab
+          cargo build --locked --manifest-path baseline/Cargo.toml -p femlab
+          cargo build --locked --manifest-path tools/replay-le10-266/Cargo.toml
+      - name: Run every CLI and matrix variant on this same machine
+        run: python tools/replay-le10-266/run.py --baseline baseline --cli target/debug/femlab.exe --replay target/debug/fem-266-le10-replay.exe

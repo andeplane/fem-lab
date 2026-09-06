@@ -1,0 +1,57 @@
+name: Direct solver diagnosis (#266)
+on:
+  push:
+    branches: [codex/266-windows-direct-solve]
+    # Preserve the queued baseline; ordinary guard commits do not enqueue duplicate matrices.
+    paths: [tools/diagnose-direct-solve.py]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            solver: cpu-direct
+            threads: '1'
+          - os: windows-latest
+            solver: cpu-direct
+            threads: '4'
+          - os: windows-latest
+            solver: cpu-direct
+            threads: default
+          - os: windows-latest
+            solver: cpu-pcg
+            threads: '4'
+          - os: ubuntu-latest
+            solver: cpu-direct
+            threads: '1'
+          - os: ubuntu-latest
+            solver: cpu-direct
+            threads: '4'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: diagnose-266
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo build -p femlab
+      - name: Record solver, residual and independent LE10 checks
+        shell: bash
+        run: |
+          BIN=target/debug/femlab
+          if [ "${{ runner.os }}" = Windows ]; then BIN="$BIN.exe"; fi
+          THREADS=()
+          if [ "${{ matrix.threads }}" != default ]; then THREADS=(--threads '${{ matrix.threads }}'); fi
+          python tools/diagnose-direct-solve.py --binary "$BIN" --solver '${{ matrix.solver }}' "${THREADS[@]}"

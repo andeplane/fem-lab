@@ -107,6 +107,9 @@ export interface Fem {
      * 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
      * `formulation: full` is the textbook linear element that locks in bending: keep the
      * default incompatible modes or use order 2 when bending matters.
+     * `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+     * (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+     * geometry: the selected mesher still determines the boundary approximation.
      */
     set(args: Omit<Extract<Command, { cmd: 'mesh.set' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -240,6 +243,12 @@ export interface Fem {
      * always check that reactions balance the applied loads before trusting a stress. A Step
      * with `after` requires its predecessor's Result to match the current Model state;
      * after an edit, solve the predecessor again before continuing the chain.
+     * Direct linear solves verify their residual too: nonfinite or excessive residuals return
+     * solve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`
+     * (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
+     * direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+     * On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
+     * assembly and triangular solves retain the engine thread count.
      */
     run(args: Omit<Extract<Command, { cmd: 'solve.run' }>, 'cmd'>): Promise<Ack>;
   };

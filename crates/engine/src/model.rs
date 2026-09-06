@@ -265,6 +265,9 @@ pub struct MeshSettings {
     pub mesher: MesherSettings,
     pub order: u8,
     pub formulation: Formulation,
+    /// Split the chosen mesher's quads/hexes into triangles/tetrahedra.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub simplices: bool,
 }
 
 /// A Plugin used by the Model (phase P).

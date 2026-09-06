@@ -209,12 +209,14 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         ? [
             {
               cmd: 'mesh.set',
-              args: { mesher: m.meshSettings.mesher, order: m.meshSettings.order, formulation: m.meshSettings.formulation },
+              args: { mesher: m.meshSettings.mesher, order: m.meshSettings.order, formulation: m.meshSettings.formulation, simplices: m.meshSettings.simplices },
               kind: 'mesh',
               glyph: '▦',
               glyphClass: 'glyph low',
               name: 'mesh',
-              summary: `${m.meshSettings.mesher.kind} · order ${m.meshSettings.order} · ${m.meshSettings.formulation}`,
+              summary: m.meshSettings.simplices
+                ? `${m.meshSettings.mesher.kind} · ${m.idealisation === 'solid3d' ? `Tet ${m.meshSettings.order === 1 ? 4 : 10}` : `Tri ${m.meshSettings.order === 1 ? 3 : 6}`} · order ${m.meshSettings.order}`
+                : `${m.meshSettings.mesher.kind} · order ${m.meshSettings.order} · ${m.meshSettings.formulation}`,
               select: {},
               remove: null,
             },

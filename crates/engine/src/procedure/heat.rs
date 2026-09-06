@@ -330,9 +330,8 @@ pub fn transient(
         for (i, &dof) in red.free.iter().enumerate() {
             rhs_f[i] = rhs_full[dof as usize] + sys.f[dof as usize] + scale * red.f_f[i];
         }
-        // A factorised direct solve cannot fail; `LinearSolve` returns a Result for the
-        // iterative solvers, which can run out of iterations.
-        solver = factored.solve(&rhs_f, &mut t_f).expect("a factorised solve");
+        // Propagate a rejected direct result instead of retaining a bad temperature history.
+        solver = factored.solve(&rhs_f, &mut t_f)?;
         solver.iterations = step;
         t = expand(&red, &t_f);
         for (i, &dof) in red.fixed.iter().enumerate() {

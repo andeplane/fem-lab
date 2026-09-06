@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::{
     extrude, face_centroid_normal, free, lattice, mapped, nearest_boundary_face, resolve_face_set, resolve_region,
-    revolve, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox, Shape, Solid,
+    revolve, split_to_simplices, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox, Shape, Solid,
 };
 
 use crate::command::ObjectKind;
@@ -86,9 +86,12 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let dim = model.idealisation.dim();
     let quadratic = settings.order == 2;
     let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
-        MesherSettings::Lattice { size, counts } => lattice_bodies(model, solids, dim, quadratic, *size, *counts)?,
+        MesherSettings::Lattice { size, counts } => {
+            lattice_bodies(model, solids, dim, quadratic, *size, *counts, settings.simplices)?
+        }
         m => {
             let (body, part, mesher) = planar_or_swept(model, m, quadratic)?;
+            let part = if settings.simplices { split_to_simplices(&part) } else { part };
             one_body(&body, part, dim, mesher)?
         }
     };
@@ -234,6 +237,7 @@ fn lattice_bodies(
     quadratic: bool,
     size: Option<f64>,
     counts: Option<[u32; 3]>,
+    simplices: bool,
 ) -> Result<Meshed, Error> {
     if model.bodies.is_empty() {
         return Err(Error::new(ErrorCode::ModelIllPosed, "the Model has no Body to mesh").suggest("geometry.add"));
@@ -263,6 +267,9 @@ fn lattice_bodies(
                 .at(format!("body '{}'", body.name))
                 .suggest("mesh.set with a smaller element size")
         })?;
+        // Convert before offsets and boundary rules are resolved, so every Body and face
+        // still points at the corresponding child elements.
+        let part = if simplices { split_to_simplices(&part) } else { part };
         let node_offset = (mesh.coords.len() / 3) as u32;
         let elem_offset = mesh.n_elems() as u32;
         let shift = |f: &Face| Face { elem: f.elem + elem_offset, local: f.local };

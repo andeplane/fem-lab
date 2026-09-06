@@ -13,6 +13,7 @@ gpu-tests = []
 [dependencies]
 femlab-geometry = { path = "../geometry" }
 faer = { version = "0.24.4", default-features = false, features = ["std", "sparse-linalg"] }
+dyn-stack = "0.13.2"
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
