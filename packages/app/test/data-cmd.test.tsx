@@ -1,7 +1,7 @@
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
-import { HOST_COMMANDS, Registry, type EngineSchema, type ModelSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type EngineSchema, type JournalDump, type ModelSummary, type ResultSummary } from '@femlab/registry';
 import { h, render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
@@ -36,6 +36,32 @@ const model = (): ModelSummary =>
   }) as unknown as ModelSummary;
 
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
+
+const journal = (...commands: Record<string, unknown>[]): JournalDump =>
+  ({
+    entries: commands.map((cmd, seq) => ({ seq, cmd, hashAfter: `h${seq}` })),
+    revision: commands.length,
+    canUndo: commands.length > 0,
+    canRedo: false,
+  }) as unknown as JournalDump;
+
+const result = (step: string, stale: boolean, revision: number): ResultSummary =>
+  ({
+    step,
+    revision,
+    stale,
+    solver: 'cpu-direct',
+    iterations: 1,
+    residual: 0,
+    timeMs: 1,
+    extremes: [],
+    reactions: [],
+    appliedTotal: [0, 0, 0].map((value) => ({ value, unit: 'N' })),
+    balance: 0,
+  }) as unknown as ResultSummary;
+
+const boundarySeq = (root: HTMLElement): string | undefined => root.querySelector('.boundary')?.previousElementSibling?.querySelector('.no')?.textContent ?? undefined;
+const staleSeqs = (root: HTMLElement): string[] => [...root.querySelectorAll('.jrow.stale .no')].map((el) => el.textContent ?? '');
 
 /**
  * The whole shell with every panel showing at once: the tree, the generated Properties form,
@@ -151,6 +177,35 @@ describe('the shell', () => {
     expect(root.querySelector('aside.assistant')).not.toBeNull();
     expect(root.querySelector('.workspace aside.assistant')).toBeNull();
     expect(root.querySelector('.under-bar')!.className).toBe('under-bar with-assistant');
+  });
+
+  it('shows the Result boundary for a fresh solve', () => {
+    const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' });
+    const { root } = mount({ journal: entries, result: result('static', false, entries.revision) });
+    expect(boundarySeq(root)).toBe('1');
+    expect(staleSeqs(root)).toEqual([]);
+  });
+
+  it('marks only rows after a stale Result and moves the boundary when that Step is re-solved', () => {
+    const staleJournal = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'geometry.addBox', name: 'after' });
+    const stale = mount({ journal: staleJournal, result: result('static', true, staleJournal.revision) }).root;
+    expect(boundarySeq(stale)).toBe('1');
+    expect(staleSeqs(stale)).toEqual(['2']);
+
+    const resolvedJournal = journal(...staleJournal.entries.map((entry) => entry.cmd as unknown as Record<string, unknown>), { cmd: 'solve.run', step: 'static' });
+    const resolved = mount({ journal: resolvedJournal, result: result('static', false, resolvedJournal.revision) }).root;
+    expect(boundarySeq(resolved)).toBe('3');
+    expect(staleSeqs(resolved)).toEqual([]);
+  });
+
+  it('attributes the boundary to the current Result and does not invent one after undo', () => {
+    const twoSteps = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'solve.run', step: 'modal' });
+    const currentStatic = mount({ journal: twoSteps, result: result('static', false, twoSteps.revision) }).root;
+    expect(boundarySeq(currentStatic)).toBe('1');
+
+    const undone = journal({ cmd: 'model.new', name: 'demo' });
+    expect(boundarySeq(mount({ journal: undone, result: result('static', false, undone.revision) }).root)).toBeUndefined();
+    expect(boundarySeq(mount({ journal: twoSteps, result: null }).root)).toBeUndefined();
   });
 
   it('renders the start screen with its four paths before a Model exists', () => {

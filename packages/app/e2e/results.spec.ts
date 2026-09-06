@@ -39,6 +39,19 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
     await expect(page.locator('button.solve')).toHaveText(/Solved · rev \d+/, { timeout: 180_000 });
     await expect(page.locator('button.solve')).toHaveClass(/solved/);
 
+    // The fresh Result owns a visible Journal boundary. Undoing its producing solve removes the
+    // provenance marker even though the engine still has the cached Result; redo restores it.
+    await page.locator('.tab', { hasText: 'journal' }).click();
+    const boundary = page.locator('.boundary');
+    await expect(boundary).toHaveCount(1);
+    const firstBoundary = Number(await boundary.locator('..').locator('.jrow .no').textContent());
+    await page.evaluate(() => window.fem.journal.undo({ steps: 1 }));
+    await expect(boundary).toHaveCount(0);
+    await page.evaluate(() => window.fem.journal.redo({ steps: 1 }));
+    await expect(boundary).toHaveCount(1);
+    expect(Number(await boundary.locator('..').locator('.jrow .no').textContent())).toBe(firstBoundary);
+    await page.locator('.tab', { hasText: 'results' }).click();
+
     // 3 · the Results tab opened itself and the viewer switched to contours (design "Solve completion").
     await expect(page.locator('.tab.active')).toContainText('results');
     await expect(page.locator('button[data-cmd="view.setMode"][aria-pressed="true"]')).toHaveText('results');
@@ -77,6 +90,12 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
     await page.evaluate(() => window.fem.load.traction({ name: 'tip', on: 'beam.xmax', total: ['0 N', '0 N', '-2 kN'] }));
     await expect(page.locator('.stale-banner')).toContainText('Result is stale');
     await expect(page.locator('button.solve')).toHaveText('Re-solve');
+    await page.locator('.tab', { hasText: 'journal' }).click();
+    await expect(boundary).toHaveCount(1);
+    expect(Number(await boundary.locator('..').locator('.jrow .no').textContent())).toBe(firstBoundary);
+    const staleSeqs = await page.locator('.jrow.stale .no').allTextContents();
+    expect(staleSeqs.length).toBeGreaterThan(0);
+    expect(staleSeqs.every((seq) => Number(seq) > firstBoundary)).toBe(true);
     await shot(page, '12-stale');
 
     // 9 · Re-solve, from the banner, and the staleness clears.
@@ -87,6 +106,10 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
       const r = (await window.fem.query.result()) as unknown as { extremes: { field: string; component: number; min: { value: number } }[] };
       return r.extremes.find((e) => e.field === 'displacement' && e.component === 2)!.min.value;
     });
+    await page.locator('.tab', { hasText: 'journal' }).click();
+    await expect(boundary).toHaveCount(1);
+    expect(Number(await boundary.locator('..').locator('.jrow .no').textContent())).toBeGreaterThan(firstBoundary);
+    await expect(page.locator('.jrow.stale')).toHaveCount(0);
     // Twice the load on a linear model is twice the deflection.
     expect(Math.abs(doubled / uz.value - 2)).toBeLessThan(0.01);
     expect(errors).toEqual([]);

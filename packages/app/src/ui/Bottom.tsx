@@ -1,7 +1,7 @@
 // The bottom panel of docs/design/README.md: Journal, Script, Results, Checks, Console. The
 // Journal is the Model (ADR 0003), so its rows carry the line number, the Command, its arguments,
 // who issued it and when, with the undo boundary drawn under the solve that produced a Result.
-import type { JournalEntry } from '@femlab/registry';
+import type { JournalEntry, ResultSummary } from '@femlab/registry';
 import type { Store, Tab, UiState } from '../store';
 import { TABS } from '../store';
 import { Checks, Results } from './Results';
@@ -17,24 +17,29 @@ const argText = (cmd: Record<string, unknown>): string => {
 
 const clock = (at: number | undefined): string => (at === undefined ? '' : new Date(at).toTimeString().slice(0, 8));
 
-/** The last `solve.*` in the Journal: everything after it edited the Model that made a Result. */
-export function solveBoundary(entries: JournalEntry[]): number {
+/** The retained `solve.*` that produced the Result currently on screen. */
+export function solveBoundary(entries: JournalEntry[], result: Pick<ResultSummary, 'step'> | null): number {
+  if (!result) return -1;
   let seq = -1;
-  for (const e of entries) if (String((e.cmd as unknown as { cmd: string }).cmd).startsWith('solve.')) seq = e.seq;
+  for (const e of entries) {
+    const cmd = e.cmd as unknown as { cmd: string; step?: string };
+    if (cmd.cmd.startsWith('solve.') && cmd.step === result.step) seq = e.seq;
+  }
   return seq;
 }
 
 function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const entries = s.journal?.entries ?? [];
+  const boundary = solveBoundary(entries, s.result);
   // Rows after the solve are only "stale" once the engine says the Result is: an export or a
   // camera move after a solve changes nothing the Result depends on.
-  const boundary = s.result?.stale === true ? solveBoundary(entries) : -1;
+  const staleBoundary = s.result?.stale === true ? boundary : -1;
   return (
     <div class="rows">
       {entries.map((e) => {
         const cmd = e.cmd as unknown as Record<string, unknown> & { cmd: string };
         const meta = s.journalWho[e.seq];
-        const stale = boundary >= 0 && e.seq > boundary;
+        const stale = staleBoundary >= 0 && e.seq > staleBoundary;
         return (
           <div key={e.seq}>
             <Cmd dispatch={dispatch} cmd="clipboard.copy" class={stale ? 'jrow stale' : 'jrow'} args={{ what: { kind: 'text', text: commandLine(cmd) } }} title={commandLine(cmd)}>
