@@ -64,4 +64,13 @@ test('@cpu editable Model name and explicit save baseline survive rename, undo a
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
   await expect(name).toHaveValue('cantilever');
   await expect(dirty).toBeHidden();
+  expect((await page.evaluate(() => window.fem.query.result())).stale).toBe(false);
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.showField', field: 'displacement' }));
+  await name.fill('renamed cantilever');
+  await name.press('Enter');
+  await expect(dirty).toBeVisible();
+  expect((await page.evaluate(() => window.fem.query.result())).stale).toBe(false);
+  // Exercises Engine::current_result through the real wasm field boundary. A full Model hash
+  // here would reject the field after this display-only name change as `result-stale`.
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.showField', field: 'displacement' }));
 });
