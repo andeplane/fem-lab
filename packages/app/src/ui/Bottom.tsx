@@ -71,10 +71,10 @@ export function journalTarget(cmd: Record<string, unknown>, model: ModelSummary 
   return null;
 }
 
-/** The retained solve or non-restoring convergence study that produced the Result on screen. */
+/** The retained producer: Result revision counts Commands; Journal seq is zero-based. */
 export function solveBoundary(entries: JournalEntry[], result: Pick<ResultSummary, 'step' | 'revision'> | null): number {
   if (!result) return -1;
-  const entry = entries.find((e) => e.seq === result.revision);
+  const entry = entries.find((e) => e.seq + 1 === result.revision);
   if (!entry) return -1;
   const cmd = entry.cmd as unknown as { cmd: string; step?: string; restore?: boolean };
   const producesResult = cmd.cmd === 'solve.run' || (cmd.cmd === 'study.converge' && cmd.restore === false);

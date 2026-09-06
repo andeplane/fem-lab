@@ -95,6 +95,14 @@ pub fn run(
     let red_k = reduce(&a.k, &zeros, &rc);
     let red_m = reduce(&m, &zeros, &rc);
     let n = red_k.k_ff.n;
+    if n == 0 {
+        return Err(Error::new(
+            ErrorCode::ModelIllPosed,
+            "modal analysis has no free displacement DOFs; every displacement DOF is constrained",
+        )
+        .at("constraints")
+        .suggest("constraint.remove on an over-constraining displacement constraint"));
+    }
     let p_modes = n_modes.clamp(1, n);
     report(&mut progress, "solve", 0.3, "subspace iteration")?;
     let (lambda, shapes, sweeps) = pool.install(|| subspace(&red_k.k_ff, &red_m.k_ff, p_modes, shift))?;

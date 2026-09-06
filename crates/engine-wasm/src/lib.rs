@@ -239,6 +239,8 @@ impl Engine {
 
     /// Replay a Journal (JSON array of entries) onto a fresh Model; returns the per-entry hash
     /// list as a JSON array. `verify` fails on the first divergence from the recorded hashes.
+    /// `skip_solves` omits numerical work but preserves Model changes and undo history, including
+    /// the final mesh settings of a non-restoring convergence study.
     pub async fn replay_hashes(
         &mut self,
         journal_json: String,
@@ -325,7 +327,10 @@ mod tests {
 /// The schema document (Commands, Queries, responses) as JSON text.
 #[wasm_bindgen]
 pub fn schema() -> String {
-    serde_json::to_string(&femlab_engine::query::schema_document()).unwrap_or_default()
+    // The native CLI owns schema generation and CI checks this committed document is fresh.
+    // Embedding that same document keeps the wasm API while avoiding a second runtime copy of
+    // every `schemars::JsonSchema` implementation in the browser binary.
+    include_str!(concat!(env!("OUT_DIR"), "/engine.schema.json")).to_owned()
 }
 
 /// Engine version string.

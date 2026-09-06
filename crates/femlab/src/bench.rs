@@ -52,8 +52,19 @@ pub struct CaseResult {
     pub time_ms: f64,
 }
 
-pub fn default_cases_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("engine").join("benches").join("cases")
+// The generated list embeds the canonical JSON files; installed binaries never read a
+// compile-machine path. Explicit --cases remains a filesystem operation.
+include!(concat!(env!("OUT_DIR"), "/benchmark_cases.rs"));
+
+pub fn builtin_cases(filter: Option<&str>) -> Result<Vec<Case>, String> {
+    let mut cases = Vec::new();
+    for (name, text) in BUILTIN_CASES {
+        let case: Case = serde_json::from_str(text).map_err(|e| format!("built-in {name}: {e}"))?;
+        if filter.is_none_or(|f| case.name.contains(f)) {
+            cases.push(case);
+        }
+    }
+    Ok(cases)
 }
 
 pub fn compare(got: &serde_json::Value, expect: &serde_json::Value, tol: f64, rel: bool) -> (bool, String) {
@@ -193,8 +204,7 @@ pub fn bench(
     threads: Option<usize>,
     cpu: bool,
 ) -> i32 {
-    let dir = cases_dir.map(Path::to_path_buf).unwrap_or_else(default_cases_dir);
-    let cases = match load_cases(&dir, filter) {
+    let cases = match cases_dir.map_or_else(|| builtin_cases(filter), |dir| load_cases(dir, filter)) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{e}");
