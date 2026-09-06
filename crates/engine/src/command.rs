@@ -1025,10 +1025,11 @@ pub enum Command {
     StepReorder { order: Vec<String> },
 
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
-    /// element quality) and refuses with a suggested fix. Returns extremes and reactions;
-    /// always check that reactions balance the applied loads before trusting a stress. A Step
-    /// with `after` requires its predecessor's Result to match the current Model state;
-    /// after an edit, solve the predecessor again before continuing the chain.
+    /// element quality) and refuses with a suggested fix. Returns extremes, reactions and every
+    /// omitted optional material property the successful solver actually read as zero; always
+    /// check that reactions balance the applied loads before trusting a stress. A Step with
+    /// `after` requires its predecessor's Result to match the current Model state; after an edit,
+    /// solve the predecessor again before continuing the chain.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,
