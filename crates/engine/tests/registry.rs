@@ -687,6 +687,33 @@ fn convert_query() {
     );
 }
 
+/// Shared with the Node wasm regression: rejected inputs cannot change the saved Model or
+/// Journal. The expected errors cover numeric, factor and dimension overflow independently.
+#[test]
+fn invalid_quantities_preserve_the_model_and_journal() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/invalid-quantities.json")).unwrap();
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"quantity validation"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let hash = e.model_hash();
+    for case in fixture["commands"].as_array().unwrap() {
+        let error = run(&mut e, &case["input"].to_string()).unwrap_err();
+        assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
+        assert!(error.where_.is_some());
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+    for case in fixture["queries"].as_array().unwrap() {
+        let query: Query = serde_json::from_value(case["input"].clone()).unwrap();
+        let error = e.query(query).unwrap_err();
+        assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
+        assert!(error.where_.is_some());
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+}
+
 #[test]
 fn enum_helpers_used_by_hosts() {
     // exercised here so the command module's helpers are part of the public contract
