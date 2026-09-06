@@ -9,16 +9,16 @@ import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
 import { lazy } from '../lazy';
-import { solveLabel, stageOf, type Store, type UiState } from '../store';
+import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
 import { ExportModal } from './Export';
-import { Examples, Palette, Start } from './Overlays';
+import { Examples, Palette, Projects, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
 import { Cmd, useStore, type Dispatch } from './cmd';
-import { blockers, type Defs } from './schema';
+import { blockers, type Defs, shapeKinds } from './schema';
 
 export type { Dispatch } from './cmd';
 
@@ -44,9 +44,45 @@ export interface AppProps {
   registry?: Registry;
 }
 
+/** Text controls own editing shortcuts; the shell must leave them to the browser. */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+  if (target.isContentEditable) return true;
+  for (let node: HTMLElement | null = target; node; node = node.parentElement) {
+    const value = node.getAttribute('contenteditable');
+    if (value !== null) return value.toLowerCase() !== 'false';
+  }
+  return false;
+}
+
+const CAMERA_SHORTCUTS = {
+  Digit1: { cmd: 'view.preset', view: 'iso' },
+  Digit2: { cmd: 'view.preset', view: 'front' },
+  Digit3: { cmd: 'view.preset', view: 'top' },
+  Digit4: { cmd: 'view.fit' },
+} as const;
+
+export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionCount: number, panels: Record<string, boolean>): void {
+  if (e.defaultPrevented) return;
+  const meta = e.metaKey || e.ctrlKey;
+  const key = e.key.toLowerCase();
+  const camera = e.shiftKey && !meta && !e.altKey && !e.repeat && !isEditableTarget(e.target)
+    ? CAMERA_SHORTCUTS[e.code as keyof typeof CAMERA_SHORTCUTS]
+    : undefined;
+  if (isEditableTarget(e.target) && meta && (key === 'z' || key === 'c')) return;
+  if (camera) (e.preventDefault(), void dispatch(camera).catch(() => undefined));
+  else if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
+  else if (meta && key === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
+  else if (meta && key === 'c' && selectionCount > 0) (e.preventDefault(), void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined));
+  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
+}
+
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
 const VARIANTS = new Map<string, JsonSchema>(doc.commands.oneOf.map((v) => [v.properties['cmd']!.const!, v as unknown as JsonSchema]));
+/** Every shape the tree's add menu offers, read off the schema once (issue #43). */
+const SHAPES = shapeKinds(DEFS);
 
 const MM = { length: 'mm', force: 'N', stress: 'MPa' };
 const SI = { length: 'm', force: 'N', stress: 'Pa' };
@@ -58,12 +94,14 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : s.lastError ? `${s.lastError.code} ${s.lastError.cause}` : '';
   const mm = s.model?.units.length === 'mm';
   const stage = stageOf(s);
+  const solveText = solveLabel(stage, s);
+  const engineState = s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…';
   return (
     <header class="topbar">
       <div class="logo">
         <i /> FEM Lab
       </div>
-      <span class="mono model-name">{s.model?.name ?? 'no model'}</span>
+      <ProjectName s={s} dispatch={dispatch} />
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">
         <span>Search commands or ask in plain words</span>
         <span class="key">⌘K</span>
@@ -83,12 +121,15 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="journal.redo" class="tbutton" args={{ steps: 1 }} disabled={!s.journal?.canRedo} title="journal.redo (⇧⌘Z)">
         ↷
       </Cmd>
-      <span class="chip" title={s.notes.join('\n') || 'everything available'}>
+      <span class="chip" title={[engineState, ...s.notes].join('\n')}>
         <span class={s.notes.length > 0 ? 'dot warn' : 'dot'} />
-        {s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…'}
+        <span class="engine-state">{engineState}</span>
       </span>
-      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `solve.run ${step}`}>
-        {solveLabel(stage, s)}
+      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `${solveText} — solve.run ${step}`}>
+        {solveText}
+      </Cmd>
+      <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'projects' }} pressed={s.panels['projects'] === true} title="Every project saved in this browser">
+        Projects
       </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'examples' }}>
         Examples
@@ -96,8 +137,11 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="file.open" class="tbutton" args={{ picker: true }} title="Open a femlab/1 file">
         Open
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Save the Model and its Journal">
+      <Cmd dispatch={dispatch} cmd="project.save" class="tbutton" title="Write the open project now and take a fresh thumbnail">
         Save
+      </Cmd>
+      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Download the Model and its Journal as a femlab/1 file">
+        Save as file
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="A URL that reopens this Model (not built yet)">
         Share
@@ -118,11 +162,50 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
+/**
+ * The project name, editable in place (`project.rename` on blur or Enter), and the saved chip
+ * next to it. There is no "unsaved" dot: the Journal is written into the open project after
+ * every Command, so there is no unsaved state, and a dot that lies is worse than no dot.
+ */
+function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const p = s.project;
+  const rename = (name: string): void => {
+    setDraft(null);
+    if (p && name.trim() && name.trim() !== p.name) void dispatch({ cmd: 'project.rename', name: name.trim() }).catch(() => undefined);
+  };
+  const chip = !p ? '' : p.autosave === false ? 'not saved — storage is off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const tone = !p || p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
+  const name = draft ?? p?.name ?? s.model?.name ?? 'no model';
+  return (
+    <span class="project-chip">
+      <input
+        class="mono model-name"
+        aria-label="project name"
+        data-cmd="project.rename"
+        disabled={p === null}
+        title={name}
+        value={name}
+        onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
+        onBlur={(e) => rename((e.target as HTMLInputElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Escape') setDraft(null);
+        }}
+      />
+      <span class={`saved-chip ${tone}`} title={p ? `${chip} — ${p.commands} Commands in this browser` : 'no project yet'}>
+        <span class="dot" />
+        <span class="saved-text">{chip}</span>
+      </span>
+    </span>
+  );
+}
+
 /** The design's 32 px blocker strip: W-code chip, plain-language cause, one mono fix Command. */
 function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.lastError) {
     return (
-      <div class="banner error" role="alert">
+      <div class="banner error" role="alert" aria-live="assertive" aria-atomic="true">
         <span class="mono code">{s.lastError.code}</span>
         <span>{s.lastError.cause}</span>
         {s.lastError.suggestion ? <span class="suggestion">{s.lastError.suggestion}</span> : null}
@@ -153,7 +236,11 @@ export function probeLine(p: { face: string | null; body: string | null; point: 
 }
 
 const MODES = ['geometry', 'mesh', 'results'] as const;
-const PRESETS = ['iso', 'front', 'top'] as const;
+const PRESETS = [
+  { view: 'iso', shortcut: '⇧1' },
+  { view: 'front', shortcut: '⇧2' },
+  { view: 'top', shortcut: '⇧3' },
+] as const;
 const LAYERS = ['edges', 'loads', 'constraints', 'grid'] as const;
 
 /** Design state 4: the centred solving card, with the one Command that stops it. */
@@ -161,9 +248,9 @@ function SolvingCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.solving === null) return null;
   const percent = Math.round((s.progress?.fraction ?? 0) * 100);
   return (
-    <div class="solving-card" role="status">
+    <div class="solving-card" role="status" aria-live="polite" aria-atomic="true">
       <div class="solving-head">
-        <span class="spinner" />
+        <span class="spinner" aria-hidden="true" />
         <b>Solving · {s.solving}</b>
         <Cmd dispatch={dispatch} cmd="solve.cancel" class="tbutton outline">
           Cancel
@@ -187,7 +274,7 @@ function ErrorCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const fix = e.suggestion && /^[a-z]+\.[a-zA-Z]+$/.test(e.suggestion.trim()) ? e.suggestion.trim() : null;
   const text = `${e.code}: ${e.cause}${e.where ? ` (at ${e.where})` : ''}`;
   return (
-    <div class="error-card" role="alert">
+    <div class="error-card" role="alert" aria-live="assertive" aria-atomic="true">
       <div class="error-head">
         <span class="mono code">{e.code}</span>
         <b>{e.cause}</b>
@@ -218,6 +305,15 @@ async function sendToAssistant(dispatch: Dispatch, text: string): Promise<void> 
   }
 }
 
+/**
+ * Why the shape on screen is not the shape the Result holds (#42). One sentence, on the legend
+ * and on the slider alike, so the number is never on screen without its explanation.
+ */
+export function exaggerationHelp(scale: number): string {
+  if (scale === 1) return 'The displacement is drawn at true scale — usually far too small to see. Drag the slider to exaggerate it.';
+  return `Displacements are drawn ${formatNumber(scale)}× larger than they are so the shape is readable. The Result itself is unchanged; the faint outline is the undeformed body. Press "true scale" for ×1.`;
+}
+
 /** The design's 168 px legend: field, unit, gradient bar, six ticks, three colour maps. */
 function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const l = s.legend;
@@ -229,8 +325,8 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <div class="legend-head">
         <span class="legend-field mono">{choiceOf(s.fieldKey).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
-        <span class="legend-sub mono">
-          {s.result?.step} · deformed ×{formatNumber(s.deformScale)}
+        <span class="legend-sub mono" title={exaggerationHelp(s.deformScale)}>
+          {s.result?.step} · {s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}
         </span>
       </div>
       <div class="legend-body">
@@ -282,8 +378,41 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
  * than a replay of the history, and the bar's own title says so.
  */
 function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+  const phaseStart = useRef<{ phase: number; playing: boolean } | null>(null);
+  const phaseEpoch = useRef(0);
   const step = s.result?.step ?? '';
   const mode = choiceOf(s.fieldKey).mode;
+  const target = `${step}\u0000${String(mode)}`;
+  const phaseTarget = useRef(target);
+  // A Command may change the shown Step/mode while a native range gesture still owns the
+  // pointer. Its eventual pointerup belongs to the old target and must not pause the new one.
+  if (phaseTarget.current !== target) {
+    phaseTarget.current = target;
+    phaseStart.current = null;
+    phaseEpoch.current++;
+  }
+  const cancelPhase = (): void => {
+    const start = phaseStart.current;
+    if (!start) return;
+    phaseStart.current = null;
+    phaseEpoch.current++;
+    store.set(start);
+    viewer.current?.animate(start.playing, store.state.animationSpeed, start.phase);
+  };
+  const previewStart = useRef<number | null>(null);
+  const preview = (scale: number): void => {
+    previewStart.current ??= store.state.deformScale;
+    // Keep both the legend and slider readout in sync with the drawing during the gesture.
+    store.set({ deformScale: scale });
+    viewer.current?.previewDeformScale(scale);
+  };
+  const cancelPreview = (): void => {
+    if (previewStart.current === null) return;
+    const scale = previewStart.current;
+    previewStart.current = null;
+    store.set({ deformScale: scale });
+    viewer.current?.previewDeformScale(scale);
+  };
   const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
   const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
   return (
@@ -295,10 +424,6 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         args={{ step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }}
         pressed={s.playing}
         title={s.playing ? 'pause' : `sweep ${what}`}
-        onRun={() => {
-          store.set({ playing: !s.playing });
-          void dispatch({ cmd: 'view.animate', step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
-        }}
       >
         {s.playing ? '❚❚' : '▶'}
       </Cmd>
@@ -308,33 +433,61 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
           class="phase"
           min="0"
           max="100"
-          step="2"
+          step="1"
           aria-label="animation phase"
           data-cmd="view.animate"
           value={String(Math.round(s.phase * 100))}
           onInput={(e) => {
             const turns = Number((e.target as HTMLInputElement).value) / 100;
-            // The Command carries the frame so a script and the AI can scrub too; the local
-            // call is what makes it visible until the host forwards `frame` to the viewer.
+            if (!phaseStart.current) {
+              phaseStart.current = { phase: store.state.phase, playing: store.state.playing };
+              phaseEpoch.current++;
+            }
             store.set({ phase: turns, playing: false });
             viewer.current?.setPhase(turns);
-            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
           }}
+          onChange={(e) => {
+            const start = phaseStart.current;
+            if (!start) return;
+            const turns = Number((e.target as HTMLInputElement).value) / 100;
+            phaseStart.current = null;
+            if (turns === start.phase && !start.playing) return;
+            const epoch = phaseEpoch.current;
+            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => {
+              // A later gesture or target change owns the viewer now. Only roll back while this
+              // rejected preview is still the state on screen.
+              if (phaseEpoch.current !== epoch || phaseTarget.current !== target || store.state.phase !== turns || store.state.playing) return;
+              store.set(start);
+              viewer.current?.animate(start.playing, store.state.animationSpeed, start.phase);
+            });
+          }}
+          onPointerCancel={cancelPhase}
+          onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelPhase(); } }}
         />
       ) : null}
-      <span class="faint">deformation</span>
+      <span class="faint" title={exaggerationHelp(s.deformScale)}>
+        exaggeration
+      </span>
       <input
         type="range"
         min="0"
-        max="400"
-        step="10"
-        aria-label="deformation scale"
+        // An auto scale of ×1000 has to be reachable, and the thumb must not sit pinned at the
+        // end of a 0–400 track when it is: the track grows to whatever is drawn.
+        max={String(Math.max(400, s.deformScale))}
+        step={String(Math.max(1, Math.round(Math.max(400, s.deformScale) / 100)))}
+        aria-label="exaggeration"
+        title={exaggerationHelp(s.deformScale)}
         data-cmd="view.setDeformScale"
         value={String(s.deformScale)}
-        onChange={(e) => void dispatch({ cmd: 'view.setDeformScale', scale: Number((e.target as HTMLInputElement).value) }).catch(() => undefined)}
+        onInput={(e) => preview(Number((e.target as HTMLInputElement).value))}
+        onPointerCancel={cancelPreview}
+        onChange={(e) => {
+          const scale = Number((e.target as HTMLInputElement).value);
+          void dispatch({ cmd: 'view.setDeformScale', scale }).then(() => { previewStart.current = null; }, cancelPreview);
+        }}
       />
       <span class="mono">×{formatNumber(s.deformScale)}</span>
-      <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} title="draw the real displacement">
+      <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} pressed={s.deformScale === 1} title="draw the real displacement">
         true scale
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.export" class="tbutton" args={{ spec: { format: 'png' } }} title="the viewer as a PNG, legend burned in">
@@ -356,6 +509,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
     // a Model exists this `import()` is already in the module cache.
     let v: Viewer | null = null;
     let gone = false;
+    let observer: ResizeObserver | null = null;
     const onResize = () => v?.resize();
     void import('../viewer/viewer').then(({ Viewer }) => {
       if (gone) return;
@@ -373,11 +527,19 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
       });
       addEventListener('resize', onResize);
+      if (typeof ResizeObserver !== 'undefined') {
+        observer = new ResizeObserver(onResize);
+        // Observe the layout box, not the canvas' drawing buffer: a canvas can keep its old
+        // intrinsic size while its CSS track changes, so observing it alone misses a splitter
+        // or viewport resize. Viewer.resize then updates the backing store from clientWidth.
+        observer.observe(el.parentElement ?? el);
+      }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);
     return () => {
       gone = true;
       removeEventListener('resize', onResize);
+      observer?.disconnect();
       if (!v) return;
       viewer.current = null;
       v.dispose();
@@ -399,19 +561,19 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             ))}
           </div>
           {LAYERS.map((layer) => (
-            <Cmd key={layer} dispatch={dispatch} cmd="view.toggle" class="toggle" args={{ layer }}>
+            <Cmd key={layer} dispatch={dispatch} cmd="view.toggle" class="toggle" args={{ layer }} pressed={s.layerVisibility[layer] ?? true}>
               {layer}
             </Cmd>
           ))}
           <Cmd dispatch={dispatch} cmd="view.setClip" class="toggle" args={{ plane: s.clipOn ? null : { normal: [0, 1, 0], offset: 0 } }} pressed={s.clipOn}>
             clip
           </Cmd>
-          {PRESETS.map((view) => (
-            <Cmd key={view} dispatch={dispatch} cmd="view.preset" class="tbutton" args={{ view }}>
+          {PRESETS.map(({ view, shortcut }) => (
+            <Cmd key={view} dispatch={dispatch} cmd="view.preset" class="tbutton" args={{ view }} title={`${view} view · ${shortcut}`}>
               {view}
             </Cmd>
           ))}
-          <Cmd dispatch={dispatch} cmd="view.fit" class="tbutton">
+          <Cmd dispatch={dispatch} cmd="view.fit" class="tbutton" title="fit view · ⇧4">
             fit
           </Cmd>
         </div>
@@ -427,7 +589,10 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       </div>
       {stale ? (
         <div class="stale-banner" role="status">
-          <span>Result is stale — Model changed after journal line {s.result!.revision}</span>
+          <span>
+            Result is stale — Model changed after journal line {s.result!.revision}.
+            {s.study ? ' The convergence table reports separate study solves; it does not refresh these stale contours. Re-solve to display the current Model.' : ''}
+          </span>
           <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }}>
             Re-solve
           </Cmd>
@@ -450,8 +615,80 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
   );
 }
 
+/** A view-only splitter: pointer movement previews in Store, and pointer-up emits one Command. */
+function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }: { panel: ResizablePanel; axis: 'x' | 'y'; direction: 1 | -1; store: Store; dispatch: Dispatch; fixed?: boolean }) {
+  const gesture = useRef<{ pointerId: number; start: number; size: number; previous: number } | null>(null);
+  const limits = PANEL_SIZE_LIMITS[panel];
+  const position = (e: PointerEvent): number => (axis === 'x' ? e.clientX : e.clientY);
+  const preview = (size: number): void => store.resizePanel(panel, clampPanelSize(panel, size));
+  const effectiveSize = (): number => {
+    const selector = panel === 'tree' ? '.workspace > .panel.tree' : panel === 'properties' ? '.workspace > .panel.props' : panel === 'bottom' ? '.bottom' : 'aside.assistant';
+    const box = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+    const rendered = box ? (axis === 'x' ? box.width : box.height) : 0;
+    return rendered > 0 ? Math.round(rendered) : store.state.panelSizes[panel];
+  };
+  const finish = (commit: boolean): void => {
+    const active = gesture.current;
+    if (!active) return;
+    gesture.current = null;
+    if (commit && store.state.panelSizes[panel] !== active.previous) void dispatch({ cmd: 'panel.resize', panel, size: store.state.panelSizes[panel] }).catch(() => preview(active.previous));
+    else if (!commit) store.resizePanel(panel, active.previous);
+  };
+  return (
+    <div
+      class={`resize-handle ${axis} ${panel === 'assistant' ? 'assistant-resize' : panel}${fixed ? ' fixed' : ''}`}
+      style={fixed ? `--assistant-width:${store.state.panelSizes.assistant}px` : undefined}
+      role="separator"
+      tabIndex={0}
+      data-cmd="panel.resize"
+      aria-label={`Resize ${panel} panel`}
+      aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
+      aria-valuemin={limits.min}
+      aria-valuemax={limits.max}
+      aria-valuenow={effectiveSize()}
+      onPointerDown={(e) => {
+        const el = e.currentTarget as HTMLElement;
+        gesture.current = { pointerId: e.pointerId, start: position(e), size: effectiveSize(), previous: store.state.panelSizes[panel] };
+        el.focus();
+        el.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      }}
+      onPointerMove={(e) => {
+        const active = gesture.current;
+        if (!active || active.pointerId !== e.pointerId) return;
+        preview(active.size + (position(e) - active.start) * direction);
+      }}
+      onPointerUp={(e) => {
+        if (gesture.current?.pointerId === e.pointerId) finish(true);
+      }}
+      onPointerCancel={(e) => {
+        if (gesture.current?.pointerId === e.pointerId) finish(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(false);
+          return;
+        }
+        const positive = axis === 'x' ? e.key === 'ArrowRight' : e.key === 'ArrowDown';
+        const negative = axis === 'x' ? e.key === 'ArrowLeft' : e.key === 'ArrowUp';
+        if (!positive && !negative) return;
+        e.preventDefault();
+        const delta = (positive ? 10 : -10) * direction;
+        const size = clampPanelSize(panel, effectiveSize() + delta);
+        preview(size);
+        void dispatch({ cmd: 'panel.resize', panel, size }).catch(() => undefined);
+      }}
+    />
+  );
+}
+
 export function App({ store, dispatch, viewer, query, commands = [], registry }: AppProps) {
   const s = useStore(store);
+  // Collapse hides the drawer, but keeps the conversation and any running turn alive.
+  const assistantOpened = useRef(false);
+  assistantOpened.current ||= s.panels['assistant'] === true;
   const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
 
@@ -461,35 +698,31 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   }, [started, s.form, store]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
-      if (meta && e.key.toLowerCase() === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
-      else if (meta && e.key.toLowerCase() === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
-      else if (meta && e.key.toLowerCase() === 'c' && s.selection.refs.length > 0) void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined);
-      else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial']) if (s.panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
-    };
-    addEventListener('keydown', onKey);
-    return () => removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => handleGlobalKey(e, dispatch, s.selection.refs.length, s.panels);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [dispatch, s.selection.refs.length, s.panels]);
 
   // One fragment for both states, with the overlays at fixed positions: the start screen
-  // offers "Start a tutorial", and a tutorial that begins there has to survive the switch to
+  // offers "Tutorials", and a tutorial that begins there has to survive the switch to
   // the workspace its first Command causes — which it only does if the node keeps its slot.
   return (
     <>
       {started ? (
-        <div class="shell">
+        <div class="shell" style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <TopBar s={s} dispatch={dispatch} />
-          <div class="under-bar">
+          <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
-              <ModelTree s={s} dispatch={dispatch} />
+              <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
+              <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />
               <div class="centre">
                 <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
+                <ResizeHandle panel="bottom" axis="y" direction={-1} store={store} dispatch={dispatch} />
               </div>
               <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
-              {registry && s.panels['assistant'] ? <AssistantPanel registry={registry} store={store} /> : null}
+              <ResizeHandle panel="properties" axis="x" direction={-1} store={store} dispatch={dispatch} />
             </div>
           </div>
         </div>
@@ -497,9 +730,17 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
         <Start s={s} dispatch={dispatch} />
       )}
       <Examples s={s} dispatch={dispatch} />
+      <Projects s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
+      {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
+          opens on the start screen and keeps its conversation when the workspace comes up around
+          it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
+          layout of the design while the top bar stays full-width. Collapsing only hides the
+          drawer, preserving the conversation and any running turn. */}
+      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
+      {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}
     </>

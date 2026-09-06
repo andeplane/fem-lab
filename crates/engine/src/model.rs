@@ -146,6 +146,19 @@ pub struct Load {
 }
 
 impl LoadKind {
+    /// Explicit Body targets, independent of the Set targeted by a surface or nodal load.
+    pub fn bodies(&self) -> &[String] {
+        match self {
+            LoadKind::Temperature { bodies, .. } | LoadKind::HeatSource { bodies, .. } => bodies,
+            LoadKind::Pressure { .. }
+            | LoadKind::Traction { .. }
+            | LoadKind::Force { .. }
+            | LoadKind::Gravity { .. }
+            | LoadKind::Convection { .. }
+            | LoadKind::HeatFlux { .. } => &[],
+        }
+    }
+
     /// The Set this load acts on, if any.
     pub fn set(&self) -> Option<&str> {
         match self {
@@ -234,6 +247,28 @@ pub enum Sweep {
 }
 
 impl MesherSettings {
+    /// Rename the Body identity owned or referenced by this mesher, including sweep bases.
+    pub fn rename_body(&mut self, from: &str, to: &str) {
+        match self {
+            Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
+                if body == from {
+                    *body = to.into();
+                }
+            }
+            Self::Sweep { base, .. } => base.rename_body(from, to),
+            Self::Lattice { .. } => {}
+        }
+    }
+
+    /// An explicit Body used as geometry, rather than the implicit Body a mesher owns.
+    pub fn source_body(&self) -> Option<&str> {
+        match self {
+            Self::Free { of, .. } => Some(of),
+            Self::Sweep { base, .. } => base.source_body(),
+            Self::Mapped { .. } | Self::Lattice { .. } => None,
+        }
+    }
+
     /// The Body a mesher makes on its own, without a `geometry.add`: the mapped mesher's.
     pub fn implicit_body(&self) -> Option<&str> {
         match self {
@@ -366,7 +401,7 @@ impl Model {
     /// Names of every object of a kind, in Model order.
     pub fn names(&self, kind: ObjectKind) -> Vec<&str> {
         match kind {
-            ObjectKind::Body => self.bodies.iter().map(|b| b.name.as_str()).collect(),
+            ObjectKind::Body => self.bodies.iter().map(|b| b.name.as_str()).chain(self.implicit_body()).collect(),
             ObjectKind::Material => self.materials.iter().map(|m| m.name.as_str()).collect(),
             ObjectKind::Set => self.sets.iter().map(|s| s.name.as_str()).collect(),
             ObjectKind::Constraint => self.constraints.iter().map(|c| c.name.as_str()).collect(),
@@ -489,6 +524,22 @@ mod tests {
         assert_eq!(LoadKind::Traction { on: "a".into(), total: [0.0; 3] }.set(), Some("a"));
         assert_eq!(LoadKind::Force { on: "a".into(), total: [0.0; 3] }.set(), Some("a"));
         assert_eq!(LoadKind::Temperature { bodies: vec![], value: 300.0, reference: 293.15 }.set(), None);
+        for kind in [
+            LoadKind::Pressure { on: "a".into(), value: 1.0 },
+            LoadKind::Traction { on: "a".into(), total: [0.0; 3] },
+            LoadKind::Force { on: "a".into(), total: [0.0; 3] },
+            LoadKind::Gravity { g: [0.0; 3] },
+            LoadKind::Convection { on: "a".into(), h: 1.0, t_inf: 300.0 },
+            LoadKind::HeatFlux { on: "a".into(), q: 1.0 },
+        ] {
+            assert!(kind.bodies().is_empty());
+        }
+        for kind in [
+            LoadKind::Temperature { bodies: vec!["beam".into(), "plain".into()], value: 300.0, reference: 293.15 },
+            LoadKind::HeatSource { bodies: vec!["beam".into(), "plain".into()], q: 1.0 },
+        ] {
+            assert_eq!(kind.bodies(), &["beam", "plain"]);
+        }
         assert!(m.knows_set("top"));
         assert!(m.knows_set("beam.xmin"));
         assert!(m.knows_set("hole.side"));

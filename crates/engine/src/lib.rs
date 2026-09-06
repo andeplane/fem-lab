@@ -6,6 +6,7 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
 pub mod command;
+mod definition;
 pub mod engine;
 pub mod error;
 pub mod fem;
@@ -13,6 +14,7 @@ pub mod gpu;
 pub mod hash;
 pub mod io;
 pub mod journal;
+mod material_library;
 pub mod mesh;
 pub mod model;
 pub mod par;

@@ -14,7 +14,7 @@ const num = (v: Valued | undefined): string => (v ? formatNumber(v.value) : '—
 const at = (p: [Valued, Valued, Valued]): string => p.map((v) => formatNumber(v.value)).join(' ');
 const fieldUnit = (field: string, v: Valued): string => (dimensionOf(field) === 'dimensionless' && v.unit === 'SI' ? '(1)' : v.unit);
 
-/** `balance` is a ratio of forces; the design writes it as a percentage with four decimals. */
+/** `balance` is a dimensionless ratio; the design writes it as a percentage with four decimals. */
 export function balanceLine(r: ResultSummary): { pass: boolean; text: string } {
   const percent = r.balance * 100;
   return { pass: Math.abs(r.balance) < 1e-6, text: `Σ reactions = −Σ loads · ${percent.toFixed(4)} %` };
@@ -97,6 +97,8 @@ export function extremeLabel(e: { field: string; component: number }): string {
 function Reactions({ s }: { s: UiState }) {
   const r = s.result!;
   const sum = [0, 1, 2].map((c) => r.reactions.reduce((a, x) => a + x.total[c]!.value, 0));
+  const power = r.reactionQuantity === 'power';
+  const components = power ? 1 : 3;
   const unit = r.appliedTotal[0]!.unit;
   const balance = balanceLine(r);
   return (
@@ -105,16 +107,14 @@ function Reactions({ s }: { s: UiState }) {
         <thead>
           <tr>
             <th>constraint</th>
-            <th>Fx</th>
-            <th>Fy</th>
-            <th>Fz {unit}</th>
+            {power ? <th>Power {unit}</th> : <><th>Fx</th><th>Fy</th><th>Fz {unit}</th></>}
           </tr>
         </thead>
         <tbody>
           {r.reactions.map((x) => (
             <tr key={x.constraint}>
               <td class="mono">{x.constraint}</td>
-              {x.total.map((v, i) => (
+              {x.total.slice(0, components).map((v, i) => (
                 <td key={i} class="mono n">
                   {num(v)}
                 </td>
@@ -123,7 +123,7 @@ function Reactions({ s }: { s: UiState }) {
           ))}
           <tr class="total">
             <td>Σ reactions</td>
-            {sum.map((v, i) => (
+            {sum.slice(0, components).map((v, i) => (
               <td key={i} class="mono n">
                 {formatNumber(v)}
               </td>
@@ -131,7 +131,7 @@ function Reactions({ s }: { s: UiState }) {
           </tr>
           <tr class="total">
             <td>Σ applied</td>
-            {r.appliedTotal.map((v, i) => (
+            {r.appliedTotal.slice(0, components).map((v, i) => (
               <td key={i} class="mono n">
                 {num(v)}
               </td>
@@ -374,6 +374,29 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
   );
 }
 
+/**
+ * What was solved, above the two columns (#42): a Result *exists*, this is the Step and the
+ * procedure it came from, and the shape in the viewer is drawn exaggerated — said here too, so
+ * a person reading the numbers is not left to infer it from the legend. Everything on it is
+ * already in the store: a header is no place to start a Query, and the Checks tab is where the
+ * DOF count lives.
+ */
+function ResultHeader({ s }: { s: UiState }) {
+  const r = s.result!;
+  const procedure = s.model?.steps.find((st) => st.name === r.step)?.procedure;
+  return (
+    <div class={r.stale ? 'result-header stale' : 'result-header'}>
+      <span class="mono">Result · step {r.step}</span>
+      {procedure ? <span class="faint">{procedure}</span> : null}
+      <span class="faint">
+        {r.solver} · {Math.round(r.timeMs)} ms
+      </span>
+      <span class="faint">{r.stale ? `solved at rev ${r.revision}, before the edits since` : `solved at rev ${r.revision}`}</span>
+      <span class="faint">{s.deformScale === 1 ? 'drawn at true scale' : `drawn exaggerated ×${formatNumber(s.deformScale)}`}</span>
+    </div>
+  );
+}
+
 export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
   const next = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0)[0];
   if (!s.result) {
@@ -394,10 +417,9 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
   }
   return (
     <div class="results">
+      <ResultHeader s={s} />
       <div class="rcol">
-        <div class="section-label">
-          Extremes · {s.result.step} · {s.result.solver} · {Math.round(s.result.timeMs)} ms
-        </div>
+        <div class="section-label">Extremes</div>
         <Extremes s={s} dispatch={dispatch} />
         <Frequencies s={s} dispatch={dispatch} />
         <Sample s={s} query={query} />
@@ -488,12 +510,28 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
         <div class="kv mono">
           <span>degrees of freedom</span>
           <span class="n">{cost.dofs}</span>
-          <span>matrix non-zeros</span>
+          <span>matrix non-zeros (upper bound)</span>
           <span class="n">{cost.nnz}</span>
-          <span>memory</span>
+          <span>counted peak memory estimate</span>
           <span class="n">{bytes(cost.bytes)}</span>
-          <span>feasible here</span>
-          <span class={cost.feasible ? 'n' : 'bad'}>{cost.feasible ? 'yes' : 'no'}</span>
+          {cost.retainedFrames > 0 ? (
+            <>
+              <span>retained frames</span>
+              <span class="n">{cost.retainedFrames}</span>
+              <span>retained primary fields</span>
+              <span class="n">{bytes(cost.retainedBytes)}</span>
+              <span>native frame staging</span>
+              <span class="n">{bytes(cost.transportStagingBytes)}</span>
+              <span>browser frame staging</span>
+              <span class="n">
+                {cost.wasmTransportStagingComplete ? bytes(cost.wasmTransportStagingBytes) : `≥ ${bytes(cost.wasmTransportStagingBytes)} + JSON/JS overhead`}
+              </span>
+            </>
+          ) : null}
+          <span>planning budget</span>
+          <span class="n">{bytes(cost.budgetBytes)}</span>
+          <span>feasibility</span>
+          <span class={cost.feasible === false ? 'bad' : 'n'}>{cost.feasible === false ? 'over budget' : 'not established'}</span>
           <span>note</span>
           <span>{cost.note}</span>
         </div>

@@ -1,16 +1,17 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type AutosaveState, type HostContext, type HostDef, type Selection } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { storeKey } from './ai/key-storage';
 import type { HostCaps } from './capabilities';
+import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
-import { type Autosave, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
-import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
+import { type Autosave, type ShareCommand, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
+import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
-import type { WorkerTransport } from './worker-transport';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -34,11 +35,12 @@ async function fetchExample(name: string): Promise<string> {
 }
 
 /**
- * The autosave, and the last thing it wrote. It is created once here rather than in `main.tsx`
- * so `file.autosave`, `file.restore` and `query.autosave` all see the same one; the boot hook
- * only has to call `note` after every Command and `primeAutosave` once.
- * `ponytail: one autosave slot, not a list of them — versioning is what file.save is for.`
+ * The projects of this browser. Built by `makeHostContext`, because `project.open` replays a
+ * Journal through the transport and `project.save` shoots the viewer, and neither exists at
+ * import time; the three hooks below are what `main.tsx` needs and are safe to call before it.
  */
+let projects: Projects | null = null;
+
 export const autosave: Autosave = makeAutosave({
   // a browser with IndexedDB blocked (private mode, or a headless test) keeps working: the
   // autosave is then simply per-session, and file.save is still there.
@@ -49,10 +51,19 @@ export const autosave: Autosave = makeAutosave({
 
 /** Read once at boot so `query.autosave` can answer without waiting on IndexedDB. */
 let lastSaved: AutosaveState['saved'] = null;
+let lastAutosaves: AutosaveVersion[] = [];
+
+const summary = (saved: { id?: string; name: string; at: number; cmds: unknown[] }): AutosaveVersion => ({
+  id: saved.id ?? `legacy-${saved.at}`,
+  name: saved.name,
+  at: saved.at,
+  commands: saved.cmds.length,
+});
 
 /** The other half of the boot hook: `await primeAutosave();` before the start screen renders. */
 export async function primeAutosave(): Promise<AutosaveState['saved']> {
   const saved = await autosave.read();
+  lastAutosaves = (await autosave.readAll()).map(summary);
   lastSaved = saved && { name: saved.name, at: saved.at, commands: saved.cmds.length };
   return lastSaved;
 }
@@ -66,9 +77,75 @@ export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
   if (!autosave.enabled() || journal.length === 0) return;
   autosave.note(name, journal as never);
   lastSaved = { name, at: Date.now(), commands: journal.length };
+  lastAutosaves = autosave.history().map(summary);
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+/** The UI copy of the bounded history, including a debounced newest snapshot. */
+export function autosaveHistory(): AutosaveVersion[] {
+  return lastAutosaves.slice();
+}
+
+
+/** A viewer screenshot cut down to a Recent card. `view.screenshot` renders at the canvas size
+ *  and ignores `width`/`height`, so the downscale is a canvas draw here, not a screenshot option. */
+async function thumbnailOf(viewer: ViewerRef, width = 320, height = 180): Promise<string | null> {
+  const png = viewer.current?.screenshot();
+  if (!png || typeof document === 'undefined') return null;
+  const image = new Image();
+  image.src = png;
+  await image.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL('image/webp', 0.7);
+}
+
+/** `await primeProjects();` at boot, before the start screen needs its Recent list. */
+export async function primeProjects(): Promise<ProjectMeta[]> {
+  return (await projects?.prime()) ?? [];
+}
+
+/**
+ * The boot hook proper: one line at the end of `main.tsx`'s `refresh()`, which already runs
+ * after every journaled Command and has just re-read the Model and the Journal. With no project
+ * open and a non-empty Journal this is what creates one (issue #41).
+ */
+export function noteProject(name: string, entries: JournalEntry[], hash: string | null): void {
+  // Boot refreshes before any Command; an empty Journal is not a project yet (issue #48).
+  projects?.note(name, { entries }, hash);
+}
+
+/** Called before every Command that replaces the whole Model, so the next one forks a project. */
+export function forkProject(): void {
+  projects?.fork();
+}
+
+export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, save: Autosave = autosave): HostContext {
+  // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
+  // that ends on a solve comes back solved on screen rather than as a Model with no Result.
+  const replay = async (cmds: ShareCommand[]): Promise<void> => {
+    let solved: unknown = null;
+    for (const cmd of cmds) {
+      const ack = await transport.dispatch(cmd as never);
+      if (String(cmd.cmd).startsWith('solve.') || cmd.cmd === 'study.converge') solved = ack;
+    }
+    if (solved) await results?.onAck(solved);
+  };
+  const own = makeProjects({
+    // A browser with IndexedDB blocked (private mode, or a headless harness) keeps working:
+    // projects are then per-session, the start screen says so, and file.save is still there.
+    store: typeof indexedDB === 'undefined' ? memoryProjects() : indexedDbProjects(indexedDB),
+    replay,
+    reset: async (name) => void (await transport.dispatch({ cmd: 'model.new', name } as never)),
+    thumbnail: () => thumbnailOf(viewer),
+    initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
+    onError: (e) => console.warn('the project save failed', e),
+    onChange: () => store.set({ projects: own.list(), project: own.current() }),
+  });
+  projects = own;
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -102,18 +179,28 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         store.set({ clipOn: p !== null });
         v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
       },
-      toggle: (layer, on) => v().setLayer(layer, on ?? true),
-      setVisible: (bodies, on) => v().setVisible(bodies, on),
+      toggle: (layer, on) => {
+        const visible = v().setLayer(layer, on);
+        store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
+      },
+      setVisible: (bodies, on) => {
+        v().setVisible(bodies, on);
+        store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
+      },
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
       },
-      animate: (a) => v().animate(a.playing),
+      animate: (a) => {
+        v();
+        if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
+        return results.animate(a);
+      },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
         const burn = o.legend === false ? null : results?.legendBurn();
-        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined) };
+        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
     },
     selection: {
@@ -122,11 +209,19 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       setPickTarget: (t) => store.set({ pickTarget: t }),
       get: (): Selection => store.state.selection,
     },
-    panels: { toggle: (panel, open) => store.togglePanel(panel, open) },
+    panels: {
+      toggle: (panel, open) => store.togglePanel(panel, open),
+      resize: (panel, size) => store.resizePanel(panel, size),
+    },
     script: {
+      validate: (code, timeoutMs) => {
+        if (!scripts) throw new FemError('unsupported', 'no validation Worker is available', 'query.validateScript', 'run the app with script workers');
+        return scripts.validate(code, timeoutMs);
+      },
       // A script's Commands are the AI's, not the person's: the Journal's `who` column says so.
       run: async (code, timeoutMs) => {
         if (!scripts) throw new FemError('unsupported', 'no script Worker is available in this host', 'script.run', 'run the app, not the test harness');
+        if (scripts.running) throw new FemError('unsupported', 'a script or validation is already running', 'script.run', 'stop it with script.stop first');
         store.set({ scriptRunning: true, scriptOut: [], source: 'ai', tab: 'script' });
         try {
           const out = await scripts.run(code, timeoutMs);
@@ -147,9 +242,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     chat: {
       send: (text) => void import('./ai').then((m) => m.chatBridge.send(text)),
       insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
+      setDraft: (text) => import('./ai').then((m) => m.chatBridge.setDraft(text)),
       clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
     },
-    skills: () => [],
+    skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
       pick: () =>
@@ -160,6 +256,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
           input.onchange = () => {
             const file = input.files?.[0];
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            if (file.size > MAX_MODEL_FILE_BYTES) return reject(new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'picker', 'open a smaller file written by file.save'));
             file.text().then(resolve, reject);
           };
           input.click();
@@ -181,17 +278,23 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         store.log('command', 'share link copied');
         return { url };
       },
+      // The privacy switch. It stops writing; it never deletes what is already saved, because
+      // with a background save into a project there is no "unsaved" copy to throw away.
       setAutosave: (on) => {
-        autosave.setEnabled(on);
+        own.setEnabled(on);
+        save.setEnabled(on);
         localStorage.setItem('femlab.autosave', on ? 'on' : 'off');
-        if (on) return;
-        lastSaved = null;
-        void autosave.clear();
       },
-      restore: async () => {
-        const saved = await autosave.read();
+      restore: async (id) => {
+        const revisions = await save.readAll();
+        lastAutosaves = revisions.map(summary);
+        const saved = id === undefined ? revisions[0] : revisions.find((revision) => revision.id === id);
+        if (id !== undefined && !saved) {
+          throw new FemError('not-found', `autosave revision '${id}' was not found`, 'file.restore.id', 'query.autosaveHistory to choose an available revision, then call file.restore with its id');
+        }
         if (!saved) return null;
         // As with an example: a restored Journal that ends on a solve comes back solved on screen.
+        own.fork();
         let solved: unknown = null;
         await applyShared(
           {
@@ -206,34 +309,58 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         if (solved) await results?.onAck(solved);
         return { name: saved.name, at: saved.at, commands: saved.cmds.length };
       },
-      autosave: () => ({ enabled: autosave.enabled(), saved: lastSaved }),
+      autosave: () => ({ enabled: save.enabled(), saved: save.history()[0] ? summary(save.history()[0]!) : null }),
+      autosaves: () => save.history().map(summary),
     },
-    project: {
-      open: soon('the project folder', 'use file.open and file.save for now'),
-      close: soon('the project folder', 'use file.open and file.save for now'),
-      refresh: soon('the project folder', 'use file.open and file.save for now'),
+    projects: {
+      new: (name) => own.new(name),
+      open: (id) => own.open(id),
+      rename: (id, name) => own.rename(id, name),
+      delete: (id) => own.delete(id),
+      save: () => own.save(),
+      list: () => own.list(),
+      current: () => own.current(),
+    },
+    folder: {
+      // The Assistant picker supplies the folder skill source; full folder I/O is #13.
+      open: soon('the folder on disk', 'use file.open and file.save for now'),
+      close: () => store.setFolder(null),
+      refresh: async () => {
+        const folder = store.state.folder;
+        if (!folder) throw new FemError('file.not-found', 'no folder is open', 'folder', 'open a project folder in the Assistant');
+        await folder.refresh();
+        // Closing/replacing a folder while this read is in flight must not restore the old one.
+        if (store.state.folder === folder) store.setFolder(folder);
+      },
+
       info: () => null,
-      readText: soon('the project folder', 'use file.open for now'),
-      writeText: soon('the project folder', 'use file.save for now'),
-      writeBytes: soon('the project folder', 'use file.save for now'),
+      readText: soon('the folder on disk', 'use file.open for now'),
+      writeText: soon('the folder on disk', 'use file.save for now'),
+      writeBytes: soon('the folder on disk', 'use file.save for now'),
     },
     examples: { fetch: fetchExample },
     ai: {
-      setKey: (key) => (key === null ? localStorage.removeItem('femlab.ai.key') : localStorage.setItem('femlab.ai.key', key)),
-      setModel: (model) => localStorage.setItem('femlab.ai.model', model),
+      setKey: (key, provider: AiProvider) => {
+        storeKey(provider, key);
+      },
+      setModel: (model) => {
+        localStorage.setItem('femlab.ai.model', model);
+        store.set({ assistantModel: model });
+      },
     },
     env: { webgpu: host.webgpu, crossOriginIsolated: host.crossOriginIsolated, threads: host.threads, userAgent: host.userAgent, engine: 'local' },
   };
 }
 
 /**
- * Three Commands the design's shell needs that `@femlab/registry` does not declare: the display
+ * Four Commands the design's shell needs that `@femlab/registry` does not declare: the display
  * mode segmented control, opening a bundled example that is a Journal rather than a saved
  * `femlab/1` file, and putting a Command into the Properties form without running it (every
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: WorkerTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+  let editRequest = 0;
   return [
     {
       name: 'view.setMode',
@@ -247,6 +374,44 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
       },
     },
     {
+      name: 'form.edit',
+      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
+      schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
+      tool: true,
+      run: async (input) => {
+        const target = input as { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+        const request = ++editRequest;
+        const previousForm = store.state.form;
+        const revision = store.state.revision;
+        const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+        if (request !== editRequest || store.state.form !== previousForm || store.state.revision !== revision) return;
+        const { cmd, ...args } = command;
+        store.openForm(cmd, args);
+      },
+    },
+    {
+      name: 'chat.setDraft',
+      description: 'Replace the unsent Assistant draft with explicit text and open the drawer. Use this to insert a skill name for the person to complete with arguments; it does not invoke the skill or send a message.',
+      schema: z.object({ text: z.string() }),
+      tool: true,
+      run: async (input, ctx) => {
+        const { text } = input as { text: string };
+        store.togglePanel('assistant', true);
+        await ctx.chat.setDraft(text);
+      },
+    },
+    {
+      name: 'form.pick',
+      description: 'Arm the next viewer face click to fill the explicit field path of an open Command form. `command` must name the currently open form; `field` names its argument path. This sets both the picking target and the form destination, without editing the Model or Journal.',
+      schema: z.object({ command: z.string(), field: z.array(z.string().min(1)).min(1) }),
+      tool: true,
+      run: (input) => {
+        const { command, field } = input as { command: string; field: string[] };
+        if (store.state.form?.cmd !== command) throw new FemError('schema', 'the requested Command form is not open', 'command', `form.open for ${command} before form.pick`);
+        store.set({ pickInto: field, pickTarget: 'face' });
+      },
+    },
+    {
       name: 'form.open',
       description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
       schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional() }),
@@ -254,6 +419,16 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
       run: (input) => {
         const { command, args, keepInitial } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean };
         store.openForm(command, args ?? {}, keepInitial === true);
+      },
+    },
+    {
+      name: 'example.filter',
+      description: 'Filter the Examples gallery by one metadata tag and one difficulty level. Pass `null` for either field to show every value in that dimension; this changes only the gallery view.',
+      schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable() }),
+      tool: true,
+      run: (input) => {
+        const { tag, difficulty } = input as { tag: string | null; difficulty: ExampleDifficulty | null };
+        store.set({ exampleFilter: { tag, difficulty } });
       },
     },
     {

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use femlab_geometry::{Shape, Solid};
+use femlab_geometry::{RegionPredicate, Shape, Solid};
 
 use crate::command::{Command, ExportFormat, IdealisationSpec, ObjectKind};
 use crate::error::{Error, ErrorCode, Warning};
@@ -42,6 +42,15 @@ pub type OnProgress<'a> = &'a mut dyn FnMut(Progress) -> bool;
 
 /// Undo depth: a bounded number of Model snapshots.
 pub const UNDO_DEPTH: usize = 200;
+
+/// Host-independent preview of one Body before finite-element mesh settings exist.
+#[derive(Debug, Clone)]
+pub struct GeometrySurface {
+    pub body: String,
+    pub triangles: femlab_geometry::TriMesh,
+    /// Sheet boundary loops, including holes, in world coordinates with named edge tags.
+    pub outlines: Vec<femlab_geometry::sketch::Loop>,
+}
 
 /// The engine.
 pub struct Engine {
@@ -128,19 +137,7 @@ impl Engine {
                 Ok(Ack { seq: self.revision(), revision: self.revision(), hash, warnings: self.warnings(), output })
             }
             Ok(output) => {
-                if matches!(cmd, Command::ModelNew { .. }) {
-                    self.undo.clear();
-                    self.journal = Journal::default();
-                } else {
-                    self.undo.push(before);
-                    if self.undo.len() > UNDO_DEPTH {
-                        self.undo.remove(0);
-                    }
-                }
-                self.redo.clear();
-                let hash = self.model_hash();
-                let entry = self.journal.append(cmd, hash.clone());
-                let seq = entry.seq;
+                let (seq, hash) = self.record(cmd, before);
                 Ok(Ack { seq, revision: self.revision(), hash, warnings: self.warnings(), output })
             }
             Err(e) => {
@@ -151,7 +148,31 @@ impl Engine {
         }
     }
 
-    fn undo(&mut self, steps: u32) -> Result<Output, Error> {
+    /// Keep one bounded undo snapshot per recorded Command, including skipped replay work.
+    fn record(&mut self, cmd: Command, before: Model) -> (u32, String) {
+        if matches!(cmd, Command::ModelNew { .. }) {
+            self.undo.clear();
+            self.journal = Journal::default();
+        } else {
+            self.undo.push(before);
+            if self.undo.len() > UNDO_DEPTH {
+                self.undo.remove(0);
+            }
+        }
+        self.redo.clear();
+        let hash = self.model_hash();
+        let seq = self.journal.append(cmd, hash.clone()).seq;
+        (seq, hash)
+    }
+
+    fn undo(&mut self, steps: u32, expected_journal: Option<&String>) -> Result<Output, Error> {
+        if let Some(expected) = expected_journal {
+            if expected != &self.journal.hash() {
+                return Err(Error::new(ErrorCode::InUse, "the Journal changed after this turn")
+                    .at("expectedJournal")
+                    .suggest("query.journal to inspect later changes before journal.undo"));
+            }
+        }
         if steps == 0 || self.undo.len() < steps as usize {
             return Err(Error::new(
                 ErrorCode::NotFound,
@@ -217,7 +238,8 @@ impl Engine {
 
     /// Replay entries onto a fresh Model; returns the recomputed hash after each entry and
     /// fails on the first entry whose hash differs from the recorded one when `verify`.
-    /// With `skip_solves`, `solve.run` and `study.converge` are appended unrun.
+    /// With `skip_solves`, numerical work is omitted while every Command still has an undo
+    /// snapshot. A non-restoring study applies its final mesh settings without computing Results.
     pub async fn replay(
         &mut self,
         entries: &[JournalEntry],
@@ -228,7 +250,7 @@ impl Engine {
         self.journal = Journal::default();
         self.undo.clear();
         self.redo.clear();
-        self.solids.clear();
+        self.invalidate_geometry();
         self.results.clear();
         self.studies.clear();
         let mut hashes = Vec::with_capacity(entries.len());
@@ -236,9 +258,21 @@ impl Engine {
         for e in entries {
             let skip = skip_solves && matches!(e.cmd, Command::SolveRun { .. } | Command::StudyConverge { .. });
             let hash = if skip {
-                let hash = self.model_hash();
-                self.journal.append(e.cmd.clone(), hash.clone());
-                hash
+                let before = self.model.clone();
+                if let Command::StudyConverge { sizes, restore: Some(false), .. } = &e.cmd {
+                    let (settings, h) =
+                        self.study_mesh(sizes).map_err(|err| err.at(format!("journal entry {}", e.seq)))?;
+                    self.model.mesh = Some(MeshSettings {
+                        mesher: crate::mesh::scale_mesher(
+                            &settings.mesher,
+                            h[0],
+                            *h.last().expect("at least two sizes"),
+                        ),
+                        ..settings
+                    });
+                }
+                self.mesh = None;
+                self.record(e.cmd.clone(), before).1
             } else {
                 self.dispatch(e.cmd.clone(), &mut nop)
                     .await
@@ -306,6 +340,29 @@ impl Engine {
                 text: "no constraints; a static solve needs supports (constraint.fix)".into(),
                 where_: None,
             });
+        } else if let Some(body) = implicit {
+            // Box regions select geometrically across the mesh; Body regions and faces name
+            // their Body explicitly. A constraint left on another Body is not a support
+            // for the mapped mesher's implicit Body. This is a reference check, not a claim
+            // that the selected DOFs eliminate every rigid mode.
+            let targeted = m.constraints.iter().any(|c| {
+                if let Some(set) = m.sets.iter().find(|s| s.name == c.on) {
+                    match &set.source {
+                        SetSource::Face { of, .. } => of == body,
+                        SetSource::Region { where_: RegionPredicate::Body { name } } => name == body,
+                        SetSource::Region { where_: RegionPredicate::Bbox { .. } } => true,
+                    }
+                } else {
+                    c.on.rsplit_once('.').is_some_and(|(prefix, _)| prefix == body)
+                }
+            });
+            if !targeted {
+                w.push(Warning {
+                    code: "model.unconstrained".into(),
+                    text: format!("no constraints target Body '{body}'; add supports on its Sets with constraint.fix"),
+                    where_: Some(format!("body '{body}'")),
+                });
+            }
         }
         if m.loads.is_empty() && has_geometry {
             w.push(Warning {
@@ -378,13 +435,17 @@ impl Engine {
         Ok(self.mesh()?.mesh.surface())
     }
 
-    /// The Bodies' triangle meshes, for the viewer before there is a Mesh.
-    pub fn geometry_surface(&mut self) -> Result<Vec<(String, femlab_geometry::TriMesh)>, Error> {
+    /// The Bodies' triangles and Sheet outlines, for a host before there is a Mesh.
+    pub fn geometry_surface(&mut self) -> Result<Vec<GeometrySurface>, Error> {
         let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
         let mut out = Vec::with_capacity(bodies.len());
         for b in bodies {
-            let tri = self.solid(&b)?.triangles().clone();
-            out.push((b, tri));
+            let solid = self.solid(&b)?;
+            out.push(GeometrySurface {
+                body: b,
+                triangles: solid.triangles().clone(),
+                outlines: solid.outline().to_vec(),
+            });
         }
         Ok(out)
     }
@@ -443,7 +504,7 @@ impl Engine {
             }
             Command::GeometryNameFace { name, of, where_ } => {
                 check_name(name)?;
-                self.model.body(of).ok_or_else(|| Error::not_found("body", of, &self.model.names(ObjectKind::Body)))?;
+                self.check_body(of).map_err(|e| e.at("of"))?;
                 let pred = where_.to_si()?;
                 let set = NamedSet { name: name.clone(), source: SetSource::Face { of: of.clone(), where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
@@ -452,9 +513,7 @@ impl Engine {
                 check_name(name)?;
                 let pred = where_.to_si()?;
                 if let femlab_geometry::RegionPredicate::Body { name: b } = &pred {
-                    self.model
-                        .body(b)
-                        .ok_or_else(|| Error::not_found("body", b, &self.model.names(ObjectKind::Body)))?;
+                    self.check_body(b).map_err(|e| e.at("where.name"))?;
                 }
                 let set = NamedSet { name: name.clone(), source: SetSource::Region { where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
@@ -493,8 +552,7 @@ impl Engine {
                     if implicit.as_deref() == Some(b.as_str()) {
                         continue;
                     }
-                    let mut known = self.model.names(ObjectKind::Body);
-                    known.extend(implicit.as_deref());
+                    let known = self.model.names(ObjectKind::Body);
                     self.model.body(b).ok_or_else(|| Error::not_found("body", b, &known))?;
                 }
                 if implicit.is_some_and(|b| bodies.contains(&b)) {
@@ -531,6 +589,25 @@ impl Engine {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
                 }
                 let settings = crate::mesh::mesher_settings(mesher)?;
+                let old_body = self.model.implicit_body();
+                let new_body = settings.implicit_body();
+                if let Some(body) = new_body {
+                    check_name(body).map_err(|e| e.at("mesher.body"))?;
+                    if self.model.body(body).is_some() || self.model.cuts.iter().any(|c| c.name == body) {
+                        return Err(Error::new(
+                            ErrorCode::NameTaken,
+                            format!("'{body}' already names explicit geometry"),
+                        )
+                        .at("mesher.body")
+                        .suggest("retry mesh.set with another mesher.body name"));
+                    }
+                }
+                if old_body != new_body {
+                    if let Some(body) = old_body {
+                        self.check_body_unused(body)?;
+                    }
+                    self.model.mesher_material = None;
+                }
                 self.model.mesh =
                     Some(MeshSettings { mesher: settings, order, formulation: formulation.unwrap_or_default() });
                 Ok(Output::None)
@@ -729,6 +806,16 @@ impl Engine {
                 self.model
                     .step(name)
                     .ok_or_else(|| Error::not_found("step", name, &self.model.names(ObjectKind::Step)))?;
+                let users: Vec<&str> = self
+                    .model
+                    .steps
+                    .iter()
+                    .filter(|s| s.after.as_deref() == Some(name.as_str()))
+                    .map(|s| s.name.as_str())
+                    .collect();
+                if !users.is_empty() {
+                    return Err(in_use("step", name, &users, "steps"));
+                }
                 self.model.steps.retain(|s| s.name != *name);
                 Ok(Output::None)
             }
@@ -757,7 +844,9 @@ impl Engine {
                 self.study_converge(step, sizes, quantity, *restore, on_progress).await
             }
             Command::PluginLoad { .. } => Err(Error::unsupported("plugin.load (phase P)")),
-            Command::JournalUndo { steps } => self.undo(steps.unwrap_or(1)),
+            Command::JournalUndo { steps, expected_journal } => {
+                self.undo(steps.unwrap_or(1), expected_journal.as_ref())
+            }
             Command::JournalRedo { steps } => self.redo(steps.unwrap_or(1)),
         }
     }
@@ -773,7 +862,7 @@ impl Engine {
                 // A Step's fields are point data on the same Mesh; without a Step the file is
                 // the Mesh alone, which is what a user exports before solving.
                 let point: Vec<(&str, usize, Vec<f64>)> = match step {
-                    Some(s) => crate::solve_run::export_fields(self.stored(Some(s))?.2),
+                    Some(s) => crate::solve_run::export_fields(self.current_result(Some(s))?),
                     None => Vec::new(),
                 };
                 let built = self.mesh()?;
@@ -795,6 +884,11 @@ impl Engine {
 
     fn add_body(&mut self, name: &str, shape: Shape) -> Result<Output, Error> {
         check_name(name)?;
+        if self.model.implicit_body() == Some(name) {
+            return Err(Error::new(ErrorCode::NameTaken, format!("'{name}' is the mesher-defined Body"))
+                .at("name")
+                .suggest("edit its geometry with mesh.set or use another Body name"));
+        }
         if self.model.cuts.iter().any(|c| c.name == name) {
             return Err(
                 Error::new(ErrorCode::NameTaken, format!("'{name}' is already a cut")).at(format!("body '{name}'"))
@@ -813,10 +907,18 @@ impl Engine {
 
     fn add_cut(&mut self, name: &str, from: &str, shape: Shape) -> Result<Output, Error> {
         check_name(name)?;
-        if self.model.body(name).is_some() {
+        if self.model.names(ObjectKind::Body).contains(&name) {
             return Err(
                 Error::new(ErrorCode::NameTaken, format!("'{name}' is already a body")).at(format!("cut '{name}'"))
             );
+        }
+        if self.model.implicit_body() == Some(from) {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "cuts require explicit geometry; mapped blocks cannot be cut",
+            )
+            .at("from")
+            .suggest("edit the mapped geometry with mesh.set"));
         }
         let body = self
             .model
@@ -834,39 +936,47 @@ impl Engine {
         Ok(if replaced { Output::Replaced { kind: ObjectKind::Body, name: name.to_string() } } else { Output::None })
     }
 
+    /// Removing mesher-owned geometry must obey the same references as explicit geometry.
+    fn check_body_unused(&self, name: &str) -> Result<(), Error> {
+        let m = &self.model;
+        let mut users: Vec<String> = Vec::new();
+        for c in &m.constraints {
+            if set_refers_to(&c.on, name) {
+                users.push(format!("constraint '{}'", c.name));
+            }
+        }
+        for l in &m.loads {
+            if l.kind.set().is_some_and(|s| set_refers_to(s, name)) || l.kind.bodies().iter().any(|body| body == name) {
+                users.push(format!("load '{}'", l.name));
+            }
+        }
+        for s in &m.sets {
+            let refers = match &s.source {
+                SetSource::Face { of, .. } => of == name,
+                SetSource::Region { where_: femlab_geometry::RegionPredicate::Body { name: body } } => body == name,
+                SetSource::Region { .. } => false,
+            };
+            if refers {
+                users.push(format!("set '{}'", s.name));
+            }
+        }
+        if m.mesh.as_ref().and_then(|mesh| mesh.mesher.source_body()) == Some(name) {
+            users.push("mesher geometry".into());
+        }
+        if !users.is_empty() {
+            let u: Vec<&str> = users.iter().map(String::as_str).collect();
+            return Err(in_use("body", name, &u, "objects"));
+        }
+        Ok(())
+    }
+
     fn geometry_remove(&mut self, name: &str) -> Result<Output, Error> {
         let m = &self.model;
-        if m.body(name).is_some() {
-            let mut users: Vec<String> = Vec::new();
-            for c in &m.constraints {
-                if set_refers_to(&c.on, name) {
-                    users.push(format!("constraint '{}'", c.name));
-                }
-            }
-            for l in &m.loads {
-                if l.kind.set().is_some_and(|s| set_refers_to(s, name)) {
-                    users.push(format!("load '{}'", l.name));
-                }
-                if let LoadKind::Temperature { bodies, .. } = &l.kind {
-                    if bodies.iter().any(|b| b == name) {
-                        users.push(format!("load '{}'", l.name));
-                    }
-                }
-            }
-            for s in &m.sets {
-                let refers = match &s.source {
-                    SetSource::Face { of, .. } => of == name,
-                    SetSource::Region { where_ } => {
-                        matches!(where_, femlab_geometry::RegionPredicate::Body { name: b } if b == name)
-                    }
-                };
-                if refers {
-                    users.push(format!("set '{}'", s.name));
-                }
-            }
-            if !users.is_empty() {
-                let u: Vec<&str> = users.iter().map(String::as_str).collect();
-                return Err(in_use("body", name, &u, "objects"));
+        if m.body(name).is_some() || m.implicit_body() == Some(name) {
+            self.check_body_unused(name)?;
+            if self.model.implicit_body() == Some(name) {
+                self.model.mesh = None;
+                self.model.mesher_material = None;
             }
             self.model.bodies.retain(|b| b.name != name);
             self.model.cuts.retain(|c| c.from != name);
@@ -928,10 +1038,24 @@ impl Engine {
             .suggest("use an auto face like 'beam.xmin' (see query.model) or geometry.nameFace"))
     }
 
+    /// A Body reference may name explicit geometry or the Body defined by a mapped/swept mesher.
+    /// This validates identity only; selectors and loads resolve against the actual Mesh.
+    fn check_body(&self, body: &str) -> Result<(), Error> {
+        let known = self.model.names(ObjectKind::Body);
+        if known.contains(&body) {
+            Ok(())
+        } else {
+            Err(Error::not_found("body", body, &known).suggest(format!(
+                "query.model lists explicit and mesher-defined Bodies; known bodies: {}",
+                known.join(", ")
+            )))
+        }
+    }
+
     /// Every named Body exists, or `not-found` listing the ones that do.
     fn check_bodies(&self, bodies: &[String]) -> Result<(), Error> {
-        for b in bodies {
-            self.model.body(b).ok_or_else(|| Error::not_found("body", b, &self.model.names(ObjectKind::Body)))?;
+        for (i, body) in bodies.iter().enumerate() {
+            self.check_body(body).map_err(|error| error.at(format!("bodies[{i}]")))?;
         }
         Ok(())
     }
@@ -941,13 +1065,19 @@ impl Engine {
         if !self.model.names(kind).contains(&name) {
             return Err(Error::not_found(kind.label(), name, &self.model.names(kind)));
         }
-        if self.model.names(kind).contains(&to) {
-            return Err(Error::new(ErrorCode::NameTaken, format!("a {} named '{to}' already exists", kind.label()))
-                .at(format!("{} '{to}'", kind.label())));
+        if self.model.names(kind).contains(&to)
+            || (kind == ObjectKind::Body && self.model.cuts.iter().any(|cut| cut.name == to))
+        {
+            return Err(Error::new(ErrorCode::NameTaken, format!("name '{to}' is already in use"))
+                .at(format!("{} '{to}'", kind.label()))
+                .suggest("retry model.rename with another name"));
         }
         let m = &mut self.model;
         match kind {
             ObjectKind::Body => {
+                if let Some(mesh) = &mut m.mesh {
+                    mesh.mesher.rename_body(name, to);
+                }
                 for b in &mut m.bodies {
                     if b.name == name {
                         b.name = to.into();
@@ -1006,6 +1136,9 @@ impl Engine {
                         b.material = Some(to.into());
                     }
                 }
+                if m.mesher_material.as_deref() == Some(name) {
+                    m.mesher_material = Some(to.into());
+                }
             }
             ObjectKind::Set => {
                 for s in &mut m.sets {
@@ -1019,12 +1152,17 @@ impl Engine {
                     }
                 }
                 for l in &mut m.loads {
-                    if let LoadKind::Pressure { on, .. } | LoadKind::Traction { on, .. } | LoadKind::Force { on, .. } =
-                        &mut l.kind
-                    {
-                        if on == name {
-                            *on = to.into();
+                    match &mut l.kind {
+                        LoadKind::Pressure { on, .. }
+                        | LoadKind::Traction { on, .. }
+                        | LoadKind::Force { on, .. }
+                        | LoadKind::Convection { on, .. }
+                        | LoadKind::HeatFlux { on, .. } => {
+                            if on == name {
+                                *on = to.into();
+                            }
                         }
+                        LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => {}
                     }
                 }
             }
@@ -1061,6 +1199,9 @@ impl Engine {
                     if s.name == name {
                         s.name = to.into();
                     }
+                    if s.after.as_deref() == Some(name) {
+                        s.after = Some(to.into());
+                    }
                 }
             }
         }
@@ -1072,13 +1213,23 @@ impl Engine {
         if !self.model.names(kind).contains(&name) {
             return Err(Error::not_found(kind.label(), name, &self.model.names(kind)));
         }
-        if self.model.names(kind).contains(&as_) {
-            return Err(Error::new(ErrorCode::NameTaken, format!("a {} named '{as_}' already exists", kind.label()))
+        if self.model.names(kind).contains(&as_)
+            || (kind == ObjectKind::Body && self.model.cuts.iter().any(|cut| cut.name == as_))
+        {
+            return Err(Error::new(ErrorCode::NameTaken, format!("name '{as_}' is already in use"))
                 .at(format!("{} '{as_}'", kind.label())));
         }
         let m = &mut self.model;
         match kind {
             ObjectKind::Body => {
+                if m.implicit_body() == Some(name) {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "a mesher-defined Body cannot be duplicated: the Model has one mesher geometry slot",
+                    )
+                    .at(format!("body '{name}'"))
+                    .suggest("use model.rename to rename it, or mesh.set to define replacement geometry"));
+                }
                 let mut b = m.body(name).expect("checked").clone();
                 b.name = as_.into();
                 m.bodies.push(b);

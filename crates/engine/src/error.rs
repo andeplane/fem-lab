@@ -59,6 +59,8 @@ pub enum ErrorCode {
     ModelNoMaterial,
     #[serde(rename = "model.ill-posed")]
     ModelIllPosed,
+    #[serde(rename = "result.stale")]
+    ResultStale,
     #[serde(rename = "constraint.conflict")]
     ConstraintConflict,
     #[serde(rename = "constraint.rigid-modes")]
@@ -67,6 +69,8 @@ pub enum ErrorCode {
     SolveNotPositiveDefinite,
     #[serde(rename = "solve.stalled")]
     SolveStalled,
+    #[serde(rename = "solve.too-large")]
+    SolveTooLarge,
     #[serde(rename = "gpu.shader")]
     GpuShader,
     #[serde(rename = "gpu.too-large")]
@@ -157,10 +161,12 @@ mod tests {
             ErrorCode::MeshFailed,
             ErrorCode::ModelNoMaterial,
             ErrorCode::ModelIllPosed,
+            ErrorCode::ResultStale,
             ErrorCode::ConstraintConflict,
             ErrorCode::ConstraintRigidModes,
             ErrorCode::SolveNotPositiveDefinite,
             ErrorCode::SolveStalled,
+            ErrorCode::SolveTooLarge,
             ErrorCode::GpuShader,
             ErrorCode::GpuTooLarge,
             ErrorCode::ExplicitUnstable,

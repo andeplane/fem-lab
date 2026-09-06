@@ -1,58 +1,35 @@
-// The OpenAI side of `Provider`: Chat Completions with function calling and streaming. Chosen over
-// the Responses API because the tool loop, the images and the streamed deltas map one-to-one onto
-// what `provider.ts` already declares, so this file is a translation and nothing else. The client is
-// injected, so the tests hand in a scripted double and nothing reaches the network.
+// Responses supports function tools with reasoning on every model offered by the app.
+// The client is injected so adapter tests exercise the wire format without the network.
 import OpenAI from 'openai';
-import type { Block, ChatEvent, ChatRequest, Message, Provider } from './provider';
+import type { ChatEvent, ChatRequest, Message, Provider } from './provider';
 
-/** From the SDK's `ChatModel` union, newest first. */
-export const OPENAI_MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini'];
+export const OPENAI_MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini'] satisfies OpenAI.ChatModel[];
 export const OPENAI_DEFAULT = OPENAI_MODELS[0]!;
 
 export interface OpenAILike {
-  chat: {
-    completions: {
-      create(params: OpenAI.ChatCompletionCreateParamsStreaming): Promise<AsyncIterable<OpenAI.ChatCompletionChunk>>;
-    };
+  responses: {
+    create(params: OpenAI.Responses.ResponseCreateParamsStreaming, options?: { signal?: AbortSignal }): Promise<AsyncIterable<OpenAI.Responses.ResponseStreamEvent>>;
   };
 }
 
-const dataUrl = (b: { mediaType: string; base64: string }) => `data:${b.mediaType};base64,${b.base64}`;
-
-/**
- * Our messages into OpenAI's. The shapes do not line up one-to-one: a `tool_result` block rides in
- * a user message here but is its own `role: 'tool'` message there, so one of ours can become several.
- */
-export function toChatMessages(system: string, messages: Message[]): OpenAI.ChatCompletionMessageParam[] {
-  const out: OpenAI.ChatCompletionMessageParam[] = [{ role: 'system', content: system }];
-  for (const m of messages) {
-    for (const b of m.content) {
-      if (b.type === 'tool_result') out.push({ role: 'tool', tool_call_id: b.toolUseId, content: b.content });
+/** Keep tool call IDs paired with their results, including multiple calls in a turn. */
+export function toResponseInput(messages: Message[]): OpenAI.Responses.ResponseInput {
+  return messages.flatMap((m) => {
+    // Replay the complete output in order, including encrypted reasoning and message phase.
+    // These items replace the display blocks; adding both would duplicate text and tool calls.
+    if (m.role === 'assistant' && m.continuation?.provider === 'openai') {
+      return m.continuation.value as OpenAI.Responses.ResponseInput;
     }
-    const parts = m.content.filter((b): b is Extract<Block, { type: 'text' | 'image' }> => b.type === 'text' || b.type === 'image');
-    const calls = m.content.filter((b): b is Extract<Block, { type: 'tool_use' }> => b.type === 'tool_use');
-    if (m.role === 'assistant') {
-      if (parts.length === 0 && calls.length === 0) continue;
-      out.push({
-        role: 'assistant',
-        content: parts.map((p) => (p.type === 'text' ? p.text : '')).join('') || null,
-        ...(calls.length > 0
-          ? { tool_calls: calls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: JSON.stringify(c.input ?? {}) } })) }
-          : {}),
-      });
-      continue;
-    }
-    if (parts.length === 0) continue;
-    out.push({
-      role: 'user',
-      content: parts.flatMap((p): OpenAI.ChatCompletionContentPart[] =>
-        p.type === 'text'
-          ? [{ type: 'text', text: p.text }]
-          : [{ type: 'image_url', image_url: { url: dataUrl(p) } }, ...(p.caption ? [{ type: 'text' as const, text: p.caption }] : [])],
-      ),
+    return m.content.flatMap((b): OpenAI.Responses.ResponseInput => {
+      if (b.type === 'tool_use') return [{ type: 'function_call', call_id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}) }];
+      if (b.type === 'tool_result') return [{ type: 'function_call_output', call_id: b.toolUseId, output: b.content }];
+      if (b.type === 'text') return [{ role: m.role, content: b.text }];
+      return [{ role: 'user', content: [
+        { type: 'input_image', image_url: `data:${b.mediaType};base64,${b.base64}`, detail: 'auto' },
+        ...(b.caption ? [{ type: 'input_text' as const, text: b.caption }] : []),
+      ] }];
     });
-  }
-  return out;
+  });
 }
 
 /** A model that returns unparseable arguments gets a schema error back rather than empty input. */
@@ -70,43 +47,62 @@ export function openaiProvider(apiKey: string, make: (key: string) => OpenAILike
     id: 'openai',
     models: OPENAI_MODELS,
     async *chat(req: ChatRequest): AsyncIterable<ChatEvent> {
-      const pending = new Map<number, { id: string; name: string; args: string }>();
-      let stopReason = 'end_turn';
-      let usage = { input: 0, output: 0, cacheRead: 0 };
       try {
-        const stream = await client.chat.completions.create({
+        const stream = await client.responses.create({
           model: req.model,
-          max_completion_tokens: req.maxTokens,
+          max_output_tokens: req.maxTokens,
           stream: true,
-          stream_options: { include_usage: true },
-          messages: toChatMessages(req.system, req.messages),
-          tools: req.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })),
-        });
-        for await (const chunk of stream) {
-          if (chunk.usage) {
-            usage = {
-              input: chunk.usage.prompt_tokens - (chunk.usage.prompt_tokens_details?.cached_tokens ?? 0),
-              output: chunk.usage.completion_tokens,
-              cacheRead: chunk.usage.prompt_tokens_details?.cached_tokens ?? 0,
-            };
+          store: false,
+          service_tier: 'default',
+          include: ['reasoning.encrypted_content'],
+          instructions: req.system,
+          input: toResponseInput(req.messages),
+          // Registry schemas intentionally have optional fields; strict mode would rewrite them.
+          tools: req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema, strict: false })),
+        }, { signal: req.signal });
+        const preparing = new Map<number, { id: string; name: string; arguments: string }>();
+        let terminal = false;
+        for await (const event of stream) {
+          if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
+            const call = { id: event.item.call_id, name: event.item.name, arguments: event.item.arguments };
+            preparing.set(event.output_index, call);
+            yield { type: 'tool_progress', ...call };
           }
-          const choice = chunk.choices[0];
-          if (!choice) continue;
-          if (choice.delta.content) yield { type: 'text_delta', text: choice.delta.content };
-          for (const call of choice.delta.tool_calls ?? []) {
-            const cur = pending.get(call.index) ?? { id: '', name: '', args: '' };
-            pending.set(call.index, {
-              id: call.id ?? cur.id,
-              name: call.function?.name ?? cur.name,
-              args: cur.args + (call.function?.arguments ?? ''),
-            });
+          if (event.type === 'response.function_call_arguments.delta') {
+            const call = preparing.get(event.output_index);
+            if (call) {
+              call.arguments += event.delta;
+              yield { type: 'tool_progress', ...call };
+            }
           }
-          if (choice.finish_reason) stopReason = choice.finish_reason === 'tool_calls' ? 'tool_use' : choice.finish_reason;
+          if (event.type === 'response.function_call_arguments.done') {
+            const call = preparing.get(event.output_index);
+            if (call) {
+              call.arguments = event.arguments;
+              yield { type: 'tool_progress', ...call };
+            }
+          }
+          if (['response.completed', 'response.failed', 'response.incomplete', 'error'].includes(event.type)) terminal = true;
+          if (event.type === 'response.output_text.delta') yield { type: 'text_delta', text: event.delta };
+          if (event.type === 'response.completed') {
+            const response = event.response;
+            const calls = response.output.filter((item) => item.type === 'function_call');
+            for (const call of calls) yield { type: 'tool_use', id: call.call_id, name: call.name, input: parseArgs(call.arguments) };
+            if (response.usage) {
+              const cacheRead = response.usage.input_tokens_details.cached_tokens;
+              const cacheWrite = response.usage.input_tokens_details.cache_write_tokens ?? 0;
+              yield { type: 'usage', usage: { input: response.usage.input_tokens - cacheRead, output: response.usage.output_tokens, cacheRead, ...(cacheWrite > 0 ? { cacheWrite } : {}) } };
+            }
+            yield { type: 'continuation', continuation: { provider: 'openai', value: response.output } };
+            yield { type: 'done', stopReason: calls.length ? 'tool_use' : 'end_turn' };
+          }
+          if (event.type === 'error') yield { type: 'error', message: event.message };
+          if (event.type === 'response.failed') yield { type: 'error', message: event.response.error?.message ?? 'OpenAI response failed' };
+          if (event.type === 'response.incomplete') yield { type: 'error', message: `OpenAI response incomplete: ${event.response.incomplete_details?.reason ?? 'unknown'}` };
         }
-        for (const call of pending.values()) yield { type: 'tool_use', id: call.id, name: call.name, input: parseArgs(call.args) };
-        yield { type: 'usage', usage };
-        yield { type: 'done', stopReason };
+        if (!terminal) yield { type: 'error', message: 'OpenAI stream ended before the response completed' };
       } catch (e) {
+        if (req.signal?.aborted) return;
         yield { type: 'error', message: e instanceof Error ? e.message : String(e) };
       }
     },

@@ -1,15 +1,30 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, AutosaveVersion, Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
+import { projectSkills, type ProjectFolder } from './ai/project';
+import { BUILTIN_SKILLS } from './ai/skills';
+import { TABS, type Tab } from './ui/tabs';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
-export type Tab = 'journal' | 'script' | 'results' | 'checks' | 'console';
-export const TABS: Tab[] = ['journal', 'script', 'results', 'checks', 'console'];
+export { TABS, type Tab } from './ui/tabs';
+export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
+export type PanelSizes = Record<ResizablePanel, number>;
+export const DEFAULT_PANEL_SIZES: PanelSizes = { tree: 274, properties: 308, bottom: 252, assistant: 392 };
+export const PANEL_SIZE_LIMITS: Record<ResizablePanel, { min: number; max: number }> = {
+  tree: { min: 180, max: 420 },
+  properties: { min: 240, max: 440 },
+  bottom: { min: 184, max: 480 },
+  assistant: { min: 320, max: 520 },
+};
 
+export function clampPanelSize(panel: ResizablePanel, size: number): number {
+  const limits = PANEL_SIZE_LIMITS[panel];
+  return Math.round(Math.min(limits.max, Math.max(limits.min, size)));
+}
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
   cmd: string;
@@ -18,6 +33,11 @@ export interface FormState {
   initial: Record<string, unknown>;
 }
 export type ConsoleLevel = 'command' | 'engine' | 'warn' | 'error' | 'result';
+export type ExampleDifficulty = 1 | 2 | 3;
+export interface ExampleFilter {
+  tag: string | null;
+  difficulty: ExampleDifficulty | null;
+}
 export interface ConsoleLine {
   level: ConsoleLevel;
   text: string;
@@ -31,9 +51,15 @@ export interface LastError {
 }
 
 export interface UiState {
-  ready: boolean;
-  /** What `query.autosave` last reported, so the start screen can offer `file.restore`. */
   autosave: AutosaveState['saved'];
+  autosaves: AutosaveVersion[];
+  /** Session mirror of the ai.setModel host Command, shared with the Assistant. */
+  assistantModel: string | null;
+  /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
+  folder: ProjectFolder | null;
+  /** One available catalog; project skills override built-ins by name. */
+  skills: Skill[];
+  ready: boolean;
   model: ModelSummary | null;
   journal: JournalDump | null;
   script: string;
@@ -46,6 +72,12 @@ export interface UiState {
   deformScale: number;
   /** Panel id → open. Panels absent from the map are closed. */
   panels: Record<string, boolean>;
+  /** The Examples gallery's two independent, registry-driven filters. */
+  exampleFilter: ExampleFilter;
+  /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
+  panelSizes: PanelSizes;
+  /** Body names hidden only in the viewer by `view.setVisible`; the Model is unchanged. */
+  hiddenBodies: string[];
   tab: Tab;
   /** Every `@`-mentionable object, for the picker chips and the palette. */
   objects: ObjectRef[];
@@ -86,9 +118,8 @@ export interface UiState {
   /** display = SI x this, for the one dimension the camera needs: length. */
   lengthFactor: number;
   /**
-   * The smallest `yield` any Material in the Journal names, in SI pascals, or `null` when
-   * none does. `query.model` does not carry it (MaterialRow has E, nu and rho), so it is read
-   * back off the Journal's own `material.add` lines — the Journal is the Model (ADR 0003).
+   * The smallest yield in the current `query.model` material rows, converted from their
+   * display units to SI pascals, or `null` when no Material specifies a positive yield.
    * The smallest is the conservative one when several Materials disagree.
    */
   yieldStress: number | null;
@@ -98,8 +129,22 @@ export interface UiState {
   phase: number;
   /** Pixels per CSS pixel a saved PNG is rendered at: the export dialog's 1× / 2×. */
   screenshotScale: number;
+  animationSpeed: number;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
+  /** Viewer layer visibility, mirrored from the Viewer so toolbar pressed state follows Commands. */
+  layerVisibility: Record<string, boolean>;
+  // --- plan D ---------------------------------------------------------------------------
+  /** `query.projects`: every project saved in this browser, newest first (the Recent list). */
+  projects: ProjectMeta[];
+  /** `query.project`: the open project and whether a write is in flight; `null` before one. */
+  project: OpenProject | null;
+  /**
+   * `data-field` path → the value the running tutorial step expects there, which `SchemaForm`
+   * shows as that input's `placeholder` (issue #46). The tutorial module never reaches into
+   * `src/ui/**`; this field is the whole of the dependency, and it points one way.
+   */
+  formHints: Record<string, string> | null;
 }
 
 /** The design's states 4–7, as one word derived from what the store already holds. */
@@ -123,8 +168,12 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
-  ready: false,
   autosave: null,
+  autosaves: [],
+  assistantModel: null,
+  folder: null,
+  skills: BUILTIN_SKILLS,
+  ready: false,
   model: null,
   journal: null,
   script: '',
@@ -134,7 +183,24 @@ export const initialState: UiState = {
   viewMode: 'geometry',
   colormap: 'viridis',
   deformScale: 1,
-  panels: { assistant: false, examples: false, export: false, report: false, palette: false },
+  panels: {
+    assistant: false,
+    examples: false,
+    export: false,
+    report: false,
+    palette: false,
+    'tree.geometry': true,
+    'tree.materials': true,
+    'tree.mesh': true,
+    'tree.constraints': true,
+    'tree.loads': true,
+    'tree.steps': true,
+    'tree.results': true,
+    'tree.plugins': true,
+  },
+  panelSizes: { ...DEFAULT_PANEL_SIZES },
+  hiddenBodies: [],
+  exampleFilter: { tag: null, difficulty: null },
   tab: 'journal',
   objects: [],
   form: null,
@@ -161,10 +227,16 @@ export const initialState: UiState = {
   assumptions: [],
   lengthFactor: 1,
   clipOn: false,
+  layerVisibility: { mesh: true, edges: true, loads: true, constraints: true, sets: true, legend: true, axes: true, grid: true },
   yieldStress: null,
   playing: false,
   phase: 0,
   screenshotScale: 1,
+  animationSpeed: 1,
+  // --- plan D ---
+  projects: [],
+  project: null,
+  formHints: null,
 };
 
 const MAX_CONSOLE = 500;
@@ -197,7 +269,17 @@ export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): Console
 }
 
 export function panelsReducer(panels: Record<string, boolean>, panel: string, open?: boolean): Record<string, boolean> {
-  return { ...panels, [panel]: open ?? !panels[panel] };
+  const nextOpen = open ?? !panels[panel];
+  if (!panel.startsWith('tree.menu.') || !nextOpen) return { ...panels, [panel]: nextOpen };
+  const next = { ...panels };
+  for (const key of Object.keys(next)) if (key.startsWith('tree.menu.')) next[key] = false;
+  next[panel] = true;
+  return next;
+}
+
+export function visibilityReducer(hidden: string[], bodies: string[], on: boolean): string[] {
+  if (on) return hidden.filter((body) => !bodies.includes(body));
+  return [...new Set([...hidden, ...bodies])];
 }
 
 export class Store {
@@ -214,6 +296,11 @@ export class Store {
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /** Publish a fresh catalog even when refresh mutated the same ProjectFolder instance. */
+  setFolder(folder: ProjectFolder | null): void {
+    this.set({ folder, skills: projectSkills(BUILTIN_SKILLS, folder) });
   }
 
   set(patch: Partial<UiState>): void {
@@ -252,6 +339,10 @@ export class Store {
   togglePanel(panel: string, open?: boolean): void {
     if ((TABS as string[]).includes(panel)) return this.set({ tab: panel as Tab });
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
+  }
+
+  resizePanel(panel: ResizablePanel, size: number): void {
+    this.set({ panelSizes: { ...this.state.panelSizes, [panel]: clampPanelSize(panel, size) } });
   }
 
   fail(e: unknown): void {
