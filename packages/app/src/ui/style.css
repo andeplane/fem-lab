@@ -363,7 +363,9 @@ textarea:focus {
   }
 }
 
-@media (min-width: 1180px) and (max-width: 1199px) {
+/* Linux fallback fonts need more room than macOS at 1200 px. Keep the tight allocation
+   through 1299 px so the next breakpoint has space for every fixed-width action. */
+@media (min-width: 1180px) and (max-width: 1299px) {
   .topbar {
     gap: 4px;
     padding-inline: 6px;
