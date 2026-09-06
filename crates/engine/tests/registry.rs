@@ -581,6 +581,32 @@ fn rename_and_duplicate_follow_references() {
 }
 
 #[test]
+fn body_removal_preserves_volumetric_load_targets() {
+    for load in [
+        r#"{"cmd":"load.heatSource","name":"source","bodies":["heated"],"q":"100 W/m^3"}"#,
+        r#"{"cmd":"load.temperature","name":"source","bodies":["heated"],"value":"320 K","reference":"300 K"}"#,
+    ] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"two-bodies"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"heated","size":["1 m","1 m","1 m"]}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"],"at":["2 m","0 m","0 m"]}"#);
+        ok(&mut e, load);
+        let before = e.model().clone();
+        let failure = err(&mut e, r#"{"cmd":"geometry.remove","name":"heated"}"#);
+        assert_eq!(failure.code, ErrorCode::InUse);
+        assert_eq!(failure.where_.as_deref(), Some("body 'heated'"));
+        assert!(failure.cause.contains("load 'source'"));
+        assert!(failure.suggestion.as_deref().is_some_and(|s| s.contains("remove or retarget")));
+        assert_eq!(e.model(), &before);
+        // An unrelated Body remains removable while the load is present.
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"other"}"#);
+        ok(&mut e, r#"{"cmd":"load.remove","name":"source"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"heated"}"#);
+        assert!(e.model().bodies.is_empty());
+    }
+}
+
+#[test]
 fn geometry_add_and_subtract_shapes_and_sheets() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"g"}"#);
@@ -908,6 +934,9 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     ok(&mut e, r#"{"cmd":"load.traction","name":"tra","on":"a.zmax","total":["0 N","0 N","1 N"]}"#);
     ok(&mut e, r#"{"cmd":"load.force","name":"fa","on":"fa","total":["0 N","0 N","1 N"]}"#);
     ok(&mut e, r#"{"cmd":"load.traction","name":"trfa","on":"fa","total":["0 N","0 N","1 N"]}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"pfa","on":"fa","value":"1 MPa"}"#);
+    ok(&mut e, r#"{"cmd":"load.convection","name":"cfa","on":"fa","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"hfa","on":"fa","q":"1 kW/m^2"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"ta","bodies":["a"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"tb","bodies":["b"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
@@ -936,6 +965,9 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     assert_eq!(e.model().sets[1].name, "fb");
     assert_eq!(e.model().load("fa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("trfa").unwrap().kind.set(), Some("faa"));
+    assert_eq!(e.model().load("pfa").unwrap().kind.set(), Some("faa"));
+    assert_eq!(e.model().load("cfa").unwrap().kind.set(), Some("faa"));
+    assert_eq!(e.model().load("hfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("tra").unwrap().kind.set(), Some("aa.zmax"));
     let QueryResult::Objects(o) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Set]) }).unwrap() else {
         panic!()
@@ -1709,6 +1741,23 @@ fn the_free_mesher_validates_its_body_its_size_and_its_boxes() {
     let er = e.query(Query::Mesh {}).unwrap_err();
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("mesher.size")));
     assert!(er.cause.contains("produced no triangle"), "{}", er.cause);
+    // the plate-with-hole sketch that panicked weka: the hole's fourth arc ends where its first
+    // one does, so the loop closes with a full circle. It fails at the segment, not at the size.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+          {"kind":"line","to":["100 mm","0 mm"],"tag":"xmax0"},{"kind":"line","to":["100 mm","80 mm"],"tag":"ymax"},
+          {"kind":"line","to":["0 mm","80 mm"],"tag":"xmin0"},{"kind":"line","to":["0 mm","0 mm"],"tag":"ymin"}],
+          "holes":[[{"kind":"arc","center":["50 mm","40 mm"],"to":["35 mm","40 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["50 mm","25 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["65 mm","40 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["35 mm","40 mm"],"ccw":true,"tag":"hole"}]]}}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"5 mm"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(er.cause.contains("a full circle"), "{}", er.cause);
+    assert!(er.suggestion.unwrap().contains("split the full-circle arc into two arcs"));
 }
 
 #[test]
@@ -2253,9 +2302,26 @@ fn a_steady_heat_step_conducts_a_linear_profile_and_exports_it() {
 fn the_three_heat_loads_report_themselves_and_hold_a_step_on_their_own() {
     let mut e = engine();
     heat_bar(&mut e);
-    ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
-    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"in","on":"bar.xmin","q":"1 kW/m^2"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"filmFace","of":"bar","where":{"kind":"normal","normal":[1,0,0]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"fluxFace","of":"bar","where":{"kind":"normal","normal":[-1,0,0]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"filmFace","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"in","on":"fluxFace","q":"1 kW/m^2"}"#);
     ok(&mut e, r#"{"cmd":"load.heatSource","name":"ohmic","bodies":["bar"],"q":"0 kW/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"filmFace","to":"filmBoundary"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"fluxFace","to":"fluxBoundary"}"#);
+    assert_eq!(e.model().load("film").unwrap().kind.set(), Some("filmBoundary"));
+    assert_eq!(e.model().load("in").unwrap().kind.set(), Some("fluxBoundary"));
+    // Set rename is journaled like every other model edit and restores the exact references.
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model().load("in").unwrap().kind.set(), Some("fluxFace"));
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.model().load("in").unwrap().kind.set(), Some("fluxBoundary"));
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
     let kinds: Vec<&str> = m.loads.iter().map(|l| l.kind.as_str()).collect();
     assert_eq!(kinds, ["convection", "heatFlux", "heatSource"]);
@@ -2263,10 +2329,13 @@ fn the_three_heat_loads_report_themselves_and_hold_a_step_on_their_own() {
     assert!(m.loads[1].summary.starts_with('1'), "{}", m.loads[1].summary);
     assert!(m.loads[2].summary.ends_with("on bar"), "{}", m.loads[2].summary);
 
-    // A rename follows the Set of a face load and the Body list of a source alike.
+    // Keep an automatic face reference too: Body rename must still rewrite it while the
+    // explicitly named Sets keep their names and the volumetric source follows the Body.
+    ok(&mut e, r#"{"cmd":"load.convection","name":"autoFilm","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
     ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"bar","to":"rod"}"#);
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
-    assert_eq!(m.loads[0].on.as_deref(), Some("rod.xmax"));
+    assert_eq!(m.loads[0].on.as_deref(), Some("filmBoundary"));
+    assert_eq!(e.model().load("autoFilm").unwrap().kind.set(), Some("rod.xmax"));
     assert!(m.loads[2].summary.ends_with("on rod"), "{}", m.loads[2].summary);
 
     ok(
@@ -2281,6 +2350,15 @@ fn the_three_heat_loads_report_themselves_and_hold_a_step_on_their_own() {
     let near = probe_at(&mut e, "conduct", Field::Temperature, None, ["0 mm", "50 mm", "50 mm"]);
     assert!((far - 40.0).abs() < 1e-8, "far face {far}");
     assert!((near - (40.0 + 1000.0 / 45.0)).abs() < 1e-8, "near face {near}");
+
+    // Replay the journal, including both Set renames, and verify the solved model is identical.
+    let expected_hash = e.model_hash();
+    let entries = e.journal().entries.clone();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&entries, true, true)).unwrap();
+    assert_eq!(replayed.model_hash(), expected_hash);
+    assert_eq!(replayed.model().load("film").unwrap().kind.set(), Some("filmBoundary"));
+    assert_eq!(replayed.model().load("in").unwrap().kind.set(), Some("fluxBoundary"));
 }
 
 /// A heat Step with neither a held temperature nor a film is refused with the Command that
@@ -2422,6 +2500,52 @@ fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
     assert_eq!(bad.code, ErrorCode::Schema);
 }
 
+/// A modal model with every displacement DOF constrained has no reduced system to solve. The
+/// failed solve must be a structured model error, and the Engine must remain usable afterwards.
+#[test]
+fn a_modal_solve_with_no_free_dofs_returns_an_error_and_recovers() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"fully-fixed-modal"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    for (name, face) in [
+        ("xmin", "block.xmin"),
+        ("xmax", "block.xmax"),
+        ("ymin", "block.ymin"),
+        ("ymax", "block.ymax"),
+        ("zmin", "block.zmin"),
+        ("zmax", "block.zmax"),
+    ] {
+        ok(&mut e, &format!(r#"{{"cmd":"constraint.fix","name":"{name}","on":"{face}"}}"#));
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmin","xmax","ymin","ymax","zmin","zmax"],"loads":[],"nModes":2}"#,
+    );
+
+    let failure = err(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(failure.code, ErrorCode::ModelIllPosed);
+    assert_eq!(failure.where_.as_deref(), Some("constraints"));
+    assert!(failure.cause.contains("no free displacement DOF"), "{}", failure.cause);
+    assert_eq!(
+        failure.suggestion.as_deref(),
+        Some("constraint.remove on an over-constraining displacement constraint")
+    );
+
+    // The failed solve is transactional: reissuing the Step with five faces released and solving
+    // again works on the same Engine, so the worker did not abort or retain broken state.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmax"],"loads":[],"nModes":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(result_of(&mut e, Some("modes")).frequencies.len(), 2);
+}
+
 /// A Step that names an earlier one with `after` reads its temperature field: the
 /// thermal-to-structural chain. Running it before the Step it continues is a `not-found`.
 #[test]
@@ -2464,6 +2588,78 @@ fn a_static_step_after_a_heat_step_turns_temperature_into_stress() {
     // ΔT is 50 K, so σ_xx is −210 GPa × 1.2e-5 × 50 = −126 MPa.
     let sigma = probe_at(&mut e, "stress", Field::Stress, Some(0), ["500 mm", "50 mm", "50 mm"]);
     assert!((sigma + 126.0).abs() <= 0.02 * 126.0, "σ_xx = {sigma} MPa");
+}
+
+fn solved_thermal_chain() -> Engine {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"left","on":"bar.xmin"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold","hot"],
+            "loads":[],"output":["temperature"]}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"conduct",
+            "constraints":["left"],"loads":[]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    e
+}
+
+/// A display-name edit changes document identity, but keeps a solved predecessor usable.
+#[test]
+fn a_renamed_model_can_continue_its_current_thermal_result() {
+    let mut e = solved_thermal_chain();
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    let before = e.field(Some("stress"), Field::Displacement).expect("displacement").clone();
+    let hash = e.model_hash();
+    ok(&mut e, r#"{"cmd":"model.setName","name":"renamed thermal chain"}"#);
+    assert_ne!(e.model_hash(), hash);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert_eq!(e.field(Some("stress"), Field::Displacement).expect("renamed displacement"), &before);
+}
+
+fn assert_stale_predecessor(e: &mut Engine) {
+    let stale = err(e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert_eq!(stale.code, ErrorCode::ResultStale);
+    assert_eq!(stale.where_.as_deref(), Some("step 'stress'"));
+    assert!(stale.cause.contains("step 'conduct'"), "{}", stale.cause);
+    assert_eq!(stale.suggestion.as_deref(), Some("solve.run on step 'conduct' again"));
+}
+
+/// A chained solve must never attach an old nodal field to a new Mesh: refinement used to
+/// panic while gathering temperatures by the new node ids.
+#[test]
+fn a_chained_step_refuses_a_predecessor_result_from_before_mesh_refinement() {
+    let mut e = solved_thermal_chain();
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":20,"ny":1,"nz":1}}}"#);
+    assert_stale_predecessor(&mut e);
+}
+
+/// Equal field and Mesh lengths do not prove compatibility: geometry and material edits can
+/// keep every node id while invalidating the predecessor's temperature field.
+#[test]
+fn a_chained_step_refuses_a_stale_same_node_count_temperature_field() {
+    let mut e = solved_thermal_chain();
+    let nodes = mesh_summary(&mut e).nodes;
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["2 m","100 mm","100 mm"]}"#);
+    assert_eq!(mesh_summary(&mut e).nodes, nodes, "fixed division counts preserve the node count");
+    assert_stale_predecessor(&mut e);
+
+    // Re-solving makes the chain valid for the changed geometry; a material edit stales it
+    // again without changing any part of the Mesh.
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+            "alpha":"1.2e-5 1/K","k":"90 W/(m K)","cp":"460 J/(kg K)"}"#,
+    );
+    assert_eq!(mesh_summary(&mut e).nodes, nodes);
+    assert_stale_predecessor(&mut e);
 }
 
 /// An explicit Step falls under gravity by exactly `g t²/2`, which is what central differences

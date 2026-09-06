@@ -511,6 +511,10 @@ export type Command =
       after?: string | null;
       nModes?: number | null;
       shift?: number | null;
+      /**
+       * Maximum heat-transient time increment. A uniform increment no larger than dt is
+       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       */
       dt?:
         | (
             | string
@@ -531,6 +535,10 @@ export type Command =
         | null;
       theta?: number | null;
       outputEvery?: number | null;
+      /**
+       * Maximum fraction of the explicit critical time step (usually 0.9). The increment
+       * may be reduced uniformly to finish exactly at tEnd.
+       */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
       initial?:
@@ -2172,6 +2180,10 @@ export type ModelFile_Command =
       after?: string | null;
       nModes?: number | null;
       shift?: number | null;
+      /**
+       * Maximum heat-transient time increment. A uniform increment no larger than dt is
+       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       */
       dt?:
         | (
             | string
@@ -2192,6 +2204,10 @@ export type ModelFile_Command =
         | null;
       theta?: number | null;
       outputEvery?: number | null;
+      /**
+       * Maximum fraction of the explicit critical time step (usually 0.9). The increment
+       * may be reduced uniformly to finish exactly at tEnd.
+       */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
       initial?:
@@ -3479,6 +3495,7 @@ export interface EngineError {
     | "mesh.failed"
     | "model.no-material"
     | "model.ill-posed"
+    | "result.stale"
     | "constraint.conflict"
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"

@@ -860,13 +860,10 @@ impl Engine {
                 }
             }
             for l in &m.loads {
-                if l.kind.set().is_some_and(|s| set_refers_to(s, name)) {
+                if l.kind.set().is_some_and(|s| set_refers_to(s, name))
+                    || l.kind.bodies().iter().any(|body| body == name)
+                {
                     users.push(format!("load '{}'", l.name));
-                }
-                if let LoadKind::Temperature { bodies, .. } = &l.kind {
-                    if bodies.iter().any(|b| b == name) {
-                        users.push(format!("load '{}'", l.name));
-                    }
                 }
             }
             for s in &m.sets {
@@ -1035,12 +1032,17 @@ impl Engine {
                     }
                 }
                 for l in &mut m.loads {
-                    if let LoadKind::Pressure { on, .. } | LoadKind::Traction { on, .. } | LoadKind::Force { on, .. } =
-                        &mut l.kind
-                    {
-                        if on == name {
-                            *on = to.into();
+                    match &mut l.kind {
+                        LoadKind::Pressure { on, .. }
+                        | LoadKind::Traction { on, .. }
+                        | LoadKind::Force { on, .. }
+                        | LoadKind::Convection { on, .. }
+                        | LoadKind::HeatFlux { on, .. } => {
+                            if on == name {
+                                *on = to.into();
+                            }
                         }
+                        LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => {}
                     }
                 }
             }

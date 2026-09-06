@@ -80,7 +80,8 @@ export interface Fem {
     nameRegion(args: Omit<Extract<Command, { cmd: 'geometry.nameRegion' }>, 'cmd'>): Promise<Ack>;
     /**
      * Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-     * and material assignments that still reference it; remove or retarget those first.
+     * (including temperature and volumetric heat sources), and named Sets that still reference
+     * it; remove or retarget those first.
      */
     remove(args: Omit<Extract<Command, { cmd: 'geometry.remove' }>, 'cmd'>): Promise<Ack>;
   };
@@ -226,7 +227,9 @@ export interface Fem {
     /**
      * Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
      * element quality) and refuses with a suggested fix. Returns extremes and reactions;
-     * always check that reactions balance the applied loads before trusting a stress.
+     * always check that reactions balance the applied loads before trusting a stress. A Step
+     * with `after` requires its predecessor's Result to match the current Model state;
+     * after an edit, solve the predecessor again before continuing the chain.
      */
     run(args: Omit<Extract<Command, { cmd: 'solve.run' }>, 'cmd'>): Promise<Ack>;
   };

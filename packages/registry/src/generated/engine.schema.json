@@ -298,7 +298,7 @@
         ]
       },
       {
-        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
         "type": "object",
         "properties": {
           "name": {
@@ -923,6 +923,7 @@
             "format": "double"
           },
           "dt": {
+            "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Q_time"
@@ -958,6 +959,7 @@
             "minimum": 0
           },
           "dtFactor": {
+            "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
             "type": [
               "number",
               "null"
@@ -1035,7 +1037,7 @@
         ]
       },
       {
-        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.",
+        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
         "type": "object",
         "properties": {
           "step": {
@@ -4691,7 +4693,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
             "type": "object",
             "properties": {
               "name": {
@@ -5316,6 +5318,7 @@
                 "format": "double"
               },
               "dt": {
+                "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/Q_time"
@@ -5351,6 +5354,7 @@
                 "minimum": 0
               },
               "dtFactor": {
+                "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
                 "type": [
                   "number",
                   "null"
@@ -5428,7 +5432,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {
@@ -7702,6 +7706,7 @@
           "mesh.failed",
           "model.no-material",
           "model.ill-posed",
+          "result.stale",
           "constraint.conflict",
           "constraint.rigid-modes",
           "solve.not-positive-definite",
@@ -10000,7 +10005,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
             "type": "object",
             "properties": {
               "name": {
@@ -10625,6 +10630,7 @@
                 "format": "double"
               },
               "dt": {
+                "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/Q_time"
@@ -10660,6 +10666,7 @@
                 "minimum": 0
               },
               "dtFactor": {
+                "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
                 "type": [
                   "number",
                   "null"
@@ -10737,7 +10744,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {

@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
+import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
@@ -42,8 +42,6 @@ export interface LastError {
 
 export interface UiState {
   ready: boolean;
-  /** What `query.autosave` last reported, so the start screen can offer `file.restore`. */
-  autosave: AutosaveState['saved'];
   model: ModelSummary | null;
   journal: JournalDump | null;
   /** Exact normalized Journal of the last successful explicit open/save; autosave is separate. */
@@ -112,6 +110,17 @@ export interface UiState {
   screenshotScale: number;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
+  // --- plan D ---------------------------------------------------------------------------
+  /** `query.projects`: every project saved in this browser, newest first (the Recent list). */
+  projects: ProjectMeta[];
+  /** `query.project`: the open project and whether a write is in flight; `null` before one. */
+  project: OpenProject | null;
+  /**
+   * `data-field` path → the value the running tutorial step expects there, which `SchemaForm`
+   * shows as that input's `placeholder` (issue #46). The tutorial module never reaches into
+   * `src/ui/**`; this field is the whole of the dependency, and it points one way.
+   */
+  formHints: Record<string, string> | null;
 }
 
 /** The design's states 4–7, as one word derived from what the store already holds. */
@@ -136,7 +145,6 @@ export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], ref
 
 export const initialState: UiState = {
   ready: false,
-  autosave: null,
   model: null,
   journal: null,
   savedJournal: null,
@@ -178,6 +186,10 @@ export const initialState: UiState = {
   playing: false,
   phase: 0,
   screenshotScale: 1,
+  // --- plan D ---
+  projects: [],
+  project: null,
+  formHints: null,
 };
 
 const MAX_CONSOLE = 500;

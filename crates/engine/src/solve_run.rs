@@ -225,13 +225,27 @@ impl Engine {
             ..SolveOptions::default()
         };
         let proc_step = procedure_step(&step, opts)?;
-        // A chained Step reads the Result of the Step it names; without one it cannot run.
+        // A chained Step reads the Result of the Step it names; without a current one it
+        // cannot run. The hash check also catches edits whose Mesh happens to keep the same
+        // node count, which a field-length check cannot distinguish from a compatible Result.
         let prev = match &step.after {
-            Some(name) => Some(self.results.get(name).map(|(_, r)| r.clone()).ok_or_else(|| {
-                Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
+            Some(name) => {
+                let current_hash = crate::hash::result_hash(&self.model);
+                let (hash, result) = self.results.get(name).ok_or_else(|| {
+                    Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
+                        .at(format!("step '{}'", step.name))
+                        .suggest(format!("solve.run on step '{name}' first"))
+                })?;
+                if hash != &current_hash {
+                    return Err(Error::new(
+                        ErrorCode::ResultStale,
+                        format!("step '{name}' has a Result that does not match the current Model state"),
+                    )
                     .at(format!("step '{}'", step.name))
-                    .suggest(format!("solve.run on step '{name}' first"))
-            })?),
+                    .suggest(format!("solve.run on step '{name}' again")));
+                }
+                Some(result.clone())
+            }
             None => None,
         };
         self.mesh()?;
