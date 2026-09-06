@@ -49,13 +49,13 @@ test.describe('@cpu the cantilever, built through the UI', () => {
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
-    await expect(page.getByText('Start a tutorial')).toBeVisible();
+    await expect(page.locator('.start')).toBeVisible();
     await ready(page);
     await shot(page, '01-start');
 
-    // 0 · model.new, named on the start card.
-    await page.getByLabel('model name').fill('cantilever');
-    await page.locator('button[title="model.new"]').click();
+    // 0 · model.new, which is what `project.new` dispatches once it has made the record.
+    await page.getByLabel('project name').fill('cantilever');
+    await page.locator('button[title="project.new"]').click();
     await expect(page.locator('.workspace')).toBeVisible();
     await shot(page, '02-empty-model');
 
@@ -67,8 +67,10 @@ test.describe('@cpu the cantilever, built through the UI', () => {
     await fill(page, 'units.stress', 'MPa');
     await apply(page);
 
-    // 2 · geometry.addBox, the form the shell opens by itself (design state 1).
+    // 2 · geometry.addBox — the chip now opens a menu of every shape first (#43); `box` keeps
+    // the dedicated Command, so the recorded line below is unchanged.
     await page.locator('.chip-add', { hasText: '+ add body' }).click();
+    await page.locator('.add-menu [data-cmd]', { hasText: 'box' }).first().click();
     await fill(page, 'name', 'beam');
     await fill(page, 'size', '1 m', 0);
     await fill(page, 'size', '100 mm', 1);
@@ -138,6 +140,46 @@ test.describe('@cpu the cantilever, built through the UI', () => {
     await expect(page.locator('.banner')).toHaveCount(0);
     await expect(page.locator('button.solve')).toBeEnabled();
   });
+
+  // Issue #43: everything the tree could add used to be a box.
+  test('adds a cylinder from the menu and a sheet drawn in the sketch editor', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.model.new({ name: 'shapes' }));
+    await page.evaluate(() => window.fem.model.setUnits({ units: { length: 'mm', force: 'kN', stress: 'MPa' } }));
+
+    // A cylinder: `geometry.add` with the kind already chosen, and the variant's own fields.
+    await page.locator('.chip-add', { hasText: '+ add body' }).click();
+    await page.locator('.add-menu [data-cmd]', { hasText: 'cylinder' }).click();
+    await fill(page, 'name', 'pin');
+    await fill(page, 'shape.radius', '20 mm');
+    await fill(page, 'shape.height', '100 mm');
+    await expect(page.locator('.recorded-cmd')).toContainText('kind: "cylinder"');
+    await apply(page);
+
+    // A sheet, whose sketch is a list of segments with a live preview rather than raw JSON.
+    await page.locator('.chip-add', { hasText: '+ add body' }).click();
+    await page.locator('.add-menu [data-cmd]', { hasText: 'sheet' }).click();
+    await fill(page, 'name', 'plate');
+    // Nothing to add until the sketch exists.
+    await expect(page.locator('.props .apply')).toBeDisabled();
+    await field(page, 'shape.sketch').locator('button', { hasText: '+ rectangle' }).click();
+    await expect(page.locator('.sketch-view path')).toHaveAttribute('d', /^M .* Z$/);
+    const first = field(page, 'shape.sketch').locator('.sketch-seg').first().locator('.sketch-seg-body input');
+    await first.nth(0).fill('200 mm');
+    await first.nth(1).fill('0 mm');
+    await expect(page.locator('.props .apply')).toBeEnabled();
+    await apply(page);
+
+    const model = (await page.evaluate(() => window.fem.query.model())) as unknown as { bodies: { name: string }[] };
+    expect(model.bodies.map((b) => b.name)).toEqual(['pin', 'plate']);
+    await shot(page, '06-shapes');
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe('@cpu the gallery, the palette and the Script tab', () => {
@@ -148,7 +190,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
     await ready(page);
-    await page.locator('button[data-cmd="panel.toggle"]', { hasText: 'Open an example' }).click();
+    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Examples' }).click();
     await expect(page.locator('.gallery')).toBeVisible();
     await shot(page, '06-gallery');
     await page.locator('button[title="file.openExample cantilever"]').click();

@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, modeChoice, showFieldArgs, siUnitOf } from '../src/fields';
-import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnitude, yieldQuantities } from '../src/results';
+import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnitude } from '../src/results';
 import { Store, initialState, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
 import { Frequencies, History, LineChart, axisTicks, extremeLabel } from '../src/ui/Results';
@@ -120,22 +120,6 @@ describe('the derived fields', () => {
     expect(derivedRange('utilisation', 2.4)).toEqual([0, 2.4]);
     expect(derivedRange('safety', 40)).toEqual([0, SAFETY_CAP]);
     expect(derivedRange('safety', 0.2)).toEqual([0, 1]);
-  });
-
-  it('reads the yields off the Journal, which is where material.add put them', () => {
-    const journal = {
-      revision: 4,
-      canUndo: true,
-      canRedo: false,
-      entries: [
-        { seq: 0, cmd: { cmd: 'model.new', name: 'm' }, hashAfter: 'a' },
-        { seq: 1, cmd: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3, yield: '355 MPa' }, hashAfter: 'b' },
-        { seq: 2, cmd: { cmd: 'material.add', name: 'alu', E: '70 GPa', nu: 0.33 }, hashAfter: 'c' },
-        { seq: 3, cmd: { cmd: 'material.add', name: 'weak', E: '70 GPa', nu: 0.33, yield: null }, hashAfter: 'd' },
-      ],
-    } as never;
-    expect(yieldQuantities(journal)).toEqual(['355 MPa']);
-    expect(yieldQuantities(null)).toEqual([]);
   });
 
   it('finds the extent of an array, and says 0..1 for an empty one', () => {
@@ -300,5 +284,15 @@ describe('the convergence study, through the same chart', () => {
     expect(bottom.textContent).toContain('Mesh convergence');
     expect(bottom.querySelector('.chart line[stroke-dasharray]')).not.toBeNull();
     expect(bottom.textContent).toContain('rate 2.01');
+    expect(root.querySelector('.stale-banner')).toBeNull();
+    store.set({ result: { ...RESULT, stale: true } });
+    render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    expect(root.querySelector('.stale-banner')?.textContent).toContain('convergence table reports separate study solves');
+    expect(root.querySelector('.stale-banner')?.textContent).toContain('does not refresh these stale contours');
+    expect(root.querySelector('.stale-banner button')?.getAttribute('data-cmd')).toBe('solve.run');
+    store.set({ study: null });
+    render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    expect(root.querySelector('.stale-banner')?.textContent).toContain('Model changed');
+    expect(root.querySelector('.stale-banner')?.textContent).not.toContain('convergence table');
   });
 });

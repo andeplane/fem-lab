@@ -75,7 +75,7 @@ test('@cpu every panel, disclosure and tab survives two open/close cycles', asyn
 
   await panels[0]!.button.click();
   const assistant = page.locator('.assistant');
-  await assistant.getByTitle('Open a project folder', { exact: true }).click();
+  await assistant.getByTitle('Open a folder on disk', { exact: true }).click();
   await expect(assistant.getByTitle('The project rules in force')).toBeVisible();
   for (const disclosure of [
     { button: assistant.getByTitle('Settings', { exact: true }), body: assistant.locator('.settings') },
