@@ -1,0 +1,162 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - id: version
+        run: python tools/release-artifacts.py metadata
+      - name: Require a tagged commit already integrated into main
+        if: github.event_name == 'push'
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+  # The same suite as PR CI, with Windows, GPU and browser GPU failures made fatal.
+  validation:
+    needs: metadata
+    uses: ./.github/workflows/ci.yml
+    with:
+      strict: true
+
+  native:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94'
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo build --locked --release -p femlab --target ${{ matrix.target }}
+      - run: python tools/release-artifacts.py native --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files-${{ matrix.target }}
+          path: release/*
+          if-no-files-found: error
+
+  web-package:
+    needs: [metadata, validation]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: packages/app/dist
+      - run: npm ci
+      - run: node tools/test-mcp-package.mjs "release/femlab-mcp-$RELEASE_VERSION.tgz"
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+      - run: python tools/release-artifacts.py web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files-web
+          path: release/*
+          if-no-files-found: error
+
+  artifacts:
+    needs: [metadata, validation, native, web-package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-files-*
+          merge-multiple: true
+          path: release
+      - run: python tools/release-artifacts.py checksums
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push'
+    needs: [metadata, artifacts]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # npm OIDC trusted publishing requires npm >=11.5.1 and Node >=22.14.
+      - run: npm install --global npm@11
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: release
+      - run: sha256sum --check SHA256SUMS
+        working-directory: release
+      - name: Create a draft release containing the verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --verify-tag --draft --generate-notes
+      - name: Publish the tested tarball using npm trusted publishing
+        env:
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          npm_tag=latest
+          case "$RELEASE_VERSION" in *-*) npm_tag=next;; esac
+          npm publish "release/femlab-mcp-$RELEASE_VERSION.tgz" --access public --provenance --tag "$npm_tag"
+      - name: Make the release public after npm publication succeeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          prerelease=false
+          case "$RELEASE_VERSION" in *-*) prerelease=true;; esac
+          gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease="$prerelease"

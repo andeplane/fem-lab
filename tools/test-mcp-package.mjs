@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -60,6 +60,12 @@ try {
   const script = await call('run_script', { code: 'const m = await fem.query.model(); return m.name;' });
   assert.equal(script.error, undefined);
   assert.equal(script.result, 'installed artifact');
+  // Release publication consumes the exact tarball that this process installed and tested.
+  if (process.argv[2]) {
+    const destination = path.resolve(process.argv[2]);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(path.join(directory, packed.filename), destination);
+  }
   console.log(`Installed ${packed.filename}: stdio tools, engine, worker script and exact WASM payload passed`);
 } finally {
   await client?.close();
