@@ -81,12 +81,14 @@ export function splitForFigure(markdown: string): [string, string] {
   return at < 0 ? [markdown, ''] : [markdown.slice(0, at), markdown.slice(at + 1)];
 }
 
-type LoadState = { kind: 'loading' } | { kind: 'ready'; report: ReportText; screenshot: string } | { kind: 'error'; message: string };
+type LoadState = { kind: 'loading' } | { kind: 'ready'; report: ReportText; screenshot: string; request: number } | { kind: 'error'; message: string };
 
 export function Report({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
   const [loaded, setLoaded] = useState<LoadState>({ kind: 'loading' });
+  const [printable, setPrintable] = useState(false);
   const hasResult = s.result !== null;
   const dialog = useRef<HTMLElement | null>(null);
+  const request = useRef(0);
 
   useLayoutEffect(() => {
     const prior = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -97,7 +99,9 @@ export function Report({ s, store, dispatch, query }: { s: UiState; store: Store
   }, [hasResult]);
 
   useEffect(() => {
+    const id = ++request.current;
     store.set({ reportReady: false });
+    setPrintable(false);
     if (!hasResult) return () => store.set({ reportReady: false });
     let live = true;
     setLoaded({ kind: 'loading' });
@@ -108,14 +112,14 @@ export function Report({ s, store, dispatch, query }: { s: UiState; store: Store
         if (typeof report.markdown !== 'string' || !Array.isArray(report.sections)) throw new Error('query.report returned an invalid document');
         const screenshot = (image as { png?: unknown }).png;
         if (typeof screenshot !== 'string' || !screenshot.startsWith('data:image/png;base64,')) throw new Error('query.screenshot returned an invalid viewer image');
-        setLoaded({ kind: 'ready', report: report as ReportText, screenshot });
-        store.set({ reportReady: true });
+        setLoaded({ kind: 'ready', report: report as ReportText, screenshot, request: id });
       })
       .catch((error: unknown) => {
         if (live) setLoaded({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
       });
     return () => {
       live = false;
+      if (request.current === id) request.current++;
       store.set({ reportReady: false });
     };
   }, [hasResult, query, s.model?.name, s.revision, store]);
@@ -123,6 +127,19 @@ export function Report({ s, store, dispatch, query }: { s: UiState; store: Store
   const markdown = loaded.kind === 'ready' ? loaded.report.markdown : '';
   const parts = useMemo(() => splitForFigure(markdown).map((part) => (part === '' ? '' : renderReportMarkdown(part))) as [string, string], [markdown]);
   const close = { panel: 'report', open: false };
+  const finishFigure = async (image: HTMLImageElement, id: number): Promise<void> => {
+    try {
+      if (typeof image.decode === 'function') await image.decode();
+      if (request.current !== id || !image.isConnected) return;
+      setPrintable(true);
+      store.set({ reportReady: true });
+    } catch (error: unknown) {
+      if (request.current !== id) return;
+      store.set({ reportReady: false });
+      setPrintable(false);
+      setLoaded({ kind: 'error', message: `the viewer figure could not be decoded: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  };
   const trapFocus = (event: KeyboardEvent): void => {
     if (event.key !== 'Tab' || !dialog.current) return;
     const focusable = [...dialog.current.querySelectorAll<HTMLElement>('button:not([disabled]), a[href]')];
@@ -155,7 +172,7 @@ export function Report({ s, store, dispatch, query }: { s: UiState; store: Store
         <strong>Report · {s.model?.name ?? 'model'}</strong>
         <span class="mono report-meta">from rev {s.revision} · Markdown · query.report</span>
         <span class="report-actions">
-          <Cmd dispatch={dispatch} cmd="report.print" class="tbutton" disabled={loaded.kind !== 'ready'} title="Open print dialog; choose Save as PDF">
+          <Cmd dispatch={dispatch} cmd="report.print" class="tbutton" disabled={!printable} title="Open print dialog; choose Save as PDF">
             Export PDF
           </Cmd>
           <Cmd dispatch={dispatch} cmd="clipboard.copy" class="tbutton" args={{ what: { kind: 'text', text: markdown } }} disabled={loaded.kind !== 'ready'}>
@@ -178,7 +195,17 @@ export function Report({ s, store, dispatch, query }: { s: UiState; store: Store
           <article class="report-paper report-markdown">
             <div dangerouslySetInnerHTML={{ __html: parts[0] }} />
             <figure class="report-figure">
-              <img src={loaded.screenshot} alt={`Current ${s.result?.step ?? ''} Result view for ${s.model?.name ?? 'model'}`} />
+              <img
+                src={loaded.screenshot}
+                alt={`Current ${s.result?.step ?? ''} Result view for ${s.model?.name ?? 'model'}`}
+                onLoad={(event) => void finishFigure(event.currentTarget, loaded.request)}
+                onError={() => {
+                  if (request.current !== loaded.request) return;
+                  store.set({ reportReady: false });
+                  setPrintable(false);
+                  setLoaded({ kind: 'error', message: 'the viewer figure could not be loaded' });
+                }}
+              />
               <figcaption>Figure 1 — current {s.result?.step ?? ''} Result view with legend</figcaption>
             </figure>
             {parts[1] === '' ? null : <div dangerouslySetInnerHTML={{ __html: parts[1] }} />}

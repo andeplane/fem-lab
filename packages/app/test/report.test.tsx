@@ -49,6 +49,14 @@ function mount(result: ResultSummary | null = {} as ResultSummary, dispatch: Dis
   return { root, store, dispatch };
 }
 
+async function loadFigure(root: HTMLElement, store: Store): Promise<HTMLImageElement> {
+  const image = await waitFor(() => root.querySelector<HTMLImageElement>('.report-figure img'), 'the report figure');
+  Object.defineProperty(image, 'decode', { configurable: true, value: vi.fn(async () => undefined) });
+  image.dispatchEvent(new Event('load'));
+  await waitFor(() => store.state.reportReady, 'the decoded report figure');
+  return image;
+}
+
 describe('Report', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
@@ -68,14 +76,17 @@ describe('Report', () => {
     expect(root.querySelector('pre code')!.textContent).toContain('fem.solve.run');
     expect(root.querySelector('.katex')).not.toBeNull();
     expect(root.querySelector<HTMLImageElement>('.report-figure img')!.src).toBe(PNG);
-    expect(store.state.reportReady).toBe(true);
+    expect(store.state.reportReady).toBe(false);
+    await loadFigure(root, store);
+    expect(root.querySelector<HTMLButtonElement>('[data-cmd="report.print"]')!.disabled).toBe(false);
     expect(root.querySelector('.report-toolbar')!.textContent).toContain('from rev 9 · Markdown · query.report');
   });
 
   it('keeps every toolbar action in the registry and copies the exact Markdown bytes', async () => {
     const commands: Record<string, unknown>[] = [];
-    const { root } = mount({} as ResultSummary, async (cmd) => void commands.push(cmd));
+    const { root, store } = mount({} as ResultSummary, async (cmd) => void commands.push(cmd));
     await waitFor(() => root.querySelector('.report-paper'), 'the report paper');
+    await loadFigure(root, store);
 
     root.querySelector<HTMLButtonElement>('[data-cmd="report.print"]')!.click();
     root.querySelector<HTMLButtonElement>('[data-cmd="clipboard.copy"]')!.click();
@@ -105,6 +116,36 @@ describe('Report', () => {
     render(<Report s={store.state} store={store} dispatch={async () => undefined} query={async () => Promise.reject(new Error('result disappeared'))} />, root);
     await waitFor(() => root.querySelector('[role="alert"]'), 'the report error');
     expect(root.querySelector('[role="alert"]')!.textContent).toContain('result disappeared');
+  });
+
+  it('keeps PDF printing unavailable until the committed figure finishes decoding', async () => {
+    let finish!: () => void;
+    const decoding = new Promise<void>((resolve) => void (finish = resolve));
+    const { root, store } = mount();
+    const image = await waitFor(() => root.querySelector<HTMLImageElement>('.report-figure img'), 'the delayed report figure');
+    const decode = vi.fn(() => decoding);
+    Object.defineProperty(image, 'decode', { configurable: true, value: decode });
+
+    image.dispatchEvent(new Event('load'));
+    await Promise.resolve();
+    expect(decode).toHaveBeenCalledOnce();
+    expect(store.state.reportReady).toBe(false);
+    expect(root.querySelector<HTMLButtonElement>('[data-cmd="report.print"]')!.disabled).toBe(true);
+
+    finish();
+    await waitFor(() => store.state.reportReady, 'the delayed decode');
+    expect(root.querySelector<HTMLButtonElement>('[data-cmd="report.print"]')!.disabled).toBe(false);
+  });
+
+  it('reports a figure decode failure and leaves printing unavailable', async () => {
+    const { root, store } = mount();
+    const image = await waitFor(() => root.querySelector<HTMLImageElement>('.report-figure img'), 'the broken report figure');
+    Object.defineProperty(image, 'decode', { configurable: true, value: vi.fn(async () => Promise.reject(new Error('bad PNG'))) });
+    image.dispatchEvent(new Event('load'));
+    await waitFor(() => root.querySelector('[role="alert"]'), 'the image error');
+    expect(root.querySelector('[role="alert"]')!.textContent).toContain('bad PNG');
+    expect(store.state.reportReady).toBe(false);
+    expect(root.querySelector<HTMLButtonElement>('[data-cmd="report.print"]')!.disabled).toBe(true);
   });
 });
 
