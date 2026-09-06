@@ -4,7 +4,7 @@
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
-import { FIELD_CHOICES, formatNumber } from '../fields';
+import { FIELD_CHOICES, dimensionOf, formatNumber } from '../fields';
 import type { UiState } from '../store';
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
@@ -12,6 +12,7 @@ import { blockers } from './schema';
 
 const num = (v: Valued | undefined): string => (v ? formatNumber(v.value) : '—');
 const at = (p: [Valued, Valued, Valued]): string => p.map((v) => formatNumber(v.value)).join(' ');
+const fieldUnit = (field: string, v: Valued): string => (dimensionOf(field) === 'dimensionless' && v.unit === 'SI' ? '(1)' : v.unit);
 
 /** `balance` is a ratio of forces; the design writes it as a percentage with four decimals. */
 export function balanceLine(r: ResultSummary): { pass: boolean; text: string } {
@@ -66,10 +67,14 @@ function Extremes({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
                 {extremeLabel(e)}
                 <span class="faint">{e.field}</span>
               </td>
-              <td class="mono n">{num(e.min)}</td>
-              <td class="mono n">{num(e.max)}</td>
+              <td class="mono n">
+                {num(e.min)} {fieldUnit(e.field, e.min)}
+              </td>
+              <td class="mono n">
+                {num(e.max)} {fieldUnit(e.field, e.max)}
+              </td>
               <td class="mono loc faint">
-                {at(e.maxAt)} {e.max.unit}
+                {at(e.maxAt)} {e.maxAt[0].unit}
               </td>
               <td>
                 <Cmd dispatch={dispatch} cmd="view.setCamera" class="chip-add" args={goTo(siPoint(e.maxAt, s.lengthFactor))} title="centre the camera on this extreme">
@@ -369,6 +374,29 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
   );
 }
 
+/**
+ * What was solved, above the two columns (#42): a Result *exists*, this is the Step and the
+ * procedure it came from, and the shape in the viewer is drawn exaggerated — said here too, so
+ * a person reading the numbers is not left to infer it from the legend. Everything on it is
+ * already in the store: a header is no place to start a Query, and the Checks tab is where the
+ * DOF count lives.
+ */
+function ResultHeader({ s }: { s: UiState }) {
+  const r = s.result!;
+  const procedure = s.model?.steps.find((st) => st.name === r.step)?.procedure;
+  return (
+    <div class={r.stale ? 'result-header stale' : 'result-header'}>
+      <span class="mono">Result · step {r.step}</span>
+      {procedure ? <span class="faint">{procedure}</span> : null}
+      <span class="faint">
+        {r.solver} · {Math.round(r.timeMs)} ms
+      </span>
+      <span class="faint">{r.stale ? `solved at rev ${r.revision}, before the edits since` : `solved at rev ${r.revision}`}</span>
+      <span class="faint">{s.deformScale === 1 ? 'drawn at true scale' : `drawn exaggerated ×${formatNumber(s.deformScale)}`}</span>
+    </div>
+  );
+}
+
 export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
   const next = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0)[0];
   if (!s.result) {
@@ -389,10 +417,9 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
   }
   return (
     <div class="results">
+      <ResultHeader s={s} />
       <div class="rcol">
-        <div class="section-label">
-          Extremes · {s.result.step} · {s.result.solver} · {Math.round(s.result.timeMs)} ms
-        </div>
+        <div class="section-label">Extremes</div>
         <Extremes s={s} dispatch={dispatch} />
         <Frequencies s={s} dispatch={dispatch} />
         <Sample s={s} query={query} />

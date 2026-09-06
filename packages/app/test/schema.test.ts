@@ -3,7 +3,7 @@
 import type { EngineSchema, JsonSchema } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
-import { applyLabel, blockers, commandLine, type Defs, type Field, dimensionTag, fieldsOf, getAt, humanise, parseQuantity, resolve, setAt, siUnit, step, tsValue } from '../src/ui/schema';
+import { applyLabel, blockers, commandLine, defaultFormValues, type Defs, type Field, dimensionTag, fieldsOf, getAt, humanise, missingRequired, parseQuantity, resolve, setAt, shapeKinds, siUnit, step, tsValue } from '../src/ui/schema';
 
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
@@ -113,12 +113,26 @@ describe('the recorded-as line', () => {
 });
 
 describe('paths and labels', () => {
+  it('keeps an untouched optional tagged union absent, but defaults it once present', () => {
+    const optional: Field = {
+      kind: 'union',
+      path: ['choice'],
+      label: 'Choice',
+      hint: '',
+      required: false,
+      tag: 'kind',
+      variants: [{ kind: 'first', fields: [] }],
+    };
+    expect(defaultFormValues({}, [optional])).toEqual({});
+    expect(defaultFormValues({ choice: {} }, [optional])).toEqual({ choice: { kind: 'first' } });
+  });
+
   it('sets and reads nested values, and removes a key when the value goes away', () => {
     expect(setAt({}, ['mesher', 'size'], '25 mm')).toEqual({ mesher: { size: '25 mm' } });
     expect(getAt({ mesher: { size: '25 mm' } }, ['mesher', 'size'])).toBe('25 mm');
     expect(getAt({}, ['a', 'b'])).toBeUndefined();
     expect(setAt({ a: 1, b: 2 }, ['a'], '')).toEqual({ b: 2 });
-    expect(setAt({ a: [1] }, ['a'], [])).toEqual({});
+    expect(setAt({ a: [1] }, ['a'], [])).toEqual({ a: [] });
     expect(setAt({ a: 1 }, [], 2)).toEqual({ a: 1 });
   });
 
@@ -133,6 +147,53 @@ describe('paths and labels', () => {
     expect(applyLabel('load.traction')).toBe('Add load');
     expect(applyLabel('load.remove')).toBe('Remove');
     expect(applyLabel('study.converge')).toBe('Converge');
+  });
+});
+
+// Issue #43: the add menu and the "not until it is filled in" rule, both read off the schema.
+describe('shapeKinds and missingRequired', () => {
+  it('lists every shape ShapeSpec declares, in schema order, with its doc string', () => {
+    const kinds = shapeKinds(DEFS);
+    expect(kinds.map((k) => k.kind)).toEqual(['box', 'cylinder', 'sphere', 'sheet', 'extrude', 'revolve', 'union', 'subtract', 'intersect', 'transform']);
+    expect(kinds[1]!.hint).toContain('Cylinder along z');
+    expect(shapeKinds({})).toEqual([]);
+  });
+
+  it('draws a sketch with an editor rather than a JSON textarea', () => {
+    const shape = fieldsOf(byName('geometry.add'), DEFS).find((f) => f.path[0] === 'shape')!;
+    expect(shape.kind).toBe('union');
+    const sheet = shape.kind === 'union' ? shape.variants.find((v) => v.kind === 'sheet')! : { fields: [] };
+    expect(sheet.fields.find((f) => f.path.at(-1) === 'sketch')).toMatchObject({ kind: 'sketch', required: true });
+  });
+
+  it('names the required fields that are still empty, and only for the chosen variant', () => {
+    const fields = fieldsOf(byName('geometry.add'), DEFS);
+    expect(missingRequired(fields, {})).toEqual(['Name', 'Size']);
+    expect(missingRequired(fields, { name: 'beam' })).toEqual(['Size']);
+    // A half-filled vector is not filled in.
+    expect(missingRequired(fields, { name: 'beam', shape: { kind: 'box', size: ['1 m', '', '1 m'] } })).toEqual(['Size']);
+    expect(missingRequired(fields, { name: 'beam', shape: { kind: 'box', size: ['1 m', '1 m', '1 m'] } })).toEqual([]);
+    // Picking another kind asks for that kind's fields, not the box's.
+    expect(missingRequired(fields, { name: 'beam', shape: { kind: 'cylinder' } })).toEqual(['Radius', 'Height']);
+    expect(missingRequired(fields, { name: 'beam', shape: { kind: 'cylinder', radius: '1 m', height: '2 m' } })).toEqual([]);
+  });
+
+  it('asks nothing of an optional group nobody has opened, whatever its variants require', () => {
+    // `step.add`'s `amplitude` is an optional union whose variants have required fields of their
+    // own; reading those would leave every Step un-addable.
+    const step = fieldsOf(byName('step.add'), DEFS);
+    expect(missingRequired(step, { name: 'static', procedure: 'static', constraints: ['root'], loads: ['tip'] })).toEqual([]);
+    expect(missingRequired(step, {})).toEqual(['Name', 'Procedure', 'Constraints', 'Loads']);
+    // #178: an empty list is an answer — a free modal Step really has no constraints.
+    expect(missingRequired(step, { name: 'free', procedure: 'modal', constraints: [], loads: [] })).toEqual([]);
+    // Every Command in the schema must be fillable: nothing may ask for a field it does not show.
+    for (const v of variants) {
+      const name = (v['properties'] as Record<string, { const?: string }>)['cmd']!.const!;
+      const fields = fieldsOf(v, DEFS);
+      const asked = new Set(missingRequired(fields, {}));
+      const shown = new Set(flat(fields).map((f) => f.label));
+      expect([...asked].filter((label) => !shown.has(label)), name).toEqual([]);
+    }
   });
 });
 
