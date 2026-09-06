@@ -183,7 +183,7 @@ describe('animation capture', () => {
     store.set({ result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] } as never });
     const animate = vi.fn();
     const phase = vi.fn();
-    const showField = vi.fn(async () => undefined);
+    const showField = vi.fn(async ({ field }: { field: string }) => store.set({ fieldKey: field }));
     const viewer = { animate, setPhase: phase } as unknown as Viewer;
     const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, { showField } as never);
 
@@ -193,6 +193,8 @@ describe('animation capture', () => {
     await ctx.view.animate({ step: 'modes', mode: 1, playing: false, frame: 75 });
     expect(phase).toHaveBeenCalledWith(0.75);
     expect(store.state).toMatchObject({ playing: false, phase: 0.75 });
+    await ctx.view.animate({ step: 'modes', mode: 1, playing: false });
+    expect(showField).toHaveBeenCalledTimes(2);
 
     await expect(ctx.view.animate({ step: 'other', mode: 1, playing: true })).rejects.toMatchObject({ code: 'not-found', where: "step 'other'" });
     await expect(ctx.view.animate({ step: 'modes', mode: 3, playing: true })).rejects.toMatchObject({ code: 'not-found', where: 'mode 3' });

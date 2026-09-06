@@ -153,7 +153,8 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         if (!result.frequencies || a.mode > result.frequencies.length) throw new FemError('not-found', `step '${a.step}' has no mode ${a.mode}`, `mode ${a.mode}`, `choose a mode from 1 through ${result.frequencies?.length ?? 0}`);
         if (!results) throw new FemError('unsupported', 'this host cannot select a modal Result field', 'view.animate', `call view.showField with field: 'mode:${a.mode}'`);
         v();
-        await results.showField({ field: `mode:${a.mode}` });
+        const field = `mode:${a.mode}`;
+        if (store.state.fieldKey !== field) await results.showField({ field });
         if (a.frame !== undefined) {
           store.set({ phase: a.frame / 100, playing: false });
           return v().setPhase(a.frame / 100);
