@@ -271,7 +271,10 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
           // Keep the app usable when a browser refuses localStorage.
         }
       },
-      setModel: (model) => localStorage.setItem('femlab.ai.model', model),
+      setModel: (model) => {
+        localStorage.setItem('femlab.ai.model', model);
+        store.set({ assistantModel: model });
+      },
     },
     env: { webgpu: host.webgpu, crossOriginIsolated: host.crossOriginIsolated, threads: host.threads, userAgent: host.userAgent, engine: 'local' },
   };

@@ -16,7 +16,9 @@ export interface ToolCall {
   command: string;
   input: unknown;
   ms: number;
-  status: 'pending' | 'succeeded' | 'failed';
+  status: 'preparing' | 'pending' | 'succeeded' | 'failed' | 'cancelled';
+  /** Raw argument snapshot, for display while the provider is generating a call. */
+  arguments?: string;
   /** The result or the error, as the JSON the model was given. */
   result: string;
 }
@@ -26,6 +28,7 @@ export interface TurnResult {
   skills: string[];
   ms: number;
   usage: Usage;
+  /** Unknown if any attempted request ended without reporting its usage. */
   cost: number | null;
   /** The Journal entries this turn added, for the "Journal diff · this turn" card. */
   diff: JournalEntry[];
@@ -38,6 +41,7 @@ export interface TurnResult {
 export type AgentEvent =
   | { type: 'text'; text: string }
   | { type: 'thinking'; status: string }
+  | { type: 'tool_progress'; call: ToolCall }
   | { type: 'tool_start'; call: ToolCall }
   | { type: 'tool_end'; call: ToolCall }
   | { type: 'turn'; turn: TurnResult }
@@ -54,6 +58,7 @@ export interface TurnOptions {
   maxTokens?: number;
   maxRounds?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   now?: () => number;
 }
 
@@ -86,7 +91,7 @@ async function journal(registry: Registry): Promise<JournalDump> {
  * Commands answered, so passing it back in continues the conversation.
  */
 export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, TurnResult> {
-  const { provider, registry, model, system, tools, messages, maxTokens = 16000, maxRounds = 12, timeoutMs = 180_000, now = Date.now } = opts;
+  const { provider, registry, model, system, tools, messages, signal, maxTokens = 16000, maxRounds = 12, timeoutMs = 180_000, now = Date.now } = opts;
   const started = now();
   const before = await journal(registry);
   const owned: JournalEntry[] = [];
@@ -97,6 +102,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
   let cost = costOf(model, NO_USAGE);
 
   for (let round = 0; round < maxRounds; round++) {
+    if (signal?.aborted) break;
     if (now() - started > timeoutMs) {
       yield { type: 'error', message: `the turn ran longer than ${Math.round(timeoutMs / 1000)} s and was stopped` };
       break;
@@ -104,10 +110,14 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
     const pending: { id: string; name: string; input: unknown }[] = [];
     let text = '';
     let failed = false;
+    let receivedUsage = false;
     let continuation: Message['continuation'];
 
-    for await (const event of provider.chat({ system, messages, tools, model, maxTokens })) {
-      if (event.type === 'text_delta') {
+    for await (const event of provider.chat({ system, messages, tools, model, maxTokens, signal })) {
+      if (signal?.aborted) break;
+      if (event.type === 'tool_progress') {
+        yield { type: 'tool_progress', call: { id: event.id, tool: event.name, command: commandNameFor(event.name, registry) ?? event.name, input: null, arguments: event.arguments, ms: 0, status: 'preparing', result: '' } };
+      } else if (event.type === 'text_delta') {
         text += event.text;
         yield { type: 'text', text: event.text };
       } else if (event.type === 'tool_use') {
@@ -115,6 +125,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
       } else if (event.type === 'continuation') {
         continuation = event.continuation;
       } else if (event.type === 'usage') {
+        receivedUsage = true;
         usage.input += event.usage.input;
         usage.output += event.usage.output;
         usage.cacheRead += event.usage.cacheRead;
@@ -125,6 +136,11 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
         failed = true;
         yield { type: 'error', message: event.message };
       }
+    }
+    if (!receivedUsage) cost = null;
+    if (signal?.aborted) {
+      if (text) messages.push({ role: 'assistant', content: [{ type: 'text', text: text + '\n[Response interrupted before completion.]' }] });
+      break;
     }
     if (failed) break;
 
@@ -144,6 +160,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
       yield { type: 'tool_start', call };
       const at = now();
       try {
+        if (signal?.aborted) throw new FemError('cancelled', 'Interrupted before this tool started', p.name);
         const value = await callTool(registry, p.name, p.input);
         call.result = JSON.stringify(value ?? null);
         call.status = p.name === RUN_SCRIPT && typeof (value as ScriptResult)?.error === 'string' ? 'failed' : 'succeeded';
@@ -154,11 +171,11 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
         }
         if (p.name === SKILL_TOOL) skills.push(String((p.input as { name?: string })?.name ?? ''));
       } catch (e) {
-        call.status = 'failed';
+        call.status = e instanceof FemError && e.code === 'cancelled' ? 'cancelled' : 'failed';
         call.result = errorJson(e);
       }
       call.ms = now() - at;
-      results.push({ type: 'tool_result', toolUseId: p.id, content: call.result, ...(call.status === 'failed' ? { isError: true } : {}) });
+      results.push({ type: 'tool_result', toolUseId: p.id, content: call.result, ...(call.status !== 'succeeded' ? { isError: true } : {}) });
       yield { type: 'tool_end', call };
     }
     messages.push({ role: 'user', content: results });

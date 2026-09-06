@@ -5,6 +5,7 @@ import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as anthropic from '../src/ai/anthropic';
+import * as context from '../src/ai/context';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { fakeTransport } from '../../registry/test/fakes';
 import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
@@ -219,14 +220,14 @@ describe('the assistant drawer', () => {
       resumeFirst();
       await tick();
       await tick();
-      expect(root.querySelector('.streaming')!.textContent).toBe('Solved.\n');
+      expect(root.querySelector('.streaming')!.textContent).toBe('Solved.');
       expect(root.textContent).not.toContain('<ver');
       expect(root.querySelector('.verify')).toBeNull();
       resumeVerification();
       await tick();
       await tick();
       expect(root.querySelector('.streaming')).toBeNull();
-      expect([...root.querySelectorAll('.prose')].map((p) => p.textContent)).toEqual(['First sentence.', 'Solved.\n\nDone.']);
+      expect([...root.querySelectorAll('.prose p')].map((p) => p.textContent)).toEqual(['First sentence.', 'Solved.', 'Done.']);
       expect(root.querySelectorAll('.verify')).toHaveLength(1);
       expect(root.querySelector('.verify')!.textContent).toContain('Reaction balance');
     } finally { provider.mockRestore(); }
@@ -237,7 +238,7 @@ describe('the assistant drawer', () => {
     const { root } = await mount({ panels: { 'assistant.settings': true } });
     expect(root.textContent).toContain('from localStorage in this browser');
     expect(root.querySelector<HTMLInputElement>('.settings input[type=password]')!.placeholder).toBe('sk-ant-a…7f2a');
-    expect([...root.querySelectorAll('.settings option')].map((o) => o.textContent)).toContain('claude-opus-5');
+    expect([...root.querySelectorAll('.model-row option')].map((o) => o.textContent)).toContain('claude-opus-5');
     expect(root.querySelector('[data-cmd="ai.setModel"]')).not.toBeNull();
   });
 
@@ -452,5 +453,147 @@ describe('the verification block', () => {
 
   it('leaves text without a block completely alone', () => {
     expect(parseVerification('Just prose.')).toEqual({ rows: [], prose: 'Just prose.' });
+  });
+});
+
+describe('Assistant queue and model controls', () => {
+  beforeEach(() => {
+    for (const root of [...document.body.children]) render(null, root as HTMLElement);
+    document.body.innerHTML = '';
+    chatBridge.pending = null;
+    localStorage.clear();
+    localStorage.setItem('femlab.ai.key', 'test-key');
+  });
+
+  it('preserves a missing-key draft and image until the key is saved and the person retries', async () => {
+    localStorage.clear();
+    const image = { type: 'image' as const, mediaType: 'image/png' as const, base64: 'AAAA', caption: 'reference' };
+    const screenshot = vi.spyOn(context, 'screenshotBlock').mockResolvedValue(image);
+    const seen: import('../src/ai/provider').Message[][] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(req) { seen.push(structuredClone(req.messages)); yield { type: 'done', stopReason: 'end_turn' }; },
+    });
+    try {
+      const { root } = await mount();
+      root.querySelector<HTMLButtonElement>('button[data-cmd="query.screenshot"]')!.click();
+      await tick();
+      chatBridge.insertMention('body:beam');
+      await tick();
+      press(await type(root, 'build from this image'), 'Enter');
+      await tick();
+      expect(root.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('build from this image');
+      expect(root.querySelector('.tokens .token')?.textContent).toContain('body:beam');
+      expect(root.querySelector('.images img')?.getAttribute('src')).toContain('AAAA');
+      expect(root.querySelector('.bubble')).toBeNull();
+      expect(provider).not.toHaveBeenCalled();
+      const key = root.querySelector<HTMLInputElement>('.settings input[type="password"]')!;
+      key.value = 'test-key';
+      key.dispatchEvent(new Event('input', { bubbles: true }));
+      await tick();
+      root.querySelector<HTMLButtonElement>('[data-cmd="ai.setKey"]')!.click();
+      await tick();
+      press(root.querySelector('textarea')!, 'Enter');
+      await tick(); await tick();
+      expect(seen).toHaveLength(1);
+      expect(JSON.stringify(seen[0])).toContain('build from this image');
+      expect(JSON.stringify(seen[0])).toContain('body:beam');
+      expect(seen[0]![0]!.content).toContainEqual(image);
+      expect(root.querySelector('.images img')).toBeNull();
+    } finally { screenshot.mockRestore(); provider.mockRestore(); }
+  });
+
+  it('queues with Enter, then interrupts with empty Enter and starts the next message once', async () => {
+    const seen: import('../src/ai/provider').ChatRequest[] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(req) {
+        seen.push(structuredClone({ ...req, signal: undefined }));
+        if (seen.length === 1) {
+          yield { type: 'text_delta', text: 'First tokens' };
+          yield { type: 'tool_progress', id: 'draft', name: 'query_model', arguments: '{' };
+          await new Promise<void>(resolve => req.signal!.addEventListener('abort', () => resolve(), { once: true }));
+          return;
+        }
+        yield { type: 'text_delta', text: 'Next answer' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root } = await mount();
+      press(await type(root, 'first'), 'Enter');
+      await tick(); await tick();
+      expect(root.querySelector('[data-status="preparing"]')?.textContent).toContain('{');
+      press(await type(root, 'second'), 'Enter');
+      await tick();
+      expect(seen).toHaveLength(1);
+      expect(root.querySelector('.queued')?.textContent).toContain('second');
+      expect(root.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('');
+      press(root.querySelector('textarea')!, 'Enter');
+      await tick(); await tick();
+      expect(seen).toHaveLength(2);
+      expect(root.querySelector('.queued')).toBeNull();
+      expect(root.querySelector('[data-status="cancelled"]')).not.toBeNull();
+      expect(root.querySelectorAll('.bubble')).toHaveLength(2);
+      expect(root.textContent).toContain('Next answer');
+      expect(JSON.stringify(seen[1]!.messages)).not.toContain('tool_use');
+      expect(JSON.stringify(seen[1]!.messages)).toContain('Response interrupted');
+    } finally { provider.mockRestore(); }
+  });
+
+  it('drains queued messages in order after ordinary completion, preserving the next draft', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>(resolve => { release = resolve; });
+    const seen: string[] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(req) {
+        seen.push(JSON.stringify(req.messages.at(-1)));
+        if (seen.length === 1) await paused;
+        yield { type: 'text_delta', text: 'Done' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root } = await mount();
+      chatBridge.send('first');
+      chatBridge.send('second');
+      chatBridge.send('third');
+      await tick();
+      expect(seen).toHaveLength(1);
+      await type(root, 'unsent draft');
+      release();
+      await tick(); await tick();
+      expect(seen).toHaveLength(3);
+      expect(seen[1]).toContain('second');
+      expect(seen[2]).toContain('third');
+      expect(root.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('unsent draft');
+    } finally { release(); provider.mockRestore(); }
+  });
+
+  it('shows the model selector without Settings and routes UI and registry changes to the next request', async () => {
+    const seen: string[] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['claude-haiku-4-5'],
+      async *chat(req) { seen.push(req.model); yield { type: 'done', stopReason: 'end_turn' }; },
+    });
+    try {
+      const { root, registry } = await mount();
+      expect(root.querySelector('.settings')).toBeNull();
+      const select = root.querySelector<HTMLSelectElement>('[data-cmd="ai.setModel"]')!;
+      select.value = 'claude-haiku-4-5';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await paint(); await tick();
+      expect(localStorage.getItem('femlab.ai.model')).toBe('claude-haiku-4-5');
+      press(await type(root, 'hello'), 'Enter');
+      await tick(); await tick();
+      expect(seen).toEqual(['claude-haiku-4-5']);
+      await registry.dispatch({ cmd: 'ai.setModel', model: 'gpt-5.4-mini' });
+      await paint(); await tick();
+      expect(select.value).toBe('gpt-5.4-mini');
+      render(null, root);
+      const remounted = await mount();
+      expect(remounted.root.querySelector<HTMLSelectElement>('[data-cmd="ai.setModel"]')!.value).toBe('gpt-5.4-mini');
+    } finally { provider.mockRestore(); }
   });
 });
