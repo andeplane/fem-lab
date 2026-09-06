@@ -3,7 +3,8 @@
 // the skill toggles and the settings row.
 import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import { render } from 'preact';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as anthropic from '../src/ai/anthropic';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { fakeHost, fakeTransport } from '../../registry/test/fakes';
 import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
@@ -86,6 +87,47 @@ describe('the assistant drawer', () => {
     expect(store.state.panels['assistant.settings']).toBe(true);
   });
 
+  it('keeps a real conversation and an in-flight tool call alive while hidden', async () => {
+    localStorage.setItem('femlab.ai.key', 'test-key');
+    let finishTool!: (value: unknown) => void;
+    const pending = new Promise((resolve) => { finishTool = resolve; });
+    let round = 0;
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat() {
+        if (round++ === 0) {
+          yield { type: 'text_delta', text: 'Inspecting the beam.' };
+          yield { type: 'tool_use', id: 'inspect', name: 'query_model', input: {} };
+        } else yield { type: 'text_delta', text: 'The beam is ready.' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry, store } = await mount();
+      const original = registry.query.bind(registry);
+      vi.spyOn(registry, 'query').mockImplementation((q) => q.query === 'query.model' ? pending : q.query === 'query.journal' ? Promise.resolve({ entries: [], revision: 0, canUndo: false, canRedo: false }) : original(q));
+      await type(root, 'Check the beam');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await tick();
+      expect(root.textContent).toContain('Inspecting the beam.');
+      expect(root.querySelector('.thinking')!.textContent).toContain('query.model');
+      render(<AssistantPanel registry={registry} store={store} hidden />, root);
+      await tick();
+      expect(root.querySelector('aside')!.hidden).toBe(true);
+      finishTool({ name: 'beam', bodies: [] });
+      await tick();
+      await tick();
+      render(<AssistantPanel registry={registry} store={store} />, root);
+      await tick();
+      expect(root.querySelector('aside')!.hidden).toBe(false);
+      expect(root.querySelector('.bubble')!.textContent).toBe('Check the beam');
+      expect(root.textContent).toContain('Inspecting the beam.');
+      expect(root.textContent).toContain('The beam is ready.');
+      expect(root.querySelector('.card .out')!.textContent).toContain('beam');
+      expect(root.querySelector('.thinking')).toBeNull();
+    } finally { provider.mockRestore(); }
+  });
+
   it('shows the key source and the model in the settings sub-panel', async () => {
     localStorage.setItem('femlab.ai.key', 'sk-ant-api03-abcdefgh7f2a');
     const { root } = await mount({ panels: { 'assistant.settings': true } });
@@ -122,8 +164,9 @@ describe('the assistant drawer', () => {
   });
 
   it('hands chat.send from a script to the same code the Send button runs', async () => {
-    const { root } = await mount();
+    const { root, store } = await mount({ panels: { assistant: false } });
     chatBridge.send('hello from a script');
+    expect(store.state.panels['assistant']).toBe(true);
     await tick();
     expect(root.textContent).toContain('no anthropic API key yet');
     chatBridge.clear();

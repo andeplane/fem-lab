@@ -334,6 +334,12 @@ export class Viewer {
     this.drawDeformed(displacement, scale);
   }
 
+  /** Preview a host gesture using the existing displacement; the host commits on release. */
+  previewDeformScale(scale: number): void {
+    this.deformScale = scale;
+    this.drawDeformed(this.deformation, scale);
+  }
+
   private drawDeformed(displacement: Float32Array | null, scale: number): void {
     const geom = this.mesh?.geometry;
     if (!geom) return;
