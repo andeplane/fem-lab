@@ -90,18 +90,26 @@ test.describe('@cpu the Results tab after a modal Step', () => {
     const webm = readFileSync(saved!);
     expect([...webm.subarray(0, 4)]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
     expect(webm.length).toBeGreaterThan(1000);
-    const dimensions = await page.evaluate(async (base64) => {
-      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-      const video = document.createElement('video');
-      video.src = URL.createObjectURL(new Blob([bytes], { type: 'video/webm' }));
-      await new Promise<void>((resolve, reject) => {
-        video.onloadedmetadata = () => resolve();
-        video.onerror = () => reject(new Error('Chromium could not decode its WebM recording'));
-      });
-      const size = [video.videoWidth, video.videoHeight];
-      URL.revokeObjectURL(video.src);
-      return size;
-    }, webm.toString('base64'));
+    // Decode away from the app page: its CSP deliberately refuses blob: media, while the
+    // downloaded file must remain independently playable in Chromium.
+    const decoder = await page.context().newPage();
+    let dimensions: number[];
+    try {
+      dimensions = await decoder.evaluate(async (base64) => {
+        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+        const video = document.createElement('video');
+        video.src = URL.createObjectURL(new Blob([bytes], { type: 'video/webm' }));
+        await new Promise<void>((resolve, reject) => {
+          video.onloadedmetadata = () => resolve();
+          video.onerror = () => reject(new Error('Chromium could not decode its WebM recording'));
+        });
+        const size = [video.videoWidth, video.videoHeight];
+        URL.revokeObjectURL(video.src);
+        return size;
+      }, webm.toString('base64'));
+    } finally {
+      await decoder.close();
+    }
     expect(dimensions).toEqual([320, 240]);
     await expect(play).toHaveText('❚❚');
 
