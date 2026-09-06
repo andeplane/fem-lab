@@ -4,7 +4,7 @@
 //
 // The blocks are emitted in a fixed order, most stable first, so the one cache breakpoint the
 // Anthropic adapter puts on the system prompt actually hits: blocks 1–2 change only on deploy,
-// 3–4 on `project.refresh`.
+// 3–4 on `folder.refresh`.
 import { FemError, parseMentions, stripDiscriminator, type MentionKind, type Registry, type Selection, type Skill } from '@femlab/registry';
 import type { ImageBlock, Message } from './provider';
 
@@ -28,6 +28,11 @@ call as it happens.
   back as { value, unit }. Never send a bare number for a dimensional quantity.
 - Targets are names, never node or element ids: bodies, named face Sets and Sets. Use query.objects
   to see what exists.
+- Named materials: call query.materialLibrary before material.add. Copy only properties applicable
+  to the returned grade, condition, product form and temperature, and copy materialAddSource into
+  source. Property objects carry their input in value; for dimensionless nu, pass the inner numeric
+  value rather than its unit "1" wrapper. Never fill a null property; ask the person for any required
+  property the source omits.
 - Prefer run_script over more than three separate Commands: one script is one Journal entry the
   person can read, and it is faster.
 - Verify before you report. After a solve, check the reaction sum against the applied load and
@@ -139,12 +144,35 @@ export interface IndexEntry {
   summary: string;
 }
 
-/** What the `@` popover lists: the engine's object index plus the open project's files. */
+/**
+ * What the `@` popover lists: the engine's object index, the auto faces and Results it leaves out,
+ * and the open project's files.
+ *
+ * ponytail: `query.objects` carries neither a body's auto-named faces nor a solved Step's Result,
+ * though `resolveMention` and `MENTION_KINDS` accept both — so `@face:beam.top` resolves but cannot
+ * be found in the picker. Their honest home is the engine's `query_objects`; until it has them the
+ * host fills the gap from `query.model`, which is the same source the Properties form's face picker
+ * already reads.
+ */
 export async function objectIndex(registry: Registry): Promise<IndexEntry[]> {
   const { objects } = (await registry.query({ query: 'query.objects' })) as { objects: IndexEntry[] };
-  const project = (await registry.query({ query: 'query.project' }).catch(() => null)) as ProjectContext | null;
+  const model = (await registry.query({ query: 'query.model' }).catch(() => null)) as ModelIndex | null;
+  const known = new Set(objects.map((o) => o.ref));
+  const extra: IndexEntry[] = [];
+  const add = (entry: IndexEntry) => {
+    if (!known.has(entry.ref)) known.add(entry.ref), extra.push(entry);
+  };
+  for (const body of model?.bodies ?? []) for (const face of body.faces ?? []) add({ ref: `face:${face}`, kind: 'face', name: face, summary: `face of ${body.name}` });
+  for (const step of model?.steps ?? []) if (step.solved) add({ ref: `result:${step.name}`, kind: 'result', name: step.name, summary: `${step.procedure} Result` });
+  const project = (await registry.query({ query: 'query.folder' }).catch(() => null)) as ProjectContext | null;
   const files = (project?.files ?? []).map((f) => ({ ref: `file:${f.path}`, kind: 'file', name: f.path, summary: `${f.size} B · ${f.kind}` }));
-  return [...objects, ...files];
+  return [...objects, ...extra, ...files];
+}
+
+/** Just the two lists `objectIndex` reads off `query.model`; the fakes need no more than this. */
+interface ModelIndex {
+  bodies?: { name: string; faces?: string[] }[];
+  steps?: { name: string; procedure: string; solved: boolean }[];
 }
 
 // --- images (PLAN 4.15) -----------------------------------------------------------------------
