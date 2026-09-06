@@ -6,15 +6,12 @@
 // `HostContext`. Nothing here touches the DOM: the app implements `HostContext`, tests fake it.
 import { z } from 'zod';
 import type { ScriptDiagnostic, ScriptValidation } from './script-validation-types';
-import type { JournalDump, ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
+import type { JournalEntry, ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
 import { FemError } from './error';
 import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
 import type { Skill } from './skills';
 import type { EngineTransport, ExportSpec } from './transport';
-
-/** A queried Journal entry; keep the public name independent of generated definition prefixes. */
-export type JournalEntry = JournalDump['entries'][number];
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
 const int = z.number().int();

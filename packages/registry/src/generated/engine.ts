@@ -3068,12 +3068,12 @@ export interface RefineBoxSpec {
  * Append-only list of applied Commands (undo truncates it).
  */
 export interface Journal {
-  entries: ModelFile_JournalEntry[];
+  entries: JournalEntry[];
 }
 /**
  * One applied Command and the Model hash after it.
  */
-export interface ModelFile_JournalEntry {
+export interface JournalEntry {
   seq: number;
   cmd: ModelFile_Command;
   hashAfter: string;
@@ -3389,18 +3389,10 @@ export interface JournalDump {
    * Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
    */
   hash: string;
-  entries: QueryResult_JournalEntry[];
+  entries: JournalEntry[];
   revision: number;
   canUndo: boolean;
   canRedo: boolean;
-}
-/**
- * One applied Command and the Model hash after it.
- */
-export interface QueryResult_JournalEntry {
-  seq: number;
-  cmd: Command;
-  hashAfter: string;
 }
 /**
  * `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
@@ -3417,11 +3409,11 @@ export interface JournalDiff {
   /**
    * The base Journal's ordered tail after `sharedEntries`.
    */
-  removed: QueryResult_JournalEntry[];
+  removed: JournalEntry[];
   /**
    * The current Journal's ordered tail after `sharedEntries`.
    */
-  added: QueryResult_JournalEntry[];
+  added: JournalEntry[];
 }
 /**
  * `query.script` response.
