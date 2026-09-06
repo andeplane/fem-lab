@@ -154,6 +154,10 @@ export interface HostContext {
     get(): Selection;
   };
   panels: { toggle(panel: string, open?: boolean): void; resize(panel: z.output<typeof PanelTarget>, size: number): void };
+  report: {
+    /** Open the browser print dialog for the mounted calculation note. */
+    print(): void;
+  };
   script: {
     validate(code: string, timeoutMs?: number): Promise<ScriptValidation>;
     run(code: string, timeoutMs?: number): Promise<ScriptResult>;
@@ -370,6 +374,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
   def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
   def('panel.resize', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
+  def('report.print', 'Open Chromium\'s print dialog for the rendered calculation note. Choose Save as PDF there for a paginated PDF of the current report.', none, (_, ctx) => ctx.report.print()),
   def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
     const validation = await ctx.script.validate(code);
     if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;

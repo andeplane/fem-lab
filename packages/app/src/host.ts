@@ -126,7 +126,16 @@ export function forkProject(): void {
   projects?.fork();
 }
 
-export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, save: Autosave = autosave): HostContext {
+export function makeHostContext(
+  store: Store,
+  transport: EngineTransport,
+  viewer: ViewerRef,
+  host: HostCaps,
+  scripts?: ScriptHost,
+  results?: ResultsView,
+  save: Autosave = autosave,
+  printPage: () => void = () => window.print(),
+): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
@@ -220,6 +229,14 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
     panels: {
       toggle: (panel, open) => store.togglePanel(panel, open),
       resize: (panel, size) => store.resizePanel(panel, size),
+    },
+    report: {
+      print: () => {
+        if (!store.state.panels['report'] || !store.state.reportReady) {
+          throw new FemError('unsupported', 'the calculation note is not ready to print', 'report', 'open Report and wait for its paper and viewer figure');
+        }
+        printPage();
+      },
     },
     script: {
       validate: (code, timeoutMs) => {
