@@ -408,6 +408,13 @@ impl Engine {
                 self.invalidate_geometry();
                 Ok(Output::None)
             }
+            Command::ModelSetName { name } => {
+                if name.trim().is_empty() {
+                    return Err(Error::schema("Model name cannot be blank").at("name"));
+                }
+                self.model.name = name.clone();
+                Ok(Output::None)
+            }
             Command::ModelSetUnits { units } => {
                 units.validate()?;
                 self.model.units = units.clone();

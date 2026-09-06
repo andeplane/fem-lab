@@ -246,3 +246,14 @@ it('does not record undo/redo acks as new Journal entries', async () => {
   await transport.cancel();
   expect(spy).toHaveBeenCalled();
 });
+
+it('returns the import boundary Journal and uses its normalized entries for cancel replay', async () => {
+  const journal = { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'normalized', description: null }, hashAfter: 'normalized-hash' }] };
+  const { transport, workers } = make((req, reply) => reply(ok(req.id, req.op === 'importFile' ? { ...ack(), journal } : {})));
+  await transport.init();
+  const file = { format: 'femlab/1', engineVersion: '0', model: {}, journal: { entries: [] } } as never;
+  expect((await transport.importFile(file)).journal).toEqual(journal);
+  await transport.cancel();
+  const replay = workers.at(-1)!.sent.find((r) => r.op === 'replay');
+  expect(replay?.payload).toMatchObject({ entries: journal.entries });
+});

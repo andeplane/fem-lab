@@ -2,7 +2,7 @@
 //!
 //! This is the seam between the registry and the numerics. Everything above it speaks names,
 //! Sets and `Quantity`; everything below it speaks SI `f64` on a Mesh (plan A §6, plan B §2.1).
-//! Results are kept per Step with the Model hash they were solved at, so an edit does not throw
+//! Results are kept per Step with their Result-validity fingerprint (ADR 0017), so an edit does not throw
 //! them away — it makes them *stale*, which `query.result` says out loud.
 
 use femlab_geometry::Mesh;
@@ -248,7 +248,7 @@ impl Engine {
             procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        let hash = self.model_hash();
+        let hash = crate::hash::result_hash(&self.model);
         self.results.insert(step.name.clone(), (hash, result));
         Ok(Output::Solve { summary: self.result_summary(&step.name) })
     }
@@ -337,7 +337,7 @@ impl Engine {
         let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
-            let hash = self.model_hash();
+            let hash = crate::hash::result_hash(&self.model);
             self.results.insert(step.name, (hash, last.expect("at least two sizes ran")));
         } else {
             self.model.mesh = Some(settings);
@@ -476,7 +476,7 @@ impl Engine {
         ResultSummary {
             step: name.to_string(),
             revision: self.revision(),
-            stale: *hash != self.model_hash(),
+            stale: *hash != crate::hash::result_hash(&self.model),
             solver: res.solver.solver.to_string(),
             iterations: res.solver.iterations as u32,
             residual: res.solver.rel_residual,

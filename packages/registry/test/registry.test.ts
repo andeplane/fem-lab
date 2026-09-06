@@ -331,3 +331,30 @@ describe('Registry', () => {
     expect(registry.list().commands).toHaveLength(schemaCommands.length + 1);
   });
 });
+
+it('marks only successful explicit saves and imports, using the captured normalized Journal', async () => {
+  const { registry, host, transport } = make(true);
+  const captured = { ...MODEL_FILE, journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'saved' }, hashAfter: 'saved-hash' }] } };
+  const later = { ...MODEL_FILE, journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'edited' }, hashAfter: 'edited-hash' }] } };
+  vi.mocked(transport.exportFile).mockResolvedValue(captured);
+  let finish!: () => void;
+  vi.mocked(host.project.writeText).mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const saving = registry.dispatch({ cmd: 'file.save', to: 'project' });
+  await vi.waitFor(() => expect(host.project.writeText).toHaveBeenCalled());
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  vi.mocked(transport.exportFile).mockResolvedValue(later);
+  finish(); await saving;
+  expect(host.files.markSaved).toHaveBeenLastCalledWith(captured.journal);
+  vi.mocked(host.files.markSaved).mockClear();
+  vi.mocked(host.project.writeText).mockRejectedValue(new Error('write failed'));
+  await expect(registry.dispatch({ cmd: 'file.save', to: 'project' })).rejects.toThrow('write failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  // The engine may normalize omitted/default fields; the imported receipt is authoritative.
+  vi.mocked(transport.importFile).mockResolvedValue({ ...ACK, journal: later.journal });
+  await registry.dispatch({ cmd: 'file.open', json: JSON.stringify(captured) });
+  expect(host.files.markSaved).toHaveBeenLastCalledWith(later.journal);
+  vi.mocked(host.files.markSaved).mockClear();
+  vi.mocked(transport.importFile).mockRejectedValue(new Error('import failed'));
+  await expect(registry.dispatch({ cmd: 'file.open', json: JSON.stringify(captured) })).rejects.toThrow('import failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+});

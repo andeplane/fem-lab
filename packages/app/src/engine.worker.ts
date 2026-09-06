@@ -107,9 +107,11 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
     }
     case 'exportFile':
       return JSON.parse(need().export_file());
-    case 'importFile':
+    case 'importFile': {
       need().import_file(JSON.stringify(req.payload));
-      return { seq: -1, revision: need().revision(), hash: need().model_hash(), warnings: [], output: { kind: 'none' } };
+      const { journal } = JSON.parse(need().export_file());
+      return { seq: -1, revision: need().revision(), hash: need().model_hash(), warnings: [], output: { kind: 'none' }, journal };
+    }
     case 'replay': {
       // Cancel-by-replay: a fresh Engine, then the Journal up to the last acknowledged revision.
       const { entries, gpu, threads } = req.payload as { entries: unknown[]; gpu: boolean; threads: number };
