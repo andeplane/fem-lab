@@ -235,7 +235,7 @@
         ]
       },
       {
-        "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Prefer the auto face names when one fits.",
+        "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
         "type": "object",
         "properties": {
           "name": {
@@ -260,7 +260,7 @@
         ]
       },
       {
-        "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean.",
+        "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
         "type": "object",
         "properties": {
           "name": {
@@ -281,7 +281,7 @@
         ]
       },
       {
-        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
         "type": "object",
         "properties": {
           "name": {
@@ -717,7 +717,7 @@
         ]
       },
       {
-        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
         "type": "object",
         "properties": {
           "name": {
@@ -983,7 +983,7 @@
         ]
       },
       {
-        "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps.",
+        "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
         "type": "object",
         "properties": {
           "name": {
@@ -1020,7 +1020,7 @@
         ]
       },
       {
-        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.",
+        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
         "type": "object",
         "properties": {
           "step": {
@@ -2969,7 +2969,7 @@
         "x-returns": "ObjectList"
       },
       {
-        "description": "The whole analysis as one Markdown calculation note: assumptions, geometry, materials,\nmesh and quality, loads with totals, results with the reaction balance, the verification\nchecks with a hand calculation where one applies, and the Journal as an appendix. Nothing\nin it depends on the clock or the machine, so two runs of the same Journal produce\nbyte-identical text. `step` reports one Step instead of every solved one; `include` picks\nsections. Formulas are `$$…$$` for KaTeX.",
+        "description": "The whole analysis as one Markdown calculation note: assumptions, geometry, materials,\nmesh and quality, loads with totals, results with the reaction balance, the verification\nchecks with a hand calculation where one applies, and the Journal as an appendix. Nothing\nin it depends on the clock or the machine, so two runs of the same Journal produce\nbyte-identical text. `step` reports one Step instead of every solved one; `include` picks\nsections. Automatic hand references require a current static Step on an uncut 3D lattice\nbox with one fully clamped end and one single-component force on the opposite end;\nother cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.",
         "type": "object",
         "properties": {
           "step": {
@@ -3391,6 +3391,17 @@
             "format": "double"
           },
           "rho": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "yield": {
+            "description": "Current yield strength in the Model's display stress unit, when specified.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Valued"
@@ -4613,7 +4624,7 @@
             ]
           },
           {
-            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Prefer the auto face names when one fits.",
+            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
             "type": "object",
             "properties": {
               "name": {
@@ -4638,7 +4649,7 @@
             ]
           },
           {
-            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean.",
+            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
             "type": "object",
             "properties": {
               "name": {
@@ -4659,7 +4670,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
             "type": "object",
             "properties": {
               "name": {
@@ -5095,7 +5106,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {
@@ -5361,7 +5372,7 @@
             ]
           },
           {
-            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps.",
+            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
             "type": "object",
             "properties": {
               "name": {
@@ -5398,7 +5409,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {
@@ -7672,6 +7683,7 @@
           "mesh.failed",
           "model.no-material",
           "model.ill-posed",
+          "result.stale",
           "constraint.conflict",
           "constraint.rigid-modes",
           "solve.not-positive-definite",
@@ -9907,7 +9919,7 @@
             ]
           },
           {
-            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Prefer the auto face names when one fits.",
+            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
             "type": "object",
             "properties": {
               "name": {
@@ -9932,7 +9944,7 @@
             ]
           },
           {
-            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean.",
+            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
             "type": "object",
             "properties": {
               "name": {
@@ -9953,7 +9965,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
             "type": "object",
             "properties": {
               "name": {
@@ -10389,7 +10401,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {
@@ -10655,7 +10667,7 @@
             ]
           },
           {
-            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps.",
+            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
             "type": "object",
             "properties": {
               "name": {
@@ -10692,7 +10704,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {

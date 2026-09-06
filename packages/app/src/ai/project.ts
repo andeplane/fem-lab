@@ -6,7 +6,8 @@
 // The handles are described here rather than taken from lib.dom, because lib.dom types neither the
 // async iteration nor the permission methods, and because a structural type is what lets the tests
 // hand in a 40-line in-memory fake.
-import { assertInside, mergeSkills, parseSkill, type ProjectInfo, type Skill } from '@femlab/registry';
+import { assertInside, mergeSkills, parseSkill, type FolderInfo, type Skill } from '@femlab/registry';
+import { HANDLES, tx } from '../db';
 
 export interface FileHandle {
   kind: 'file';
@@ -23,7 +24,7 @@ export interface DirHandle {
   requestPermission?(options: { mode: 'read' | 'readwrite' }): Promise<'granted' | 'denied' | 'prompt'>;
 }
 
-export type FileKind = ProjectInfo['files'][number]['kind'];
+export type FileKind = FolderInfo['files'][number]['kind'];
 export interface ProjectFile {
   path: string;
   size: number;
@@ -108,11 +109,11 @@ export class ProjectFolder {
     return null;
   }
 
-  info(): ProjectInfo {
+  info(): FolderInfo {
     return {
       name: this.name,
       files: this.files,
-      agentsMd: (this.agentsMd?.file ?? null) as ProjectInfo['agentsMd'],
+      agentsMd: (this.agentsMd?.file ?? null) as FolderInfo['agentsMd'],
       skills: this.skills.map((s) => s.name),
     };
   }
@@ -169,39 +170,24 @@ export function watchAgents(folder: ProjectFolder, onChange: () => void, everyMs
 }
 
 // --- remembering the folder across reloads ------------------------------------------------------
+//
+// Over `src/db.ts`, which owns the one `femlab` database. This module used to open it itself at
+// version 1 with a `handles` store while `share.ts` opened the same name at the same version with
+// an `autosave` store: whichever ran first won, and the other's transaction raised NotFoundError.
 
-const DB = 'femlab';
-const STORE = 'handles';
-const KEY = 'project';
-
-function open(indexedDB: IDBFactory): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-function transact<T>(db: IDBDatabase, mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const req = run(db.transaction(STORE, mode).objectStore(STORE));
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
+const KEY = 'folder';
 
 /** `FileSystemDirectoryHandle` is structured-cloneable, so a reload can offer "reopen <name>". */
 export async function rememberHandle(handle: DirHandle, factory: IDBFactory = indexedDB): Promise<void> {
-  await transact(await open(factory), 'readwrite', (s) => s.put(handle, KEY));
+  await tx(factory, HANDLES, 'readwrite', (s) => s.put(handle, KEY));
 }
 
 export async function recallHandle(factory: IDBFactory = indexedDB): Promise<DirHandle | null> {
-  return (await transact<DirHandle | undefined>(await open(factory), 'readonly', (s) => s.get(KEY))) ?? null;
+  return (await tx<DirHandle | undefined>(factory, HANDLES, 'readonly', (s) => s.get(KEY))) ?? null;
 }
 
 export async function forgetHandle(factory: IDBFactory = indexedDB): Promise<void> {
-  await transact(await open(factory), 'readwrite', (s) => s.delete(KEY));
+  await tx(factory, HANDLES, 'readwrite', (s) => s.delete(KEY));
 }
 
 /** Chromium only, and only from a click: `showDirectoryPicker` is a user-gesture API (ADR 0014). */

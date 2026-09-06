@@ -26,6 +26,13 @@ export interface Step {
   highlight?: string;
   /** What "do it for me" dispatches. Omitted on read-only steps. */
   doIt?: TutorialCommand;
+  /**
+   * The values the card lists and the form shows as placeholders. Omit it: they are derived
+   * from `doIt` (minus `cmd`), so the card cannot disagree with the button beside it. Set it
+   * only when that derived list reads badly — a Command with a dozen arguments where three are
+   * the point, or a step whose `doIt` is deliberately not what the reader should type.
+   */
+  fields?: Record<string, string>;
   /** KaTeX-ready text (rendered plain for now); typically the closing step of a tutorial. */
   theory?: string;
 }
