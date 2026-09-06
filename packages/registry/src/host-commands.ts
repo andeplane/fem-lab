@@ -3,7 +3,7 @@
 // a zod schema, a doc string that is the AI's tool description, and a `run` that makes one call on
 // `HostContext`. Nothing here touches the DOM: the app implements `HostContext`, tests fake it.
 import { z } from 'zod';
-import type { ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
+import type { JournalEntry, ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
 import { FemError } from './error';
 import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
@@ -62,6 +62,8 @@ export interface ProjectInfo {
   skills: string[];
 }
 export interface ScriptResult {
+  /** Successful engine Commands dispatched by this script, for attributable turn diffs. */
+  journalEntries?: JournalEntry[];
   result: unknown;
   console: string[];
   error?: string;

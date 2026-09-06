@@ -3587,3 +3587,46 @@ fn a_stale_result_is_labelled_in_the_report() {
     let md = report(&mut e, Some("static"), None).markdown;
     assert!(md.contains("| Up to date | no: the Model changed after the solve |"), "{md}");
 }
+
+#[test]
+fn guarded_undo_checks_the_whole_history_at_execution() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"guarded"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    let boundary = e.journal().entries.clone();
+    let guarded = serde_json::json!({"cmd":"journal.undo","steps":1,"expectedJournal":e.journal().hash()}).to_string();
+    ok(&mut e, &guarded);
+    assert_eq!(e.revision(), 1);
+    assert_eq!(run(&mut e, &guarded).unwrap_err().code, ErrorCode::InUse);
+    assert_eq!(e.revision(), 1);
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    ok(&mut e, &guarded);
+    // A rewrite with the same length and final model is a different Journal boundary.
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1000 mm","1 m","1 m"]}"#);
+    assert_eq!(e.model_hash(), boundary[1].hash_after);
+    let unchanged = e.journal().clone();
+    assert_eq!(run(&mut e, &guarded).unwrap_err().code, ErrorCode::InUse);
+    assert_eq!(e.journal(), &unchanged);
+    // A later human Command queued before the guarded undo cannot be removed by it.
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"human","size":["1 m","1 m","1 m"]}"#);
+    assert_eq!(run(&mut e, &guarded).unwrap_err().code, ErrorCode::InUse);
+    assert_eq!(e.revision(), 3);
+}
+
+#[test]
+fn journal_guard_uses_full_history_even_for_filtered_queries() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"hash"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"],"at":null}"#);
+    let QueryResult::Journal(full) = e.query(Query::Journal { from_seq: None }).unwrap() else { panic!() };
+    let QueryResult::Journal(tail) = e.query(Query::Journal { from_seq: Some(1) }).unwrap() else { panic!() };
+    assert_eq!(full.hash, tail.hash);
+    assert_eq!(tail.entries.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&tail.entries[0].cmd).unwrap(),
+        serde_json::json!({"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]})
+    );
+    let guarded = serde_json::json!({"cmd":"journal.undo","expectedJournal":tail.hash}).to_string();
+    ok(&mut e, &guarded);
+    assert_eq!(e.revision(), 1);
+}
