@@ -5398,7 +5398,7 @@
             ]
           },
           {
-            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.\nSheet translation, rotation about z and positive in-plane scaling are applied before\nmeshing. Size and refine boxes use world coordinates; curved boundaries are sampled\nto one tenth of size in world space. Nested or out-of-plane transforms are unsupported.",
             "type": "object",
             "properties": {
               "of": {
