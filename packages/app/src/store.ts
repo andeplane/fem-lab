@@ -5,6 +5,7 @@ import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef,
 import type { HostCaps } from './capabilities';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
+import type { TransientState } from './transient';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
 export type Tab = 'journal' | 'script' | 'results' | 'checks' | 'console';
@@ -99,6 +100,8 @@ export interface UiState {
   /** Pixels per CSS pixel a saved PNG is rendered at: the export dialog's 1× / 2×. */
   screenshotScale: number;
   animationSpeed: number;
+  /** The retained physical frame shared by contours, deformation, legend and scientific probes. */
+  transient: TransientState | null;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
 }
@@ -167,6 +170,7 @@ export const initialState: UiState = {
   phase: 0,
   screenshotScale: 1,
   animationSpeed: 1,
+  transient: null,
 };
 
 const MAX_CONSOLE = 500;

@@ -1410,6 +1410,8 @@ button.solve.stale {
   right: 190px;
   bottom: 10px;
   display: flex;
+  flex-wrap: wrap;
+  max-width: calc(100% - 200px);
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
@@ -1423,6 +1425,9 @@ button.solve.stale {
   width: 120px;
   accent-color: var(--accent);
 }
+.transient-speed { display: inline-flex; align-items: center; gap: 4px; }
+.transient-speed select { max-width: 76px; }
+.transient-time { white-space: nowrap; }
 
 .stale-banner {
   position: absolute;
@@ -1824,6 +1829,7 @@ button.solve.stale {
   .deform-bar {
     right: 10px;
     left: 10px;
+    max-width: calc(100% - 20px);
     justify-content: flex-end;
   }
 }
