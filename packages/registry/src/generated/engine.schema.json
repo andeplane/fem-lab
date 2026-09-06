@@ -2961,7 +2961,7 @@
         "x-returns": "ObjectList"
       },
       {
-        "description": "The whole analysis as one Markdown calculation note: assumptions, geometry, materials,\nmesh and quality, loads with totals, results with the reaction balance, the verification\nchecks with a hand calculation where one applies, and the Journal as an appendix. Nothing\nin it depends on the clock or the machine, so two runs of the same Journal produce\nbyte-identical text. `step` reports one Step instead of every solved one; `include` picks\nsections. Formulas are `$$…$$` for KaTeX.",
+        "description": "The whole analysis as one Markdown calculation note: assumptions, geometry, materials,\nmesh and quality, loads with totals, results with the reaction balance, the verification\nchecks with a hand calculation where one applies, and the Journal as an appendix. Nothing\nin it depends on the clock or the machine, so two runs of the same Journal produce\nbyte-identical text. `step` reports one Step instead of every solved one; `include` picks\nsections. Automatic hand references require a current static Step on an uncut 3D lattice\nbox with one fully clamped end and one single-component force on the opposite end;\nother cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.",
         "type": "object",
         "properties": {
           "step": {

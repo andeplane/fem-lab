@@ -296,3 +296,20 @@ prove is the same either way.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+### Automatic hand-reference applicability (#149)
+
+`automatic_hand_checks_require_the_steps_actual_supports_and_end_load` checks the
+report's cantilever reference at 10 and 20 axial divisions: for L = 1 m, b = h =
+0.1 m, E = 210 GPa and P = 1 kN, PL³/(3EI) = 0.190476190476 mm. The existing
+axial case independently checks FL/(EA) = 0.047619047619 mm at F = 100 kN.
+These are analytical reference values, separate from the finite-element response.
+
+At both meshes, an inactive global load, a midpoint-loaded cantilever, and a
+simply supported midpoint-loaded beam receive no cantilever reference. Pure
+applicability checks also cover reversed ends, partial supports, stale Results,
+chained Steps, cuts, mixed or zero forces, missing definitions and independent
+mapped geometry. The hook only recognizes uncut, axis-aligned 3D lattice boxes
+with one fully fixed end and one single-component force at the opposite end.
+Other geometries and boundary conditions explicitly report no applicable
+automatic reference; their verification belongs to a dedicated Benchmark.

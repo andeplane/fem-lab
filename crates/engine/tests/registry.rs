@@ -3586,4 +3586,60 @@ fn a_stale_result_is_labelled_in_the_report() {
     ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
     let md = report(&mut e, Some("static"), None).markdown;
     assert!(md.contains("| Up to date | no: the Model changed after the solve |"), "{md}");
+    assert!(!md.contains("### Hand calculation"));
+    assert!(md.contains("No applicable automatic hand-calculation reference"));
+}
+
+#[test]
+fn automatic_hand_checks_require_the_steps_actual_supports_and_end_load() {
+    for divisions in [10, 20] {
+        let mut e = engine();
+        cantilever(&mut e);
+        ok(
+            &mut e,
+            &serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":divisions,"ny":2,"nz":2}}})
+                .to_string(),
+        );
+        ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+        let text = report(&mut e, Some("static"), Some(vec![ReportSection::Verification])).markdown;
+        // PL³/(3EI) = 1000/(3*210e9*(.1*.1³/12)) m, independent of the FEM solution.
+        assert!(text.contains("| Hand calculation | 0.19048 mm |"), "{text}");
+        assert!(text.contains("verified fully clamped at the opposite end"));
+        // An unused load must not provide a reference for this Step, even though it remains
+        // the only Load in the Model and would have matched the former global heuristic.
+        ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":[]}"#);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+        let text = report(&mut e, Some("static"), Some(vec![ReportSection::Verification])).markdown;
+        assert!(!text.contains("### Hand calculation"));
+        assert!(text.contains("No applicable automatic hand-calculation reference"));
+        // The same cantilever with a load at its midpoint has a different closed form;
+        // the automatic end-load reference must stand aside rather than quote PL³/(3EI).
+        ok(
+            &mut e,
+            r#"{"cmd":"geometry.nameRegion","name":"middle","where":{"kind":"bbox","min":["0.499999 m","0 m","0 m"],"max":["0.500001 m","0.1 m","0.1 m"]}}"#,
+        );
+        ok(&mut e, r#"{"cmd":"load.force","name":"tip","on":"middle","total":["0 N","0 N","-1 kN"]}"#);
+        ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":["tip"]}"#);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+        assert!(!report(&mut e, Some("static"), Some(vec![ReportSection::Verification]))
+            .markdown
+            .contains("### Hand calculation"));
+        // Simply supported transverse bending: uy/uz on both ends,
+        // and one axial anchor. Neither support clamps all three components of an end.
+        ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin","dofs":["uy","uz"]}"#);
+        ok(&mut e, r#"{"cmd":"constraint.fix","name":"roller","on":"beam.xmax","dofs":["uy","uz"]}"#);
+        ok(
+            &mut e,
+            r#"{"cmd":"geometry.nameRegion","name":"anchor","where":{"kind":"bbox","min":["0 m","0 m","0 m"],"max":["0.000001 m","0.000001 m","0.000001 m"]}}"#,
+        );
+        ok(&mut e, r#"{"cmd":"constraint.fix","name":"axial","on":"anchor","dofs":["ux"]}"#);
+        ok(
+            &mut e,
+            r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root","roller","axial"],"loads":["tip"]}"#,
+        );
+        ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+        assert!(!report(&mut e, Some("static"), Some(vec![ReportSection::Verification]))
+            .markdown
+            .contains("### Hand calculation"));
+    }
 }
