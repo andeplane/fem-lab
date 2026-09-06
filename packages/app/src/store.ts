@@ -5,12 +5,13 @@ import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, P
 import type { HostCaps } from './capabilities';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
-import { TABS, type Tab } from './tabs';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
+import { TABS, type Tab } from './ui/tabs';
+export { TABS, type Tab };
+
 export type ViewMode = 'geometry' | 'mesh' | 'results';
-export { TABS, type Tab } from './tabs';
 
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
