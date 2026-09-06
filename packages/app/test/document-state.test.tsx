@@ -84,3 +84,28 @@ it('establishes an exact saved baseline only after a bundled example opens compl
   await expect(open.run({ name: 'broken' }, {} as never)).rejects.toThrow('second command failed');
   expect(store.state.savedJournal).toBe('still previous');
 });
+
+it('does not include an edit made while an opened example restores its Result', async () => {
+  const opened = [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'solved example' }, hashAfter: 'opened' }];
+  const edited = [...opened, { seq: 1, cmd: { cmd: 'model.setName' as const, name: 'later edit' }, hashAfter: 'edited' }];
+  const store = new Store();
+  const dispatch = vi.fn(async () => ({ output: { kind: 'solve' } }));
+  const transport = { dispatch } as unknown as WorkerTransport;
+  const refresh = vi.fn(async () => store.set({ journal: { entries: opened, revision: 1, hash: 'opened', canUndo: true, canRedo: false } }));
+  let finishResult!: () => void;
+  const onAck = vi.fn(() => new Promise<void>((resolve) => { finishResult = resolve; }));
+  vi.stubGlobal('fetch', vi.fn(async () => ({
+    ok: true,
+    text: async () => JSON.stringify([{ cmd: opened[0]!.cmd }, { cmd: { cmd: 'solve.run', step: 'static' } }]),
+  })));
+  const open = appHostCommands(store, transport, { current: null }, refresh, { onAck } as never).find((def) => def.name === 'file.openExample')!;
+
+  const pending = open.run({ name: 'solved-example' }, {} as never);
+  await vi.waitFor(() => expect(onAck).toHaveBeenCalledOnce());
+  store.set({ journal: { entries: edited, revision: 2, hash: 'edited', canUndo: true, canRedo: false } });
+  finishResult();
+  await pending;
+
+  expect(store.state.savedJournal).toBe(journalIdentity(opened));
+  expect(unsaved(store.state)).toBe(true);
+});
