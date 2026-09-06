@@ -230,11 +230,10 @@ fn mesh(built: Option<&(MeshSummary, MeshSettings)>, cost: Option<&crate::query:
     s += &table(&["Property", "Value"], rows, "unreachable");
     if let Some(c) = cost {
         s += &format!(
-            "Cost estimate: {} equations, {} matrix non-zeros, {} MB, fits this host: {} ({}).\n\n",
+            "Cost estimate: {} equations, at most {} matrix non-zeros, at least {} MB mandatory assembly storage. {}\n\n",
             c.dofs,
             c.nnz,
             fmt_sig(c.bytes as f64 / 1.048576e6, 3),
-            c.feasible,
             c.note
         );
     }

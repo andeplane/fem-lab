@@ -66,6 +66,7 @@ export class ProjectFolder {
   files: ProjectFile[] = [];
   agentsMd: { file: string; text: string; at: number } | null = null;
   skills: Skill[] = [];
+  private refreshing: Promise<void> = Promise.resolve();
 
   handle: DirHandle;
 
@@ -84,24 +85,35 @@ export class ProjectFolder {
   }
 
   /** Re-list and re-read after files changed outside the app; `project.refresh` calls this. */
-  async refresh(): Promise<void> {
+  refresh(): Promise<void> {
+    // Polling and explicit refresh share a queue, so an older read cannot overwrite a newer one.
+    const next = this.refreshing.then(() => this.readFolder());
+    this.refreshing = next.catch(() => undefined);
+    return next;
+  }
+
+  private async readFolder(): Promise<void> {
     const files: ProjectFile[] = [];
     await walk(this.handle, '', 1, files);
-    this.files = files;
-    this.agentsMd = await this.readAgents();
-    this.skills = [];
+    const agentsMd = await this.readAgents(files);
+    const skills: Skill[] = [];
     for (const file of files.filter((f) => f.kind === 'skill')) {
+      const text = await this.readText(file.path);
       try {
-        this.skills.push(parseSkill(await this.readText(file.path), 'project'));
+        skills.push(parseSkill(text, 'project'));
       } catch {
         // A malformed SKILL.md is skipped rather than making the whole folder unopenable.
       }
     }
+    // Publish together only after all reads succeeded; a failed refresh keeps the old catalog.
+    this.files = files;
+    this.agentsMd = agentsMd;
+    this.skills = skills;
   }
 
-  private async readAgents(): Promise<{ file: string; text: string; at: number } | null> {
+  private async readAgents(files: ProjectFile[]): Promise<{ file: string; text: string; at: number } | null> {
     for (const file of AGENTS_FILES) {
-      if (!this.files.some((f) => f.path === file)) continue;
+      if (!files.some((f) => f.path === file)) continue;
       const handle = await this.fileHandle([file]);
       const blob = await handle.getFile();
       return { file, text: await blob.text(), at: blob.lastModified };
@@ -151,22 +163,36 @@ export function projectSkills(builtin: Skill[], folder: ProjectFolder | null): S
 
 /**
  * AGENTS.md changes under the app all the time (the person edits it in their editor). Poll it, and
- * call back when the text actually changed — cheaper and far less code than a FileSystemObserver
+ * call back when the rules or skill content changed — cheaper and far less code than a FileSystemObserver
  * that Chromium only recently grew.
  */
-export function watchAgents(folder: ProjectFolder, onChange: () => void, everyMs = 4000, timer = setInterval): () => void {
-  const at = folder.agentsMd?.at ?? 0;
-  let last = at;
+export function watchAgents(folder: ProjectFolder, onChange: () => void, everyMs = 4000, timer = setInterval, onError?: (error: unknown) => void): () => void {
+  const snapshot = () => JSON.stringify([folder.agentsMd, folder.skills]);
+  let last = snapshot();
+  let active = true;
+  let reading = false;
+  let failed = false;
   const id = timer(() => {
+    if (!active || reading) return;
+    reading = true;
     void folder.refresh().then(() => {
-      const now = folder.agentsMd?.at ?? 0;
+      if (!active) return;
+      failed = false;
+      const now = snapshot();
       if (now !== last) {
         last = now;
         onChange();
       }
-    });
+    }).catch((error: unknown) => {
+      // Keep the last successful catalog and retry next tick; report an outage only once.
+      if (active && !failed) onError?.(error);
+      failed = true;
+    }).finally(() => { reading = false; });
   }, everyMs);
-  return () => clearInterval(id as ReturnType<typeof setInterval>);
+  return () => {
+    active = false;
+    clearInterval(id as ReturnType<typeof setInterval>);
+  };
 }
 
 // --- remembering the folder across reloads ------------------------------------------------------

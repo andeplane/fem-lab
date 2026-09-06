@@ -1,7 +1,7 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type AiProvider, type EngineTransport, type HostContext, type HostDef, type ProjectMeta, type Selection } from '@femlab/registry';
+import { FemError, type AiProvider, type EngineTransport, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
@@ -67,9 +67,9 @@ export async function primeProjects(): Promise<ProjectMeta[]> {
  * after every journaled Command and has just re-read the Model and the Journal. With no project
  * open and a non-empty Journal this is what creates one (issue #41).
  */
-export function noteProject(name: string, journal: { cmd: unknown }[], hash: string | null): void {
+export function noteProject(name: string, entries: JournalEntry[], hash: string | null): void {
   // Boot refreshes before any Command; an empty Journal is not a project yet (issue #48).
-  projects?.note(name, journal.map((e) => e.cmd) as ShareCommand[], hash);
+  projects?.note(name, { entries }, hash);
 }
 
 /** Called before every Command that replaces the whole Model, so the next one forks a project. */
@@ -133,7 +133,10 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
         store.set({ clipOn: p !== null });
         v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
       },
-      toggle: (layer, on) => v().setLayer(layer, on ?? true),
+      toggle: (layer, on) => {
+        const visible = v().setLayer(layer, on);
+        store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
+      },
       setVisible: (bodies, on) => v().setVisible(bodies, on),
       setTheme: (t) => {
         store.set({ theme: t });
@@ -186,7 +189,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
       setDraft: (text) => void import('./ai').then((m) => m.chatBridge.setDraft(text)),
       clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
     },
-    skills: () => [],
+    skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
       pick: () =>
@@ -235,9 +238,17 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
       current: () => own.current(),
     },
     folder: {
+      // The Assistant picker supplies the folder skill source; full folder I/O is #13.
       open: soon('the folder on disk', 'use file.open and file.save for now'),
-      close: soon('the folder on disk', 'use file.open and file.save for now'),
-      refresh: soon('the folder on disk', 'use file.open and file.save for now'),
+      close: () => store.setFolder(null),
+      refresh: async () => {
+        const folder = store.state.folder;
+        if (!folder) throw new FemError('file.not-found', 'no folder is open', 'folder', 'open a project folder in the Assistant');
+        await folder.refresh();
+        // Closing/replacing a folder while this read is in flight must not restore the old one.
+        if (store.state.folder === folder) store.setFolder(folder);
+      },
+
       info: () => null,
       readText: soon('the folder on disk', 'use file.open for now'),
       writeText: soon('the folder on disk', 'use file.save for now'),

@@ -94,6 +94,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
   const calls: ToolCall[] = [];
   const skills: string[] = [];
   const usage: Usage = { ...NO_USAGE };
+  let cost = costOf(model, NO_USAGE);
 
   for (let round = 0; round < maxRounds; round++) {
     if (now() - started > timeoutMs) {
@@ -117,6 +118,9 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
         usage.input += event.usage.input;
         usage.output += event.usage.output;
         usage.cacheRead += event.usage.cacheRead;
+        if (event.usage.cacheWrite) usage.cacheWrite = (usage.cacheWrite ?? 0) + event.usage.cacheWrite;
+        const requestCost = costOf(model, event.usage);
+        cost = cost === null || requestCost === null ? null : cost + requestCost;
       } else if (event.type === 'error') {
         failed = true;
         yield { type: 'error', message: event.message };
@@ -175,7 +179,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
     skills,
     ms: now() - started,
     usage,
-    cost: costOf(model, usage),
+    cost,
     diff,
     undoSteps: contiguous ? diff.length : 0,
     undoJournal: contiguous ? after.hash : null,

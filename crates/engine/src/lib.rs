@@ -13,6 +13,7 @@ pub mod gpu;
 pub mod hash;
 pub mod io;
 pub mod journal;
+mod material_library;
 pub mod mesh;
 pub mod model;
 pub mod par;
