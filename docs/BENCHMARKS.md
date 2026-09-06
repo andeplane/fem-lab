@@ -45,6 +45,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 
 | Benchmark | Status | Checks | Measured | Reference | Error |
 |---|---|---|---|---|---|
+| amplitude-ramped-cantilever | green | 9/9 | -0.190407 | -0.191962 | 0.81 % |
 | axisymmetric-thermal-stress | green | 4/4 | 1 | 1 | 0.00 % |
 | cantilever-hex20 | green | 6/6 | -0.190407 | -0.191962 | 0.81 % |
 | cantilever-hex8-full | green | 6/6 | -0.18378 | -0.18378 | 0.00 % |
@@ -53,7 +54,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cantilever-model | green | 11/11 | 1.0000e7 | 1.0000e7 | 0.00 % |
 | cook-membrane-plane-strain-quad8 | green | 3/3 | 21.50184 | 21.5262 | 0.11 % |
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
-| explicit-free-fall | green | 3/3 | -0.004915 | -0.004905 | 0.20 % |
+| explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
 | kirsch-quarter-quad8 | green | 4/4 | 302.187087 | 300 | 0.73 % |
 | lame-3d-revolve-hex20 | green | 5/5 | 99.816731 | 100 | 0.18 % |
@@ -161,10 +162,27 @@ Gauss tables are positive and cover these factors; stiffness/recovery retains it
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
+| B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
 motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
 refinements n=4,8,16 give rates about 2.00 for tri3/tet4 and 4.02/4.05 for tri6/tet10.
+
+B8 (`amplitude-ramped-cantilever`) is B1's hex20 cantilever with a triangular amplitude,
+t = [0, 1, 2] s and g = [0, 1, 0] at dt = 0.25 s: eight increments, nine retained frames. The
+fully loaded frame measures 0.1904070 mm, the same value the un-amplituded `cantilever-hex20`
+case reports, and the half-loaded frames on the way up and the way down are exactly half of it.
+
+**Linear static is affine in the amplitude, not proportional.** `u(t) = u_th + g(t)·u_L`: the
+amplitude scales the Loads and the prescribed displacements, and never the temperature, because
+the thermal strain an element subtracts in `recover` belongs to the temperature field rather
+than to the load history. So a whole schedule costs at most two solves against one reduced
+system, and `an_amplitude_is_affine_in_the_loads_and_never_scales_the_temperature` in
+`tests/fem.rs` is what fails if that is ever "simplified" back into a scaling of one solve: with
+a temperature Load present, the frame at g = 0 must equal a pure thermal solve — fields, stress
+and reactions — and the frame at g = 1 the un-amplituded answer. The exactness of the scaling
+itself is what a linear procedure guarantees; when a nonlinear material, contact or large
+deflection lands, the increments become real solves and this benchmark becomes their gate.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
