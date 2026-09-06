@@ -1,8 +1,10 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
+import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
+import { projectSkills, type ProjectFolder } from './ai/project';
+import { BUILTIN_SKILLS } from './ai/skills';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
@@ -31,6 +33,10 @@ export interface LastError {
 }
 
 export interface UiState {
+  /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
+  folder: ProjectFolder | null;
+  /** One available catalog; project skills override built-ins by name. */
+  skills: Skill[];
   ready: boolean;
   model: ModelSummary | null;
   journal: JournalDump | null;
@@ -131,6 +137,8 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
+  folder: null,
+  skills: BUILTIN_SKILLS,
   ready: false,
   model: null,
   journal: null,
@@ -225,6 +233,11 @@ export class Store {
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /** Publish a fresh catalog even when refresh mutated the same ProjectFolder instance. */
+  setFolder(folder: ProjectFolder | null): void {
+    this.set({ folder, skills: projectSkills(BUILTIN_SKILLS, folder) });
   }
 
   set(patch: Partial<UiState>): void {
