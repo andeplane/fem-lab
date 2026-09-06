@@ -1024,7 +1024,7 @@
         ]
       },
       {
-        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.",
+        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
         "type": "object",
         "properties": {
           "step": {
@@ -5399,7 +5399,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
             "type": "object",
             "properties": {
               "step": {
@@ -10695,7 +10695,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
             "type": "object",
             "properties": {
               "step": {

@@ -228,6 +228,8 @@ export interface Fem {
      * solve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`
      * (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
      * direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+     * On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
+     * assembly and triangular solves retain the engine thread count.
      */
     run(args: Omit<Extract<Command, { cmd: 'solve.run' }>, 'cmd'>): Promise<Ack>;
   };

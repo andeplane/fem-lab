@@ -4215,3 +4215,57 @@ fn a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer() {
         assert!(info.rel_residual < 1e-14);
     }
 }
+
+/// The discrete Dirichlet harmonic problem has exact x_i=(i+1)/(n+1): a linear
+/// profile with zero second difference and unit value at the far boundary.
+fn direct_harmonic_profile(threads: usize) {
+    use femlab_engine::solve::direct::Direct;
+    use femlab_engine::solve::LinearSolve;
+    let ambient = faer::get_global_parallelism();
+    for n in [65, 129, 257] {
+        let mut k = Csr { n, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
+        for i in 0..n {
+            if i > 0 {
+                k.col_idx.push((i - 1) as u32);
+                k.vals.push(-1.0);
+            }
+            k.col_idx.push(i as u32);
+            k.vals.push(2.0);
+            if i + 1 < n {
+                k.col_idx.push((i + 1) as u32);
+                k.vals.push(-1.0);
+            }
+            k.row_ptr.push(k.vals.len() as u32);
+        }
+        // The owning factor outlives the temporary pool and scratch used to construct it.
+        let mut direct = Pool::new(threads).install(|| Direct::factor(&k)).unwrap();
+        assert_eq!(faer::get_global_parallelism(), ambient);
+        for boundary in [1.0, -3.0] {
+            let mut rhs = vec![0.0; n];
+            rhs[n - 1] = boundary;
+            let mut answer = vec![0.0; n];
+            let info = direct.solve(&rhs, &mut answer).unwrap();
+            assert!(info.rel_residual < 1e-12);
+            for (i, value) in answer.iter().enumerate() {
+                let exact = boundary * (i + 1) as f64 / (n + 1) as f64;
+                assert!((value - exact).abs() < 1e-11, "threads{threads}, n{n}, node{i}: {value} vs {exact}");
+            }
+            assert_eq!(faer::get_global_parallelism(), ambient);
+        }
+    }
+}
+
+#[test]
+fn direct_factors_own_their_storage_and_never_change_process_parallelism() {
+    for threads in [1, 4] {
+        direct_harmonic_profile(threads);
+    }
+    // Independent Engines/Direct users may solve concurrently with different pool sizes.
+    let barrier = std::sync::Barrier::new(2);
+    Pool::new(2).install(|| {
+        femlab_engine::par::map_collect(2, |index| {
+            barrier.wait();
+            direct_harmonic_profile([1, 4][index]);
+        })
+    });
+}
