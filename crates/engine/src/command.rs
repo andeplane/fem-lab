@@ -928,7 +928,9 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit.
+    /// `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
+    /// conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
+    /// `theta` must lie in [0, 1].
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,

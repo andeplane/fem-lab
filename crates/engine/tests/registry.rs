@@ -3026,6 +3026,129 @@ fn a_heat_step_says_what_it_is_missing() {
     assert_eq!(bad.where_.as_deref(), Some("tEnd"));
 }
 
+/// Heat procedures reject transport properties at the point where they become required. A
+/// steady Step only needs conductivity, while a transient also needs density and specific
+/// heat. Every refusal is recoverable: the same Engine accepts a corrected material and runs.
+#[test]
+fn heat_steps_validate_transport_properties_and_theta_without_panicking() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"steady","procedure":"heat-steady","constraints":["cold"],"loads":[]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"transient","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"0.1 s","tEnd":"0.1 s","theta":0.5}"#,
+    );
+
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","cp":"460 J/(kg K)"}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"steady"}"#);
+    assert_eq!(bad.code, ErrorCode::ModelIllPosed);
+    assert!(bad.cause.contains("conductivity k"), "{bad:?}");
+
+    let bad_materials = [
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","cp":"460 J/(kg K)"}"#,
+            "conductivity k",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"0 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "conductivity k",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"-1 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "conductivity k",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "density rho",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"0 kg/m^3","k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "density rho",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"-1 kg/m^3","k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "density rho",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"45 W/(m K)"}"#,
+            "specific heat cp",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"45 W/(m K)","cp":"0 J/(kg K)"}"#,
+            "specific heat cp",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"45 W/(m K)","cp":"-1 J/(kg K)"}"#,
+            "specific heat cp",
+        ),
+    ];
+    for (material, property) in bad_materials {
+        ok(&mut e, material);
+        let bad = err(&mut e, r#"{"cmd":"solve.run","step":"transient"}"#);
+        assert_eq!(bad.code, ErrorCode::ModelIllPosed, "{bad:?}");
+        assert_eq!(bad.where_.as_deref(), Some("body 'bar'"));
+        assert!(bad.cause.contains(property), "{bad:?}");
+        assert!(bad.suggestion.as_deref().is_some_and(|s| s.starts_with("material.add with")));
+    }
+
+    // Capacity is irrelevant to steady conduction, so omitted rho and cp remain valid there.
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"k":"45 W/(m K)"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"steady"}"#);
+
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+            "k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+    );
+    for theta in [-0.1, 1.1] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"bad-theta","procedure":"heat-transient","constraints":["cold"],
+                    "loads":[],"dt":"0.1 s","tEnd":"0.1 s","theta":{theta}}}"#
+            ),
+        );
+        let bad = err(&mut e, r#"{"cmd":"solve.run","step":"bad-theta"}"#);
+        assert_eq!(bad.code, ErrorCode::Schema);
+        assert_eq!(bad.where_.as_deref(), Some("theta"));
+    }
+    // The lower endpoint is a valid forward-Euler Step; theta = 0.5 and 1 are covered by the
+    // transient history and NAFEMS benchmark tests.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"forward","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"0.1 s","tEnd":"0.1 s","theta":0}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"forward"}"#);
+}
+
+/// Even after physical validation, a bad extension or boundary may produce an indefinite
+/// matrix. The direct factorisation error crosses the procedure boundary and the Engine stays
+/// alive to solve the corrected model.
+#[test]
+fn transient_heat_propagates_factorisation_failure_and_recovers() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"bar.xmax","h":"-1e12 W/(m^2 K)","tInf":"0 K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"cool","procedure":"heat-transient","constraints":["cold"],"loads":["film"],
+            "dt":"1 s","tEnd":"1 s","theta":1}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"cool"}"#);
+    assert_eq!(bad.code, ErrorCode::SolveNotPositiveDefinite, "{bad:?}");
+
+    ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"cool"}"#);
+    assert_eq!(result_of(&mut e, Some("cool")).history.len(), 2);
+}
+
 /// A transient Step keeps a history the Result summary reports, and its amplitude may be a sine
 /// or a table; a malformed table is refused when the Command is dispatched, not when it is run.
 #[test]
