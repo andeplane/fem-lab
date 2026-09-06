@@ -91,3 +91,7 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
   green and self-contained (code, its tests, its Benchmark, its doc string), and open a PR as a
   sequence of such commits. A day of uncommitted work is a bug.
 - Stage files by name. Run the tests before claiming done; report failures with their output.
+- **Take an issue by labelling it.** Work is tracked as GitHub issues. The moment you start on
+  one (planning counts), add the `in progress` label; name the branch and the PR after the
+  issue number; remove the label when the PR merges or the work stops. Many agents work here
+  at once, and the label is how anyone sees what is already taken.
