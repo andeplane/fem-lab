@@ -36,6 +36,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
   'script.setSource': { code: 'fem.model.new({ name: "a" })', append: true },
+  'chat.setDraft': { text: 'editable prompt' },
   'chat.send': { text: 'hello @body:beam' },
   'chat.insertMention': { ref: 'body:beam' },
   'chat.clear': {},
@@ -86,6 +87,14 @@ describe('Registry', () => {
     expect(registry.describe('geometry.addBox').tool).toBe(true);
     expect(registry.describe('geometry.addBox').description.length).toBeGreaterThan(80);
     expect(registry.describe('view.fit').schema).not.toHaveProperty('$schema');
+  });
+
+  it('prepares an editable draft without sending a chat turn', async () => {
+    const { registry, host } = make();
+    await registry.dispatch({ cmd: 'chat.setDraft', text: 'editable prompt' });
+    expect(host.chat.setDraft).toHaveBeenCalledWith('editable prompt');
+    expect(host.chat.send).not.toHaveBeenCalled();
+    expect(registry.describe('chat.setDraft').tool).toBe(false);
   });
 
   it('describe throws a structured not-found error with known names', () => {

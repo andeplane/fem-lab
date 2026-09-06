@@ -359,6 +359,9 @@
   padding: 9px 12px;
   position: relative;
 }
+.assistant .suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.assistant .suggestions button { padding: 3px 8px; border: 1px solid #2b3038; border-radius: 3px; font-size: 11px; color: #8b929d; }
+.assistant .suggestions button:hover { color: #e7e9ec; border-color: #4c525b; }
 .assistant .popover {
   position: absolute;
   left: 12px;

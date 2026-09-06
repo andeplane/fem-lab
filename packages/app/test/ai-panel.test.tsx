@@ -14,8 +14,11 @@ import { Store } from '../src/store';
 async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
   transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : {})) as never;
-  const registry = new Registry({ schema: schema as unknown as EngineSchema, host: fakeHost(transport), hostCommands: HOST_COMMANDS });
+  const host = fakeHost(transport);
+  const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: HOST_COMMANDS });
   const store = new Store();
+  host.chat.setDraft = (text) => chatBridge.setDraft(text);
+  host.panels.toggle = (panel, open) => store.togglePanel(panel, open);
   store.set({ ready: true, ...patch });
   const root = document.createElement('div');
   document.body.append(root);
@@ -45,6 +48,7 @@ describe('the assistant drawer', () => {
     for (const root of [...document.body.children]) render(null, root as HTMLElement);
     document.body.innerHTML = '';
     chatBridge.pending = null;
+    chatBridge.pendingDraft = null;
     localStorage.clear();
   });
 
@@ -204,6 +208,8 @@ describe('the assistant drawer', () => {
       expect([...root.querySelectorAll('.prose')].map((p) => p.textContent)).toEqual(['First sentence.', 'Solved.\n\nDone.']);
       expect(root.querySelectorAll('.verify')).toHaveLength(1);
       expect(root.querySelector('.verify')!.textContent).toContain('Reaction balance');
+      expect(root.querySelector('.suggestions')!.textContent).toContain('Check this Model');
+      expect(root.querySelector('.suggestions')!.textContent).not.toContain('Build a cantilever');
     } finally { provider.mockRestore(); }
   });
 
@@ -234,6 +240,60 @@ describe('the assistant drawer', () => {
     root.querySelector<HTMLButtonElement>('.bar [data-cmd="chat.insertMention"]')!.click();
     await tick();
     expect([...root.querySelectorAll('.token span:first-child')].map((t) => t.textContent)).toEqual(['@body:beam', '@face:beam.top']);
+  });
+
+  it('prepares editable suggestions and selects a skill without sending the draft', async () => {
+    const { root, registry, store } = await mount();
+    const dispatch = vi.spyOn(registry, 'dispatch');
+    root.querySelector<HTMLButtonElement>('.suggestions button')!.click();
+    await tick();
+    const box = root.querySelector('textarea')!;
+    expect(box.value).toContain('Help me build a cantilever');
+    expect(document.activeElement).toBe(box);
+    expect(root.querySelector('.user')).toBeNull();
+    await type(root, 'Check my beam');
+    root.querySelector<HTMLButtonElement>('[title="Choose a skill for this draft"]')!.click();
+    await tick();
+    expect(store.state.panels['assistant.skills']).toBe(true);
+    const skill = [...root.querySelectorAll<HTMLButtonElement>('.popover button')].find((b) => b.textContent?.includes('beam-theory-check'))!;
+    skill.click();
+    await tick();
+    expect(box.value).toBe('/beam-theory-check Check my beam');
+    expect(document.activeElement).toBe(box);
+    expect(root.querySelector('.popover')).toBeNull();
+    expect(dispatch.mock.calls.some(([c]) => c.cmd === 'chat.send' || c.cmd === 'skill.invoke')).toBe(false);
+    expect(dispatch).toHaveBeenCalledWith({ cmd: 'chat.setDraft', text: '/beam-theory-check Check my beam' });
+  });
+
+  it('loads a selected skill on Send while retaining existing reference chips', async () => {
+    localStorage.setItem('femlab.ai.key', 'test-key');
+    let received = '';
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(request) {
+        received = JSON.stringify(request.messages);
+        yield { type: 'text_delta', text: 'Checked' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry } = await mount();
+      chatBridge.insertMention('body:beam');
+      await type(root, 'Check my beam\nExplain assumptions');
+      root.querySelector<HTMLButtonElement>('[title="Choose a skill for this draft"]')!.click();
+      await tick();
+      [...root.querySelectorAll<HTMLButtonElement>('.popover button')].find((b) => b.textContent?.includes('beam-theory-check'))!.click();
+      await tick();
+      expect(root.querySelector('.token')!.textContent).toContain('@body:beam');
+      const dispatch = vi.spyOn(registry, 'dispatch');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await tick();
+      await tick();
+      expect(dispatch).toHaveBeenCalledWith({ cmd: 'skill.invoke', name: 'beam-theory-check', args: 'Check my beam\nExplain assumptions @body:beam' });
+      expect(received).toContain('Skill beam-theory-check');
+      expect(received).toContain('# Steps');
+      expect(received).toContain('@body:beam');
+    } finally { provider.mockRestore(); }
   });
 
   it('shows the skill menu when the line starts with a slash', async () => {
