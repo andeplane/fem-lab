@@ -62,6 +62,38 @@ describe('WorkerTransport', () => {
   it('rebuilds typed arrays from a bulk reply', async () => {
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     const indices = new Uint32Array([0, 1, 2]);
+    const triSetOffsets = new Uint32Array([0, 3]);
+    const triSets = new Uint32Array([0, 1, 2]);
+    const { transport } = make((req, reply) =>
+      reply(
+        {
+          id: req.id,
+          ok: true,
+          value: { faceNames: ['b.top'], setNames: ['b.top', 'bearing', 'bearing_alias'], bodyNames: ['b'], source: 'mesh' },
+          buffers: [
+            { name: 'positions', dtype: 'f32', length: 9 },
+            { name: 'indices', dtype: 'u32', length: 3 },
+            { name: 'triFace', dtype: 'u32', length: 1 },
+            { name: 'triBody', dtype: 'u32', length: 1 },
+            { name: 'triSetOffsets', dtype: 'u32', length: 2 },
+            { name: 'triSets', dtype: 'u32', length: 3 },
+          ],
+        },
+        [positions.buffer as ArrayBuffer, indices.buffer as ArrayBuffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer, triSetOffsets.buffer as ArrayBuffer, triSets.buffer as ArrayBuffer],
+      ),
+    );
+    const s = await transport.surface();
+    expect(Array.from(s.positions)).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    expect(s.faceNames[s.triFace[0]!]).toBe('b.top');
+    expect(s.setNames).toEqual(['b.top', 'bearing', 'bearing_alias']);
+    expect(Array.from(s.triSetOffsets ?? [])).toEqual([0, 3]);
+    expect(Array.from(s.triSets ?? [])).toEqual([0, 1, 2]);
+    expect(s.source).toBe('mesh');
+  });
+
+  it('rebuilds Sheet edge arrays from a bulk reply', async () => {
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const indices = new Uint32Array([0, 1, 2]);
     const { transport } = make((req, reply) =>
       reply(
         {
@@ -88,6 +120,27 @@ describe('WorkerTransport', () => {
     expect(s.edges).toEqual(new Uint32Array([0, 1]));
     expect(s.faceNames[s.edgeFace![0]!]).toBe('b.top');
     expect(s.bodyNames[s.edgeBody![0]!]).toBe('b');
+  });
+
+  it('transfers frame staging at f64 precision and returns the generated JSON shape', async () => {
+    const exact = 1 + 2 ** -40; // f32 would round this to 1.
+    const metadata = { sample: { step: 'warm', modelHash: 'h', frame: { index: 1, timeSi: 0.1, time: { value: 100, unit: 'ms' } } }, field: 'temperature', components: 3, nodeCount: 1, unit: 'K' };
+    const detached: ArrayBuffer[] = [];
+    const { transport, workers } = make((req, reply) => {
+      const values = new Float64Array([exact, 0, 0]);
+      const buffer = values.buffer;
+      detached.push(buffer);
+      const raw = structuredClone([buffer], { transfer: [buffer] });
+      reply({ id: req.id, ok: true, value: metadata, buffers: [{ name: 'values', dtype: 'f64', length: 3 }] }, raw);
+    });
+    const query = { query: 'query.frame', index: 1 } as const;
+    const first = await transport.query(query) as { values: number[] };
+    expect(first).toEqual({ ...metadata, values: [exact, 0, 0] });
+    expect(Array.isArray(first.values)).toBe(true);
+    first.values[0] = -100;
+    expect(await transport.query(query)).toEqual({ ...metadata, values: [exact, 0, 0] });
+    expect(detached.map(buffer => buffer.byteLength)).toEqual([0, 0]);
+    expect(workers[0]!.sent.map(req => req.payload)).toEqual([query, query]);
   });
 
   it('rejects with the engine\'s structured error, not a string', async () => {

@@ -44,7 +44,7 @@ pub type OnProgress<'a> = &'a mut dyn FnMut(Progress) -> bool;
 pub const UNDO_DEPTH: usize = 200;
 
 /// Host-independent preview of one Body before finite-element mesh settings exist.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GeometrySurface {
     pub body: String,
     pub triangles: femlab_geometry::TriMesh,
@@ -66,9 +66,9 @@ pub struct Engine {
     pub(crate) solids: BTreeMap<String, Solid>,
     /// The derived Mesh with its resolved Sets; cleared by every Command, rebuilt on demand.
     pub(crate) mesh: Option<crate::mesh::BuiltMesh>,
-    /// One Result per Step with the Model hash it was solved at. An edit does not throw a
-    /// Result away — it makes it stale, and `query.result` says so (plan B §2.1).
-    pub(crate) results: BTreeMap<String, (String, crate::procedure::StepResult)>,
+    /// One Result per Step with the Model hash and Journal line it was solved at. An edit does
+    /// not throw a Result away — it makes it stale, and `query.result` says so (plan B §2.1).
+    pub(crate) results: BTreeMap<String, (String, u32, crate::procedure::StepResult)>,
     /// The last `study.converge` report per Step, so `query.report` can append the table. Not
     /// part of the Model and never hashed: a study is a measurement, not a definition.
     pub(crate) studies: BTreeMap<String, crate::query::StudyReport>,

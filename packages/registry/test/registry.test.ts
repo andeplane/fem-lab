@@ -27,13 +27,16 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'view.setClip': { plane: { normal: [0, 0, 1], offset: 0 } },
   'view.toggle': { layer: 'mesh' },
   'view.setVisible': { bodies: ['beam'], on: false },
+  'view.highlight': { faces: ['beam.top'] },
   'view.setTheme': { theme: 'dark' },
-  'view.animate': { step: 'static', playing: true },
-  'selection.set': { bodies: ['beam'], mode: 'add' },
+  'view.animate': { step: 'modes', mode: 1, playing: true },
+  'view.playTransient': { step: 'heat', playing: false, sample: { kind: 'frame', index: 0 } },
+  'selection.set': { refs: ['material:steel'], mode: 'add' },
   'selection.clear': {},
   'selection.setPickTarget': { target: 'face' },
   'panel.toggle': { panel: 'palette', open: true },
   'panel.resize': { panel: 'tree', size: 300 },
+  'report.print': {},
   'query.validateScript': { code: '1 + 1' },
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
@@ -46,6 +49,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'file.open': { json: JSON.stringify(MODEL_FILE) },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
+  'file.cancelAnimationCapture': {},
   'file.shareLink': {},
   'file.autosave': { on: true },
   'file.restore': {},
@@ -142,6 +146,13 @@ describe('Registry', () => {
     expect(bad.where).toBe('position');
     const root = (await registry.query({ query: 'query.screenshot', width: 'wide' }).catch((e: unknown) => e)) as FemError;
     expect(root.code).toBe('schema');
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 0, height: 720 } })).rejects.toMatchObject({ code: 'schema', where: 'spec', suggestion: expect.stringContaining("describe('file.export')") });
+    for (const input of [
+      { cmd: 'view.animate', step: '', mode: 1, playing: true },
+      { cmd: 'view.animate', step: 'modes', mode: 0, playing: true },
+      { cmd: 'view.animate', step: 'modes', mode: 1, playing: true, speed: 0 },
+      { cmd: 'view.animate', step: 'modes', mode: 1, playing: false, frame: 101 },
+    ]) await expect(registry.dispatch(input)).rejects.toMatchObject({ code: 'schema' });
     // a union that matches no member reports at the root: `where` is null
     const union = (await registry.dispatch({ cmd: 'view.showField', nothing: true }).catch((e: unknown) => e)) as FemError;
     expect(union.toJSON()).toMatchObject({ code: 'schema', where: null });
@@ -193,10 +204,20 @@ describe('Registry', () => {
     expect(host.view.showField).toHaveBeenCalledWith({ field: null });
     await registry.dispatch({ cmd: 'view.showField', field: '' });
     expect(host.view.showField).toHaveBeenCalledWith({ field: '' });
+    await registry.dispatch({ cmd: 'view.highlight', bodies: ['beam'] });
+    expect(host.view.highlight).toHaveBeenCalledWith({ bodies: ['beam'] });
     await registry.dispatch({ cmd: 'selection.set', faces: ['beam.top'] });
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
+    await registry.dispatch({ cmd: 'selection.set', refs: ['load:p'] });
+    expect(host.selection.set).toHaveBeenCalledWith({ refs: ['load:p'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
     expect(host.script.setSource).toHaveBeenCalledWith('x', undefined);
+  });
+
+  it('opens the host print path for the calculation note', async () => {
+    const { registry, host } = make();
+    await registry.dispatch({ cmd: 'report.print' });
+    expect(host.report.print).toHaveBeenCalledOnce();
   });
 
   it('skill.invoke returns the body or a not-found error listing the skills', async () => {
@@ -347,6 +368,12 @@ describe('Registry', () => {
     expect(host.view.screenshot).toHaveBeenLastCalledWith({ width: 1200, height: 675, legend: false, title: 'Beam' });
     await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'png', width: 0 } })).rejects.toThrow();
     await expect(registry.query({ query: 'query.screenshot', height: -2 })).rejects.toThrow();
+
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 1280, height: 720 } });
+    expect(host.view.captureAnimation).toHaveBeenCalledWith({ width: 1280, height: 720, fps: 30, duration: 4 });
+    expect(wrote()).toEqual(['beam.webm', 'video/webm', new Uint8Array([26, 69, 223, 163])]);
+    (host.view.captureAnimation as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ webm: null });
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 640, height: 360, fps: 24, duration: 2 } })).resolves.toEqual({ cancelled: true });
 
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv' } });
     expect(wrote()[0]).toBe('beam-extremes.csv');

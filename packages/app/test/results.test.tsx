@@ -212,7 +212,7 @@ describe('the probe readout', () => {
 });
 
 describe('the Export dialog', () => {
-  const has = { hasMesh: true, hasResult: true };
+  const has = { hasMesh: true, hasResult: true, hasAnimation: true };
   it('says why a row cannot run yet', () => {
     expect(unavailable({ needs: 'none' } as never, has)).toBeNull();
     expect(unavailable({ needs: 'soon' } as never, has)).toBe('not written yet');
@@ -220,6 +220,8 @@ describe('the Export dialog', () => {
     expect(unavailable({ needs: 'mesh' } as never, has)).toBeNull();
     expect(unavailable({ needs: 'result' } as never, { ...has, hasResult: false })).toContain('solved Step');
     expect(unavailable({ needs: 'result' } as never, has)).toBeNull();
+    expect(unavailable({ needs: 'animation' } as never, { ...has, hasAnimation: false })).toContain('mode shape');
+    expect(unavailable({ needs: 'animation' } as never, has)).toBeNull();
   });
 
   it('builds the spec each row exports', () => {
@@ -227,6 +229,7 @@ describe('the Export dialog', () => {
     expect(specOf({ format: 'csv' } as never, undefined)).toEqual({ format: 'csv', table: 'extremes' });
     expect(specOf({ format: 'vtu' } as never, 'static')).toEqual({ format: 'vtu', step: 'static' });
     expect(specOf({ format: 'vtu' } as never, undefined)).toEqual({ format: 'vtu' });
+    expect(specOf({ format: 'webm' } as never, 'modes')).toEqual({ format: 'webm', width: 1280, height: 720 });
     expect(specOf({ format: 'stl' } as never, 'static')).toEqual({ format: 'stl' });
     expect(specOf({ format: 'png' } as never, 'static', { width: 1280, height: 720 })).toEqual({ format: 'png', width: 1280, height: 720 });
   });
@@ -234,7 +237,7 @@ describe('the Export dialog', () => {
 
 /** A viewer stub: the four calls `ResultsView` makes, recorded. */
 function fakeViewer() {
-  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), autoScale: vi.fn(() => 120), animate: vi.fn() };
+  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), animate: vi.fn(), autoScale: vi.fn(() => 120) };
 }
 
 function harness(result: ResultSummary | null = RESULT) {
@@ -516,6 +519,14 @@ describe('ResultsView', () => {
     await results.showField({ field: 'vonMises' });
     expect(viewer.current.setDeformed.mock.calls.at(-1)![1]).toBe(first);
     expect(first).not.toBe(1);
+  });
+
+  it('preserves an explicitly requested exaggeration when a solve completes', async () => {
+    const { store, viewer, results } = harness();
+    results.setDeformScale(200);
+    await results.onAck({ output: { type: 'solve' } });
+    expect(store.state.deformScale).toBe(200);
+    expect(viewer.current.setDeformed.mock.calls.at(-1)![1]).toBe(200);
   });
 
   it('recomputes an `auto` that had no Viewer to compute it with when one arrives', async () => {
