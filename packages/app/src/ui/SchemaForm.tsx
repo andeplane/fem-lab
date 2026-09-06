@@ -6,7 +6,8 @@ import type { JsonSchema } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import type { LastError, Store, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
-import { applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, parseQuantity, setAt, siUnit, step } from './schema';
+import { SketchEditor } from './SketchEditor';
+import { applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
 
 export type Query = (q: { query: string } & Record<string, unknown>) => Promise<unknown>;
 
@@ -70,7 +71,7 @@ function Row({ field, children, error }: { field: Field; children: preact.Compon
 }
 
 /** The design's quantity field: value with unit, − / + steppers, and the SI echo underneath. */
-function Quantity({ value, dimension, onChange, query, keyField, placeholder }: { value: unknown; dimension: string; onChange(v: unknown): void; query: Query; keyField: boolean; placeholder?: string }) {
+function Quantity({ value, dimension, onChange, query, keyField, placeholder, hint }: { value: unknown; dimension: string; onChange(v: unknown): void; query: Query; keyField: boolean; placeholder?: string; hint?: string }) {
   const [echo, setEcho] = useState<{ text: string; bad: boolean }>({ text: '', bad: false });
   const text = typeof value === 'string' || value === undefined || value === null ? String(value ?? '') : JSON.stringify(value);
   useEffect(() => {
@@ -89,7 +90,7 @@ function Quantity({ value, dimension, onChange, query, keyField, placeholder }: 
   return (
     <>
       <div class={keyField ? 'qty key' : 'qty'}>
-        <input class="mono" value={text} data-cmd="form.open" placeholder={placeholder} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
+        <input class="mono" value={text} data-cmd="form.open" data-hint={hint} placeholder={hint ?? placeholder} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
         <button type="button" data-cmd="form.open" title="−10 %" onClick={() => onChange(step(text, -1))}>
           −
         </button>
@@ -173,10 +174,13 @@ function FieldView(props: FieldProps) {
   if (field.kind === 'quantity') {
     const parts = field.parts;
     const list = Array.isArray(value) ? (value as unknown[]) : [];
+    // The issue's "the placeholder should show the units": the Model's own length unit, or the
+    // dimension's SI one, so an empty box says what a number in it has to carry.
+    const placeholder = `0 ${field.dimension === 'length' ? (s.model?.units.length ?? 'm') : siUnit(field.dimension)}`.trim();
     return (
       <Row field={field} error={error}>
         {parts === 1 ? (
-          <Quantity value={value} dimension={field.dimension} onChange={onChange} query={query} keyField={field.required} placeholder={hintFor(s, field.path)} />
+          <Quantity value={value} dimension={field.dimension} onChange={onChange} query={query} keyField={field.required} placeholder={placeholder} hint={hintFor(s, field.path)} />
         ) : (
           Array.from({ length: parts }, (_, i) => (
             <Quantity
@@ -185,11 +189,19 @@ function FieldView(props: FieldProps) {
               dimension={field.dimension}
               query={query}
               keyField={field.required}
-              placeholder={hintFor(s, [...field.path, String(i)])}
+              placeholder={placeholder}
+              hint={hintFor(s, [...field.path, String(i)])}
               onChange={(v) => onChange(Array.from({ length: parts }, (_, j) => (j === i ? v : (list[j] ?? ''))))}
             />
           ))
         )}
+      </Row>
+    );
+  }
+  if (field.kind === 'sketch') {
+    return (
+      <Row field={field} error={error}>
+        <SketchEditor value={value} unit={s.model?.units.length ?? 'm'} onChange={onChange} dispatch={dispatch} />
       </Row>
     );
   }
@@ -267,7 +279,7 @@ function FieldView(props: FieldProps) {
       : null;
     return (
       <Row field={field} error={error}>
-        <input class="mono input" type="number" data-cmd="form.open" placeholder={hintFor(s, field.path)} value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value === '' ? undefined : Number((e.target as HTMLInputElement).value))} />
+        <input class="mono input" type="number" data-cmd="form.open" data-hint={hintFor(s, field.path)} placeholder={hintFor(s, field.path)} value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value === '' ? undefined : Number((e.target as HTMLInputElement).value))} />
         {bendingWarning ? (
           <div class="surface warn" role="status">
             <span aria-hidden="true">△</span>
@@ -305,7 +317,7 @@ function FieldView(props: FieldProps) {
   void variants;
   return (
     <Row field={field} error={error}>
-      <input class="mono input" data-cmd="form.open" placeholder={hintFor(s, field.path)} value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
+      <input class="mono input" data-cmd="form.open" data-hint={hintFor(s, field.path)} placeholder={hintFor(s, field.path)} value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
     </Row>
   );
 }
@@ -330,7 +342,11 @@ export function SchemaForm(props: FormProps) {
   const cmd = { cmd: form.cmd, ...values };
   const name = String(values['name'] ?? '—');
   const label = applyLabel(form.cmd);
+  const missing = missingRequired(fields, values);
   const apply = (): void => {
+    // The panel is a real `<form>`, so ↵ in any field lands here whatever the button says: the
+    // rule lives in `apply`, and `disabled` below is only its visible half (issue #43).
+    if (missing.length > 0) return store.set({ formError: { code: 'incomplete', cause: `fill in ${missing.join(', ')}`, where: null, suggestion: null } });
     store.set({ formError: null });
     void dispatch(cmd as { cmd: string }).catch(() => store.set({ formError: store.state.lastError }));
   };
@@ -370,7 +386,8 @@ export function SchemaForm(props: FormProps) {
               cmd={form.cmd}
               class="apply"
               args={values}
-              title={form.cmd}
+              disabled={missing.length > 0}
+              title={missing.length > 0 ? `fill in ${missing.join(', ')}` : form.cmd}
               onRun={apply}
             >
               {label}

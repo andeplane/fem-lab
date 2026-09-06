@@ -1893,3 +1893,134 @@ button.solve.stale {
     justify-content: flex-end;
   }
 }
+
+/* Plan F · #42: what was solved, spanning both Result columns. */
+.result-header {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 10px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border-divider);
+  font-size: 11.5px;
+}
+.result-header .mono {
+  color: var(--text-high);
+}
+.result-header.stale {
+  border-bottom-color: var(--warn-border);
+}
+.result-header.stale .faint {
+  color: var(--warn-text);
+}
+
+/* Plan F · #43: the tree's add chip (now shown whether or not the group has items) and the shape
+   menu it opens, then the sketch editor in the Properties panel. */
+.add-row {
+  position: relative;
+  padding: 2px 12px 8px 26px;
+}
+.add-menu {
+  right: auto;
+  left: 26px;
+  min-width: 168px;
+  max-height: 300px;
+  overflow: auto;
+}
+.add-menu .menu-item {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.chip-add[aria-pressed='true'] {
+  background: var(--cyan-bg);
+  border-style: solid;
+}
+
+.sketch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sketch-loops,
+.sketch-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.sketch-view {
+  width: 100%;
+  height: 120px;
+  background: var(--bg-well);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+}
+.sketch-view path {
+  fill: #58b7d622;
+  stroke: var(--cyan);
+  vector-effect: non-scaling-stroke;
+  stroke-width: 1.4;
+}
+.sketch-view circle {
+  fill: var(--accent-bright);
+}
+.sketch-note {
+  font-size: 10.5px;
+  color: var(--warn-text);
+}
+.sketch-seg {
+  border: 1px solid var(--border-divider);
+  border-radius: var(--radius);
+  padding: 5px 6px;
+}
+.sketch-seg-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.sketch-seg-head .grow {
+  flex: 1;
+}
+.sketch-seg-head .tag {
+  flex: 1;
+  min-width: 60px;
+  height: 22px;
+  padding: 0 5px;
+  font-size: 11px;
+}
+.sketch-seg-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 5px;
+  margin-top: 5px;
+}
+.sketch-seg-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 88px;
+  font-size: 10.5px;
+}
+.sketch-seg-body input {
+  height: 24px;
+  padding: 0 5px;
+  font-size: 11px;
+}
+.sketch .seg {
+  font-size: 11px;
+  color: var(--text-low);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  padding: 1px 6px;
+}
+.sketch .seg[aria-pressed='true'] {
+  color: var(--cyan-text);
+  border-color: var(--cyan-border);
+  background: var(--cyan-bg);
+}
+.sketch .seg.danger:hover {
+  color: var(--red-text);
+  border-color: var(--red-border);
+}
