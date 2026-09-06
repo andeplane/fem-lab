@@ -1,14 +1,15 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { storeKey } from './ai/key-storage';
 import type { HostCaps } from './capabilities';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
 import { type Autosave, type ShareCommand, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
-import { EMPTY_SELECTION, type Store, type ViewMode, visibilityReducer } from './store';
+import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 
@@ -255,6 +256,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
           input.onchange = () => {
             const file = input.files?.[0];
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            if (file.size > MAX_MODEL_FILE_BYTES) return reject(new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'picker', 'open a smaller file written by file.save'));
             file.text().then(resolve, reject);
           };
           input.click();
@@ -339,13 +341,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
     examples: { fetch: fetchExample },
     ai: {
       setKey: (key, provider: AiProvider) => {
-        const slot = provider === 'openai' ? 'femlab.ai.key.openai' : 'femlab.ai.key';
-        try {
-          if (key === null) localStorage.removeItem(slot);
-          else localStorage.setItem(slot, key);
-        } catch {
-          // Keep the app usable when a browser refuses localStorage.
-        }
+        storeKey(provider, key);
       },
       setModel: (model) => {
         localStorage.setItem('femlab.ai.model', model);
@@ -357,7 +353,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
 }
 
 /**
- * Three Commands the design's shell needs that `@femlab/registry` does not declare: the display
+ * Four Commands the design's shell needs that `@femlab/registry` does not declare: the display
  * mode segmented control, opening a bundled example that is a Journal rather than a saved
  * `femlab/1` file, and putting a Command into the Properties form without running it (every
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
@@ -423,6 +419,16 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       run: (input) => {
         const { command, args, keepInitial } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean };
         store.openForm(command, args ?? {}, keepInitial === true);
+      },
+    },
+    {
+      name: 'example.filter',
+      description: 'Filter the Examples gallery by one metadata tag and one difficulty level. Pass `null` for either field to show every value in that dimension; this changes only the gallery view.',
+      schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable() }),
+      tool: true,
+      run: (input) => {
+        const { tag, difficulty } = input as { tag: string | null; difficulty: ExampleDifficulty | null };
+        store.set({ exampleFilter: { tag, difficulty } });
       },
     },
     {

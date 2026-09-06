@@ -43,6 +43,15 @@ pub type OnProgress<'a> = &'a mut dyn FnMut(Progress) -> bool;
 /// Undo depth: a bounded number of Model snapshots.
 pub const UNDO_DEPTH: usize = 200;
 
+/// Host-independent preview of one Body before finite-element mesh settings exist.
+#[derive(Debug, Clone)]
+pub struct GeometrySurface {
+    pub body: String,
+    pub triangles: femlab_geometry::TriMesh,
+    /// Sheet boundary loops, including holes, in world coordinates with named edge tags.
+    pub outlines: Vec<femlab_geometry::sketch::Loop>,
+}
+
 /// The engine.
 pub struct Engine {
     pub(crate) model: Model,
@@ -426,13 +435,17 @@ impl Engine {
         Ok(self.mesh()?.mesh.surface())
     }
 
-    /// The Bodies' triangle meshes, for the viewer before there is a Mesh.
-    pub fn geometry_surface(&mut self) -> Result<Vec<(String, femlab_geometry::TriMesh)>, Error> {
+    /// The Bodies' triangles and Sheet outlines, for a host before there is a Mesh.
+    pub fn geometry_surface(&mut self) -> Result<Vec<GeometrySurface>, Error> {
         let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
         let mut out = Vec::with_capacity(bodies.len());
         for b in bodies {
-            let tri = self.solid(&b)?.triangles().clone();
-            out.push((b, tri));
+            let solid = self.solid(&b)?;
+            out.push(GeometrySurface {
+                body: b,
+                triangles: solid.triangles().clone(),
+                outlines: solid.outline().to_vec(),
+            });
         }
         Ok(out)
     }
