@@ -18,14 +18,12 @@ const argText = (cmd: Record<string, unknown>): string => {
 const clock = (at: number | undefined): string => (at === undefined ? '' : new Date(at).toTimeString().slice(0, 8));
 
 /** The retained `solve.*` that produced the Result currently on screen. */
-export function solveBoundary(entries: JournalEntry[], result: Pick<ResultSummary, 'step'> | null): number {
+export function solveBoundary(entries: JournalEntry[], result: Pick<ResultSummary, 'step' | 'revision'> | null): number {
   if (!result) return -1;
-  let seq = -1;
-  for (const e of entries) {
-    const cmd = e.cmd as unknown as { cmd: string; step?: string };
-    if (cmd.cmd.startsWith('solve.') && cmd.step === result.step) seq = e.seq;
-  }
-  return seq;
+  const entry = entries.find((e) => e.seq === result.revision);
+  if (!entry) return -1;
+  const cmd = entry.cmd as unknown as { cmd: string; step?: string };
+  return cmd.cmd.startsWith('solve.') && cmd.step === result.step ? entry.seq : -1;
 }
 
 function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {

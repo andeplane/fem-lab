@@ -108,8 +108,16 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
     });
     await page.locator('.tab', { hasText: 'journal' }).click();
     await expect(boundary).toHaveCount(1);
-    expect(Number(await boundary.locator('..').locator('.jrow .no').textContent())).toBeGreaterThan(firstBoundary);
+    const secondBoundary = Number(await boundary.locator('..').locator('.jrow .no').textContent());
+    expect(secondBoundary).toBeGreaterThan(firstBoundary);
     await expect(page.locator('.jrow.stale')).toHaveCount(0);
+    // Undoing the second solve leaves its cached Result in the engine. Its producing line is
+    // gone, so the marker disappears instead of being falsely attached to the first solve.
+    await page.evaluate(() => window.fem.journal.undo({ steps: 1 }));
+    await expect(boundary).toHaveCount(0);
+    await page.evaluate(() => window.fem.journal.redo({ steps: 1 }));
+    await expect(boundary).toHaveCount(1);
+    expect(Number(await boundary.locator('..').locator('.jrow .no').textContent())).toBe(secondBoundary);
     // Twice the load on a linear model is twice the deflection.
     expect(Math.abs(doubled / uz.value - 2)).toBeLessThan(0.01);
     expect(errors).toEqual([]);

@@ -3250,6 +3250,10 @@ export interface SetInfo {
  */
 export interface ResultSummary {
   step: string;
+  /**
+   * The Journal sequence of the Command that produced this Result. It stays fixed while
+   * later edits make the Result stale and when undo removes that producing Command.
+   */
   revision: number;
   stale: boolean;
   solver: string;

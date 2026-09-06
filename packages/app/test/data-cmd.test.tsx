@@ -181,31 +181,44 @@ describe('the shell', () => {
 
   it('shows the Result boundary for a fresh solve', () => {
     const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' });
-    const { root } = mount({ journal: entries, result: result('static', false, entries.revision) });
+    const { root } = mount({ journal: entries, result: result('static', false, 1) });
     expect(boundarySeq(root)).toBe('1');
     expect(staleSeqs(root)).toEqual([]);
   });
 
   it('marks only rows after a stale Result and moves the boundary when that Step is re-solved', () => {
     const staleJournal = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'geometry.addBox', name: 'after' });
-    const stale = mount({ journal: staleJournal, result: result('static', true, staleJournal.revision) }).root;
+    const stale = mount({ journal: staleJournal, result: result('static', true, 1) }).root;
     expect(boundarySeq(stale)).toBe('1');
     expect(staleSeqs(stale)).toEqual(['2']);
 
     const resolvedJournal = journal(...staleJournal.entries.map((entry) => entry.cmd as unknown as Record<string, unknown>), { cmd: 'solve.run', step: 'static' });
-    const resolved = mount({ journal: resolvedJournal, result: result('static', false, resolvedJournal.revision) }).root;
+    const resolved = mount({ journal: resolvedJournal, result: result('static', false, 3) }).root;
     expect(boundarySeq(resolved)).toBe('3');
     expect(staleSeqs(resolved)).toEqual([]);
   });
 
   it('attributes the boundary to the current Result and does not invent one after undo', () => {
     const twoSteps = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'solve.run', step: 'modal' });
-    const currentStatic = mount({ journal: twoSteps, result: result('static', false, twoSteps.revision) }).root;
+    const currentStatic = mount({ journal: twoSteps, result: result('static', false, 1) }).root;
     expect(boundarySeq(currentStatic)).toBe('1');
 
     const undone = journal({ cmd: 'model.new', name: 'demo' });
     expect(boundarySeq(mount({ journal: undone, result: result('static', false, undone.revision) }).root)).toBeUndefined();
     expect(boundarySeq(mount({ journal: twoSteps, result: null }).root)).toBeUndefined();
+  });
+
+  it('does not attribute an undone re-solve to an older solve of the same Step', () => {
+    const solvedTwice = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'solve.run', step: 'static' },
+      { cmd: 'load.traction', name: 'p', on: 'beam.top', total: ['0 N', '0 N', '-2 kN'] },
+      { cmd: 'solve.run', step: 'static' },
+    );
+    expect(boundarySeq(mount({ journal: solvedTwice, result: result('static', false, 3) }).root)).toBe('3');
+
+    const undone = journal(...solvedTwice.entries.slice(0, -1).map((entry) => entry.cmd as unknown as Record<string, unknown>));
+    expect(boundarySeq(mount({ journal: undone, result: result('static', false, 3) }).root)).toBeUndefined();
   });
 
   it('renders the start screen with its four paths before a Model exists', () => {

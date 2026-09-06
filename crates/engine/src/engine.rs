@@ -57,9 +57,9 @@ pub struct Engine {
     pub(crate) solids: BTreeMap<String, Solid>,
     /// The derived Mesh with its resolved Sets; cleared by every Command, rebuilt on demand.
     pub(crate) mesh: Option<crate::mesh::BuiltMesh>,
-    /// One Result per Step with the Model hash it was solved at. An edit does not throw a
-    /// Result away — it makes it stale, and `query.result` says so (plan B §2.1).
-    pub(crate) results: BTreeMap<String, (String, crate::procedure::StepResult)>,
+    /// One Result per Step with the Model hash and Journal line it was solved at. An edit does
+    /// not throw a Result away — it makes it stale, and `query.result` says so (plan B §2.1).
+    pub(crate) results: BTreeMap<String, (String, u32, crate::procedure::StepResult)>,
     /// The last `study.converge` report per Step, so `query.report` can append the table. Not
     /// part of the Model and never hashed: a study is a measurement, not a definition.
     pub(crate) studies: BTreeMap<String, crate::query::StudyReport>,
@@ -773,7 +773,7 @@ impl Engine {
                 // A Step's fields are point data on the same Mesh; without a Step the file is
                 // the Mesh alone, which is what a user exports before solving.
                 let point: Vec<(&str, usize, Vec<f64>)> = match step {
-                    Some(s) => crate::solve_run::export_fields(self.stored(Some(s))?.2),
+                    Some(s) => crate::solve_run::export_fields(self.stored(Some(s))?.3),
                     None => Vec::new(),
                 };
                 let built = self.mesh()?;
