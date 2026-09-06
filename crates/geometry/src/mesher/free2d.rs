@@ -117,6 +117,7 @@ pub fn free(sketch: &Sketch, size: f64, quadratic: bool, refine: &[RefineBox]) -
                     ];
                     // 0 means "no local bound"; the global max_area still applies everywhere.
                     // When boxes overlap, the smallest area is the finest requested size.
+                    // When boxes overlap, the smallest area is the finest requested size.
                     refine.iter().filter(|b| b.contains(c)).map(|b| max_area(b.size)).fold(0.0, |best, area| {
                         if best == 0.0 {
                             area

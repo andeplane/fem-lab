@@ -1326,6 +1326,7 @@ fn overlapping_refine_boxes_choose_the_finer_bound_independent_of_order() {
     let coarse = RefineBox { min: [2.0, 2.0], max: [8.0, 8.0], size: 1.0 };
     let fine = RefineBox { min: [3.0, 3.0], max: [7.0, 7.0], size: 0.25 };
     let runs = [vec![coarse.clone(), fine.clone()], vec![fine, coarse]];
+    let mut meshes = Vec::new();
     let mut summaries = Vec::new();
     for boxes in runs {
         let m = free(&sketch, 2.0, false, &boxes).unwrap();
@@ -1346,8 +1347,10 @@ fn overlapping_refine_boxes_choose_the_finer_bound_independent_of_order() {
         }
         assert!(overlap_count > 0, "nested refinement produced no overlap triangles");
         summaries.push((m.n_elems(), overlap_sum / overlap_count as f64, outside_max));
+        meshes.push(m);
     }
-    assert_eq!(summaries[0], summaries[1], "box order changes the mesh");
+    assert_eq!(meshes[0], meshes[1], "box order changes mesh points or connectivity");
+    assert_eq!(summaries[0], summaries[1], "box order changes measured areas");
     for (elements, overlap_mean, outside_max) in summaries {
         assert!(elements > 100, "nested refinement should add elements");
         assert!(overlap_mean < 0.5 * 0.25 * 0.25, "fine overlap mean area is {overlap_mean}");
