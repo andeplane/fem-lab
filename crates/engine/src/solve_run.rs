@@ -547,7 +547,8 @@ impl Engine {
     }
 
     /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
-    /// changed coordinates or connectivity; the Model hash covers every mesh input.
+    /// changed coordinates or connectivity; the Result-validity fingerprint covers every
+    /// physics and mesh input while deliberately excluding the display name (ADR 0017).
     pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
         let (name, hash, result) = self.stored(step)?;
         if *hash != crate::hash::result_hash(&self.model) {

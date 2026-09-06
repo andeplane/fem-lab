@@ -36,6 +36,8 @@ it('commits the name exactly once on Enter or blur, cancels Escape, and rejects 
   document.body.append(root);
   render(<ModelName name="beam" dirty dispatch={dispatch} />, root);
   const input = root.querySelector('input')!;
+  expect(input.title).toBe('beam');
+  expect(input.getAttribute('aria-description')).toContain('Escape to cancel');
   const edit = async (value: string, key?: string) => {
     input.focus();
     input.value = value;
@@ -68,7 +70,7 @@ it('establishes an exact saved baseline only after a bundled example opens compl
     hashAfter: 'normalized-1',
   };
   const store = new Store({ ...new Store().state, savedJournal: 'previous baseline' });
-  const dispatch = vi.fn(async () => ({ output: { kind: 'none' } }));
+  const dispatch = vi.fn(async () => ({ output: { type: 'none' } }));
   const transport = { dispatch } as unknown as WorkerTransport;
   const refresh = vi.fn(async () => store.set({ journal: { entries: [first, second], revision: 2, hash: 'journal', canUndo: true, canRedo: false } }));
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => JSON.stringify([{ cmd: first.cmd }, { cmd: second.cmd }]) })));
@@ -79,7 +81,7 @@ it('establishes an exact saved baseline only after a bundled example opens compl
   expect(store.state.savedJournal).toBe(journalIdentity([first, second]));
 
   store.set({ savedJournal: 'still previous' });
-  dispatch.mockResolvedValueOnce({ output: { kind: 'none' } });
+  dispatch.mockResolvedValueOnce({ output: { type: 'none' } });
   dispatch.mockRejectedValueOnce(new Error('second command failed'));
   await expect(open.run({ name: 'broken' }, {} as never)).rejects.toThrow('second command failed');
   expect(store.state.savedJournal).toBe('still previous');

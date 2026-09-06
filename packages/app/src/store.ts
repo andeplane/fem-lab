@@ -10,6 +10,16 @@ import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 import type { TransientState } from './transient';
 
+/** Content identity, independent of JSON object-key order and view-only state. */
+export function journalIdentity(entries: JournalDump['entries']): string {
+  return JSON.stringify(entries, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value);
+}
+
+export function unsaved(s: UiState): boolean {
+  return s.journal !== null && s.journal.entries.length > 0 && journalIdentity(s.journal.entries) !== s.savedJournal;
+}
+
 export type ViewMode = 'geometry' | 'mesh' | 'results';
 export { TABS, type Tab } from './ui/tabs';
 export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
@@ -21,16 +31,6 @@ export const PANEL_SIZE_LIMITS: Record<ResizablePanel, { min: number; max: numbe
   bottom: { min: 184, max: 480 },
   assistant: { min: 320, max: 520 },
 };
-
-/** Content identity, independent of JSON object-key order and view-only state. */
-export function journalIdentity(entries: JournalDump['entries']): string {
-  return JSON.stringify(entries, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
-    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value);
-}
-
-export function unsaved(s: UiState): boolean {
-  return s.journal !== null && s.journal.entries.length > 0 && journalIdentity(s.journal.entries) !== s.savedJournal;
-}
 
 export function clampPanelSize(panel: ResizablePanel, size: number): number {
   const limits = PANEL_SIZE_LIMITS[panel];
@@ -358,12 +358,12 @@ export class Store {
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
   }
 
-  markSaved(journal: { entries: JournalDump['entries'] }): void {
-    this.set({ savedJournal: journalIdentity(journal.entries) });
-  }
-
   resizePanel(panel: ResizablePanel, size: number): void {
     this.set({ panelSizes: { ...this.state.panelSizes, [panel]: clampPanelSize(panel, size) } });
+  }
+
+  markSaved(journal: { entries: JournalDump['entries'] }): void {
+    this.set({ savedJournal: journalIdentity(journal.entries) });
   }
 
   fail(e: unknown): void {

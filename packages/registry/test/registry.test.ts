@@ -450,6 +450,7 @@ it('marks exactly the successful project-save receipt, leaving failures and null
   vi.mocked(host.projects.save).mockResolvedValueOnce(null);
   await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toBeNull();
   expect(host.files.markSaved).not.toHaveBeenCalled();
+});
 
 it('rejects oversized Model files from every input route before importing', async () => {
   const { registry, host, transport } = make(true);

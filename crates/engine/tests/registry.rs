@@ -63,6 +63,7 @@ fn changing_the_model_name_preserves_results_history_and_replay_identity() {
     else {
         panic!()
     };
+    let displacement = e.field(Some("static"), Field::Displacement).expect("displacement before rename").clone();
     ok(&mut e, r#"{"cmd":"model.setName","name":"renamed cantilever"}"#);
     let after = e.export_file();
     assert_eq!(after.model.name, "renamed cantilever");
@@ -75,6 +76,7 @@ fn changing_the_model_name_preserves_results_history_and_replay_identity() {
         panic!()
     };
     assert!(!renamed.stale);
+    assert_eq!(e.field(Some("static"), Field::Displacement).expect("displacement after rename"), &displacement);
     assert_eq!(renamed.extremes, solved.extremes);
     assert_eq!(renamed.reactions, solved.reactions);
     ok(&mut e, r#"{"cmd":"journal.undo"}"#);

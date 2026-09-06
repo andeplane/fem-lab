@@ -23,7 +23,8 @@ export function ModelName({ name, dirty, dispatch }: { name: string; dirty: bool
         ref={input}
         class="mono model-name"
         aria-label="Model name"
-        title="Rename Model (Enter to apply, Escape to cancel)"
+        title={name}
+        aria-description="Enter or blur to apply the Model name; Escape to cancel"
         data-cmd="model.setName"
         value={draft}
         size={Math.max(4, draft.length)}
