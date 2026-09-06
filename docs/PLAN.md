@@ -185,7 +185,7 @@ Goal: geometry that is not a box, and the classic benchmarks that need it.
 | Benchmark | Elements | Reference | Tolerance |
 |---|---|---|---|
 | NAFEMS LE1 elliptic membrane, plane stress | quad4/quad8 | σyy(D) = 92.7 MPa | 2 % (p=2), 5 % (p=1) |
-| NAFEMS LE10 thick plate under pressure | hex20 / tet10 | σyy(D) = −5.38 MPa | 2 % (p=2); the p=1 error (~−29 %) is recorded and shown as the J4.3 lesson |
+| LE10 thick plate: implemented ESRD full-face-support variant (#183) | hex20 / tet10 | σyy(D) = −5.25 MPa; original NAFEMS mid-plane-line model remains a distinct −5.38 MPa case | 2 % (p=2), unchanged; p=1 error recorded as the J4.3 lesson |
 | NAFEMS LE11 solid cylinder, thermal stress | hex20, axisymmetric | σzz(A) = −105 MPa | 3 % |
 | NAFEMS T4 steady conduction + convection | quad/tri | T(E) = 18.3 °C (converged 18.25) | 0.5 °C |
 | NAFEMS FV32 tapered membrane, modal | quad8 | 44.623, 130.03, 162.70, 246.05, 379.90, 391.44 Hz | 1 % |
