@@ -30,7 +30,7 @@ were inspected at 1600 × 1000. A screenshot of one state does not verify the ot
 | Live deformation preview, one final Command per gesture | Slider only handles change; cross-field deformation is separately owned. | [#98](https://github.com/andeplane/fem-lab/issues/98), [#42](https://github.com/andeplane/fem-lab/issues/42): intermediate geometry changes before release; one final Command, no Journal edit. |
 | Legend, glyphs, clip, probe, projection and animation | Viewer implements several operations; per-frame transient fields remain a known capability gap. | [#9](https://github.com/andeplane/fem-lab/issues/9); audit #90 must verify each viewer interaction and its registry boundary. Performance needs hardware evidence, never software-adapter timings. |
 | Journal solve provenance and post-result edits | Fresh Results have no visible solve boundary because its rendering is gated by stale state. | [#91](https://github.com/andeplane/fem-lab/issues/91): fresh, stale, re-solved and undone Journal cases. |
-| Script editor, run/stop and live Journal representation | Existing editor and worker runner; highlighting, error locations and edited replay behavior still need comparison. | Audit #90: real edited script execution and stop, visible errors with location, copied/downloaded script replay. |
+| Script editor, run/stop and live Journal representation | Existing editor and worker runner; highlighting, error locations and edited replay behavior still need comparison. | [#173](https://github.com/andeplane/fem-lab/issues/173): real edited script execution and stop, visible errors with location, copied/downloaded script replay. |
 | Results extremes, units, reactions and convergence | Real tables/charts exist; coordinate-unit defect is tracked. | [#50](https://github.com/andeplane/fem-lab/issues/50): value and coordinate units verified separately; audit balance and convergence from independent numerical evidence. |
 | Checks well-posedness, mesh quality, cost and assumptions | Source contains these sections, but Assistant verification is not shared into Checks. | [#96](https://github.com/andeplane/fem-lab/issues/96): verification survives tab changes, carries provenance and becomes stale when its Model changes. |
 | Palette searches Commands, accepts object references and natural-language parameters | Current palette performs text ranking and opens forms. | [#95](https://github.com/andeplane/fem-lab/issues/95): object routing and parameterized intent produce previewable registry operations; keyboard navigation verified. |
@@ -74,3 +74,22 @@ layout and member idealisations) must not be presented as implemented reference 
 - [#174](https://github.com/andeplane/fem-lab/issues/174): panels need resize controls with keyboard and cancellation support.
 - [#175](https://github.com/andeplane/fem-lab/issues/175): Assistant background must use the viewer-well token; PR #181 is reviewed but not yet merged.
 - [#183](https://github.com/andeplane/fem-lab/issues/183): the LE10 support definition and reference must agree before using it to validate the tetrahedral capability. Numerical completion remains unproven.
+
+## Integration checkpoints
+
+- #4 now passes native simplex face/heat tests, the Tet10 three-mesh convergence study,
+  and Tri3/Tri6 edge/replay checks. A simplex Journal has matching per-entry hashes on
+  native 1 and 4 threads and verified wasm replay. Full GPU-inclusive LLVM coverage remains
+  open; this is not yet a delivered capability.
+- #183 / PR #200 corrects the LE10 boundary-condition/reference mismatch and has passed
+  independent review. CI and merge remain pending. #4 integrates this correction locally.
+- #172 / PR #195 remains under revision: semantic object selection, transient highlight
+  cleanup and named predicate Set rendering must pass review, beyond the body-only test.
+- #109 / PR #199 remains under revision: Result staleness and Journal identity must prevent
+  false current/pass claims; every omitted example comparison needs a specific justification.
+- #95 is being implemented with previewable parameterized intent and model-object routing.
+- #101 / PR #134 was rebased to preserve the merged Assistant behavior; the resolution passed
+  review and requires fresh CI. #92 / PR #140 likewise retains both camera and Assistant tests.
+
+Remaining matrix rows, including panel resizing (#174), editable name/dirty state (#123),
+gallery presentation (#30), and the integrated workflow checks, are still open requirements.
