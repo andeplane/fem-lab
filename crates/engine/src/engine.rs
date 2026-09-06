@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use femlab_geometry::{Shape, Solid};
+use femlab_geometry::{RegionPredicate, Shape, Solid};
 
 use crate::command::{Command, ExportFormat, IdealisationSpec, ObjectKind};
 use crate::error::{Error, ErrorCode, Warning};
@@ -128,19 +128,7 @@ impl Engine {
                 Ok(Ack { seq: self.revision(), revision: self.revision(), hash, warnings: self.warnings(), output })
             }
             Ok(output) => {
-                if matches!(cmd, Command::ModelNew { .. }) {
-                    self.undo.clear();
-                    self.journal = Journal::default();
-                } else {
-                    self.undo.push(before);
-                    if self.undo.len() > UNDO_DEPTH {
-                        self.undo.remove(0);
-                    }
-                }
-                self.redo.clear();
-                let hash = self.model_hash();
-                let entry = self.journal.append(cmd, hash.clone());
-                let seq = entry.seq;
+                let (seq, hash) = self.record(cmd, before);
                 Ok(Ack { seq, revision: self.revision(), hash, warnings: self.warnings(), output })
             }
             Err(e) => {
@@ -149,6 +137,23 @@ impl Engine {
                 Err(e)
             }
         }
+    }
+
+    /// Keep one bounded undo snapshot per recorded Command, including skipped replay work.
+    fn record(&mut self, cmd: Command, before: Model) -> (u32, String) {
+        if matches!(cmd, Command::ModelNew { .. }) {
+            self.undo.clear();
+            self.journal = Journal::default();
+        } else {
+            self.undo.push(before);
+            if self.undo.len() > UNDO_DEPTH {
+                self.undo.remove(0);
+            }
+        }
+        self.redo.clear();
+        let hash = self.model_hash();
+        let seq = self.journal.append(cmd, hash.clone()).seq;
+        (seq, hash)
     }
 
     fn undo(&mut self, steps: u32, expected_journal: Option<&String>) -> Result<Output, Error> {
@@ -224,7 +229,8 @@ impl Engine {
 
     /// Replay entries onto a fresh Model; returns the recomputed hash after each entry and
     /// fails on the first entry whose hash differs from the recorded one when `verify`.
-    /// With `skip_solves`, `solve.run` and `study.converge` are appended unrun.
+    /// With `skip_solves`, numerical work is omitted while every Command still has an undo
+    /// snapshot. A non-restoring study applies its final mesh settings without computing Results.
     pub async fn replay(
         &mut self,
         entries: &[JournalEntry],
@@ -235,7 +241,7 @@ impl Engine {
         self.journal = Journal::default();
         self.undo.clear();
         self.redo.clear();
-        self.solids.clear();
+        self.invalidate_geometry();
         self.results.clear();
         self.studies.clear();
         let mut hashes = Vec::with_capacity(entries.len());
@@ -243,9 +249,21 @@ impl Engine {
         for e in entries {
             let skip = skip_solves && matches!(e.cmd, Command::SolveRun { .. } | Command::StudyConverge { .. });
             let hash = if skip {
-                let hash = self.model_hash();
-                self.journal.append(e.cmd.clone(), hash.clone());
-                hash
+                let before = self.model.clone();
+                if let Command::StudyConverge { sizes, restore: Some(false), .. } = &e.cmd {
+                    let (settings, h) =
+                        self.study_mesh(sizes).map_err(|err| err.at(format!("journal entry {}", e.seq)))?;
+                    self.model.mesh = Some(MeshSettings {
+                        mesher: crate::mesh::scale_mesher(
+                            &settings.mesher,
+                            h[0],
+                            *h.last().expect("at least two sizes"),
+                        ),
+                        ..settings
+                    });
+                }
+                self.mesh = None;
+                self.record(e.cmd.clone(), before).1
             } else {
                 self.dispatch(e.cmd.clone(), &mut nop)
                     .await
@@ -313,6 +331,29 @@ impl Engine {
                 text: "no constraints; a static solve needs supports (constraint.fix)".into(),
                 where_: None,
             });
+        } else if let Some(body) = implicit {
+            // Box regions select geometrically across the mesh; Body regions and faces name
+            // their Body explicitly. A constraint left on another Body is not a support
+            // for the mapped mesher's implicit Body. This is a reference check, not a claim
+            // that the selected DOFs eliminate every rigid mode.
+            let targeted = m.constraints.iter().any(|c| {
+                if let Some(set) = m.sets.iter().find(|s| s.name == c.on) {
+                    match &set.source {
+                        SetSource::Face { of, .. } => of == body,
+                        SetSource::Region { where_: RegionPredicate::Body { name } } => name == body,
+                        SetSource::Region { where_: RegionPredicate::Bbox { .. } } => true,
+                    }
+                } else {
+                    c.on.rsplit_once('.').is_some_and(|(prefix, _)| prefix == body)
+                }
+            });
+            if !targeted {
+                w.push(Warning {
+                    code: "model.unconstrained".into(),
+                    text: format!("no constraints target Body '{body}'; add supports on its Sets with constraint.fix"),
+                    where_: Some(format!("body '{body}'")),
+                });
+            }
         }
         if m.loads.is_empty() && has_geometry {
             w.push(Warning {
@@ -450,7 +491,7 @@ impl Engine {
             }
             Command::GeometryNameFace { name, of, where_ } => {
                 check_name(name)?;
-                self.model.body(of).ok_or_else(|| Error::not_found("body", of, &self.model.names(ObjectKind::Body)))?;
+                self.check_selector_body(of).map_err(|e| e.at("of"))?;
                 let pred = where_.to_si()?;
                 let set = NamedSet { name: name.clone(), source: SetSource::Face { of: of.clone(), where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
@@ -459,9 +500,7 @@ impl Engine {
                 check_name(name)?;
                 let pred = where_.to_si()?;
                 if let femlab_geometry::RegionPredicate::Body { name: b } = &pred {
-                    self.model
-                        .body(b)
-                        .ok_or_else(|| Error::not_found("body", b, &self.model.names(ObjectKind::Body)))?;
+                    self.check_selector_body(b).map_err(|e| e.at("where.name"))?;
                 }
                 let set = NamedSet { name: name.clone(), source: SetSource::Region { where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
@@ -736,6 +775,16 @@ impl Engine {
                 self.model
                     .step(name)
                     .ok_or_else(|| Error::not_found("step", name, &self.model.names(ObjectKind::Step)))?;
+                let users: Vec<&str> = self
+                    .model
+                    .steps
+                    .iter()
+                    .filter(|s| s.after.as_deref() == Some(name.as_str()))
+                    .map(|s| s.name.as_str())
+                    .collect();
+                if !users.is_empty() {
+                    return Err(in_use("step", name, &users, "steps"));
+                }
                 self.model.steps.retain(|s| s.name != *name);
                 Ok(Output::None)
             }
@@ -853,13 +902,10 @@ impl Engine {
                 }
             }
             for l in &m.loads {
-                if l.kind.set().is_some_and(|s| set_refers_to(s, name)) {
+                if l.kind.set().is_some_and(|s| set_refers_to(s, name))
+                    || l.kind.bodies().iter().any(|body| body == name)
+                {
                     users.push(format!("load '{}'", l.name));
-                }
-                if let LoadKind::Temperature { bodies, .. } = &l.kind {
-                    if bodies.iter().any(|b| b == name) {
-                        users.push(format!("load '{}'", l.name));
-                    }
                 }
             }
             for s in &m.sets {
@@ -935,6 +981,21 @@ impl Engine {
         let k: Vec<&str> = known.iter().map(String::as_str).collect();
         Err(Error::not_found("set", set, &k)
             .suggest("use an auto face like 'beam.xmin' (see query.model) or geometry.nameFace"))
+    }
+
+    /// Selectors may refer to explicit geometry or the Body defined by a mapped/swept mesher.
+    /// This validates identity only; the geometric predicate resolves against the actual Mesh.
+    fn check_selector_body(&self, body: &str) -> Result<(), Error> {
+        let mut known = self.model.names(ObjectKind::Body);
+        known.extend(self.model.implicit_body());
+        if known.contains(&body) {
+            Ok(())
+        } else {
+            Err(Error::not_found("body", body, &known).suggest(format!(
+                "query.model lists explicit and mesher-defined Bodies; known bodies: {}",
+                known.join(", ")
+            )))
+        }
     }
 
     /// Every named Body exists, or `not-found` listing the ones that do.
@@ -1015,6 +1076,9 @@ impl Engine {
                         b.material = Some(to.into());
                     }
                 }
+                if m.mesher_material.as_deref() == Some(name) {
+                    m.mesher_material = Some(to.into());
+                }
             }
             ObjectKind::Set => {
                 for s in &mut m.sets {
@@ -1028,12 +1092,17 @@ impl Engine {
                     }
                 }
                 for l in &mut m.loads {
-                    if let LoadKind::Pressure { on, .. } | LoadKind::Traction { on, .. } | LoadKind::Force { on, .. } =
-                        &mut l.kind
-                    {
-                        if on == name {
-                            *on = to.into();
+                    match &mut l.kind {
+                        LoadKind::Pressure { on, .. }
+                        | LoadKind::Traction { on, .. }
+                        | LoadKind::Force { on, .. }
+                        | LoadKind::Convection { on, .. }
+                        | LoadKind::HeatFlux { on, .. } => {
+                            if on == name {
+                                *on = to.into();
+                            }
                         }
+                        LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => {}
                     }
                 }
             }
@@ -1069,6 +1138,9 @@ impl Engine {
                 for s in &mut m.steps {
                     if s.name == name {
                         s.name = to.into();
+                    }
+                    if s.after.as_deref() == Some(name) {
+                        s.after = Some(to.into());
                     }
                 }
             }

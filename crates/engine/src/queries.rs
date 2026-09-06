@@ -149,6 +149,7 @@ impl Engine {
                 e: display(m, mat.e, Stress::DIM),
                 nu: mat.nu,
                 rho: mat.rho.map(|r| display(m, r, Density::DIM)),
+                yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)),
                 assigned_to: m
                     .bodies
                     .iter()
