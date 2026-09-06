@@ -356,6 +356,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
     // a Model exists this `import()` is already in the module cache.
     let v: Viewer | null = null;
     let gone = false;
+    let observer: ResizeObserver | null = null;
     const onResize = () => v?.resize();
     void import('../viewer/viewer').then(({ Viewer }) => {
       if (gone) return;
@@ -373,11 +374,16 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
       });
       addEventListener('resize', onResize);
+      if (typeof ResizeObserver !== 'undefined') {
+        observer = new ResizeObserver(onResize);
+        observer.observe(el);
+      }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);
     return () => {
       gone = true;
       removeEventListener('resize', onResize);
+      observer?.disconnect();
       if (!v) return;
       viewer.current = null;
       v.dispose();
