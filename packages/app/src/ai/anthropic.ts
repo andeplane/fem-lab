@@ -10,7 +10,7 @@ export const ANTHROPIC_DEFAULT = ANTHROPIC_MODELS[0]!;
 /** Only the two members we call, so a fake is two functions rather than a mock of the SDK. */
 export interface AnthropicLike {
   messages: {
-    stream(params: Anthropic.MessageStreamParams): AsyncIterable<Anthropic.MessageStreamEvent> & {
+    stream(params: Anthropic.MessageStreamParams, options?: { signal?: AbortSignal }): AsyncIterable<Anthropic.MessageStreamEvent> & {
       finalMessage(): Promise<Anthropic.Message>;
     };
   };
@@ -57,7 +57,7 @@ export function anthropicProvider(apiKey: string, make: (key: string) => Anthrop
           tools: req.tools as Anthropic.Tool[],
           messages: toMessageParams(req.messages),
           ...thinkingFor(req.model),
-        });
+        }, { signal: req.signal });
         const preparing = new Map<number, { id: string; name: string; arguments: string }>();
         for await (const event of stream) {
           if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
@@ -81,6 +81,7 @@ export function anthropicProvider(apiKey: string, make: (key: string) => Anthrop
         yield { type: 'usage', usage: usageOf(final.usage) };
         yield { type: 'done', stopReason: final.stop_reason ?? 'end_turn' };
       } catch (e) {
+        if (req.signal?.aborted) return;
         yield { type: 'error', message: e instanceof Error ? e.message : String(e) };
       }
     },

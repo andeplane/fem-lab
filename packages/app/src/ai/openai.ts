@@ -8,7 +8,7 @@ export const OPENAI_DEFAULT = OPENAI_MODELS[0]!;
 
 export interface OpenAILike {
   responses: {
-    create(params: OpenAI.Responses.ResponseCreateParamsStreaming): Promise<AsyncIterable<OpenAI.Responses.ResponseStreamEvent>>;
+    create(params: OpenAI.Responses.ResponseCreateParamsStreaming, options?: { signal?: AbortSignal }): Promise<AsyncIterable<OpenAI.Responses.ResponseStreamEvent>>;
   };
 }
 
@@ -59,7 +59,7 @@ export function openaiProvider(apiKey: string, make: (key: string) => OpenAILike
           input: toResponseInput(req.messages),
           // Registry schemas intentionally have optional fields; strict mode would rewrite them.
           tools: req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema, strict: false })),
-        });
+        }, { signal: req.signal });
         const preparing = new Map<number, { id: string; name: string; arguments: string }>();
         let terminal = false;
         for await (const event of stream) {
@@ -102,6 +102,7 @@ export function openaiProvider(apiKey: string, make: (key: string) => OpenAILike
         }
         if (!terminal) yield { type: 'error', message: 'OpenAI stream ended before the response completed' };
       } catch (e) {
+        if (req.signal?.aborted) return;
         yield { type: 'error', message: e instanceof Error ? e.message : String(e) };
       }
     },

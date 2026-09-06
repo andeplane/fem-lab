@@ -276,3 +276,18 @@ it('reveals Anthropic argument fragments before requesting the final message', a
   expect((await stream.next()).value).toEqual({ type: 'tool_use', id: 'a', name: 'geometry_addBox', input: { name: 'beam' } });
   expect(finalized).toBe(true);
 });
+
+it('passes cancellation to both SDKs and treats an aborted network read as interruption', async () => {
+  const controller = new AbortController();
+  const abort = () => { controller.abort(); throw new DOMException('aborted', 'AbortError'); };
+  const openai: OpenAILike = { responses: { create: async (_params, options) => {
+    expect(options?.signal).toBe(controller.signal);
+    return abort();
+  } } };
+  expect(await collect(openaiProvider('k', () => openai).chat({ ...request(), signal: controller.signal }))).toEqual([]);
+  const anthropic: AnthropicLike = { messages: { stream: (_params, options) => {
+    expect(options?.signal).toBe(controller.signal);
+    return abort();
+  } } };
+  expect(await collect(anthropicProvider('k', () => anthropic).chat({ ...request(), signal: controller.signal }))).toEqual([]);
+});

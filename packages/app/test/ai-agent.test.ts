@@ -290,3 +290,26 @@ describe('the agent loop', () => {
     expect(turn.undoSteps).toBe(0);
   });
 });
+
+it('finishes an active tool on interruption, skips later tools and retains paired results', async () => {
+  const { registry } = fixture({ journals: [{ hash: 'same', entries: [], revision: 0, canUndo: false, canRedo: false }] });
+  const controller = new AbortController();
+  const dispatch = vi.spyOn(registry, 'dispatch').mockImplementation(async () => {
+    controller.abort();
+    return undefined;
+  });
+  const { provider, seen } = fakeProvider([[
+    { type: 'tool_use', id: 'a', name: 'view_fit', input: {} },
+    { type: 'tool_use', id: 'b', name: 'view_fit', input: {} },
+    { type: 'done', stopReason: 'tool_use' },
+  ]]);
+  const messages: Message[] = [];
+  const events = await drain(runTurn({ registry, provider, model: 'test', system: '', tools: [], messages, signal: controller.signal }));
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(seen).toHaveLength(1);
+  expect(turnOf(events).calls.map(c => c.status)).toEqual(['succeeded', 'cancelled']);
+  expect(messages[1]!.content).toEqual([
+    { type: 'tool_result', toolUseId: 'a', content: 'null' },
+    { type: 'tool_result', toolUseId: 'b', isError: true, content: expect.stringContaining('Interrupted before this tool started') },
+  ]);
+});

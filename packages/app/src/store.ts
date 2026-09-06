@@ -34,6 +34,8 @@ export interface LastError {
 }
 
 export interface UiState {
+  /** Session mirror of the ai.setModel host Command, shared with the Assistant. */
+  assistantModel: string | null;
   /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
   folder: ProjectFolder | null;
   /** One available catalog; project skills override built-ins by name. */
@@ -142,6 +144,7 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
+  assistantModel: null,
   folder: null,
   skills: BUILTIN_SKILLS,
   ready: false,

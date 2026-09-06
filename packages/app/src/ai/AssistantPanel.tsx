@@ -4,13 +4,14 @@
 // holds this panel against `registry.list()` the same way it holds the shell.
 import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { Store, UiState } from '../store';
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
 import './assistant.css';
 import { buildSystem, buildTurn, downscaleImage, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
 import { defaultProvider, maskKey, MODELS, resolveKey, storedModel, storeKey } from './keys';
+import { Prose, toolDisplay } from './Prose';
 import { openaiProvider } from './openai';
 import { ProjectFolder, pickFolder, watchAgents, type DirHandle } from './project';
 import type { ImageBlock, Message, Provider, ProviderId } from './provider';
@@ -50,6 +51,8 @@ export const chatBridge = {
 const buffer = (text: string): void => {
   chatBridge.pending = text;
 };
+
+interface QueuedMessage { text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string | null }
 
 type Item =
   | { kind: 'user'; text: string; images: ImageBlock[] }
@@ -153,17 +156,19 @@ function withRefs(text: string) {
 }
 
 function ToolCard({ call }: { call: ToolCall }) {
+  const working = call.status === 'preparing' || call.status === 'pending';
+  const label = call.status === 'preparing' ? 'Preparing' : call.status === 'pending' ? 'Running' : call.status === 'succeeded' ? 'Succeeded' : call.status === 'cancelled' ? 'Interrupted' : 'Failed';
   return (
     <div class={`card${call.status === 'failed' ? ' bad' : ''}`} data-status={call.status}>
       <div class="head">
-        <span class={call.status === 'pending' ? 'tool-pending' : call.status === 'succeeded' ? 'ok' : 'fail'} role="img" aria-label={call.status === 'pending' ? 'Running' : call.status === 'succeeded' ? 'Succeeded' : 'Failed'}>
-          {call.status === 'pending' ? '' : call.status === 'succeeded' ? '✓' : '✕'}
+        <span class={working ? 'tool-pending' : call.status === 'succeeded' ? 'ok' : 'fail'} role="img" aria-label={label}>
+          {working ? '' : call.status === 'succeeded' ? '✓' : call.status === 'cancelled' ? '–' : '✕'}
         </span>
         <span class="cmd">{call.command}</span>
-        <span class="ms">{call.status === 'pending' ? '…' : `${call.ms} ms`}</span>
+        <span class="ms">{working || call.status === 'cancelled' ? label : `${call.ms} ms`}</span>
       </div>
-      <div class="args">{JSON.stringify(call.input)}</div>
-      {call.result ? <div class="out">{call.result.slice(0, 400)}</div> : null}
+      <div class="args" tabIndex={0} aria-label="Tool arguments">{toolDisplay(call.arguments ?? JSON.stringify(call.input))}</div>
+      {call.result ? <div class="out" tabIndex={0} aria-label="Tool result">{toolDisplay(call.result)}</div> : null}
     </div>
   );
 }
@@ -173,6 +178,11 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState('');
   const [streaming, setStreaming] = useState('');
+  const transcript = useRef<HTMLDivElement>(null);
+  const followBottom = useRef(true);
+  useLayoutEffect(() => {
+    if (followBottom.current && transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight;
+  }, [items, streaming, busy]);
   const [draft, setDraft] = useState('');
   const [caret, setCaret] = useState(0);
   /** The keyboard cursor in whichever popover is open, and the `@` the person dismissed with Esc. */
@@ -187,6 +197,17 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const [keyDraft, setKeyDraft] = useState('');
   const [turn, setTurn] = useState<TurnResult | null>(null);
   const messages = useRef<Message[]>([]);
+  const queue = useRef<QueuedMessage[]>([]);
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
+  const activeRequest = useRef<AbortController | null>(null);
+  const execute = useRef<(job: QueuedMessage, signal: AbortSignal) => Promise<void>>(async () => undefined);
+
+  useEffect(() => {
+    if (!ui.assistantModel) return;
+    const owner = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(ui.assistantModel!));
+    if (owner) { setProvider(owner); setModel(ui.assistantModel); }
+  }, [ui.assistantModel]);
+  useEffect(() => () => { queue.current = []; activeRequest.current?.abort(); }, []);
 
   const key = resolveKey(provider);
   const openPanel = (name: string, fallback = false) => ui.panels[`assistant.${name}`] ?? fallback;
@@ -234,20 +255,15 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     }
   };
 
-  const send = useCallback(
-    async (text: string) => {
-      const line = text.trim();
-      if (!line || busy) return;
-      const providerImpl: Provider = provider === 'anthropic' ? anthropicProvider(key.key ?? '') : openaiProvider(key.key ?? '');
-      if (!key.key) {
+  const runMessage = useCallback(
+    async (job: QueuedMessage, signal: AbortSignal) => {
+      const { text: line, images: attached, provider, model, key: apiKey } = job;
+      const providerImpl: Provider = provider === 'anthropic' ? anthropicProvider(apiKey ?? '') : openaiProvider(apiKey ?? '');
+      if (!apiKey) {
         add({ kind: 'bad', text: `no ${provider} API key yet — open Settings and paste one; it stays in this browser` });
         store.togglePanel('assistant.settings', true);
         return;
       }
-      const attached = images;
-      setDraft('');
-      setTokens([]);
-      setImages([]);
       setBusy('thinking…');
       add({ kind: 'user', text: line, images: attached });
       let prose = '';
@@ -258,20 +274,24 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       };
       try {
         const built = await buildTurn({ text: line, registry, images: attached, selection: ui.selection, skills });
+        if (signal.aborted) return;
         if (built.skill) add({ kind: 'skill', name: built.skill, note: 'loaded into this turn' });
         for (const bad of built.unresolved) add({ kind: 'bad', text: `${bad.ref}: ${bad.cause}` });
         messages.current.push(built.message);
 
         const system = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
-        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current })) {
+        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current, signal })) {
           if (event.type === 'text') {
             prose += event.text;
             setStreaming(streamingProse(prose));
             setBusy('writing…');
-          } else if (event.type === 'tool_start') {
+          } else if (event.type === 'tool_start' || event.type === 'tool_progress') {
             finishProse();
-            setBusy(`${event.call.command}…`);
-            add({ kind: 'tool', call: event.call });
+            setBusy(`${event.type === 'tool_progress' ? 'preparing ' : ''}${event.call.command}…`);
+            const call = { ...event.call };
+            setItems(cur => cur.some(i => i.kind === 'tool' && i.call.id === call.id)
+              ? cur.map(i => i.kind === 'tool' && i.call.id === call.id ? { kind: 'tool', call } : i)
+              : [...cur, { kind: 'tool', call }]);
           } else if (event.type === 'tool_end') {
             setItems((cur) => cur.map((i) => (i.kind === 'tool' && i.call.id === event.call.id ? { kind: 'tool', call: { ...event.call } } : i)));
           } else if (event.type === 'error') {
@@ -291,11 +311,44 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         add({ kind: 'bad', text: e instanceof FemError ? `${e.code}: ${e.cause}` : String(e) });
       } finally {
         finishProse();
-        setBusy('');
+        setItems(cur => cur.map(i => i.kind === 'tool' && i.call.status === 'preparing'
+          ? { kind: 'tool', call: { ...i.call, status: 'cancelled', result: 'Not executed: response ended before this call could run.' } } : i));
+        if (signal.aborted) add({ kind: 'prose', text: 'Response interrupted.' });
       }
     },
-    [busy, provider, key.key, images, registry, ui.selection, skills, enabled, folder, model, store],
+    [registry, ui.selection, skills, enabled, folder, store],
   );
+  execute.current = runMessage;
+
+  const send = useCallback(async (text: string) => {
+    const line = text.trim();
+    if (!line) {
+      if (queue.current.length && activeRequest.current) {
+        activeRequest.current.abort();
+        setBusy('interrupting… waiting for any active tool');
+      }
+      return;
+    }
+    const selectedModel = store.state.assistantModel ?? model;
+    const selectedProvider = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(selectedModel)) ?? provider;
+    queue.current.push({ text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: resolveKey(selectedProvider).key });
+    followBottom.current = true;
+    setQueued([...queue.current]);
+    setDraft('');
+    setTokens([]);
+    setImages([]);
+    if (activeRequest.current) return;
+    // A ref owns the lock before the first await, including two sends in the same paint.
+    while (queue.current.length) {
+      const controller = new AbortController();
+      activeRequest.current = controller;
+      const job = queue.current.shift()!;
+      setQueued([...queue.current]);
+      try { await execute.current(job, controller.signal); }
+      finally { activeRequest.current = null; }
+    }
+    setBusy('');
+  }, [images, provider, model, store]);
 
   const refreshIndex = useCallback(async () => {
     setIndex(await objectIndex(registry).catch(() => []));
@@ -311,6 +364,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     chatBridge.insertMention = insert;
     chatBridge.clear = () => {
       chatBridge.pending = null;
+      if (activeRequest.current) return;
       messages.current = [];
       setItems([]);
       setStreaming('');
@@ -409,11 +463,14 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         </div>
       </div>
 
-      <div class="messages">
+      <div class="messages" ref={transcript} onScroll={(event) => {
+        const el = event.currentTarget;
+        followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+      }}>
         {items.map((item, i) => (
           <Item key={i} item={item} registry={registry} dispatch={dispatch} />
         ))}
-        {streaming ? <div class="prose streaming">{streaming}</div> : null}
+        {streaming ? <Prose streaming text={streaming} /> : null}
         {busy ? (
           <div class="thinking">
             <i />
@@ -505,7 +562,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
                     return void setDismissed(at ? `${at.from}:${at.q}` : slashKey);
                   }
                 }
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !e.repeat) {
                   e.preventDefault();
                   void send(compose());
                 }
@@ -565,12 +622,27 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
                 }}
               />
             </label>
-            <Cmd cmd="chat.send" class="send" disabled={busy !== '' || compose() === ''} run={() => send(compose())}>
-              Send
+            <Cmd cmd="chat.send" class="send" disabled={compose() === '' && !(busy && queued.length)} run={() => send(compose())}>
+              {busy ? (compose() === '' && queued.length ? 'Send next' : 'Queue') : 'Send'}
             </Cmd>
           </div>
         </div>
 
+        <div class="model-row">
+          <label>Model <select aria-label="Assistant model" data-cmd="ai.setModel" value={model}
+            onChange={(e) => {
+              const next = (e.target as HTMLSelectElement).value;
+              void dispatch({ cmd: 'ai.setModel', model: next }).catch(error => add({ kind: 'bad', text: String(error) }));
+            }}>
+            {(Object.keys(MODELS) as ProviderId[]).map(id => <optgroup label={id === 'openai' ? 'OpenAI' : 'Anthropic'}>
+              {MODELS[id].map(m => <option key={m} value={m}>{m}</option>)}
+            </optgroup>)}
+          </select></label>
+        </div>
+        {queued.length > 0 ? <div class="queued" aria-live="polite">
+          <div>{queued.length} queued · Enter on an empty composer to interrupt and send next</div>
+          <ol>{queued.map(job => <li>{job.text}{job.images.length ? ` · ${job.images.length} images` : ''}</li>)}</ol>
+        </div> : null}
         <div class="cost">
           <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
           <span>{key.source === 'stored' ? 'key stored in this browser' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
@@ -585,30 +657,11 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
               value={provider}
               onChange={(e) => {
                 const next = (e.target as HTMLSelectElement).value as ProviderId;
-                setProvider(next);
-                setModel(storedModel(next));
+                void dispatch({ cmd: 'ai.setModel', model: storedModel(next) }).catch(error => add({ kind: 'bad', text: String(error) }));
               }}
             >
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI</option>
-            </select>
-          </label>
-          <label>
-            <span>Model</span>
-            <select
-              data-cmd="ai.setModel"
-              value={model}
-              onChange={(e) => {
-                const next = (e.target as HTMLSelectElement).value;
-                setModel(next);
-                void dispatch({ cmd: 'ai.setModel', model: next }).catch(() => undefined);
-              }}
-            >
-              {MODELS[provider].map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
             </select>
           </label>
           <label>
@@ -663,7 +716,7 @@ function Item({ item, registry, dispatch }: { item: Item; registry: Registry; di
       </div>
     );
   }
-  if (item.kind === 'prose') return <div class="prose">{item.text}</div>;
+  if (item.kind === 'prose') return <Prose text={item.text} />;
   if (item.kind === 'bad') return <div class="bad-line">{item.text}</div>;
   if (item.kind === 'tool') return <ToolCard call={item.call} />;
   if (item.kind === 'skill') {

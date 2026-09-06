@@ -50,6 +50,8 @@ export interface ChatRequest {
   tools: ToolDefinition[];
   model: string;
   maxTokens: number;
+  /** Host-owned cancellation, including network reads while no tokens are arriving. */
+  signal?: AbortSignal;
 }
 
 export interface Usage {
