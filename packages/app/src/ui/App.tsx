@@ -58,6 +58,8 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : s.lastError ? `${s.lastError.code} ${s.lastError.cause}` : '';
   const mm = s.model?.units.length === 'mm';
   const stage = stageOf(s);
+  const solveText = solveLabel(stage, s);
+  const engineState = s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…';
   return (
     <header class="topbar">
       <div class="logo">
@@ -83,12 +85,12 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="journal.redo" class="tbutton" args={{ steps: 1 }} disabled={!s.journal?.canRedo} title="journal.redo (⇧⌘Z)">
         ↷
       </Cmd>
-      <span class="chip" title={s.notes.join('\n') || 'everything available'}>
+      <span class="chip" title={[engineState, ...s.notes].join('\n')}>
         <span class={s.notes.length > 0 ? 'dot warn' : 'dot'} />
-        {s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…'}
+        <span class="engine-state">{engineState}</span>
       </span>
-      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `solve.run ${step}`}>
-        {solveLabel(stage, s)}
+      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `${solveText} — solve.run ${step}`}>
+        {solveText}
       </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'projects' }} pressed={s.panels['projects'] === true} title="Every project saved in this browser">
         Projects
@@ -138,6 +140,7 @@ function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   };
   const chip = !p ? '' : p.autosave === false ? 'not saved — storage is off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   const tone = !p || p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
+  const name = draft ?? p?.name ?? s.model?.name ?? 'no model';
   return (
     <span class="project-chip">
       <input
@@ -145,7 +148,8 @@ function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         aria-label="project name"
         data-cmd="project.rename"
         disabled={p === null}
-        value={draft ?? p?.name ?? s.model?.name ?? 'no model'}
+        title={name}
+        value={name}
         onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
         onBlur={(e) => rename((e.target as HTMLInputElement).value)}
         onKeyDown={(e) => {
@@ -153,9 +157,9 @@ function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
           if (e.key === 'Escape') setDraft(null);
         }}
       />
-      <span class={`saved-chip ${tone}`} title={p ? `${p.commands} Commands in this browser` : 'no project yet'}>
+      <span class={`saved-chip ${tone}`} title={p ? `${chip} — ${p.commands} Commands in this browser` : 'no project yet'}>
         <span class="dot" />
-        {chip}
+        <span class="saved-text">{chip}</span>
       </span>
     </span>
   );
@@ -325,6 +329,20 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
  * than a replay of the history, and the bar's own title says so.
  */
 function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+  const previewStart = useRef<number | null>(null);
+  const preview = (scale: number): void => {
+    previewStart.current ??= store.state.deformScale;
+    // Keep both the legend and slider readout in sync with the drawing during the gesture.
+    store.set({ deformScale: scale });
+    viewer.current?.previewDeformScale(scale);
+  };
+  const cancelPreview = (): void => {
+    if (previewStart.current === null) return;
+    const scale = previewStart.current;
+    previewStart.current = null;
+    store.set({ deformScale: scale });
+    viewer.current?.previewDeformScale(scale);
+  };
   const step = s.result?.step ?? '';
   const mode = choiceOf(s.fieldKey).mode;
   const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
@@ -374,7 +392,12 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         aria-label="deformation scale"
         data-cmd="view.setDeformScale"
         value={String(s.deformScale)}
-        onChange={(e) => void dispatch({ cmd: 'view.setDeformScale', scale: Number((e.target as HTMLInputElement).value) }).catch(() => undefined)}
+        onInput={(e) => preview(Number((e.target as HTMLInputElement).value))}
+        onPointerCancel={cancelPreview}
+        onChange={(e) => {
+          const scale = Number((e.target as HTMLInputElement).value);
+          void dispatch({ cmd: 'view.setDeformScale', scale }).then(() => { previewStart.current = null; }, cancelPreview);
+        }}
       />
       <span class="mono">×{formatNumber(s.deformScale)}</span>
       <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} title="draw the real displacement">

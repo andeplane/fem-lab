@@ -82,6 +82,13 @@ plane-stress sheet and an axisymmetric ring. A8's numerics half is
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
 
+Quantity boundary regressions check overflow independently of a solve: decimal `1e999` and
+finite `1e308 kN` must be rejected; `Pa^127`, overflowing products and inversion of `m^-128`
+must report structured errors without wrapping dimensions. Representable boundary exponents
+and `Gm^-35 = 1e-315 m^-35` remain valid. A shared native/wasm fixture verifies rejected force,
+temperature, geometry and display-unit Commands preserve the complete saved Model and Journal,
+and conversion Queries never serialize nonfinite numbers as JSON `null`.
+
 ## B. Beams and locking (phase 1–2)
 
 | # | Case | Reference | Tolerance | Proves | Status |
