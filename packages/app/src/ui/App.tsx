@@ -502,7 +502,10 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
           </div>
         </div>
       ) : (
-        <Start s={s} dispatch={dispatch} />
+        <div class={s.form ? 'start-layout with-properties' : 'start-layout'}>
+          <Start s={s} dispatch={dispatch} />
+          {s.form ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
+        </div>
       )}
       <Examples s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
