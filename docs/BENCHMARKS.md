@@ -112,6 +112,27 @@ while unequal increments are rejected with both Load names and the Body. A8's nu
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
 
+Direct-solver acceptance (#266) is also checked independently of factorization success.
+`a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer` supplies a full operator whose
+one-triangle factorization gives `(2/3,-1/3)` but whose actual residual is exactly `(0,-2/3)`
+for `b=(1,0)`: returning that candidate as a successful solve fails the test. An SPD scalar
+system whose exact solution is `1e500` must return a structured error. Conversely, `3x=b`
+for `b=1e-300,1,1e300` must recover `x/b=1/3` within 1e-15 without norm overflow. A 3–4–5
+norm-ratio check verifies the same residual ratio at those scales, plus zero and nonfinite
+cases. NaN, infinite, nonpositive and allowance-overflowing tolerances are rejected before
+changing the solution vector. Direct solves reject a nonfinite residual or one above the existing
+refinement floor of `100*tolerance` (default 1e-8); this is an acceptance guard, not a replacement for D1's
+published stress and force-balance oracles. Command regressions keep Model/Journal/previous
+Result intact on rejection and ensure transient heat and modal analysis propagate the error
+without a panic. The modal case uses the first Bathe inverse iterate, whose coefficients
+scale as `rho²/E`: finite `rho=1e100 kg/m³` and `E=1e-200 Pa` exceed the f64 range.
+
+Windows uses per-call sequential numeric factorization, retaining parallel assembly and
+triangular solution ([ADR0019](adr/0019-windows-direct-factorization-parallelism.md)).
+The exact discrete harmonic Dirichlet solution `x_i=(i+1)/(n+1)` checks reusable factors
+at 65/129/257 unknowns, two right-hand sides, one/four threads and concurrent callers.
+The unchanged D1 stress and force-balance checks remain the physical acceptance gate.
+
 A9 runs the shipped CG shaders on the adapter with budgets of 2, 25 and 50 iterations,
 including matrix chunks of three rows and a vector crossing the 256-thread workgroup boundary.
 The positive diagonal cases also pass through Jacobi scaling and f64 refinement at 1 and 2 CPU
