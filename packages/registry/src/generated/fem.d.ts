@@ -120,7 +120,6 @@ export interface Fem {
      * `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
      * (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
      * geometry: the selected mesher still determines the boundary approximation.
-
      */
     set(args: Omit<Extract<Command, { cmd: 'mesh.set' }>, 'cmd'>): Promise<Ack>;
     /**

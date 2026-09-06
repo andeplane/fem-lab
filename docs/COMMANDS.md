@@ -477,12 +477,16 @@ default incompatible modes or use order 2 when bending matters. Mapped geometry 
 a Body name distinct from explicit geometry. Keeping that name preserves its material;
 changing/removing it requires no remaining Body references and clears its material.
 Use model.rename to change an implicit Body name while preserving its references.
+`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+geometry: the selected mesher still determines the boundary approximation.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
 | mesher | yes | <code>{"$ref":"#/$defs/MesherSpec"}</code> |  |
 | order | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
 | formulation | no | <code>{"anyOf":[{"$ref":"#/$defs/Formulation"},{"type":"null"}]}</code> |  |
+| simplices | no | <code>{"type":["boolean","null"]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"mesh.set"}</code> |  |
 
 <a id="commands-model-duplicate"></a>
@@ -584,6 +588,12 @@ element quality) and refuses with a suggested fix. Returns extremes and reaction
 always check that reactions balance the applied loads before trusting a stress. A Step
 with `after` requires its predecessor's Result to match the current Model state;
 after an edit, solve the predecessor again before continuing the chain.
+Direct linear solves verify their residual too: nonfinite or excessive residuals return
+solve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`
+(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
+direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
+assembly and triangular solves retain the engine thread count.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
