@@ -75,6 +75,11 @@ async function boot(): Promise<void> {
     if (baseline) {
       const comparison = await transport.query({ query: 'query.journalDiff', base: { entries: baseline } });
       store.set({ journalComparison: comparison as never, comparisonSource: 'saved' });
+    } else if (store.state.comparisonSource === 'imported' && store.state.comparisonBaseline) {
+      const comparison = await transport.query({ query: 'query.journalDiff', base: { entries: store.state.comparisonBaseline } });
+      store.set({ journalComparison: comparison as never, comparisonSource: 'imported' });
+    } else if (store.state.comparisonSource === 'imported') {
+      store.set({ journalComparison: null, comparisonSource: null });
     }
     viewer.current?.setSurface(await transport.surface());
     await results.refresh();

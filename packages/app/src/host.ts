@@ -235,6 +235,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
 export function appHostCommands(store: Store, transport: WorkerTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+  store.setJournalDiffQuery(async (base) => (await transport.query({ query: 'query.journalDiff', base })) as JournalDiff);
   return [
     {
       name: 'view.setMode',
@@ -299,19 +300,21 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
             file.text().then(resolve, reject);
           };
+          picker.addEventListener('cancel', () => reject(new FemError('file.not-found', 'no file was chosen', 'picker')), { once: true });
           picker.click();
         });
-        let file: { format?: unknown; journal?: unknown };
+        let file: { format?: unknown; journal?: unknown } | null;
         try {
           file = JSON.parse(text) as { format?: unknown; journal?: unknown };
         } catch (e) {
           throw new FemError('schema', `not a femlab/1 JSON file: ${(e as Error).message}`, 'json', 'use file.save to write a comparable Model file');
         }
-        if (file.format !== 'femlab/1' || !file.journal || typeof file.journal !== 'object' || !Array.isArray((file.journal as { entries?: unknown }).entries)) {
+        if (!file || typeof file !== 'object' || file.format !== 'femlab/1' || !file.journal || typeof file.journal !== 'object' || !Array.isArray((file.journal as { entries?: unknown }).entries)) {
           throw new FemError('schema', 'the comparison file is not a femlab/1 file with a Journal', 'file', 'use file.save to write a comparable Model file');
         }
-        const diff = (await transport.query({ query: 'query.journalDiff', base: file.journal as Journal })) as JournalDiff;
-        store.set({ journalComparison: diff, comparisonSource: 'imported' });
+        const importedJournal = file.journal as Journal;
+        const diff = (await transport.query({ query: 'query.journalDiff', base: importedJournal })) as JournalDiff;
+        store.set({ journalComparison: diff, comparisonSource: 'imported', comparisonBaseline: importedJournal.entries });
         return diff;
       },
     },
@@ -325,6 +328,12 @@ export function appHostQueries(store: Store): HostDef[] {
     description: 'Compare the current Journal with the last successful explicit save/open baseline. Returns ordered `added` and `removed` Journal entries, or `null` before an explicit baseline exists. Use file.compare to inspect an imported file without opening it.',
     schema: z.object({}),
     tool: true,
-    run: () => store.state.journalComparison,
+    run: async () => {
+      if (store.state.comparisonSource === 'imported' && store.state.comparisonBaseline) {
+        const diff = await store.queryJournalDiff({ entries: store.state.comparisonBaseline });
+        if (diff) store.set({ journalComparison: diff });
+      }
+      return store.state.journalComparison;
+    },
   }];
 }

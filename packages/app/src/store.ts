@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, Capabilities, JournalDiff, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
@@ -53,6 +53,8 @@ export interface UiState {
   /** Current-vs-baseline causal diff, or an explicitly imported comparison. */
   journalComparison: JournalDiff | null;
   comparisonSource: 'saved' | 'imported' | null;
+  /** Imported comparison baseline, retained so a later refresh can recompute it read-only. */
+  comparisonBaseline: JournalDump['entries'] | null;
   script: string;
   /** `query.model().revision` mirrored, so the tree header can show `rev N` without a query. */
   revision: number;
@@ -148,6 +150,7 @@ export const initialState: UiState = {
   savedBaseline: null,
   journalComparison: null,
   comparisonSource: null,
+  comparisonBaseline: null,
   script: '',
   revision: 0,
   selection: EMPTY_SELECTION,
@@ -228,6 +231,7 @@ export class Store {
    * it so "do it for me" behaves exactly like a click on the real control (issue #37, #12).
    */
   dispatch: ((cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>) | null = null;
+  private journalDiffQuery: ((base: Journal) => Promise<JournalDiff>) | null = null;
   private listeners = new Set<() => void>();
 
   constructor(public state: UiState = initialState) {}
@@ -240,6 +244,14 @@ export class Store {
   set(patch: Partial<UiState>): void {
     this.state = { ...this.state, ...patch };
     for (const fn of this.listeners) fn();
+  }
+
+  setJournalDiffQuery(query: (base: Journal) => Promise<JournalDiff>): void {
+    this.journalDiffQuery = query;
+  }
+
+  queryJournalDiff(base: Journal): Promise<JournalDiff> | null {
+    return this.journalDiffQuery?.(base) ?? null;
   }
 
   /**
@@ -281,6 +293,7 @@ export class Store {
       savedBaseline: journal.entries.map((entry) => ({ ...entry })),
       journalComparison: null,
       comparisonSource: null,
+      comparisonBaseline: null,
     });
   }
 

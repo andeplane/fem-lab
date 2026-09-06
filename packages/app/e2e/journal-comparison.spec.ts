@@ -26,7 +26,7 @@ test('@cpu Journal comparison keeps the explicit baseline and does not import th
   const diff = await page.evaluate(() => window.fem.registry.query({ query: 'query.journalComparison' }));
 
   expect(after).toEqual(before);
-  expect(diff).toMatchObject({ sharedEntries: 2, removed: [], added: [{ cmd: 'model.setName' }] });
+  expect(diff).toMatchObject({ sharedEntries: 2, removed: [], added: [{ cmd: { cmd: 'model.setName' } }] });
   await page.evaluate(() => window.fem.journal.undo({ steps: 1 }));
   await expect.poll(() => page.evaluate(() => window.fem.registry.query({ query: 'query.journalComparison' }))).toMatchObject({ sharedEntries: 2, added: [] });
   await expect(page.locator('.comparison-label')).toContainText('Since last explicit save/open');

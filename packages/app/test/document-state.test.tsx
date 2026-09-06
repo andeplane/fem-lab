@@ -48,6 +48,11 @@ it('compares an imported file through journalDiff without importing or changing 
   expect(store.state.comparisonSource).toBe('imported');
 });
 
+it('rejects malformed comparison files as structured schema errors', async () => {
+  const compare = appHostCommands(new Store(), { query: vi.fn() } as unknown as WorkerTransport, { current: null }, async () => undefined).find((def) => def.name === 'file.compare')!;
+  await expect(compare.run({ json: 'null' }, {} as never)).rejects.toMatchObject({ code: 'schema', where: 'file' });
+});
+
 it('keeps an explicit baseline normalized while undo and redo update the causal diff', () => {
   const first = entries[0]!;
   const second = { seq: 1, cmd: { cmd: 'model.setName' as const, name: 'girder' }, hashAfter: 'h2' };

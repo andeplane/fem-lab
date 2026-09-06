@@ -16,6 +16,7 @@ const argText = (cmd: Record<string, unknown>): string => {
 };
 
 const clock = (at: number | undefined): string => (at === undefined ? '' : new Date(at).toTimeString().slice(0, 8));
+const entryKey = (entry: JournalEntry): string => JSON.stringify([entry.cmd, entry.hashAfter]);
 
 /** The last `solve.*` in the Journal: everything after it edited the Model that made a Result. */
 export function solveBoundary(entries: JournalEntry[]): number {
@@ -24,11 +25,11 @@ export function solveBoundary(entries: JournalEntry[]): number {
   return seq;
 }
 
-function JournalRow({ s, dispatch, entry, className = '' }: { s: UiState; dispatch: Dispatch; entry: JournalEntry; className?: string }) {
+function JournalRow({ s, dispatch, entry, className = '', removed = false }: { s: UiState; dispatch: Dispatch; entry: JournalEntry; className?: string; removed?: boolean }) {
   const e = entry;
   const cmd = e.cmd as unknown as Record<string, unknown> & { cmd: string };
-  const meta = s.journalWho[e.seq];
-  const boundary = s.result?.stale === true ? solveBoundary(s.journal?.entries ?? []) : -1;
+  const meta = removed ? undefined : s.journalWho[e.seq];
+  const boundary = removed ? -1 : s.result?.stale === true ? solveBoundary(s.journal?.entries ?? []) : -1;
   const stale = boundary >= 0 && e.seq > boundary;
   return (
     <div class={className}>
@@ -36,7 +37,7 @@ function JournalRow({ s, dispatch, entry, className = '' }: { s: UiState; dispat
         <span class="no">{e.seq}</span>
         <span class={cmd.cmd.startsWith('solve.') ? 'jcmd solve' : 'jcmd'}>{cmd.cmd}</span>
         <span class="jargs">{argText(cmd)}</span>
-        <span class="jwho">{meta?.who ?? 'you'}</span>
+        <span class="jwho">{meta?.who ?? (removed ? 'unknown' : 'you')}</span>
         <span class="jtime">{clock(meta?.at)}</span>
       </Cmd>
       {e.seq === boundary ? (
@@ -52,14 +53,15 @@ function JournalRow({ s, dispatch, entry, className = '' }: { s: UiState; dispat
 
 function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const entries = s.journal?.entries ?? [];
+  const added = new Set(s.journalComparison?.added.map(entryKey));
   return (
     <div class="rows">
       {s.journalComparison ? <div class="section-label comparison-label">{s.comparisonSource === 'imported' ? 'Compared file' : 'Since last explicit save/open'}</div> : null}
-      {entries.map((e) => <JournalRow key={e.seq} s={s} dispatch={dispatch} entry={e} className={s.journalComparison && e.seq >= s.journalComparison.sharedEntries ? 'comparison-added' : ''} />)}
+      {entries.map((e) => <JournalRow key={e.seq} s={s} dispatch={dispatch} entry={e} className={added.has(entryKey(e)) ? 'comparison-added' : ''} />)}
       {s.journalComparison && s.journalComparison.removed.length > 0 ? (
         <>
           <div class="section-label comparison-removed-label">Removed from comparison baseline</div>
-          {s.journalComparison.removed.map((e) => <JournalRow key={`removed-${e.seq}`} s={s} dispatch={dispatch} entry={e} className="comparison-removed" />)}
+          {s.journalComparison.removed.map((e) => <JournalRow key={`removed-${e.seq}`} s={s} dispatch={dispatch} entry={e} className="comparison-removed" removed />)}
         </>
       ) : null}
       {entries.length === 0 ? <div class="empty-note">The Journal is empty. Every Command you apply lands here, and the Script tab shows the same thing as TypeScript.</div> : null}
