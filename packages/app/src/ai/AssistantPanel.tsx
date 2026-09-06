@@ -12,7 +12,7 @@ import './assistant.css';
 import { buildSystem, buildTurn, downscaleImage, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
 import { defaultProvider, maskKey, MODELS, resolveKey, storedModel, storeKey } from './keys';
 import { openaiProvider } from './openai';
-import { ProjectFolder, pickFolder, watchAgents, type DirHandle } from './project';
+import { watchAgents } from './project';
 import type { ImageBlock, Message, Provider, ProviderId } from './provider';
 
 export interface AssistantPanelProps {
@@ -126,6 +126,8 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const [provider, setProvider] = useState<ProviderId>(() => defaultProvider());
   const [model, setModel] = useState(() => storedModel(defaultProvider()));
   const [keyDraft, setKeyDraft] = useState('');
+  const [recentProject, setRecentProject] = useState<string | null>(null);
+  const [projectFailure, setProjectFailure] = useState<string | null>(null);
   const [turn, setTurn] = useState<TurnResult | null>(null);
   const messages = useRef<Message[]>([]);
 
@@ -142,16 +144,24 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     if (store.state.project === folder) store.setProject(folder);
   }, undefined, undefined, (error) => store.log('warn', `project refresh failed: ${String(error)}`)) : undefined), [folder, store]);
 
-  const openFolder = async () => {
-    let handle: DirHandle;
-    try {
-      // The host Command owns this when the app wires it; until then the panel opens it itself.
-      await dispatch({ cmd: 'project.open', picker: true });
-      return;
-    } catch {
-      handle = await pickFolder();
+  useEffect(() => {
+    let active = true;
+    setRecentProject(null);
+    if (!folder) void registry.query({ query: 'query.projectRecent' }).then((info) => {
+      if (active) setRecentProject((info as { name: string } | null)?.name ?? null);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [folder, registry]);
+
+  const projectCommand = async (cmd: string, args: Record<string, unknown> = {}) => {
+    setProjectFailure(null);
+    try { await dispatch({ cmd, ...args }); }
+    catch (error) {
+      if (!(error instanceof FemError && error.code === 'cancelled')) {
+        setProjectFailure(error instanceof FemError ? error.cause : String(error));
+      }
+      throw error;
     }
-    store.setProject(await ProjectFolder.fromHandle(handle));
   };
 
   const insert = (ref: string) => {
@@ -285,12 +295,22 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             <span class="paths">/{folder.name}</span>
           </Cmd>
         ) : (
-          <Cmd cmd="project.open" class="agents" title="Open a project folder" run={openFolder}>
+          <Cmd cmd="project.open" class="agents" title="Open a project folder" run={() => projectCommand('project.open', { picker: true })}>
             <span class="mono">＋</span>
             <span class="file">open a project folder</span>
             <span class="count">for AGENTS.md, skills and files</span>
           </Cmd>
         )}
+        {!folder && recentProject ? (
+          <Cmd cmd="project.open" title={`Reopen ${recentProject}`} run={() => projectCommand('project.open', { reopen: true })}>
+            reopen {recentProject}
+          </Cmd>
+        ) : null}
+        {folder ? <>
+          <Cmd cmd="project.refresh" title="Refresh project files and rules" run={() => projectCommand('project.refresh')}>refresh</Cmd>
+          <Cmd cmd="project.close" title="Close project folder" run={() => projectCommand('project.close')}>close project</Cmd>
+        </> : null}
+        {projectFailure ? <div class="empty-note" role="alert">{projectFailure}</div> : null}
         {folder && openPanel('rules') ? <div class="rules">{folder.agentsMd?.text}</div> : null}
         <div class="chips">
           <span class="section-label">Skills</span>

@@ -90,6 +90,7 @@ export function fakeHost(transport = fakeTransport(), projectOpen = false): Host
       close: vi.fn(),
       refresh: vi.fn(async () => undefined),
       info: vi.fn(() => (projectOpen ? PROJECT : null)),
+      recent: vi.fn(async () => ({ name: PROJECT.name })),
       readText: vi.fn(async (path: string) => (path === 'big.txt' ? 'x'.repeat(2 * 1024 * 1024 + 1) : path.endsWith('.json') ? JSON.stringify(MODEL_FILE) : `content of ${path}`)),
       writeText: vi.fn(async () => undefined),
       writeBytes: vi.fn(async () => undefined),

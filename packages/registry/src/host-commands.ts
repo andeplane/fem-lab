@@ -45,7 +45,9 @@ export const CopyWhat = z.union([
   z.object({ kind: z.literal('script'), seqs: z.array(int).optional() }),
   z.object({ kind: z.literal('text'), text: z.string() }),
 ]);
-export const OpenHow = z.union([z.object({ picker: z.literal(true) }), z.object({ handle: z.looseObject({}) })]);
+// A FileSystemDirectoryHandle has prototype methods. Object parsing would clone it into an
+// unusable plain object; preserve this opaque capability and validate it in the host.
+export const OpenHow = z.union([z.object({ picker: z.literal(true) }), z.object({ handle: z.unknown().nonoptional() }), z.object({ reopen: z.literal(true) })]);
 const Destination = z.enum(['download', 'project']).optional();
 
 export interface Selection {
@@ -122,9 +124,10 @@ export interface HostContext {
   };
   project: {
     open(how: z.output<typeof OpenHow>): Promise<void>;
-    close(): void;
+    close(): void | Promise<void>;
     refresh(): Promise<void>;
     info(): ProjectInfo | null;
+    recent(): Promise<{ name: string } | null>;
     readText(path: string): Promise<string>;
     writeText(path: string, text: string): Promise<void>;
     writeBytes(path: string, bytes: Uint8Array): Promise<void>;
@@ -330,8 +333,8 @@ export const HOST_COMMANDS: HostDef[] = [
     return { text };
   }),
   def('file.write', 'Write a text file into the open project folder by relative path, creating directories as needed and replacing an existing file. Paths outside the folder are refused.', z.object({ path: z.string(), text: z.string() }), ({ path, text }, ctx) => ctx.project.writeText(assertInside(path).join('/'), text)),
-  def('project.open', 'Open a project folder with the directory picker (needs a click) or from a stored handle; its AGENTS.md and skills/*/SKILL.md are read and its files listed. Not a tool: the person chooses the folder.', OpenHow, (how, ctx) => ctx.project.open(how), false),
-  def('project.close', 'Close the open project folder: file.read/file.write stop working, project skills and AGENTS.md rules are dropped, saves go back to downloads.', none, (_, ctx) => ctx.project.close()),
+  def('project.open', 'Open a project folder with picker: true, an opaque browser directory handle, or reopen: true for the remembered folder. Needs a click and read/write permission; cancellation preserves the active folder. Lists files and reads AGENTS.md or CLAUDE.md and skills/*/SKILL.md. Not an AI tool: the person grants folder access.', OpenHow, (how, ctx) => ctx.project.open(how), false),
+  def('project.close', 'Close and forget the project folder: file.read/file.write stop working, project skills and AGENTS.md rules are dropped, saves go back to downloads. Does not delete files from disk.', none, (_, ctx) => ctx.project.close()),
   def('project.refresh', 'Re-list the project folder and re-read AGENTS.md or CLAUDE.md and skills/*/SKILL.md after files changed outside the app.', none, (_, ctx) => ctx.project.refresh()),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
@@ -350,5 +353,6 @@ export const HOST_QUERIES: HostDef[] = [
   def('query.skills', 'Every available skill with its name, description, when to use it and whether it is built in or from the project folder. Invoke one with skill.invoke.', none, (_, ctx) => ctx.skills().map(({ name, description, when, source }) => ({ name, description, when, source }))),
   def('query.exportFormats', 'Every format file.export writes, with its extension, what it contains and what it needs first (`mesh`, `result`, `none`, or `soon` for one that is not written yet). The Export dialog is a view of this list.', none, () => ({ formats: EXPORT_FORMATS })),
   def('query.project', 'The open project folder: name, files with size and kind, which of AGENTS.md or CLAUDE.md is present, and the project skills; `null` when no folder is open.', none, (_, ctx) => ctx.project.info()),
+  def('query.projectRecent', 'The remembered project folder name, or null. Reading this does not request permission or open the folder; project.open with reopen: true requests access from a click.', none, (_, ctx) => ctx.project.recent(), false),
   def('query.autosave', 'Whether the background autosave is on, and what this browser last saved (`{ name, at, commands }` or `null`). The start screen reads it to decide whether to offer "restore the last model"; file.restore reopens it.', none, (_, ctx) => ctx.files.autosave()),
 ];

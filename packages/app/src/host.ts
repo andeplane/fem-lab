@@ -4,6 +4,7 @@
 import { FemError, type AutosaveState, type HostContext, type HostDef, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
+import { makeProjectHost, type ProjectAccess } from './project-host';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
 import { type Autosave, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
@@ -22,10 +23,6 @@ export interface ViewerRef {
   current: Viewer | null;
   onReady?: () => void;
 }
-
-const soon = (what: string, suggestion: string) => (): never => {
-  throw new FemError('unsupported', `${what} is not built yet`, what, suggestion);
-};
 
 async function fetchExample(name: string): Promise<string> {
   const res = await fetch(`${import.meta.env.BASE_URL}examples/${name}.json`);
@@ -68,7 +65,7 @@ export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
   lastSaved = { name, at: Date.now(), commands: journal.length };
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, projectAccess?: ProjectAccess): HostContext {
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -208,23 +205,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       },
       autosave: () => ({ enabled: autosave.enabled(), saved: lastSaved }),
     },
-    project: {
-      // The Assistant picker supplies the shared skill source. Full project I/O is #13;
-      // info stays null while writes are unsupported so file.save still defaults to download.
-      open: soon('the project folder', 'use file.open and file.save for now'),
-      close: () => store.setProject(null),
-      refresh: async () => {
-        const folder = store.state.project;
-        if (!folder) throw new FemError('file.not-found', 'no project folder is open', 'project', 'open a project folder in the Assistant');
-        await folder.refresh();
-        // Closing/replacing a folder while this read is in flight must not restore the old one.
-        if (store.state.project === folder) store.setProject(folder);
-      },
-      info: () => null,
-      readText: soon('the project folder', 'use file.open for now'),
-      writeText: soon('the project folder', 'use file.save for now'),
-      writeBytes: soon('the project folder', 'use file.save for now'),
-    },
+    project: makeProjectHost(store, projectAccess),
     examples: { fetch: fetchExample },
     ai: {
       setKey: (key) => (key === null ? localStorage.removeItem('femlab.ai.key') : localStorage.setItem('femlab.ai.key', key)),

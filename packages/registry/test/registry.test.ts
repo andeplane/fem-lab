@@ -254,6 +254,15 @@ describe('Registry', () => {
     const { registry, host, transport } = make();
     await registry.dispatch({ cmd: 'project.open', handle: { kind: 'directory' } });
     expect(host.project.open).toHaveBeenCalledWith({ handle: { kind: 'directory' } });
+    const handle = Object.create({ kind: 'directory', getDirectoryHandle: () => undefined });
+    await registry.dispatch({ cmd: 'project.open', handle });
+    expect(vi.mocked(host.project.open).mock.calls.at(-1)![0]).toEqual({ handle });
+    expect((vi.mocked(host.project.open).mock.calls.at(-1)![0] as { handle: unknown }).handle).toBe(handle);
+    await registry.dispatch({ cmd: 'project.open', reopen: true });
+    expect(host.project.open).toHaveBeenLastCalledWith({ reopen: true });
+    await expect(registry.dispatch({ cmd: 'project.open' })).rejects.toMatchObject({ code: 'schema' });
+    await expect(registry.query({ query: 'query.projectRecent' })).resolves.toEqual({ name: PROJECT.name });
+
     await registry.dispatch({ cmd: 'solve.cancel' });
     expect(transport.cancel).toHaveBeenCalled();
     await registry.dispatch({ cmd: 'ai.setKey', key: 'sk' });

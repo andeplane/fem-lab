@@ -16,13 +16,13 @@ import type { WorkerTransport } from '../src/worker-transport';
 import type { ChatRequest } from '../src/ai/provider';
 import { BUILTIN_SKILLS } from '../src/ai/skills';
 import * as project from '../src/ai/project';
-import { fakeDir } from './project-fake';
+import { fakeDir, memoryProjectAccess } from './project-fake';
 
 async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
   transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
   const store = new Store();
-  const host = makeHostContext(store, transport as WorkerTransport, { current: null }, readHostCaps({}));
+  const host = makeHostContext(store, transport as WorkerTransport, { current: null }, readHostCaps({}), undefined, undefined, memoryProjectAccess(() => project.pickFolder()));
   const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: HOST_COMMANDS });
   store.set({ ready: true, ...patch });
   const root = document.createElement('div');
@@ -77,6 +77,24 @@ describe('the assistant drawer', () => {
     expect(chips).toContain('beam-theory-check');
     expect(chips).toContain('write-report');
     expect([...root.querySelectorAll('.chips button')].every((b) => b.getAttribute('aria-pressed') === 'true')).toBe(true);
+  });
+
+  it('uses one picker, keeps cancellation quiet and shows permission errors in the drawer', async () => {
+    const picker = vi.spyOn(project, 'pickFolder').mockRejectedValue(new DOMException('cancelled by user', 'AbortError'));
+    try {
+      const { root, store } = await mount();
+      root.querySelector<HTMLButtonElement>('[data-cmd="project.open"]')!.click();
+      await tick();
+      expect(picker).toHaveBeenCalledOnce();
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      const denied = fakeDir({});
+      denied.requestPermission = async () => 'denied';
+      picker.mockResolvedValue(denied);
+      root.querySelector<HTMLButtonElement>('[data-cmd="project.open"]')!.click();
+      await vi.waitFor(() => expect(root.querySelector('[role="alert"]')?.textContent).toContain('permission'));
+      expect(picker).toHaveBeenCalledTimes(2);
+      expect(store.state.project).toBeNull();
+    } finally { picker.mockRestore(); }
   });
 
   it('switches a skill off through panel.toggle, so the toggle is a Command like everything else', async () => {
@@ -213,8 +231,7 @@ describe('the assistant drawer', () => {
       root.querySelector<HTMLButtonElement>('[data-cmd="project.open"]')!.click();
       await vi.waitFor(() => expect(root.textContent).toContain('project-check'));
       expect(picker).toHaveBeenCalledTimes(1);
-      // Full project I/O is #13: opening skills must not change file.save's download default.
-      expect(await registry.query({ query: 'query.project' })).toBeNull();
+      expect(await registry.query({ query: 'query.project' })).toMatchObject({ name: 'bridge', skills: ['beam-theory-check', 'project-check'] });
       const invoke = (name: string) => registry.dispatch({ cmd: 'skill.invoke', name });
       expect(await invoke('beam-theory-check')).toMatchObject({ source: 'project', body: 'First project instructions.' });
       await type(root, '/project');

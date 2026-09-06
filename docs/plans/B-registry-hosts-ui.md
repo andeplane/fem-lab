@@ -1161,13 +1161,25 @@ built-in has `name`, `description` ≥ 40 chars and a body; `query.skills` == me
 `skill.invoke` unknown → `NotFound` listing names; a Playwright step types `/beam` and asserts
 the menu shows the built-in.
 
-### 7.9 Project folder (`src/project.ts`, `packages/registry/src/project-paths.ts`)
+### 7.9 Project folder (`src/project-host.ts`, `src/ai/project.ts`, `packages/registry/src/project-paths.ts`)
 
 Chromium's File System Access API (ADR 0014; `showDirectoryPicker` needs a user gesture and is
 Window-only, so `project.open { picker: true }` runs on the main thread from a click). The handle
 is stored in IndexedDB (`FileSystemDirectoryHandle` is structured-cloneable) under one key so a
-reload can offer "reopen <name>", which calls `handle.requestPermission({ mode: 'readwrite' })`
-from a click and then `project.open { handle }`.
+reload can offer "reopen <name>". `query.projectRecent` reads a separate name record without
+deserializing the stored handle or asking for permission; clicking reopen calls
+`project.open { reopen: true }`, which requests read/write
+permission before publishing the folder. The registry preserves native handle identity, and the
+typed `ProjectAccess` boundary supplies the picker and handle persistence to the production host.
+
+[Issue #13](https://github.com/andeplane/fem-lab/issues/13) connects these routes to that host.
+The Assistant uses the same Commands, including refresh and close. Cancellation keeps the active
+folder without opening a second picker; denied access remains a structured error. A failed refresh
+keeps the last successful files/rules/skills catalog. Closing drops the active capability and
+forgets the remembered handle, without deleting disk files; a slow earlier open cannot restore it.
+Handle writes commit in invocation order in `femlab-project`/`handles`, separate from the existing
+`femlab`/`autosave` database, so the two version-one store initializers cannot race. If storage is
+unavailable, granted file access remains usable for the session and the host reports the failure.
 
 ```ts
 export class ProjectFolder {
@@ -1183,9 +1195,12 @@ export class ProjectFolder {
 export function normalisePath(p: string): string[];   // split on / or \, drop '' and '.', reject '..' or a leading '/' / drive letter with Error(FileScope), reject segments with ':' or control chars
 ```
 
-Scoping is structural: every read and write walks from the stored directory handle segment by
-segment, so nothing outside the folder is reachable even without the path check; the check exists
-to give a clean `FileScope` error instead of a browser exception. `file.read`/`file.write`/
+Scoping uses both path validation and the browser's directory capability: every read and write
+walks from the stored handle segment by segment. Chromium refuses native file and directory
+symlinks; a real-browser test guards this requirement. `resolve()` is not used as a canonical-path
+check because it reports handle-relative paths. Invalid paths get `file.scope` before accessing
+any handle. Failed writes abort the writable stream while preserving the original error.
+`file.read`/`file.write`/
 `file.open { path }`/`file.save { to: 'project' }`/`file.export { to: 'project' }` all go through
 `ProjectFolder`. `AGENTS.md` text feeds `buildSystem` (§7.6) and the badge; the AI gets the same
 `file.read` the person has (PLAN 4.13 "scoped").
