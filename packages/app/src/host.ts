@@ -263,7 +263,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     examples: { fetch: fetchExample },
     ai: {
       setKey: (key) => (key === null ? localStorage.removeItem('femlab.ai.key') : localStorage.setItem('femlab.ai.key', key)),
-      setModel: (model) => localStorage.setItem('femlab.ai.model', model),
+      setModel: (model) => {
+        localStorage.setItem('femlab.ai.model', model);
+        store.set({ assistantModel: model });
+      },
     },
     env: { webgpu: host.webgpu, crossOriginIsolated: host.crossOriginIsolated, threads: host.threads, userAgent: host.userAgent, engine: 'local' },
   };

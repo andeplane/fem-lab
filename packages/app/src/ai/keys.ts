@@ -47,8 +47,11 @@ export function storeKey(id: ProviderId, key: string | null, storage: Storage = 
   }
 }
 
-/** The first provider with a key, Anthropic preferred; Anthropic anyway when neither has one. */
+/** Honor a saved model first; otherwise use the first keyed provider, then Anthropic. */
 export function defaultProvider(storage: Storage = localStorage, dev = devApiKeys()): ProviderId {
+  const selected = read(storage, MODEL_SLOT);
+  const chosen = PROVIDER_IDS.find(id => selected !== null && MODELS[id].includes(selected));
+  if (chosen) return chosen;
   return PROVIDER_IDS.find((id) => resolveKey(id, storage, dev).key) ?? 'anthropic';
 }
 
