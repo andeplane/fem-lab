@@ -26,12 +26,14 @@ export interface CmdProps {
   selected?: boolean;
   /** Runs instead of `dispatch` when the click needs a fallback (the `@` button's copy). */
   onRun?: () => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
   /** A Command this control runs on the way to its own, for the tutorial to find it by. */
   opens?: string;
   children: ComponentChildren;
 }
 
-export function Cmd({ dispatch, cmd, args, children, onRun, ...rest }: CmdProps) {
+export function Cmd({ dispatch, cmd, args, children, onRun, onFocus, onBlur, ...rest }: CmdProps) {
   // A control that fills the Properties form with some *other* Command names it here, so the
   // tutorial spotlight can find "the + add material chip" from `highlight: "material.add"`
   // alone (issue #38). The form's own inputs carry a bare `data-cmd="form.open"` with no args,
@@ -48,6 +50,8 @@ export function Cmd({ dispatch, cmd, args, children, onRun, ...rest }: CmdProps)
       {...(rest.role === undefined ? {} : { role: rest.role })}
       {...(rest.selected === undefined ? {} : { 'aria-selected': rest.selected })}
       {...(rest.pressed === undefined ? {} : { 'aria-pressed': rest.pressed })}
+      onFocus={onFocus}
+      onBlur={onBlur}
       onClick={(e) => {
         e.stopPropagation();
         if (onRun) return onRun();

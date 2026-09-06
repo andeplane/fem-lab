@@ -734,13 +734,15 @@ textarea:focus {
 .jrow,
 .crow {
   display: flex;
-  gap: 12px;
   width: 100%;
-  padding: 2.5px 14px;
   font-family: var(--mono);
   font-size: 11.5px;
   text-align: left;
   border-left: 2px solid transparent;
+}
+.crow {
+  gap: 12px;
+  padding: 2.5px 14px;
 }
 .jrow:hover {
   background: #171a20;
@@ -748,6 +750,29 @@ textarea:focus {
 .jrow.stale {
   background: var(--warn-bg);
   border-left-color: var(--yellow);
+}
+.jrow-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 12px;
+  padding: 2.5px 8px 2.5px 12px;
+  text-align: left;
+}
+.jrow-main:disabled {
+  opacity: 0.58;
+  cursor: default;
+}
+.jcopy {
+  flex: none;
+  padding: 2.5px 14px 2.5px 8px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  opacity: 0.45;
+}
+.jrow:hover .jcopy,
+.jcopy:focus-visible {
+  opacity: 1;
 }
 .no {
   width: 24px;

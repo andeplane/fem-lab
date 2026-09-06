@@ -39,6 +39,9 @@ function surface(): Bulk {
     triSet: Uint32Array;
     triBody: Uint32Array;
     setNames: string[];
+    membershipNames: string[];
+    triSetOffsets: Uint32Array;
+    triSets: Uint32Array;
     bodyNames: string[];
     source: string;
   };
@@ -47,9 +50,11 @@ function surface(): Bulk {
     { name: 'indices', dtype: 'u32' as const, view: s.indices.slice() },
     { name: 'triFace', dtype: 'u32' as const, view: s.triSet.slice() },
     { name: 'triBody', dtype: 'u32' as const, view: s.triBody.slice() },
+    { name: 'triSetOffsets', dtype: 'u32' as const, view: s.triSetOffsets.slice() },
+    { name: 'triSets', dtype: 'u32' as const, view: s.triSets.slice() },
   ];
   return {
-    value: { faceNames: s.setNames, bodyNames: s.bodyNames, source: s.source },
+    value: { faceNames: s.setNames, setNames: s.membershipNames, bodyNames: s.bodyNames, source: s.source },
     buffers: arrays.map((a) => ({ name: a.name, dtype: a.dtype, length: a.view.length })),
     raw: arrays.map((a) => a.view.buffer as ArrayBuffer),
   };

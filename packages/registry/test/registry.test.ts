@@ -27,9 +27,10 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'view.setClip': { plane: { normal: [0, 0, 1], offset: 0 } },
   'view.toggle': { layer: 'mesh' },
   'view.setVisible': { bodies: ['beam'], on: false },
+  'view.highlight': { faces: ['beam.top'] },
   'view.setTheme': { theme: 'dark' },
   'view.animate': { step: 'static', playing: true },
-  'selection.set': { bodies: ['beam'], mode: 'add' },
+  'selection.set': { refs: ['material:steel'], mode: 'add' },
   'selection.clear': {},
   'selection.setPickTarget': { target: 'face' },
   'panel.toggle': { panel: 'palette', open: true },
@@ -187,8 +188,12 @@ describe('Registry', () => {
     expect(host.view.setClip).toHaveBeenCalledWith(null);
     await registry.dispatch({ cmd: 'view.showField', field: null });
     expect(host.view.showField).toHaveBeenCalledWith({ field: null });
+    await registry.dispatch({ cmd: 'view.highlight', bodies: ['beam'] });
+    expect(host.view.highlight).toHaveBeenCalledWith({ bodies: ['beam'] });
     await registry.dispatch({ cmd: 'selection.set', faces: ['beam.top'] });
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
+    await registry.dispatch({ cmd: 'selection.set', refs: ['load:p'] });
+    expect(host.selection.set).toHaveBeenCalledWith({ refs: ['load:p'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
     expect(host.script.setSource).toHaveBeenCalledWith('x', undefined);
   });
