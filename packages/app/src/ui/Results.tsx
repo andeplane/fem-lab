@@ -5,7 +5,8 @@
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber } from '../fields';
-import type { UiState } from '../store';
+import { verificationState, type UiState } from '../store';
+
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
 import { blockers } from './schema';
@@ -565,6 +566,17 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
       ) : (
         <div class="empty-note">The DOF and memory estimate appears once a Mesh and a Step exist.</div>
       )}
+
+      {s.assistantVerifications.length > 0 ? <>
+        <div class="section-label">Assistant-reported checks</div>
+        <div class="empty-note">Assistant observations, not independently verified engine measurements.</div>
+        {s.assistantVerifications.map((record, i) => <div class="assistant-check" key={i}>
+          <div class="empty-note">{record.model ?? 'No Model'} · {verificationState(record, s)}</div>
+          {record.rows.map((row, j) => <div class="check-row" key={j}>
+            <span class="mono code">{row.status}</span><span class="check-text">{row.what}</span><span class="mono">{row.value}</span>
+          </div>)}
+        </div>)}
+      </> : null}
 
       <div class="section-label">Assumption log</div>
       {s.assumptions.length === 0 ? (
