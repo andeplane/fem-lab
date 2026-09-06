@@ -1,12 +1,13 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type AutosaveState, type HostContext, type HostDef, type Selection } from '@femlab/registry';
+import { FemError, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
+import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
-import { type Autosave, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
+import { type ShareCommand, shareUrl } from './share';
 import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
@@ -34,41 +35,72 @@ async function fetchExample(name: string): Promise<string> {
 }
 
 /**
- * The autosave, and the last thing it wrote. It is created once here rather than in `main.tsx`
- * so `file.autosave`, `file.restore` and `query.autosave` all see the same one; the boot hook
- * only has to call `note` after every Command and `primeAutosave` once.
- * `ponytail: one autosave slot, not a list of them — versioning is what file.save is for.`
+ * The projects of this browser. Built by `makeHostContext`, because `project.open` replays a
+ * Journal through the transport and `project.save` shoots the viewer, and neither exists at
+ * import time; the three hooks below are what `main.tsx` needs and are safe to call before it.
  */
-export const autosave: Autosave = makeAutosave({
-  // a browser with IndexedDB blocked (private mode, or a headless test) keeps working: the
-  // autosave is then simply per-session, and file.save is still there.
-  store: typeof indexedDB === 'undefined' ? memoryStore() : indexedDbStore(indexedDB),
-  initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
-  onError: (e) => console.warn('autosave failed', e),
-});
+let projects: Projects | null = null;
 
-/** Read once at boot so `query.autosave` can answer without waiting on IndexedDB. */
-let lastSaved: AutosaveState['saved'] = null;
+/** A viewer screenshot cut down to a Recent card. `view.screenshot` renders at the canvas size
+ *  and ignores `width`/`height`, so the downscale is a canvas draw here, not a screenshot option. */
+async function thumbnailOf(viewer: ViewerRef, width = 320, height = 180): Promise<string | null> {
+  const png = viewer.current?.screenshot();
+  if (!png || typeof document === 'undefined') return null;
+  const image = new Image();
+  image.src = png;
+  await image.decode();
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL('image/webp', 0.7);
+}
 
-/** The other half of the boot hook: `await primeAutosave();` before the start screen renders. */
-export async function primeAutosave(): Promise<AutosaveState['saved']> {
-  const saved = await autosave.read();
-  lastSaved = saved && { name: saved.name, at: saved.at, commands: saved.cmds.length };
-  return lastSaved;
+/** `await primeProjects();` at boot, before the start screen needs its Recent list. */
+export async function primeProjects(): Promise<ProjectMeta[]> {
+  return (await projects?.prime()) ?? [];
 }
 
 /**
  * The boot hook proper: one line at the end of `main.tsx`'s `refresh()`, which already runs
- * after every journaled Command and has just re-read the Model and the Journal.
+ * after every journaled Command and has just re-read the Model and the Journal. With no project
+ * open and a non-empty Journal this is what creates one (issue #41).
  */
-export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
-  // Boot refreshes before any Command; an empty Journal is nothing to restore (issue #48).
-  if (!autosave.enabled() || journal.length === 0) return;
-  autosave.note(name, journal as never);
-  lastSaved = { name, at: Date.now(), commands: journal.length };
+export function noteProject(name: string, entries: JournalEntry[], hash: string | null): void {
+  // Boot refreshes before any Command; an empty Journal is not a project yet (issue #48).
+  projects?.note(name, { entries }, hash);
+}
+
+/** Called before every Command that replaces the whole Model, so the next one forks a project. */
+export function forkProject(): void {
+  projects?.fork();
 }
 
 export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+  // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
+  // that ends on a solve comes back solved on screen rather than as a Model with no Result.
+  const replay = async (cmds: ShareCommand[]): Promise<void> => {
+    let solved: unknown = null;
+    for (const cmd of cmds) {
+      const ack = await transport.dispatch(cmd as never);
+      if (String(cmd.cmd).startsWith('solve.') || cmd.cmd === 'study.converge') solved = ack;
+    }
+    if (solved) await results?.onAck(solved);
+  };
+  const own = makeProjects({
+    // A browser with IndexedDB blocked (private mode, or a headless harness) keeps working:
+    // projects are then per-session, the start screen says so, and file.save is still there.
+    store: typeof indexedDB === 'undefined' ? memoryProjects() : indexedDbProjects(indexedDB),
+    replay,
+    reset: async (name) => void (await transport.dispatch({ cmd: 'model.new', name } as never)),
+    thumbnail: () => thumbnailOf(viewer),
+    initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
+    onError: (e) => console.warn('the project save failed', e),
+    onChange: () => store.set({ projects: own.list(), project: own.current() }),
+  });
+  projects = own;
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -102,7 +134,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         store.set({ clipOn: p !== null });
         v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
       },
-      toggle: (layer, on) => v().setLayer(layer, on ?? true),
+      toggle: (layer, on) => {
+        const visible = v().setLayer(layer, on);
+        store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
+      },
       setVisible: (bodies, on) => v().setVisible(bodies, on),
       setTheme: (t) => {
         store.set({ theme: t });
@@ -128,9 +163,14 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     },
     panels: { toggle: (panel, open) => store.togglePanel(panel, open) },
     script: {
+      validate: (code, timeoutMs) => {
+        if (!scripts) throw new FemError('unsupported', 'no validation Worker is available', 'query.validateScript', 'run the app with script workers');
+        return scripts.validate(code, timeoutMs);
+      },
       // A script's Commands are the AI's, not the person's: the Journal's `who` column says so.
       run: async (code, timeoutMs) => {
         if (!scripts) throw new FemError('unsupported', 'no script Worker is available in this host', 'script.run', 'run the app, not the test harness');
+        if (scripts.running) throw new FemError('unsupported', 'a script or validation is already running', 'script.run', 'stop it with script.stop first');
         store.set({ scriptRunning: true, scriptOut: [], source: 'ai', tab: 'script' });
         try {
           const out = await scripts.run(code, timeoutMs);
@@ -153,7 +193,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
       clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
     },
-    skills: () => [],
+    skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
       pick: () =>
@@ -185,41 +225,38 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         store.log('command', 'share link copied');
         return { url };
       },
+      // The privacy switch. It stops writing; it never deletes what is already saved, because
+      // with a background save into a project there is no "unsaved" copy to throw away.
       setAutosave: (on) => {
-        autosave.setEnabled(on);
+        own.setEnabled(on);
         localStorage.setItem('femlab.autosave', on ? 'on' : 'off');
-        if (on) return;
-        lastSaved = null;
-        void autosave.clear();
       },
-      restore: async () => {
-        const saved = await autosave.read();
-        if (!saved) return null;
-        // As with an example: a restored Journal that ends on a solve comes back solved on screen.
-        let solved: unknown = null;
-        await applyShared(
-          {
-            dispatch: async (cmd) => {
-              const ack = await transport.dispatch(cmd as never);
-              if (String(cmd.cmd).startsWith('solve.') || cmd.cmd === 'study.converge') solved = ack;
-              return ack;
-            },
-          },
-          saved.cmds,
-        );
-        if (solved) await results?.onAck(solved);
-        return { name: saved.name, at: saved.at, commands: saved.cmds.length };
-      },
-      autosave: () => ({ enabled: autosave.enabled(), saved: lastSaved }),
     },
-    project: {
-      open: soon('the project folder', 'use file.open and file.save for now'),
-      close: soon('the project folder', 'use file.open and file.save for now'),
-      refresh: soon('the project folder', 'use file.open and file.save for now'),
+    projects: {
+      new: (name) => own.new(name),
+      open: (id) => own.open(id),
+      rename: (id, name) => own.rename(id, name),
+      delete: (id) => own.delete(id),
+      save: () => own.save(),
+      list: () => own.list(),
+      current: () => own.current(),
+    },
+    folder: {
+      // The Assistant picker supplies the folder skill source; full folder I/O is #13.
+      open: soon('the folder on disk', 'use file.open and file.save for now'),
+      close: () => store.setFolder(null),
+      refresh: async () => {
+        const folder = store.state.folder;
+        if (!folder) throw new FemError('file.not-found', 'no folder is open', 'folder', 'open a project folder in the Assistant');
+        await folder.refresh();
+        // Closing/replacing a folder while this read is in flight must not restore the old one.
+        if (store.state.folder === folder) store.setFolder(folder);
+      },
+
       info: () => null,
-      readText: soon('the project folder', 'use file.open for now'),
-      writeText: soon('the project folder', 'use file.save for now'),
-      writeBytes: soon('the project folder', 'use file.save for now'),
+      readText: soon('the folder on disk', 'use file.open for now'),
+      writeText: soon('the folder on disk', 'use file.save for now'),
+      writeBytes: soon('the folder on disk', 'use file.save for now'),
     },
     examples: { fetch: fetchExample },
     ai: {
