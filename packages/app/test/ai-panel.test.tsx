@@ -43,6 +43,7 @@ describe('the assistant drawer', () => {
     // Unmount, not just detach: a live panel keeps re-running the effect that owns `chatBridge`.
     for (const root of [...document.body.children]) render(null, root as HTMLElement);
     document.body.innerHTML = '';
+    chatBridge.pending = null;
     localStorage.clear();
   });
 
@@ -128,6 +129,26 @@ describe('the assistant drawer', () => {
     chatBridge.clear();
     await tick();
     expect(root.textContent).not.toContain('no anthropic API key yet');
+  });
+
+  // Issue #40: "open the drawer, then chat.send" is one tick, and the panel mounts on the next.
+  it('keeps a chat.send made before it mounted, and sends it on mount', async () => {
+    chatBridge.send('sent before the drawer existed');
+    expect(chatBridge.pending).toBe('sent before the drawer existed');
+    const { root, store } = await mount();
+    await tick();
+    // No key, so the buffered line lands as the drawer's own answer and opens Settings, which is
+    // exactly what #40 asks for. Dropped, it would say nothing at all.
+    expect(root.textContent).toContain('no anthropic API key yet');
+    expect(store.state.panels['assistant.settings']).toBe(true);
+    expect(chatBridge.pending).toBeNull();
+  });
+
+  it('goes back to buffering when it unmounts, so the next send is not lost either', async () => {
+    const { root } = await mount();
+    render(null, root);
+    chatBridge.send('after the drawer closed');
+    expect(chatBridge.pending).toBe('after the drawer closed');
   });
 });
 
