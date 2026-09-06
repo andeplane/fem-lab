@@ -8,7 +8,7 @@ import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from '
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
 import { type ShareCommand, shareUrl } from './share';
-import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
+import { EMPTY_SELECTION, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import type { WorkerTransport } from './worker-transport';
@@ -141,7 +141,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         const visible = v().setLayer(layer, on);
         store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
       },
-      setVisible: (bodies, on) => v().setVisible(bodies, on),
+      setVisible: (bodies, on) => {
+        v().setVisible(bodies, on);
+        store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
+      },
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;

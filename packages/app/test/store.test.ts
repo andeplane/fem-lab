@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Store, consoleReducer, initialState, panelsReducer, refsOf, selectionReducer } from '../src/store';
+import { Store, consoleReducer, initialState, panelsReducer, refsOf, selectionReducer, visibilityReducer } from '../src/store';
 
 const sel = (bodies: string[] = [], faces: string[] = [], sets: string[] = []) => ({ bodies, faces, sets, refs: refsOf({ bodies, faces, sets }) });
 
@@ -40,6 +40,21 @@ describe('panelsReducer', () => {
     expect(panelsReducer({}, 'examples')['examples']).toBe(true);
     expect(panelsReducer({ examples: true }, 'examples')['examples']).toBe(false);
     expect(panelsReducer({ examples: true }, 'examples', true)['examples']).toBe(true);
+  });
+
+  it('keeps one tree menu open and gives tree groups a real open default', () => {
+    const a = panelsReducer(initialState.panels, 'tree.menu.body:a', true);
+    const b = panelsReducer(a, 'tree.menu.body:b', true);
+    expect(b['tree.menu.body:a']).toBe(false);
+    expect(b['tree.menu.body:b']).toBe(true);
+    expect(panelsReducer(initialState.panels, 'tree.geometry')['tree.geometry']).toBe(false);
+  });
+});
+
+describe('visibilityReducer', () => {
+  it('hides without duplicates and shows only the named bodies', () => {
+    expect(visibilityReducer(['column'], ['beam', 'beam'], false)).toEqual(['column', 'beam']);
+    expect(visibilityReducer(['column', 'beam'], ['beam'], true)).toEqual(['column']);
   });
 });
 
