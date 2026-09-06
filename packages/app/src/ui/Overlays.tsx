@@ -4,7 +4,7 @@
 import type { CommandDef } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import { engineChip } from '../capabilities';
-import type { UiState } from '../store';
+import type { ExampleDifficulty, ExampleFilter, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 import { humanise } from './schema';
 
@@ -100,20 +100,45 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
 export interface ExampleEntry {
   name: string;
   commands: number;
+  title: string;
+  tag: string;
+  tags: string[];
+  difficulty: ExampleDifficulty;
   summary: string;
+  expected: {
+    quantity: string;
+    value: number | number[];
+    unit: string;
+    reference: string;
+  };
+  thumbnail: string | null;
 }
+
+export function filterExamples(items: ExampleEntry[], filter: ExampleFilter): ExampleEntry[] {
+  return items.filter((item) => (filter.tag === null || item.tags.includes(filter.tag)) && (filter.difficulty === null || item.difficulty === filter.difficulty));
+}
+
+export const expectedValue = (expected: ExampleEntry['expected']): string =>
+  `${Array.isArray(expected.value) ? expected.value.join(' · ') : String(expected.value)} ${expected.unit}`;
 
 export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const [items, setItems] = useState<ExampleEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const open = s.panels['examples'] === true;
   useEffect(() => {
     if (!open) return;
+    setLoaded(false);
     fetch(`${import.meta.env.BASE_URL}examples/index.json`)
       .then((r) => r.json() as Promise<{ examples: ExampleEntry[] }>)
-      .then((j) => setItems(j.examples))
-      .catch(() => setItems([]));
+      .then((j) => (setItems(j.examples), setLoaded(true)))
+      .catch(() => (setItems([]), setLoaded(true)));
   }, [open]);
   if (!open) return null;
+  const tags = [...new Set(items.flatMap((item) => item.tags))].sort();
+  const shown = filterExamples(items, s.exampleFilter);
+  const filtered = s.exampleFilter.tag !== null || s.exampleFilter.difficulty !== null;
+  const applyFilter = (patch: Partial<ExampleFilter>) =>
+    void dispatch({ cmd: 'example.filter', ...s.exampleFilter, ...patch }).catch(() => undefined);
   return (
     <div class="overlay wide" onClick={() => void dispatch({ cmd: 'panel.toggle', panel: 'examples', open: false })}>
       <div class="gallery" role="dialog" aria-modal="true" aria-label="Examples and benchmarks" onClick={(e) => e.stopPropagation()}>
@@ -124,21 +149,82 @@ export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
             ×
           </Cmd>
         </div>
+        <div class="gallery-filters">
+          <label>
+            <span>Tag</span>
+            <select
+              aria-label="Filter examples by tag"
+              data-cmd="example.filter"
+              value={s.exampleFilter.tag ?? ''}
+              onChange={(e) => applyFilter({ tag: (e.target as HTMLSelectElement).value || null })}
+            >
+              <option value="">all tags</option>
+              {tags.map((tag) => (
+                <option key={tag} value={tag}>
+                  {tag}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Difficulty</span>
+            <select
+              aria-label="Filter examples by difficulty"
+              data-cmd="example.filter"
+              value={s.exampleFilter.difficulty ?? ''}
+              onChange={(e) => applyFilter({ difficulty: ((e.target as HTMLSelectElement).value ? Number((e.target as HTMLSelectElement).value) : null) as ExampleDifficulty | null })}
+            >
+              <option value="">all levels</option>
+              <option value="1">1 · start here</option>
+              <option value="2">2 · applied</option>
+              <option value="3">3 · advanced</option>
+            </select>
+          </label>
+          <span class="gallery-count mono" aria-live="polite">
+            {shown.length} / {items.length}
+          </span>
+          {filtered ? (
+            <Cmd dispatch={dispatch} cmd="example.filter" class="tbutton" args={{ tag: null, difficulty: null }}>
+              reset filters
+            </Cmd>
+          ) : null}
+        </div>
         <div class="cards-grid">
-          {items.map((e) => (
+          {!loaded ? <div class="empty-note">Loading bundled examples…</div> : null}
+          {shown.map((e) => (
             <Cmd key={e.name} dispatch={dispatch} cmd="file.openExample" class="ex-card" args={{ name: e.name }} title={`file.openExample ${e.name}`}>
-              <span class="ex-thumb" />
+              <span class="ex-thumb">
+                {e.thumbnail ? (
+                  <img src={`${import.meta.env.BASE_URL}examples/${e.thumbnail}`} alt={`Rendered viewer preview of ${e.title}`} width="320" height="180" loading="lazy" decoding="async" />
+                ) : (
+                  <span class="ex-thumb-pending mono">preview pending</span>
+                )}
+                <span class="ex-tag mono">{e.tag}</span>
+              </span>
               <span class="ex-body">
-                <span class="ex-title">{humanise(e.name.replace(/-/g, ' '))}</span>
+                <span class="ex-title">{e.title || humanise(e.name.replace(/-/g, ' '))}</span>
                 <span class="ex-text">{e.summary}</span>
+                <span class="ex-expected">
+                  <span class="section-label">{e.expected.quantity}</span>
+                  <span class="mono cyan">{expectedValue(e.expected)}</span>
+                  <span class="ex-reference">{e.expected.reference}</span>
+                </span>
                 <span class="ex-foot mono">
-                  <span>Journal</span>
-                  <span class="cyan">{e.commands} Commands</span>
+                  <span>difficulty {e.difficulty}</span>
+                  <span>{e.commands} Commands</span>
                 </span>
               </span>
             </Cmd>
           ))}
-          {items.length === 0 ? <div class="empty-note">No bundled examples were found. `npm run dev` copies them from crates/engine/benches/journals.</div> : null}
+          {loaded && items.length === 0 ? <div class="empty-note">No bundled examples were found. `npm run dev` copies them from crates/engine/benches/journals.</div> : null}
+          {loaded && items.length > 0 && shown.length === 0 ? (
+            <div class="empty-note gallery-empty">
+              <span>No examples match both filters.</span>
+              <Cmd dispatch={dispatch} cmd="example.filter" class="tbutton outline" args={{ tag: null, difficulty: null }}>
+                reset filters
+              </Cmd>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

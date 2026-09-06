@@ -140,7 +140,20 @@ jobs:
       - run: npm run test -w packages/mcp
       - run: npm run build -w packages/mcp
       - run: npm run test -w packages/app
-      # `postbuild` fails the job if an API key ever reaches dist/.
+      # The first build is the real app the supported-Chromium thumbnail pass drives. That pass
+      # writes fixed 320×180 viewer canvases into public/examples; the final build packages them.
+      - run: npm run build -w packages/app
+      - name: playwright version for thumbnails
+        id: thumbnail-pw
+        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.thumbnail-pw.outputs.v }}
+      - run: npx playwright install --with-deps chromium
+        working-directory: packages/app
+      - run: npm run thumbnails -w packages/app
+      # `postbuild` fails if an API key reaches the final dist, which now includes thumbnails.
       - run: npm run build -w packages/app
       # The bundle budget (plan C row 37): landing JS ≤ 1 MB gz, cold boot ≤ 3 MB gz. The table
       # of every chunk with its raw and gzipped size goes in the log either way.

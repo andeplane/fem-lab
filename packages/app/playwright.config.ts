@@ -25,6 +25,7 @@ export default defineConfig({
   projects: [
     { name: 'cpu', grep: /@cpu/, use: { ...devices['Desktop Chrome'], baseURL: PREVIEW } },
     { name: 'sw', grep: /@sw/, use: { ...devices['Desktop Chrome'], baseURL: HEADERLESS } },
+    { name: 'thumbnails', grep: /@thumbnails/, use: { ...devices['Desktop Chrome'], deviceScaleFactor: 1, baseURL: PREVIEW } },
     {
       name: 'gpu',
       grep: /@gpu/,

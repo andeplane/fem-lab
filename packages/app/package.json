@@ -12,6 +12,7 @@
     "test": "vitest run",
     "typecheck": "tsc -p . --noEmit",
     "e2e": "playwright test",
+    "thumbnails": "playwright test --project=thumbnails",
     "postbuild": "node scripts/check-no-secrets.mjs",
     "size": "node ../../tools/size-check.mjs"
   },
