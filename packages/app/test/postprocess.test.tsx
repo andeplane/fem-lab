@@ -3,20 +3,8 @@
 // a pure function or a component over one `query.result` fixture, so none of this needs wasm.
 import type { ResultSummary, StudyReport } from '@femlab/registry';
 import { render } from 'preact';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-// The deformation-bar tests mount the whole App, whose viewer pane imports three.js and tries to
-// open a WebGL2 context; happy-dom has none, and three.js says so on the console after the file
-// has finished. Vitest then fails the run for a console line it could not deliver
-// ("Closing rpc while onUserConsoleLog was pending"). A Viewer that refuses up front keeps the
-// pane on its no-WebGL2 message and three.js out of the test entirely.
-vi.mock('../src/viewer/viewer', () => ({
-  Viewer: class {
-    constructor() {
-      throw new Error('no WebGL2 in tests');
-    }
-  },
-}));
 import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, modeChoice, showFieldArgs, siUnitOf } from '../src/fields';
 import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnitude, yieldQuantities } from '../src/results';
 import { Store, initialState, type UiState } from '../src/store';
