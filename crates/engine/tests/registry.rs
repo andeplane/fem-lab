@@ -3323,6 +3323,48 @@ fn the_mapped_meshers_implicit_body_owns_a_material() {
 
 // ---------------------------------------------------------------- query.report
 
+#[test]
+fn material_rename_preserves_the_mapped_assignment_and_solve_after_replay() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"cook-rename"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"1 m"}}"#);
+    ok(&mut e, COOK);
+    ok(&mut e, r#"{"cmd":"material.add","name":"soft","E":"1 Pa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"soft","bodies":["sheet"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"sheet.left"}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"sheet.right","total":["0 N","1 N","0 N"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":["tip"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let before = probe_at(&mut e, "static", Field::Displacement, Some(1), ["48 m", "60 m", "0 m"]);
+    assert!(before > 0.0 && before.is_finite());
+    // Renaming an unrelated Material must leave the implicit assignment alone.
+    ok(&mut e, r#"{"cmd":"material.add","name":"unused","E":"2 Pa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"material","name":"unused","to":"other"}"#);
+    assert_eq!(e.model().material_of_body("sheet"), Some("soft"));
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"material","name":"soft","to":"renamed"}"#);
+    assert_eq!(e.model().material_of_body("sheet"), Some("renamed"));
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a ModelSummary") };
+    assert_eq!(m.bodies[0].material.as_deref(), Some("renamed"));
+    assert_eq!(m.materials[0].assigned_to, ["sheet"]);
+    assert!(!m.warnings.iter().any(|w| w.code == "model.no-material"));
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model().material_of_body("sheet"), Some("soft"));
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.model().material_of_body("sheet"), Some("renamed"));
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(probe_at(&mut e, "static", Field::Displacement, Some(1), ["48 m", "60 m", "0 m"]), before);
+    let file = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&file.journal.entries, false, true)).expect("renamed Journal replays");
+    assert_eq!(replayed.model_hash(), e.model_hash());
+    assert_eq!(replayed.model().material_of_body("sheet"), Some("renamed"));
+    assert_eq!(probe_at(&mut replayed, "static", Field::Displacement, Some(1), ["48 m", "60 m", "0 m"]), before);
+    let mut reopened = engine();
+    reopened.import_file(file).expect("renamed Model reopens");
+    ok(&mut reopened, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(probe_at(&mut reopened, "static", Field::Displacement, Some(1), ["48 m", "60 m", "0 m"]), before);
+}
+
 /// The shipped cantilever fixture, so the report is written about the model the gallery shows.
 const CANTILEVER_JOURNAL: &str = include_str!("../benches/journals/cantilever.json");
 

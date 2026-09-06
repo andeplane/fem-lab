@@ -1006,6 +1006,9 @@ impl Engine {
                         b.material = Some(to.into());
                     }
                 }
+                if m.mesher_material.as_deref() == Some(name) {
+                    m.mesher_material = Some(to.into());
+                }
             }
             ObjectKind::Set => {
                 for s in &mut m.sets {
