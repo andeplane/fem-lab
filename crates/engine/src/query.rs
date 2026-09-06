@@ -731,8 +731,9 @@ pub enum Output {
         kind: ObjectKind,
         name: String,
     },
-    /// Boxed: a Result summary is much larger than every other variant, and an `Output` is
-    /// returned by value from every Command.
+    // Boxed, and not a doc comment because the reason is internal and would reach the schema:
+    // a Result summary is much larger than every other variant of an enum returned by value
+    // from every Command. `Box` changes neither the serde shape nor the JSON schema.
     Solve {
         summary: Box<ResultSummary>,
     },
