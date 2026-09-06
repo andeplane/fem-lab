@@ -3,7 +3,6 @@
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
 import type { ModelSummary } from '@femlab/registry';
-import { useEffect, useState } from 'preact/hooks';
 import { fieldChoices, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
@@ -279,12 +278,8 @@ function Menu({ item, dispatch, close }: { item: TreeItem; dispatch: Dispatch; c
 }
 
 export function ModelTree({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
-  const [menu, setMenu] = useState<string | null>(null);
-  useEffect(() => {
-    const open = Object.keys(s.panels).find((panel) => panel.startsWith('tree.menu.') && s.panels[panel]);
-    if (open) setMenu(open.slice('tree.menu.'.length));
-    else setMenu(null);
-  }, [s.panels]);
+  const openMenu = Object.keys(s.panels).find((panel) => panel.startsWith('tree.menu.') && s.panels[panel]);
+  const menu = openMenu?.slice('tree.menu.'.length) ?? null;
   const groups = treeGroups(s);
   const stepNames = (s.model?.steps ?? []).map((x) => x.name);
   const selected = s.form ? String(s.form.values['name'] ?? '') : '';
@@ -320,7 +315,6 @@ export function ModelTree({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
                         onContextMenu={(e) => {
                           e.preventDefault();
                           void dispatch({ cmd: 'panel.toggle', panel: menuPanel, open: true }).catch(() => undefined);
-                          setMenu(itemKey);
                         }}
                       >
                         <Cmd
@@ -386,14 +380,12 @@ export function ModelTree({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
                           pressed={menu === itemKey}
                           label={`Actions for ${item.name}`}
                           title={`actions for ${item.name}`}
-                          onRun={() => {
-                            void dispatch({ cmd: 'panel.toggle', panel: menuPanel, open: menu !== itemKey }).catch(() => undefined);
-                            setMenu(menu === itemKey ? null : itemKey);
-                          }}
                         >
                           ⋯
                         </Cmd>
-                        {menu === itemKey ? <Menu item={item} dispatch={dispatch} close={() => setMenu(null)} /> : null}
+                        {menu === itemKey ? (
+                          <Menu item={item} dispatch={dispatch} close={() => void dispatch({ cmd: 'panel.toggle', panel: menuPanel, open: false }).catch(() => undefined)} />
+                        ) : null}
                       </div>
                     );
                   })}

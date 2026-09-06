@@ -136,7 +136,21 @@ export const initialState: UiState = {
   viewMode: 'geometry',
   colormap: 'viridis',
   deformScale: 1,
-  panels: { assistant: false, examples: false, export: false, report: false, palette: false },
+  panels: {
+    assistant: false,
+    examples: false,
+    export: false,
+    report: false,
+    palette: false,
+    'tree.geometry': true,
+    'tree.materials': true,
+    'tree.mesh': true,
+    'tree.constraints': true,
+    'tree.loads': true,
+    'tree.steps': true,
+    'tree.results': true,
+    'tree.plugins': true,
+  },
   hiddenBodies: [],
   tab: 'journal',
   objects: [],
@@ -200,7 +214,12 @@ export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): Console
 }
 
 export function panelsReducer(panels: Record<string, boolean>, panel: string, open?: boolean): Record<string, boolean> {
-  return { ...panels, [panel]: open ?? !panels[panel] };
+  const nextOpen = open ?? !panels[panel];
+  if (!panel.startsWith('tree.menu.') || !nextOpen) return { ...panels, [panel]: nextOpen };
+  const next = { ...panels };
+  for (const key of Object.keys(next)) if (key.startsWith('tree.menu.')) next[key] = false;
+  next[panel] = true;
+  return next;
 }
 
 export function visibilityReducer(hidden: string[], bodies: string[], on: boolean): string[] {

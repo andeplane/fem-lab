@@ -41,6 +41,14 @@ describe('panelsReducer', () => {
     expect(panelsReducer({ examples: true }, 'examples')['examples']).toBe(false);
     expect(panelsReducer({ examples: true }, 'examples', true)['examples']).toBe(true);
   });
+
+  it('keeps one tree menu open and gives tree groups a real open default', () => {
+    const a = panelsReducer(initialState.panels, 'tree.menu.body:a', true);
+    const b = panelsReducer(a, 'tree.menu.body:b', true);
+    expect(b['tree.menu.body:a']).toBe(false);
+    expect(b['tree.menu.body:b']).toBe(true);
+    expect(panelsReducer(initialState.panels, 'tree.geometry')['tree.geometry']).toBe(false);
+  });
 });
 
 describe('visibilityReducer', () => {

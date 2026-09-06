@@ -125,6 +125,25 @@ describe('the shell', () => {
     ]);
   });
 
+  it('keeps row menus exclusive and a closed menu closed across unrelated panel changes', async () => {
+    const { root, store } = mount();
+    await afterEffects();
+    const actions = [...root.querySelectorAll<HTMLButtonElement>('[aria-label^="Actions for"]')];
+    expect(actions.length).toBeGreaterThan(1);
+    const secondName = actions[1]!.getAttribute('aria-label')!.slice('Actions for '.length);
+    actions[0]!.click();
+    await waitFor(() => root.querySelector('.menu'), 'the first row menu');
+    actions[1]!.click();
+    await waitFor(() => root.querySelector('.menu')?.closest('.row')?.querySelector('.name')?.textContent === secondName, 'the second row menu');
+    expect(Object.entries(store.state.panels).filter(([key, open]) => key.startsWith('tree.menu.') && open)).toHaveLength(1);
+
+    root.querySelector('.menu')!.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    await waitForGone(() => root.querySelector('.menu'), 'the dismissed row menu');
+    store.togglePanel('examples', true);
+    await afterEffects();
+    expect(root.querySelector('.menu')).toBeNull();
+  });
+
   it('names only Commands the registry has on every clickable', () => {
     const { root, registry } = mount();
     const { commands, queries } = registry.list();
