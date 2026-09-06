@@ -280,6 +280,29 @@ impl Engine {
             .step(step_name)
             .ok_or_else(|| Error::not_found("step", step_name, &self.model.names(ObjectKind::Step)))?
             .clone();
+        if step.procedure == Procedure::Modal {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!(
+                    "step '{}' is modal; a nodal mode amplitude is not a mesh-independent convergence quantity",
+                    step.name
+                ),
+            )
+            .at("step.procedure")
+            .suggest("solve.run at each mesh and compare the same frequency with query.result"));
+        }
+        if let Some(previous) = &step.after {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!(
+                    "step '{}' continues '{previous}'; a convergence study must recompute its dependency on each mesh",
+                    step.name
+                ),
+            )
+            .at("step.after")
+            .suggest("mesh.set, then solve.run on each dependency and the target Step for every refinement"));
+        }
+        let proc_step = procedure_step(&step, SolveOptions::default())?;
         let settings = self.model.mesh.clone().ok_or_else(|| {
             Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
                 .suggest("mesh.set { mesher: { kind: \"lattice\", size: \"25 mm\" } }")
@@ -314,21 +337,16 @@ impl Engine {
             self.mesh = None;
             self.mesh()?;
             let started = self.host.now_ms();
-            let mut result = {
+            let (mut result, dofs) = {
                 let built = self.mesh.as_ref().expect("built above");
                 let p = build_problem(&self.model, built, &step)?;
-                let procedure_step = procedure::Step::Static { solver: SolveOptions::default() };
-                procedure::run(&p, &procedure_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?
+                let result = procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
+                (result, p.n_dofs() as u64)
             };
             result.solver.time_ms = self.host.now_ms() - started;
             let built = self.mesh.as_ref().expect("built above");
             let (value, u) = self.quantity_of(&result, &built.mesh, quantity)?;
-            rows.push(StudyRow {
-                size: where_,
-                dofs: (built.mesh.n_nodes() * built.mesh.dim) as u64,
-                value,
-                time_ms: result.solver.time_ms,
-            });
+            rows.push(StudyRow { size: where_, dofs, value, time_ms: result.solver.time_ms });
             values.push(value);
             unit = u;
             last = Some(result);
