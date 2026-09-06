@@ -448,6 +448,8 @@ Write the current Mesh out as text the host saves; the Mesh is built first if it
 stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
 id and the Body index as cell data. Name a `step` to add that Step's result fields as
 point data — displacement, reaction, stress and von Mises — so ParaView colours by them.
+Result fields require the Model state they were solved on; `result.stale` means run
+`solve.run` on that Step again before exporting it with the current Mesh.
 `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
 
 | Argument | Required | Schema | Description |
@@ -588,7 +590,9 @@ Step whose Result this one continues — a static Step after a heat Step picks u
 temperature field and turns it into thermal stress. The remaining fields belong to one
 procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-`dtFactor` and `outputEvery` to explicit.
+`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
+conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
+`theta` must lie in [0, 1].
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -2510,6 +2514,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.convert](#queries-query-convert)
 - [query.cost](#queries-query-cost)
 - [query.journal](#queries-query-journal)
+- [query.materialLibrary](#queries-query-materialLibrary)
 - [query.mesh](#queries-query-mesh)
 - [query.model](#queries-query-model)
 - [query.objects](#queries-query-objects)
@@ -2552,8 +2557,10 @@ Returns: `Converted`.
 
 ### query.cost
 
-Cost of solving a Step before running it: DOF, matrix non-zeros, memory, and whether
-it fits the current host. Use it before solving large models.
+Cost before solving: DOF, matrix non-zero bounds and mandatory assembly memory lower
+bound. Counting uses at most 16 MiB scratch after meshing. Feasibility is false above
+a fixed 1.5 GiB planning budget, otherwise unknown: solver fill/workspace are excluded.
+Use before large solves; this query does not promise that a solve fits the current host.
 
 Returns: `CostEstimate`.
 
@@ -2575,6 +2582,23 @@ Returns: `JournalDump`.
 | --- | --- | --- | --- |
 | fromSeq | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.journal"}</code> |  |
+
+<a id="queries-query-materialLibrary"></a>
+
+### query.materialLibrary
+
+Primary-source material data with dimensions, grade, condition, temperature and a source
+for every reported property. With no `name`, lists the stable catalogue. With a canonical
+id, name or unambiguous alias, returns that entry. Missing properties are explicit nulls:
+never infer them before material.add. Copy the entry's `materialAddSource` into that
+Command's `source` so the Journal preserves provenance.
+
+Returns: `MaterialLibrary`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | no | <code>{"type":["string","null"]}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.materialLibrary"}</code> |  |
 
 <a id="queries-query-mesh"></a>
 
@@ -2622,6 +2646,7 @@ Returns: `ObjectList`.
 ### query.path
 
 A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
 
 Returns: `PathResult`.
 
@@ -2641,6 +2666,7 @@ Returns: `PathResult`.
 
 A field value interpolated at a point (default: the last solved Step). Component
 indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
 
 Returns: `ProbeResult`.
 
