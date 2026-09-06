@@ -268,10 +268,11 @@ export interface Fem {
   solve: {
     /**
      * Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
-     * element quality) and refuses with a suggested fix. Returns extremes and reactions;
-     * always check that reactions balance the applied loads before trusting a stress. A Step
-     * with `after` requires its predecessor's Result to match the current Model state;
-     * after an edit, solve the predecessor again before continuing the chain.
+     * element quality) and refuses with a suggested fix. Returns extremes, reactions and every
+     * omitted optional material property the successful solver actually read as zero; always
+     * check that reactions balance the applied loads before trusting a stress. A Step with
+     * `after` requires its predecessor's Result to match the current Model state; after an edit,
+     * solve the predecessor again before continuing the chain.
      */
     run(args: Omit<Extract<Command, { cmd: 'solve.run' }>, 'cmd'>): Promise<Ack>;
   };
@@ -339,8 +340,9 @@ export interface Fem {
     set(args: Omit<Extract<Query, { query: 'query.set' }>, 'query'>): Promise<SetInfo>;
     /**
      * Summary of a Step's Result: solver info, extremes of every field with their location,
-     * reactions per constraint and the applied totals, and whether the Result is stale
-     * (the Model changed after it was solved). Check the reaction balance first.
+     * reactions per constraint, applied totals, solver-used omitted material assumptions, and
+     * whether the Result is stale (the Model changed after it was solved). Check the reaction
+     * balance and assumptions first.
      */
     result(args?: Omit<Extract<Query, { query: 'query.result' }>, 'query'>): Promise<ResultSummary>;
     /**

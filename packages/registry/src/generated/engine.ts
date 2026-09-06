@@ -2609,6 +2609,12 @@ export type Sweep =
       kind: "revolve";
     };
 /**
+ * An omitted optional material property that a successful solve read as its resolved zero.
+ * The value is kept in SI with the Result, so later unit, name and material edits cannot
+ * rewrite the assumption under an already-computed answer.
+ */
+export type AssumedMaterialProperty = "rho" | "alpha";
+/**
  * What a Command produced beyond changing the Model.
  */
 export type Output =
@@ -3192,12 +3198,12 @@ export interface RefineBoxSpec {
  * Append-only list of applied Commands (undo truncates it).
  */
 export interface Journal {
-  entries: JournalEntry[];
+  entries: ModelFile_JournalEntry[];
 }
 /**
  * One applied Command and the Model hash after it.
  */
-export interface JournalEntry {
+export interface ModelFile_JournalEntry {
   seq: number;
   cmd: ModelFile_Command;
   hashAfter: string;
@@ -3445,6 +3451,11 @@ export interface ResultSummary {
    */
   appliedTotal: [Valued, Valued, Valued];
   /**
+   * Optional material properties the successful procedure actually read as zero because the
+   * Material omitted them. Empty when every solver-used property was explicit.
+   */
+  assumptions?: ResultAssumption[];
+  /**
    * Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
    * shape is the Result field named `mode:k`.
    */
@@ -3486,6 +3497,21 @@ export interface ReactionRow {
    * @maxItems 3
    */
   total: [Valued, Valued, Valued];
+}
+/**
+ * One solver-used material assumption captured at solve time.
+ */
+export interface ResultAssumption {
+  step: string;
+  body: string;
+  material: string;
+  property: AssumedMaterialProperty;
+  value: Valued;
+  /**
+   * The Material provenance at solve time; null when the Material named none.
+   */
+  source?: string | null;
+  cause: string;
 }
 /**
  * One time of a transient Step's history: the extremes of the field at that instant.
@@ -3634,10 +3660,18 @@ export interface JournalDump {
    * Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
    */
   hash: string;
-  entries: JournalEntry[];
+  entries: QueryResult_JournalEntry[];
   revision: number;
   canUndo: boolean;
   canRedo: boolean;
+}
+/**
+ * One applied Command and the Model hash after it.
+ */
+export interface QueryResult_JournalEntry {
+  seq: number;
+  cmd: Command;
+  hashAfter: string;
 }
 /**
  * `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
@@ -3654,11 +3688,11 @@ export interface JournalDiff {
   /**
    * The base Journal's ordered tail after `sharedEntries`.
    */
-  removed: JournalEntry[];
+  removed: QueryResult_JournalEntry[];
   /**
    * The current Journal's ordered tail after `sharedEntries`.
    */
-  added: JournalEntry[];
+  added: QueryResult_JournalEntry[];
 }
 /**
  * `query.script` response.
