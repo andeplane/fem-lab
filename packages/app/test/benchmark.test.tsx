@@ -1,4 +1,4 @@
-import type { ResultSummary, Valued } from '@femlab/registry';
+import type { ResultSummary, StudyReport, Valued } from '@femlab/registry';
 import { render } from 'preact';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -84,6 +84,25 @@ describe('benchmark comparison registry', () => {
     expect(reading.pass).toBe(true);
   });
 
+  it('samples hoop stress away from the tube base with the thin-wall approximation caveat', async () => {
+    const comparison = BENCHMARK_COMPARISONS['tube-under-pressure']!;
+    const query = vi.fn(async () => ({ value: { value: 71.1645, unit: 'MPa' }, element: 28, interpolated: true }));
+    const reading = await readBenchmark(comparison, result(), query);
+    expect(query).toHaveBeenCalledWith({ query: 'query.probe', field: 'stress', component: 1, at: ['47.5 mm', '0 mm', '100 mm'] });
+    expect(reading.percent).toBeCloseTo(6.3625, 3);
+    expect(reading.pass).toBe(true);
+  });
+
+  it('compares a three-mesh Richardson limit with the analytical beam limit', async () => {
+    const comparison = BENCHMARK_COMPARISONS['mesh-convergence-cantilever']!;
+    const study = { rows: [{ value: -0.1894 }, { value: -0.1901 }, { value: -0.19044 }], unit: 'mm', observedRate: 1.112, extrapolated: -0.19073000145 } as StudyReport;
+    const reading = await readBenchmark(comparison, result(), async () => undefined, study);
+    expect(reading.actual).toEqual([-0.19073000145]);
+    expect(reading.percent).toBeCloseTo(0.13325, 4);
+    expect(reading.pass).toBe(true);
+    await expect(readBenchmark(comparison, result(), async () => undefined)).rejects.toThrow('no three-mesh convergence-study extrapolation');
+  });
+
   it('compares every modal frequency and rejects incompatible Result shapes', async () => {
     const comparison = BENCHMARK_COMPARISONS['cantilever-modal']!;
     const modal = { ...result(), frequencies: [20.96, 41.91, 131.32, 262.66].map((value) => ({ value, unit: 'Hz' })) };
@@ -131,14 +150,14 @@ describe('benchmark comparison registry', () => {
 describe('example provenance lifecycle', () => {
   it('attaches metadata only after the example replay and its Result refresh finish', async () => {
     const store = new Store({ ...initialState, panels: { ...initialState.panels, examples: true } });
-    const journal = [{ cmd: { cmd: 'model.new', name: 'cantilever' } }, { cmd: { cmd: 'solve.run', step: 'static' } }];
+    const journal = [{ cmd: { cmd: 'model.new', name: 'cantilever' } }, { cmd: { cmd: 'study.converge', step: 'static' } }, { cmd: { cmd: 'solve.run', step: 'static' } }];
     const fetch = vi.fn(async (url: string) =>
       url.endsWith('index.json')
         ? ({ ok: true, json: async () => ({ examples: [example()] }) } as Response)
         : ({ ok: true, text: async () => JSON.stringify(journal) } as Response),
     );
     vi.stubGlobal('fetch', fetch);
-    const transport = { dispatch: vi.fn(async (cmd: { cmd: string }) => (cmd.cmd === 'solve.run' ? { output: { type: 'solve' } } : { output: { type: 'none' } })) } as unknown as WorkerTransport;
+    const transport = { dispatch: vi.fn(async (cmd: { cmd: string }) => (cmd.cmd === 'solve.run' ? { output: { type: 'solve' } } : cmd.cmd === 'study.converge' ? { output: { type: 'study', report: { rows: [] } } } : { output: { type: 'none' } })) } as unknown as WorkerTransport;
     const refresh = vi.fn(async () => {
       expect(store.state.benchmark).toBeNull();
       store.set({
@@ -147,12 +166,13 @@ describe('example provenance lifecycle', () => {
         revision: 2,
       });
     });
-    const results = { onAck: vi.fn(async () => expect(store.state.benchmark).toBeNull()) };
+    const results = { onAck: vi.fn(async (_ack: unknown) => expect(store.state.benchmark).toBeNull()) };
     const command = appHostCommands(store, transport, { current: null }, refresh, results as never).find((item) => item.name === 'file.openExample')!;
 
     await command.run({ name: 'cantilever' }, {} as never);
 
-    expect(transport.dispatch).toHaveBeenCalledTimes(2);
+    expect(transport.dispatch).toHaveBeenCalledTimes(3);
+    expect(results.onAck.mock.calls.map(([ack]) => (ack as { output: { type: string } }).output.type)).toEqual(['study', 'solve']);
     expect(store.state.benchmark?.name).toBe('cantilever');
     expect(store.state.benchmark).toMatchObject({ modelName: 'cantilever', modelHash: 'model-a', modelRevision: 2 });
     expect(store.state.benchmark?.journalHash).toBe(completeJournalHash(store.state.journal));
@@ -188,6 +208,17 @@ describe('Theory panel', () => {
     expect(root.textContent).toContain('modified example');
     expect(root.textContent).toContain('comparison is informative');
     expect(root.querySelector('.surface.pass')).toBeNull();
+  });
+
+  it('labels a mapped observable with its own reference instead of unrelated expected metadata', async () => {
+    const entry = { ...example('heated-fin'), expected: { quantity: 'peak von Mises', value: 160.2, unit: 'MPa', reference: 'no closed form; restraint dependent' } };
+    const benchmark = attachComparison(entry, provenance());
+    const solved = result([{ field: 'displacement', component: 0, min: mm(0), minAt: [mm(0), mm(0), mm(0)], max: mm(0.168386), maxAt: [mm(120), mm(20), mm(0)] }]);
+    const root = document.createElement('div');
+    render(<Theory benchmark={benchmark} result={solved} current={provenance()} query={async () => undefined} />, root);
+    await waitFor(() => root.querySelector('.theory-values'), 'thermal expansion comparison');
+    expect(root.querySelector('.theory-reference')?.textContent).toContain('uˣ at the free tip · 0.1656 mm');
+    expect(root.querySelector('.theory-reference')?.textContent).not.toContain('no closed form');
   });
 
   it('explains why LE10 makes no live verification claim', () => {

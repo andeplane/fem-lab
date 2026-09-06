@@ -294,17 +294,20 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
         // From this point the current Model is being replaced. Do not leave the old example's
         // theory beside a partial replay if a later Command fails.
-        store.set({ benchmark: null });
+        store.set({ benchmark: null, study: null });
         // An example that ends on solve.run opens solved, and a solved Model is shown as one:
         // the last solve's Ack goes where the Solve button's would (results tab, contours).
         let solved: unknown = null;
+        let study: unknown = null;
         for (const e of entries) {
           const ack = await transport.dispatch(e.cmd as never);
-          if (String(e.cmd.cmd).startsWith('solve.') || e.cmd.cmd === 'study.converge') solved = ack;
+          if (String(e.cmd.cmd).startsWith('solve.')) solved = ack;
+          if (e.cmd.cmd === 'study.converge') study = ack;
         }
         // The gallery has done its job; leaving it up hides the Model it just opened.
         store.togglePanel('examples', false);
         await refresh();
+        if (study) await results?.onAck(study);
         if (solved) await results?.onAck(solved);
         store.set({ benchmark: { ...benchmark, ...benchmarkProvenance(store.state.model, store.state.journal, store.state.revision) } });
         return { name, commands: entries.length };

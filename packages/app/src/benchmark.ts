@@ -1,4 +1,4 @@
-import type { JournalDump, ModelSummary, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
+import type { JournalDump, ModelSummary, ProbeResult, ResultSummary, StudyReport, Valued } from '@femlab/registry';
 import { FemError } from '@femlab/registry';
 
 export interface ExampleEntry {
@@ -14,7 +14,8 @@ export interface ExampleEntry {
 type Locator =
   | { kind: 'extreme'; field: string; component: number; pick: 'min' | 'max' }
   | { kind: 'probe'; field: string; component: number; at: [string, string, string] }
-  | { kind: 'frequencies' };
+  | { kind: 'frequencies' }
+  | { kind: 'study-extrapolated' };
 
 type Tolerance = { kind: 'percent'; value: number } | { kind: 'absolute'; value: number; unit: string };
 
@@ -110,7 +111,13 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
     tolerance: { kind: 'percent', value: 2 },
     source: 'MacNeal & Harder, Finite Elements in Analysis and Design 1 (1985) · catalogue B2',
   },
-  'mesh-convergence-cantilever': null,
+  'mesh-convergence-cantilever': {
+    locator: { kind: 'study-extrapolated' },
+    reference: { values: [0.1904762], unit: 'mm', label: '|uᶻ| Richardson limit at the tip' },
+    tolerance: { kind: 'percent', value: 0.2 },
+    magnitude: true,
+    source: 'Euler–Bernoulli bending solution PL³/3EI · catalogue B1/B5',
+  },
   'nafems-le1-membrane': {
     locator: { kind: 'probe', field: 'stress', component: 1, at: ['2 m', '0 m', '0 m'] },
     reference: { values: [92.7], unit: 'MPa', label: 'σᵧᵧ at point D' },
@@ -127,19 +134,22 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
     tolerance: { kind: 'percent', value: 2 },
     source: 'Restrained thermal-strain closed form −EαΔT/(1−ν) · catalogue C8',
   },
-  'tube-under-pressure': null,
+  'tube-under-pressure': {
+    locator: { kind: 'probe', field: 'stress', component: 1, at: ['47.5 mm', '0 mm', '100 mm'] },
+    reference: { values: [76], unit: 'MPa', label: 'σθ at the mid-wall, halfway from the base' },
+    tolerance: { kind: 'percent', value: 10 },
+    source: 'Thin-wall membrane estimate prₘ/t; t/rₘ = 0.105 sets its approximation scale, and the probe excludes the welded-base boundary layer',
+  },
 };
 
 /** Why a bundled reference cannot honestly be presented as a live pass/fail comparison. */
 export const BENCHMARK_UNMAPPED_REASONS: Record<string, string> = {
   'bolt-flange': 'No live comparison: the quoted peak is a stair-stepped bolt-hole stress with only two or three elements across the hole. The metadata explicitly treats it as a load-path picture, not a converged stress oracle.',
   'bracket-L': 'No live comparison: the Result peak lies at the sharp re-entrant corner, where linear-elastic stress is singular and rises with refinement. There is no finite corner-stress reference to pass.',
-  'mesh-convergence-cantilever': 'No live comparison: −0.19073 mm is the Richardson estimate calculated from all three study meshes. A single Result exposes one mesh solution; the convergence table, rather than an extreme or point probe, is the matching observable.',
   'nafems-le10-plate': 'Live comparison withheld: this model clamps the full outer face, unlike the published LE10 line support. Issue #183 tracks the matching variant.',
   'plate-with-hole-2d': 'No live comparison: 3σ is the local hoop stress of an infinite plate, while this finite-width full model reports global Cartesian and von Mises extrema. Those are different stress quantities and locations.',
   'simply-supported-beam': 'No live comparison: the textbook formulas assume ideal line supports at the neutral axis, but this solid model restrains translation over both complete end faces. Its bundled expected value is the resulting global von Mises peak at a support, not the mid-span beam quantity.',
   'slab-strip': 'No live comparison: 6M/bh² is longitudinal stress at the mid-span extreme fibre for ideal line supports, but this solid model restrains both complete end faces. Its bundled expected value is the resulting global von Mises peak near a support.',
-  'tube-under-pressure': 'No live comparison: pr/t is circumferential membrane stress away from the welded base, while the Result summary peak is von Mises stress in the restrained base boundary layer. A cylindrical hoop-stress probe away from the base is required.',
 };
 
 export interface BenchmarkProvenance {
@@ -191,7 +201,7 @@ export function attachComparison(entry: ExampleEntry, provenance: BenchmarkProve
 }
 
 /** Read the exact Result observable named by the example, including point probes when needed. */
-export async function readBenchmark(comparison: BenchmarkComparison, result: ResultSummary, query: BenchmarkQuery): Promise<BenchmarkReading> {
+export async function readBenchmark(comparison: BenchmarkComparison, result: ResultSummary, query: BenchmarkQuery, study: StudyReport | null = null): Promise<BenchmarkReading> {
   let values: Valued[];
   const at = comparison.locator;
   if (at.kind === 'extreme') {
@@ -201,8 +211,11 @@ export async function readBenchmark(comparison: BenchmarkComparison, result: Res
   } else if (at.kind === 'probe') {
     const probe = (await query({ query: 'query.probe', field: at.field, component: at.component, at: at.at })) as ProbeResult;
     values = [probe.value];
-  } else {
+  } else if (at.kind === 'frequencies') {
     values = result.frequencies ?? [];
+  } else {
+    if (!study || study.rows.length < 3 || typeof study.extrapolated !== 'number') throw new Error('this Result has no three-mesh convergence-study extrapolation');
+    values = [{ value: study.extrapolated, unit: study.unit }];
   }
   if (values.length !== comparison.reference.values.length) throw new Error(`expected ${comparison.reference.values.length} values, Result has ${values.length}`);
   values = await Promise.all(

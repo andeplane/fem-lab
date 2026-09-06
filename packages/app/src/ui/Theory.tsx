@@ -3,13 +3,13 @@ import 'katex/dist/katex.min.css';
 import { useEffect, useState } from 'preact/hooks';
 import { BENCHMARK_UNMAPPED_REASONS, benchmarkChanged, readBenchmark, type ActiveBenchmark, type BenchmarkProvenance, type BenchmarkReading } from '../benchmark';
 import { formatNumber } from '../fields';
-import type { ResultSummary } from '@femlab/registry';
+import type { ResultSummary, StudyReport } from '@femlab/registry';
 import type { Query } from './SchemaForm';
 
 type ReadingState =
-  | { kind: 'loading'; benchmark: string; result: ResultSummary; stale: boolean }
-  | { kind: 'ready'; benchmark: string; result: ResultSummary; stale: boolean; reading: BenchmarkReading }
-  | { kind: 'error'; benchmark: string; result: ResultSummary; stale: boolean; message: string };
+  | { kind: 'loading'; benchmark: string; result: ResultSummary; study: StudyReport | null; stale: boolean }
+  | { kind: 'ready'; benchmark: string; result: ResultSummary; study: StudyReport | null; stale: boolean; reading: BenchmarkReading }
+  | { kind: 'error'; benchmark: string; result: ResultSummary; study: StudyReport | null; stale: boolean; message: string };
 
 /** Render only the inline TeX delimited by `$`; every other metadata byte stays text. */
 export function TheoryText({ text }: { text: string }) {
@@ -30,26 +30,26 @@ export function toleranceText(benchmark: ActiveBenchmark): string {
   return tolerance.kind === 'percent' ? `≤ ${formatNumber(tolerance.value)} %` : `≤ ${formatNumber(tolerance.value)} ${tolerance.unit}`;
 }
 
-export function Theory({ benchmark, result, current, query }: { benchmark: ActiveBenchmark; result: ResultSummary; current: BenchmarkProvenance; query: Query }) {
+export function Theory({ benchmark, result, study = null, current, query }: { benchmark: ActiveBenchmark; result: ResultSummary; study?: StudyReport | null; current: BenchmarkProvenance; query: Query }) {
   const comparison = benchmark.comparison;
   const modified = benchmarkChanged(benchmark, current);
   const stale = result.stale || modified;
-  const [state, setState] = useState<ReadingState>({ kind: 'loading', benchmark: benchmark.name, result, stale: result.stale });
+  const [state, setState] = useState<ReadingState>({ kind: 'loading', benchmark: benchmark.name, result, study, stale: result.stale });
   // Effects start after paint. Hide a reading from the previous Result immediately rather than
   // briefly presenting it as the value of a newly selected Step or replacement Result.
-  const visible = state.benchmark === benchmark.name && state.result === result && state.stale === result.stale ? state : { kind: 'loading' as const };
+  const visible = state.benchmark === benchmark.name && state.result === result && state.study === study && state.stale === result.stale ? state : { kind: 'loading' as const };
   useEffect(() => {
     if (!comparison) return;
     let live = true;
-    setState({ kind: 'loading', benchmark: benchmark.name, result, stale: result.stale });
-    void readBenchmark(comparison, result, query).then(
-      (reading) => live && setState({ kind: 'ready', benchmark: benchmark.name, result, stale: result.stale, reading }),
-      (error: unknown) => live && setState({ kind: 'error', benchmark: benchmark.name, result, stale: result.stale, message: error instanceof Error ? error.message : String(error) }),
+    setState({ kind: 'loading', benchmark: benchmark.name, result, study, stale: result.stale });
+    void readBenchmark(comparison, result, query, study).then(
+      (reading) => live && setState({ kind: 'ready', benchmark: benchmark.name, result, study, stale: result.stale, reading }),
+      (error: unknown) => live && setState({ kind: 'error', benchmark: benchmark.name, result, study, stale: result.stale, message: error instanceof Error ? error.message : String(error) }),
     );
     return () => {
       live = false;
     };
-  }, [benchmark.name, comparison, query, result, result.step, result.revision, result.stale]);
+  }, [benchmark.name, comparison, query, result, result.step, result.revision, result.stale, study]);
 
   return (
     <section class={stale ? 'theory-panel stale' : 'theory-panel'} aria-label={`Theory for ${benchmark.title}`}>
@@ -90,8 +90,8 @@ export function Theory({ benchmark, result, current, query }: { benchmark: Activ
         </>
       )}
       <div class="theory-reference">
-        <span class="mono">reference</span>
-        <span>{benchmark.expected.reference}</span>
+        <span class="mono">{comparison ? 'comparison' : 'reference'}</span>
+        <span>{comparison ? `${comparison.reference.label} · ${values(comparison.reference.values, comparison.reference.unit)}` : benchmark.expected.reference}</span>
       </div>
       {comparison ? <div class="theory-source">Source: {comparison.source}</div> : null}
     </section>

@@ -407,7 +407,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
         <Sample s={s} query={query} />
       </div>
       <div class="rcol">
-        {s.benchmark ? <Theory benchmark={s.benchmark} result={s.result} current={benchmarkProvenance(s.model, s.journal, s.revision)} query={query} /> : null}
+        {s.benchmark ? <Theory benchmark={s.benchmark} result={s.result} study={s.study} current={benchmarkProvenance(s.model, s.journal, s.revision)} query={query} /> : null}
         <div class="section-label">Reactions</div>
         <Reactions s={s} />
         <History s={s} />
