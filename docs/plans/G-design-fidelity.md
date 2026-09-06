@@ -86,6 +86,9 @@ layout and member idealisations) must not be presented as implemented reference 
 - #266 blocks #223: Windows CLI benchmarks return incorrect Hex20/Tet10 LE10 stresses
   and force-balance errors of 0.224 and 0.679. Local CPU passes do not clear this failure.
   The cause is under investigation; tolerances and independent references remain unchanged.
+- #102 / PR #159 merged at `67c1404` after independent review and all seven CI jobs and
+  their executed steps passed. This clears #223's mesh-warning dependency; #200 and #266
+  remain outstanding. The shared dependency files in the #102 worktree remain in use.
 - #183 / PR #200 corrects the LE10 boundary-condition/reference mismatch and has passed
   independent review. CI and merge remain pending. #4 integrates this correction locally.
 - #172 / PR #195 (`4a173c1`) passed review after semantic selection, transient highlight
