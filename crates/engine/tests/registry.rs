@@ -852,6 +852,135 @@ fn convert_query() {
     );
 }
 
+#[test]
+fn sourced_material_library_is_typed_applicable_and_host_independent() {
+    let mut e = engine();
+    let before = e.export_file();
+    let QueryResult::MaterialLibrary(library) = e.query(Query::MaterialLibrary { name: None }).unwrap() else {
+        panic!()
+    };
+    assert_eq!(library.entries.len(), 7);
+    assert_eq!(library.sources.len(), 8);
+    assert!(library.sources.iter().all(|source| {
+        source.url.starts_with("https://") && source.retrieved_on == "2026-09-06" && !source.locator.is_empty()
+    }));
+    let jrc = library.sources.iter().find(|source| source.id == "jrc-handbook-3").unwrap();
+    assert!(jrc.locator.contains("Table 2, PDF p. 135"));
+    assert!(jrc.locator.contains("Table 3, PDF p. 137") && jrc.locator.contains("Table 9, PDF p. 147"));
+    let jrc_concrete = library.sources.iter().find(|source| source.id == "jrc-bridge-worked-example").unwrap();
+    assert!(jrc_concrete.locator.contains("C30/37 Ecm = 33 GPa"));
+    let natureworks = library.sources.iter().find(|source| source.id == "natureworks-4043d").unwrap();
+    assert!(natureworks.url.contains("getContentAsset") && natureworks.locator.contains("NW4043DFILA_032415V1"));
+    let source_ids: std::collections::BTreeSet<&str> =
+        library.sources.iter().map(|source| source.id.as_str()).collect();
+    for entry in &library.entries {
+        for source in [
+            entry.e.as_ref().map(|p| p.source.as_str()),
+            entry.nu.as_ref().map(|p| p.source.as_str()),
+            entry.rho.as_ref().map(|p| p.source.as_str()),
+            entry.alpha.as_ref().map(|p| p.source.as_str()),
+            entry.k.as_ref().map(|p| p.source.as_str()),
+            entry.cp.as_ref().map(|p| p.source.as_str()),
+            entry.yield_.as_ref().map(|p| p.source.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert!(source_ids.contains(source), "{} uses unknown source {source}", entry.id);
+        }
+        assert!(entry.material_add_source.contains("retrieved 2026-09-06"));
+    }
+
+    let aluminium = library.entries.iter().find(|entry| entry.id == "6061-t6-sheet").unwrap();
+    assert_eq!(aluminium.specification, "AMS 4025/4027; MMPDS A-basis data");
+    assert!((aluminium.e.as_ref().unwrap().value.si().unwrap() - 68.3e9).abs() < 1.0);
+    assert!((aluminium.nu.as_ref().unwrap().value.si().unwrap() - 0.33).abs() < 1e-12);
+    assert!((aluminium.rho.as_ref().unwrap().value.si().unwrap() - 2710.0).abs() < 1e-12);
+    assert!((aluminium.alpha.as_ref().unwrap().value.si().unwrap() - 22.7e-6).abs() < 1e-15);
+    assert!((aluminium.k.as_ref().unwrap().value.si().unwrap() - 152.0).abs() < 1e-12);
+    assert!((aluminium.cp.as_ref().unwrap().value.si().unwrap() - 879.0).abs() < 1e-12);
+    assert!((aluminium.yield_.as_ref().unwrap().value.si().unwrap() - 248e6).abs() < 1.0);
+    assert!(aluminium.temperature.is_none());
+
+    let concrete = library.entries.iter().find(|entry| entry.id == "c30-37").unwrap();
+    assert_eq!(concrete.e.as_ref().unwrap().source, "jrc-bridge-worked-example");
+    assert!((concrete.e.as_ref().unwrap().value.si().unwrap() - 33e9).abs() < 1.0);
+
+    let abs = library.entries.iter().find(|entry| entry.id == "terluran-gp35").unwrap();
+    assert!(abs.temperature.is_none() && abs.temperature_basis.contains("Yield strength is reported at 23 degC"));
+    assert!((abs.e.as_ref().unwrap().value.si().unwrap() - 362.0 * 6_894_757.293_168).abs() < 1e-5);
+    assert!(abs.nu.is_none() && abs.alpha.is_none() && abs.k.is_none() && abs.cp.is_none());
+
+    let pla = library.entries.iter().find(|entry| entry.id == "ingeo-4043d").unwrap();
+    assert!((pla.e.as_ref().unwrap().value.si().unwrap() - 524_000.0 * 6_894.757_293_168).abs() < 1e-5);
+    assert!((pla.yield_.as_ref().unwrap().value.si().unwrap() - 8700.0 * 6_894.757_293_168).abs() < 1e-5);
+    assert!(pla.e.as_ref().unwrap().basis.contains("ASTM D882"));
+
+    let timber = library.entries.iter().find(|entry| entry.id == "c24-timber").unwrap();
+    assert!(timber.nu.is_none() && timber.yield_.is_none());
+    assert!(timber.limitations.iter().any(|text| text.contains("orthotropic")));
+    assert!(timber
+        .limitations
+        .iter()
+        .any(|text| text.contains("would not make the longitudinal E an isotropic default")));
+    let wire = serde_json::to_value(timber).unwrap();
+    assert!(wire["nu"].is_null() && wire["yield"].is_null() && wire["temperature"].is_null());
+    assert_eq!(e.export_file(), before, "the list Query cannot mutate the Model or Journal");
+
+    // Entries with the isotropic properties material.add requires pass through the same JSON
+    // boundary hosts use. Partial polymer and timber entries deliberately cannot be applied.
+    for (at, entry) in library.entries.iter().filter(|entry| entry.e.is_some() && entry.nu.is_some()).enumerate() {
+        let mut cmd = serde_json::json!({
+            "cmd": "material.add",
+            "name": format!("catalogue{at}"),
+            "E": serde_json::to_value(&entry.e.as_ref().unwrap().value).unwrap(),
+            "nu": entry.nu.as_ref().unwrap().value.si().unwrap(),
+            "source": &entry.material_add_source,
+        });
+        for (key, value) in [
+            ("rho", entry.rho.as_ref().map(|p| serde_json::to_value(&p.value).unwrap())),
+            ("alpha", entry.alpha.as_ref().map(|p| serde_json::to_value(&p.value).unwrap())),
+            ("k", entry.k.as_ref().map(|p| serde_json::to_value(&p.value).unwrap())),
+            ("cp", entry.cp.as_ref().map(|p| serde_json::to_value(&p.value).unwrap())),
+            ("yield", entry.yield_.as_ref().map(|p| serde_json::to_value(&p.value).unwrap())),
+        ] {
+            if let Some(value) = value {
+                cmd[key] = value;
+            }
+        }
+        ok(&mut e, &cmd.to_string());
+    }
+    assert_eq!(e.revision(), 4);
+    assert!(e
+        .model()
+        .materials
+        .iter()
+        .all(|material| { material.source.as_deref().is_some_and(|source| source.contains("retrieved 2026-09-06")) }));
+}
+
+#[test]
+fn material_library_aliases_are_stable_and_ambiguity_is_explicit() {
+    let mut e = engine();
+    let before = e.export_file();
+    for name in ["6061-t6-sheet", "6061-T6 aluminium sheet", "ALUMINUM 6061 T6", "c30 / 37"] {
+        let QueryResult::MaterialLibrary(found) = e.query(Query::MaterialLibrary { name: Some(name.into()) }).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(found.entries.len(), 1);
+        assert_eq!(found.sources.len(), 8);
+    }
+    let ambiguous = e.query(Query::MaterialLibrary { name: Some("steel".into()) }).unwrap_err();
+    assert_eq!(ambiguous.code, ErrorCode::Schema);
+    assert_eq!(ambiguous.where_.as_deref(), Some("name"));
+    assert!(ambiguous.cause.contains("s355j2") && ambiguous.cause.contains("s235j2w"));
+    let missing = e.query(Query::MaterialLibrary { name: Some("generic titanium".into()) }).unwrap_err();
+    assert_eq!(missing.code, ErrorCode::NotFound);
+    assert_eq!(missing.where_.as_deref(), Some("name"));
+    assert!(missing.suggestion.as_deref().unwrap().contains("6061-t6-sheet"));
+    assert_eq!(e.export_file(), before, "Queries cannot mutate the Model or Journal");
+}
+
 /// Shared with the Node wasm regression: rejected inputs cannot change the saved Model or
 /// Journal. The expected errors cover numeric, factor and dimension overflow independently.
 #[test]
