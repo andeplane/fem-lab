@@ -72,3 +72,47 @@ test('@cpu composer suggestions and skills prepare editable drafts by keyboard',
   await expect(input).toHaveValue('Reopened draft');
   await expect(input).toBeFocused();
 });
+
+test('@cpu Assistant observations survive tab changes and collapse, then become stale after an edit', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem('femlab.ai.key.openai', 'test-only');
+    localStorage.setItem('femlab.ai.model', 'gpt-5.4-mini');
+    localStorage.setItem('femlab.tour.dismissed', '1');
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, options) => {
+      if (!String(input).includes('api.openai.com/v1/responses')) return original(input, options);
+      const events = [
+        { type: 'response.output_text.delta', delta: 'Review complete.\n<verification>\nwarn | Mesh convergence | not run\n</verification>' },
+        { type: 'response.completed', response: { output: [], usage: { input_tokens: 4, output_tokens: 4, input_tokens_details: { cached_tokens: 0 } } } },
+      ];
+      return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    };
+  });
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto('./');
+  await ready(page);
+  await page.evaluate(async () => {
+    await window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' });
+    await window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true });
+  });
+  const drawer = page.locator('aside.assistant');
+  await drawer.locator('textarea').fill('Review this Model');
+  await drawer.locator('textarea').press('Enter');
+  await expect(drawer.locator('.thinking')).toHaveCount(0);
+  await expect(drawer).toContainText('VERIFICATION · also in Checks');
+  await expect(drawer).toContainText('Recorded at Model rev');
+  await page.locator('.tab', { hasText: 'checks' }).click();
+  const checks = page.locator('.checks');
+  await expect(checks.locator('.assistant-check')).toContainText('Mesh convergence');
+  await expect(checks).toContainText('not independently verified engine measurements');
+  await drawer.getByTitle('Close the assistant').click();
+  await expect(drawer).toBeHidden();
+  await page.locator('.tab', { hasText: 'results' }).click();
+  await page.locator('.tab', { hasText: 'checks' }).click();
+  await expect(checks.locator('.assistant-check')).toContainText('not run');
+  await page.evaluate(() => window.fem.load.traction({ name: 'tip', on: 'beam.xmax', total: ['0 N', '0 N', '-2 kN'] }));
+  await expect(checks.locator('.assistant-check')).toContainText('Stale — Model or Result changed');
+  await page.screenshot({ path: testInfo.outputPath('assistant-checks-stale.png') });
+});
