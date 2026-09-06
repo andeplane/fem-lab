@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Store } from '../store';
 import { TutorialRunner } from './runner';
 import { Spotlight, useTarget } from './Spotlight';
-import { candidates, place } from './target';
+import { candidates, fieldsOf, formHintsOf, place } from './target';
 import { TUTORIALS, tutorialById } from './tutorials';
 import type { Step } from './types';
 import './tutorial.css';
@@ -69,6 +69,13 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
   const { box, name, fallback } = useTarget(current ? candidates(current, s.form) : []);
   const cardRef = useRef<HTMLElement | null>(null);
   const cardSize = useCardSize(cardRef);
+  // The step's values, offered to the Properties form as placeholders. This is the whole of the
+  // tutorial module's reach into the shell, and it goes through the Store (issue #46).
+  const values = current ? fieldsOf(current) : [];
+  useEffect(() => {
+    store.set({ formHints: current ? formHintsOf(current) : null });
+    return () => store.set({ formHints: null });
+  }, [current, store]);
   const spot = box ? place(box, cardSize, { width: innerWidth, height: innerHeight }) : null;
   // One "do it for me" at a time: the button is disabled until the Journal has been re-read,
   // so a second click cannot issue the same Command again (issue #37). Through the app's own
@@ -179,6 +186,16 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
           <p class="tutorial-where">
             Click <b>{name}</b>, outlined in the viewer.
           </p>
+        ) : null}
+        {values.length > 0 ? (
+          <dl class="tutorial-values mono">
+            {values.map(([label, value]) => (
+              <>
+                <dt key={`${label}-k`}>{label}</dt>
+                <dd key={`${label}-v`}>{value}</dd>
+              </>
+            ))}
+          </dl>
         ) : null}
         {step.theory ? <pre class="tutorial-theory mono">{step.theory}</pre> : null}
         <div class="tutorial-actions">

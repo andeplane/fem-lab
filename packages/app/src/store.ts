@@ -100,6 +100,12 @@ export interface UiState {
   screenshotScale: number;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
+  /**
+   * `data-field` path → the value the running tutorial step expects there, which `SchemaForm`
+   * shows as that input's `placeholder` (issue #46). The tutorial module never reaches into
+   * `src/ui/**`; this field is the whole of the dependency, and it points one way.
+   */
+  formHints: Record<string, string> | null;
 }
 
 /** The design's states 4–7, as one word derived from what the store already holds. */
@@ -165,6 +171,7 @@ export const initialState: UiState = {
   playing: false,
   phase: 0,
   screenshotScale: 1,
+  formHints: null,
 };
 
 const MAX_CONSOLE = 500;

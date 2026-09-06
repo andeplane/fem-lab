@@ -202,6 +202,33 @@ describe('TutorialPanel', () => {
     target.remove();
   });
 
+  it('lists the values the step expects, and offers them to the form as hints (issue #46)', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Cantilever beam')), 'the cantilever tutorial'));
+    await waitForText(() => root.querySelector('.tutorial-values'), 'cantilever');
+    await waitFor(() => store.state.formHints, 'the form hints on the store');
+    expect(store.state.formHints).toEqual({ name: 'cantilever' });
+    // step 3 is `geometry.addBox`, whose size is three lengths: one hint per input
+    await click([...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent === 'Skip')!);
+    await click([...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent === 'Skip')!);
+    await waitFor(() => (store.state.formHints?.['size.0'] === undefined ? null : true), 'the box size hints');
+    expect(store.state.formHints).toEqual({ name: 'beam', 'size.0': '1 m', 'size.1': '100 mm', 'size.2': '100 mm' });
+  });
+
+  it('takes its hints off the store again when the tutorial is closed', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
+    await waitFor(() => store.state.formHints, 'the form hints on the store');
+    await click(root.querySelector('.tutorial-close'));
+    await waitFor(() => store.state.formHints === null, 'the hints to be cleared');
+  });
+
   it('stays docked when the step names a control that is nowhere on the page', async () => {
     const store = new Store();
     store.togglePanel('tutorial', true);

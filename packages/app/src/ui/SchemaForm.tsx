@@ -34,6 +34,10 @@ export function asList(value: unknown): string[] {
   return value === undefined || value === null || typeof value === 'object' ? [] : [String(value)];
 }
 
+/** What a running tutorial step expects in this input, shown as its `placeholder` (issue #46).
+ * `undefined` — no tutorial, or nothing to say about this field — leaves the input bare. */
+const hintFor = (s: UiState, path: string[]): string | undefined => s.formHints?.[path.join('.')];
+
 /** The engine's `where` ("body 'beam'", "size.0") pointed at one field of this form. */
 export function errorFor(err: LastError | null, path: string[]): string | null {
   if (!err?.where) return null;
@@ -64,7 +68,7 @@ function Row({ field, children, error }: { field: Field; children: preact.Compon
 }
 
 /** The design's quantity field: value with unit, − / + steppers, and the SI echo underneath. */
-function Quantity({ value, dimension, onChange, query, keyField }: { value: unknown; dimension: string; onChange(v: unknown): void; query: Query; keyField: boolean }) {
+function Quantity({ value, dimension, onChange, query, keyField, placeholder }: { value: unknown; dimension: string; onChange(v: unknown): void; query: Query; keyField: boolean; placeholder?: string }) {
   const [echo, setEcho] = useState<{ text: string; bad: boolean }>({ text: '', bad: false });
   const text = typeof value === 'string' || value === undefined || value === null ? String(value ?? '') : JSON.stringify(value);
   useEffect(() => {
@@ -83,7 +87,7 @@ function Quantity({ value, dimension, onChange, query, keyField }: { value: unkn
   return (
     <>
       <div class={keyField ? 'qty key' : 'qty'}>
-        <input class="mono" value={text} data-cmd="form.open" onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
+        <input class="mono" value={text} data-cmd="form.open" placeholder={placeholder} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
         <button type="button" data-cmd="form.open" title="−10 %" onClick={() => onChange(step(text, -1))}>
           −
         </button>
@@ -171,7 +175,7 @@ function FieldView(props: FormProps & { field: Field }) {
     return (
       <Row field={field} error={error}>
         {parts === 1 ? (
-          <Quantity value={value} dimension={field.dimension} onChange={onChange} query={query} keyField={field.required} />
+          <Quantity value={value} dimension={field.dimension} onChange={onChange} query={query} keyField={field.required} placeholder={hintFor(s, field.path)} />
         ) : (
           Array.from({ length: parts }, (_, i) => (
             <Quantity
@@ -180,6 +184,7 @@ function FieldView(props: FormProps & { field: Field }) {
               dimension={field.dimension}
               query={query}
               keyField={field.required}
+              placeholder={hintFor(s, [...field.path, String(i)])}
               onChange={(v) => onChange(Array.from({ length: parts }, (_, j) => (j === i ? v : (list[j] ?? ''))))}
             />
           ))
@@ -251,7 +256,7 @@ function FieldView(props: FormProps & { field: Field }) {
   if (field.kind === 'number') {
     return (
       <Row field={field} error={error}>
-        <input class="mono input" type="number" data-cmd="form.open" value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value === '' ? undefined : Number((e.target as HTMLInputElement).value))} />
+        <input class="mono input" type="number" data-cmd="form.open" placeholder={hintFor(s, field.path)} value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value === '' ? undefined : Number((e.target as HTMLInputElement).value))} />
       </Row>
     );
   }
@@ -278,7 +283,7 @@ function FieldView(props: FormProps & { field: Field }) {
   void variants;
   return (
     <Row field={field} error={error}>
-      <input class="mono input" data-cmd="form.open" value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
+      <input class="mono input" data-cmd="form.open" placeholder={hintFor(s, field.path)} value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
     </Row>
   );
 }
