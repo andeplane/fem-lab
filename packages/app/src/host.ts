@@ -5,6 +5,7 @@ import { FemError, type HostContext, type HostDef, type JournalEntry, type Proje
 import { z } from 'zod';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
+import { choiceOf } from './fields';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
@@ -170,7 +171,11 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       captureAnimation: (o) =>
         capture.run(async (record) => {
           const s = store.state;
-          if (!s.fieldKey.startsWith('mode:')) throw new FemError('export.unavailable', 'the selected Result field is not a mode shape that can be recorded', 'file.export', 'solve a modal Step and select one of its mode fields');
+          const mode = choiceOf(s.fieldKey).mode;
+          const modes = s.result?.frequencies?.length ?? 0;
+          if (mode === undefined || mode < 1 || mode > modes) {
+            throw new FemError('export.unavailable', 'the selected field is not a mode in the current modal Result', 'file.export', 'solve a modal Step and select one of its mode fields');
+          }
           const target = v();
           const before = target.animationState();
           const ui = { playing: s.playing, phase: s.phase };

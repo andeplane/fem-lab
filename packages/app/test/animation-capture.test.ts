@@ -88,7 +88,7 @@ describe('animation capture', () => {
   it('restores the exact viewer and UI animation state after capture', async () => {
     const c = controlled();
     const store = new Store();
-    store.set({ fieldKey: 'mode:2', result: { step: 'modes', history: [] } as never, playing: true, phase: 0.42 });
+    store.set({ fieldKey: 'mode:2', result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }], history: [] } as never, playing: true, phase: 0.42 });
     const restored: unknown[] = [];
     const phases: number[] = [];
     const sizes: number[][] = [];
@@ -121,10 +121,27 @@ describe('animation capture', () => {
     await expect(ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 })).rejects.toMatchObject({ code: 'export.unavailable', suggestion: expect.stringContaining('modal Step') });
   });
 
+  it('rejects a stale mode selection after its Result has gone before touching the viewer', async () => {
+    const c = controlled();
+    const store = new Store();
+    store.set({ fieldKey: 'mode:1', result: null });
+    const animationState = vi.fn();
+    const viewer = { animationState } as unknown as Viewer;
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, c.env);
+
+    await expect(ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 })).rejects.toMatchObject({
+      code: 'export.unavailable',
+      cause: expect.stringContaining('current modal Result'),
+      where: 'file.export',
+      suggestion: expect.stringContaining('solve a modal Step'),
+    });
+    expect(animationState).not.toHaveBeenCalled();
+  });
+
   it('restores a paused view after recorder failure and cancellation', async () => {
     const c = controlled();
     const store = new Store();
-    store.set({ fieldKey: 'mode:1', result: { step: 'modes' } as never, playing: false, phase: 0.62 });
+    store.set({ fieldKey: 'mode:1', result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: false, phase: 0.62 });
     const restored: unknown[] = [];
     const viewer = {
       animationState: () => ({ playing: false, phase: 0.62, speed: 1 }),
@@ -152,7 +169,7 @@ describe('animation capture', () => {
   it('rejects an overlapping host capture before it changes dimensions, phase, or UI state', async () => {
     const c = controlled();
     const store = new Store();
-    store.set({ fieldKey: 'mode:1', result: { step: 'modes' } as never, playing: true, phase: 0.33 });
+    store.set({ fieldKey: 'mode:1', result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: true, phase: 0.33 });
     const phases: number[] = [];
     const sizes: number[][] = [];
     const viewer = {

@@ -106,10 +106,10 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
   };
   const step = s.result?.step;
   const close = { cmd: 'panel.toggle', panel: 'export', open: false };
-  const runAll = (): void => {
+  const runAll = async (): Promise<void> => {
     for (const format of ticked) {
       const row = EXPORT_FORMATS.find((r) => r.format === format);
-      if (row) void dispatch({ cmd: 'file.export', spec: specOf(row, step) }).catch(() => undefined);
+      if (row) await dispatch({ cmd: 'file.export', spec: specOf(row, step) }).catch(() => undefined);
     }
   };
   return (
@@ -152,7 +152,7 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
           </div>
         ))}
         <div class="export-foot">
-          <Cmd dispatch={dispatch} cmd="file.export" class="apply" disabled={ticked.length === 0 || s.capturingAnimation} onRun={runAll} title="one file.export per ticked row">
+          <Cmd dispatch={dispatch} cmd="file.export" class="apply" disabled={ticked.length === 0 || s.capturingAnimation} onRun={() => void runAll()} title="one file.export per ticked row">
             Export selected
           </Cmd>
         </div>
