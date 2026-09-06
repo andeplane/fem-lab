@@ -892,6 +892,9 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     ok(&mut e, r#"{"cmd":"load.traction","name":"tra","on":"a.zmax","total":["0 N","0 N","1 N"]}"#);
     ok(&mut e, r#"{"cmd":"load.force","name":"fa","on":"fa","total":["0 N","0 N","1 N"]}"#);
     ok(&mut e, r#"{"cmd":"load.traction","name":"trfa","on":"fa","total":["0 N","0 N","1 N"]}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"pfa","on":"fa","value":"1 MPa"}"#);
+    ok(&mut e, r#"{"cmd":"load.convection","name":"cfa","on":"fa","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"hfa","on":"fa","q":"1 kW/m^2"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"ta","bodies":["a"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"tb","bodies":["b"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
@@ -920,6 +923,9 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     assert_eq!(e.model().sets[1].name, "fb");
     assert_eq!(e.model().load("fa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("trfa").unwrap().kind.set(), Some("faa"));
+    assert_eq!(e.model().load("pfa").unwrap().kind.set(), Some("faa"));
+    assert_eq!(e.model().load("cfa").unwrap().kind.set(), Some("faa"));
+    assert_eq!(e.model().load("hfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("tra").unwrap().kind.set(), Some("aa.zmax"));
     let QueryResult::Objects(o) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Set]) }).unwrap() else {
         panic!()
@@ -2254,9 +2260,26 @@ fn a_steady_heat_step_conducts_a_linear_profile_and_exports_it() {
 fn the_three_heat_loads_report_themselves_and_hold_a_step_on_their_own() {
     let mut e = engine();
     heat_bar(&mut e);
-    ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
-    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"in","on":"bar.xmin","q":"1 kW/m^2"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"filmFace","of":"bar","where":{"kind":"normal","normal":[1,0,0]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"fluxFace","of":"bar","where":{"kind":"normal","normal":[-1,0,0]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"filmFace","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"in","on":"fluxFace","q":"1 kW/m^2"}"#);
     ok(&mut e, r#"{"cmd":"load.heatSource","name":"ohmic","bodies":["bar"],"q":"0 kW/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"filmFace","to":"filmBoundary"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"fluxFace","to":"fluxBoundary"}"#);
+    assert_eq!(e.model().load("film").unwrap().kind.set(), Some("filmBoundary"));
+    assert_eq!(e.model().load("in").unwrap().kind.set(), Some("fluxBoundary"));
+    // Set rename is journaled like every other model edit and restores the exact references.
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model().load("in").unwrap().kind.set(), Some("fluxFace"));
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.model().load("in").unwrap().kind.set(), Some("fluxBoundary"));
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
     let kinds: Vec<&str> = m.loads.iter().map(|l| l.kind.as_str()).collect();
     assert_eq!(kinds, ["convection", "heatFlux", "heatSource"]);
@@ -2264,10 +2287,13 @@ fn the_three_heat_loads_report_themselves_and_hold_a_step_on_their_own() {
     assert!(m.loads[1].summary.starts_with('1'), "{}", m.loads[1].summary);
     assert!(m.loads[2].summary.ends_with("on bar"), "{}", m.loads[2].summary);
 
-    // A rename follows the Set of a face load and the Body list of a source alike.
+    // Keep an automatic face reference too: Body rename must still rewrite it while the
+    // explicitly named Sets keep their names and the volumetric source follows the Body.
+    ok(&mut e, r#"{"cmd":"load.convection","name":"autoFilm","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
     ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"bar","to":"rod"}"#);
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
-    assert_eq!(m.loads[0].on.as_deref(), Some("rod.xmax"));
+    assert_eq!(m.loads[0].on.as_deref(), Some("filmBoundary"));
+    assert_eq!(e.model().load("autoFilm").unwrap().kind.set(), Some("rod.xmax"));
     assert!(m.loads[2].summary.ends_with("on rod"), "{}", m.loads[2].summary);
 
     ok(
@@ -2282,6 +2308,15 @@ fn the_three_heat_loads_report_themselves_and_hold_a_step_on_their_own() {
     let near = probe_at(&mut e, "conduct", Field::Temperature, None, ["0 mm", "50 mm", "50 mm"]);
     assert!((far - 40.0).abs() < 1e-8, "far face {far}");
     assert!((near - (40.0 + 1000.0 / 45.0)).abs() < 1e-8, "near face {near}");
+
+    // Replay the journal, including both Set renames, and verify the solved model is identical.
+    let expected_hash = e.model_hash();
+    let entries = e.journal().entries.clone();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&entries, true, true)).unwrap();
+    assert_eq!(replayed.model_hash(), expected_hash);
+    assert_eq!(replayed.model().load("film").unwrap().kind.set(), Some("filmBoundary"));
+    assert_eq!(replayed.model().load("in").unwrap().kind.set(), Some("fluxBoundary"));
 }
 
 /// A heat Step with neither a held temperature nor a film is refused with the Command that

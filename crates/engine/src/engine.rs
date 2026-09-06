@@ -1025,12 +1025,17 @@ impl Engine {
                     }
                 }
                 for l in &mut m.loads {
-                    if let LoadKind::Pressure { on, .. } | LoadKind::Traction { on, .. } | LoadKind::Force { on, .. } =
-                        &mut l.kind
-                    {
-                        if on == name {
-                            *on = to.into();
+                    match &mut l.kind {
+                        LoadKind::Pressure { on, .. }
+                        | LoadKind::Traction { on, .. }
+                        | LoadKind::Force { on, .. }
+                        | LoadKind::Convection { on, .. }
+                        | LoadKind::HeatFlux { on, .. } => {
+                            if on == name {
+                                *on = to.into();
+                            }
                         }
+                        LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => {}
                     }
                 }
             }
