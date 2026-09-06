@@ -3054,7 +3054,7 @@
         "x-returns": "PathResult"
       },
       {
-        "description": "Cost of solving a Step before running it: DOF, matrix non-zeros, memory, and whether\nit fits the current host. Use it before solving large models.",
+        "description": "Cost before solving: DOF, matrix non-zero bounds and mandatory assembly memory lower\nbound. Counting uses at most 16 MiB scratch after meshing. Feasibility is false above\na fixed 1.5 GiB planning budget, otherwise unknown: solver fill/workspace are excluded.\nUse before large solves; this query does not promise that a solve fits the current host.",
         "type": "object",
         "properties": {
           "step": {
@@ -4887,17 +4887,35 @@
             "minimum": 0
           },
           "nnz": {
+            "description": "Upper bound on matrix non-zeros; exact when equal to nnzLower.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "nnzLower": {
+            "description": "Lower bound on matrix non-zeros.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "bytes": {
+            "description": "Mandatory assembly storage lower bound in bytes, including element slots and two CSRs.\nExcludes mesh/model, element buffers, reduction, solver storage/fill and time history.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "budgetBytes": {
+            "description": "Fixed 1.5 GiB planning budget; not measured free memory on the current host.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "feasible": {
-            "type": "boolean"
+            "description": "False if mandatory storage exceeds the planning budget; null means feasibility is\nunknown. Fitting a lower bound does not establish that assembly or factorisation fits.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "note": {
             "type": "string"
@@ -4906,8 +4924,9 @@
         "required": [
           "dofs",
           "nnz",
+          "nnzLower",
           "bytes",
-          "feasible",
+          "budgetBytes",
           "note"
         ]
       },

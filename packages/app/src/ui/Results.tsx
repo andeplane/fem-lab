@@ -488,12 +488,14 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
         <div class="kv mono">
           <span>degrees of freedom</span>
           <span class="n">{cost.dofs}</span>
-          <span>matrix non-zeros</span>
+          <span>matrix non-zeros (upper bound)</span>
           <span class="n">{cost.nnz}</span>
-          <span>memory</span>
+          <span>mandatory memory (at least)</span>
           <span class="n">{bytes(cost.bytes)}</span>
-          <span>feasible here</span>
-          <span class={cost.feasible ? 'n' : 'bad'}>{cost.feasible ? 'yes' : 'no'}</span>
+          <span>planning budget</span>
+          <span class="n">{bytes(cost.budgetBytes)}</span>
+          <span>feasibility</span>
+          <span class={cost.feasible === false ? 'bad' : 'n'}>{cost.feasible === false ? 'over budget' : 'not established'}</span>
           <span>note</span>
           <span>{cost.note}</span>
         </div>

@@ -147,8 +147,10 @@ pub enum Query {
         n: u32,
     },
 
-    /// Cost of solving a Step before running it: DOF, matrix non-zeros, memory, and whether
-    /// it fits the current host. Use it before solving large models.
+    /// Cost before solving: DOF, matrix non-zero bounds and mandatory assembly memory lower
+    /// bound. Counting uses at most 16 MiB scratch after meshing. Feasibility is false above
+    /// a fixed 1.5 GiB planning budget, otherwise unknown: solver fill/workspace are excluded.
+    /// Use before large solves; this query does not promise that a solve fits the current host.
     #[serde(rename = "query.cost", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "CostEstimate"))]
     Cost { step: String },
@@ -500,9 +502,18 @@ pub struct PathResult {
 #[serde(rename_all = "camelCase")]
 pub struct CostEstimate {
     pub dofs: u64,
+    /// Upper bound on matrix non-zeros; exact when equal to nnzLower.
     pub nnz: u64,
+    /// Lower bound on matrix non-zeros.
+    pub nnz_lower: u64,
+    /// Mandatory assembly storage lower bound in bytes, including element slots and two CSRs.
+    /// Excludes mesh/model, element buffers, reduction, solver storage/fill and time history.
     pub bytes: u64,
-    pub feasible: bool,
+    /// Fixed 1.5 GiB planning budget; not measured free memory on the current host.
+    pub budget_bytes: u64,
+    /// False if mandatory storage exceeds the planning budget; null means feasibility is
+    /// unknown. Fitting a lower bound does not establish that assembly or factorisation fits.
+    pub feasible: Option<bool>,
     pub note: String,
 }
 
