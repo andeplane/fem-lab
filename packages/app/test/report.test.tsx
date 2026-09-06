@@ -182,6 +182,7 @@ describe('report.print host boundary', () => {
       readHostCaps({ navigator: { userAgent: 'Chrome/140' } }),
       undefined,
       undefined,
+      undefined,
       print,
     );
     expect(() => host.report.print()).toThrow(expect.objectContaining({ code: 'unsupported', where: 'report' }));

@@ -1,17 +1,30 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, AutosaveVersion, Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
+import { TABS, type Tab } from './ui/tabs';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
-import { TABS, type Tab } from './ui/tabs';
-export { TABS, type Tab };
+export { TABS, type Tab } from './ui/tabs';
+export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
+export type PanelSizes = Record<ResizablePanel, number>;
+export const DEFAULT_PANEL_SIZES: PanelSizes = { tree: 274, properties: 308, bottom: 252, assistant: 392 };
+export const PANEL_SIZE_LIMITS: Record<ResizablePanel, { min: number; max: number }> = {
+  tree: { min: 180, max: 420 },
+  properties: { min: 240, max: 440 },
+  bottom: { min: 184, max: 480 },
+  assistant: { min: 320, max: 520 },
+};
 
+export function clampPanelSize(panel: ResizablePanel, size: number): number {
+  const limits = PANEL_SIZE_LIMITS[panel];
+  return Math.round(Math.min(limits.max, Math.max(limits.min, size)));
+}
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
   cmd: string;
@@ -20,6 +33,11 @@ export interface FormState {
   initial: Record<string, unknown>;
 }
 export type ConsoleLevel = 'command' | 'engine' | 'warn' | 'error' | 'result';
+export type ExampleDifficulty = 1 | 2 | 3;
+export interface ExampleFilter {
+  tag: string | null;
+  difficulty: ExampleDifficulty | null;
+}
 export interface ConsoleLine {
   level: ConsoleLevel;
   text: string;
@@ -33,6 +51,10 @@ export interface LastError {
 }
 
 export interface UiState {
+  autosave: AutosaveState['saved'];
+  autosaves: AutosaveVersion[];
+  /** Session mirror of the ai.setModel host Command, shared with the Assistant. */
+  assistantModel: string | null;
   /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
   folder: ProjectFolder | null;
   /** One available catalog; project skills override built-ins by name. */
@@ -50,6 +72,12 @@ export interface UiState {
   deformScale: number;
   /** Panel id → open. Panels absent from the map are closed. */
   panels: Record<string, boolean>;
+  /** The Examples gallery's two independent, registry-driven filters. */
+  exampleFilter: ExampleFilter;
+  /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
+  panelSizes: PanelSizes;
+  /** Body names hidden only in the viewer by `view.setVisible`; the Model is unchanged. */
+  hiddenBodies: string[];
   tab: Tab;
   /** Every `@`-mentionable object, for the picker chips and the palette. */
   objects: ObjectRef[];
@@ -101,6 +129,7 @@ export interface UiState {
   phase: number;
   /** Pixels per CSS pixel a saved PNG is rendered at: the export dialog's 1× / 2×. */
   screenshotScale: number;
+  animationSpeed: number;
   /** True only while the current report Markdown and viewer figure are mounted and printable. */
   reportReady: boolean;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
@@ -141,6 +170,9 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
+  autosave: null,
+  autosaves: [],
+  assistantModel: null,
   folder: null,
   skills: BUILTIN_SKILLS,
   ready: false,
@@ -153,7 +185,24 @@ export const initialState: UiState = {
   viewMode: 'geometry',
   colormap: 'viridis',
   deformScale: 1,
-  panels: { assistant: false, examples: false, export: false, report: false, palette: false },
+  panels: {
+    assistant: false,
+    examples: false,
+    export: false,
+    report: false,
+    palette: false,
+    'tree.geometry': true,
+    'tree.materials': true,
+    'tree.mesh': true,
+    'tree.constraints': true,
+    'tree.loads': true,
+    'tree.steps': true,
+    'tree.results': true,
+    'tree.plugins': true,
+  },
+  panelSizes: { ...DEFAULT_PANEL_SIZES },
+  hiddenBodies: [],
+  exampleFilter: { tag: null, difficulty: null },
   tab: 'journal',
   objects: [],
   form: null,
@@ -185,6 +234,7 @@ export const initialState: UiState = {
   playing: false,
   phase: 0,
   screenshotScale: 1,
+  animationSpeed: 1,
   reportReady: false,
   // --- plan D ---
   projects: [],
@@ -222,7 +272,17 @@ export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): Console
 }
 
 export function panelsReducer(panels: Record<string, boolean>, panel: string, open?: boolean): Record<string, boolean> {
-  return { ...panels, [panel]: open ?? !panels[panel] };
+  const nextOpen = open ?? !panels[panel];
+  if (!panel.startsWith('tree.menu.') || !nextOpen) return { ...panels, [panel]: nextOpen };
+  const next = { ...panels };
+  for (const key of Object.keys(next)) if (key.startsWith('tree.menu.')) next[key] = false;
+  next[panel] = true;
+  return next;
+}
+
+export function visibilityReducer(hidden: string[], bodies: string[], on: boolean): string[] {
+  if (on) return hidden.filter((body) => !bodies.includes(body));
+  return [...new Set([...hidden, ...bodies])];
 }
 
 export class Store {
@@ -282,6 +342,10 @@ export class Store {
   togglePanel(panel: string, open?: boolean): void {
     if ((TABS as string[]).includes(panel)) return this.set({ tab: panel as Tab });
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
+  }
+
+  resizePanel(panel: ResizablePanel, size: number): void {
+    this.set({ panelSizes: { ...this.state.panelSizes, [panel]: clampPanelSize(panel, size) } });
   }
 
   fail(e: unknown): void {

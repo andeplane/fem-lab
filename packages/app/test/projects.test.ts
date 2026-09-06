@@ -5,10 +5,10 @@
 import { IDBFactory } from 'fake-indexeddb';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelFile } from '@femlab/registry';
-import { DB_NAME, HANDLES, JOURNALS, PROJECTS, openDb, tx, type ProjectMeta } from '../src/db';
+import { DB_NAME, HANDLES, JOURNALS, PROJECTS, REVISIONS, openDb, tx, type ProjectMeta } from '../src/db';
 import { indexedDbProjects, makeProjects, memoryProjects, type ProjectStore, type ProjectsOptions } from '../src/projects';
 import { forgetHandle, recallHandle, rememberHandle, type DirHandle } from '../src/ai/project';
-import type { ShareCommand } from '../src/share';
+import { indexedDbStore, type ShareCommand } from '../src/share';
 
 const CMDS: ShareCommand[] = [
   { cmd: 'model.new', name: 'beam' },
@@ -50,10 +50,10 @@ function legacyDb(slot?: { name: string; at: number; cmds: ShareCommand[] }): Pr
 const stores = (db: IDBDatabase): string[] => [...db.objectStoreNames].sort();
 
 describe('the femlab database', () => {
-  it('creates its three stores on a browser that has never seen FEM Lab', async () => {
+  it('creates its four stores on a browser that has never seen FEM Lab', async () => {
     const db = await openDb(factory);
-    expect(stores(db)).toEqual([HANDLES, JOURNALS, PROJECTS]);
-    expect(db.version).toBe(2);
+    expect(stores(db)).toEqual([HANDLES, JOURNALS, PROJECTS, REVISIONS]);
+    expect(db.version).toBe(3);
     db.close();
   });
 
@@ -73,7 +73,7 @@ describe('the femlab database', () => {
   it('migrates the one autosave slot of a version-1 database into a project, once', async () => {
     await legacyDb({ name: 'restored-beam', at: 1_700_000_000_000, cmds: CMDS });
     const db = await openDb(factory);
-    expect(stores(db)).toEqual([HANDLES, JOURNALS, PROJECTS]);
+    expect(stores(db)).toEqual([HANDLES, JOURNALS, PROJECTS, REVISIONS]);
     db.close();
 
     const store = indexedDbProjects(factory);
@@ -86,6 +86,47 @@ describe('the femlab database', () => {
     await store.writeMeta({ ...meta!, name: 'renamed' });
     (await openDb(factory)).close();
     expect((await store.list()).map((p) => p.name)).toEqual(['renamed']);
+  });
+
+  it('keeps revision history, projects and folder handles in one upgraded database', async () => {
+    const projects = indexedDbProjects(factory);
+    const meta: ProjectMeta = { id: 'kept', name: 'kept', at: 2, createdAt: 1, commands: 2, hash: null, thumbnail: null };
+    await projects.writeJournal(meta, CMDS);
+    const handle = { kind: 'directory', name: 'folder' } as unknown as DirHandle;
+    await rememberHandle(handle, factory);
+    const history = indexedDbStore(factory);
+    const revision = { id: 'r1', name: 'earlier', at: 1, cmds: CMDS.slice(0, 1) };
+    await history.write([revision]);
+    expect(await history.read()).toEqual([revision]);
+    expect(await projects.journal('kept')).toEqual(CMDS);
+    expect(await recallHandle(factory)).toMatchObject({ name: 'folder' });
+    await history.clear();
+    expect(await history.read()).toEqual([]);
+    expect(await projects.list()).toEqual([meta]);
+    expect(await projects.journal('kept')).toEqual(CMDS);
+    expect(await recallHandle(factory)).toMatchObject({ name: 'folder' });
+  });
+
+  it('adds history to a version-2 database without changing its saved project', async () => {
+    const meta: ProjectMeta = { id: 'v2', name: 'existing', at: 4, createdAt: 3, commands: 2, hash: 'saved', thumbnail: null };
+    await new Promise<void>((resolve, reject) => {
+      const request = factory.open(DB_NAME, 2);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore(PROJECTS, { keyPath: 'id' }).put(meta);
+        request.result.createObjectStore(JOURNALS, { keyPath: 'id' }).put({ id: meta.id, cmds: CMDS });
+        request.result.createObjectStore(HANDLES);
+      };
+      request.onsuccess = () => { request.result.close(); resolve(); };
+      request.onerror = () => reject(request.error);
+    });
+    const db = await openDb(factory);
+    expect(db.version).toBe(3);
+    expect(stores(db)).toEqual([HANDLES, JOURNALS, PROJECTS, REVISIONS]);
+    db.close();
+    const projects = indexedDbProjects(factory);
+    expect(await projects.list()).toEqual([meta]);
+    expect(await projects.journal(meta.id)).toEqual(CMDS);
+    expect(await indexedDbStore(factory).read()).toEqual([]);
   });
 
   it('upgrades a version-1 database whose slot is empty without inventing a project', async () => {
