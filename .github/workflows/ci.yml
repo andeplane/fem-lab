@@ -93,6 +93,7 @@ jobs:
           name: wasm
           path: |
             packages/app/src/generated/wasm
+            tools/wasm-node
             engine.schema.json
 
   windows:
@@ -127,6 +128,9 @@ jobs:
       - run: npm run codegen:check
       - run: npm run typecheck
       - run: npm run test -w packages/registry
+      # The MCP server runs the Node wasm build from the `wasm-hash` job's artifact.
+      - run: npm run test -w packages/mcp
+      - run: npm run build -w packages/mcp
       - run: npm run test -w packages/app
       # `postbuild` fails the job if an API key ever reaches dist/; the build prints the gzipped
       # size of every chunk, which is the budget size-limit will gate on later.

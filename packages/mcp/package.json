@@ -1,0 +1,29 @@
+{
+  "name": "femlab-mcp",
+  "version": "0.1.0",
+  "description": "FEM Lab as an MCP server: every engine Command and Query as a tool, over stdio.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "femlab-mcp": "dist/femlab-mcp.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "esbuild src/femlab-mcp.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/femlab-mcp.js --banner:js=\"#!/usr/bin/env node\"",
+    "test": "vitest run --coverage",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@femlab/registry": "*",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "sucrase": "^3.35.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "^5.0.0",
+    "esbuild": "^0.25.12",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.0"
+  }
+}
