@@ -84,6 +84,29 @@ test.describe('@cpu the shell', () => {
     });
     expect(error?.code).toBeTruthy();
   });
+
+  // Issue #39's second half, which happy-dom cannot answer: the picker is a box on a screen, and
+  // it has to sit between the skills row and the composer rather than on top of either.
+  test('the @ picker opens below the skills row and above the composer', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.model.new({ name: 'mentions' }));
+    await page.evaluate(() => window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] }));
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
+
+    const box = page.locator('.assistant textarea');
+    await box.click();
+    await box.pressSequentially('@');
+    const popover = page.locator('.assistant .popover');
+    await expect(popover).toBeVisible();
+    await expect(popover).toContainText('beam');
+
+    const [strip, list, composer] = await Promise.all([page.locator('.assistant .strip').boundingBox(), popover.boundingBox(), page.locator('.assistant .composer').boundingBox()]);
+    expect(list!.y).toBeGreaterThanOrEqual(strip!.y + strip!.height);
+    expect(list!.y + list!.height).toBeLessThanOrEqual(composer!.y + 1);
+  });
 });
 
 test.describe('@sw without server headers', () => {
