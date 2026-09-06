@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { describe, expect, it, vi } from 'vitest';
 import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, legendTicks, siUnitOf } from '../src/fields';
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
-import { Store, initialState, solveLabel, stageOf } from '../src/store';
+import { Store, initialState, solveLabel, stageOf, verificationState, type AssistantVerification } from '../src/store';
 import { probeLine } from '../src/ui/App';
 import { PathPlot, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
 import { specOf, unavailable } from '../src/ui/Export';
@@ -276,5 +276,20 @@ describe('ResultsView', () => {
     await results.onAck({ output: { type: 'none' } });
     await results.onAck(undefined);
     expect(store.state.study).toEqual({ rows: [], unit: 'mm' });
+  });
+});
+
+
+describe('Assistant observations remain distinct from engine checks', () => {
+  it('marks history changes, result changes and missing history as stale or unconfirmed', () => {
+    const record: AssistantVerification = { rows: [], model: null, revision: 10, journalHash: 'saved-history', result: { step: 'static', revision: 10 } };
+    const state = { ...initialState, revision: 10, journal: { hash: 'saved-history', entries: [], revision: 10, canUndo: true, canRedo: false }, result: RESULT };
+    expect(verificationState(record, state)).toContain('Result static rev 10');
+    expect(verificationState(record, { ...state, journal: { ...state.journal, hash: 'same-revision-other-history' } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: { ...RESULT, stale: true } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: { ...RESULT, step: 'other' } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: { ...RESULT, revision: 11 } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: null })).toContain('Stale');
+    expect(verificationState({ ...record, journalHash: null }, state)).toContain('unconfirmed');
   });
 });

@@ -10,6 +10,7 @@ import { fakeHost, fakeTransport } from '../../registry/test/fakes';
 import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
 import { parseVerification } from '../src/ai/context';
 import { Store } from '../src/store';
+import { Checks } from '../src/ui/Results';
 
 async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
@@ -187,7 +188,7 @@ describe('the assistant drawer', () => {
       },
     });
     try {
-      const { root, registry } = await mount();
+      const { root, registry, store } = await mount({ journal: { hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false } });
       const original = registry.query.bind(registry);
       vi.spyOn(registry, 'query').mockImplementation((q) => q.query === 'query.journal' ? Promise.resolve({ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }) : original(q));
       await type(root, 'Check it');
@@ -210,6 +211,26 @@ describe('the assistant drawer', () => {
       expect(root.querySelector('.verify')!.textContent).toContain('Reaction balance');
       expect(root.querySelector('.suggestions')!.textContent).toContain('Check this Model');
       expect(root.querySelector('.suggestions')!.textContent).not.toContain('Build a cantilever');
+      expect(store.state.assistantVerifications).toHaveLength(1);
+      const checks = document.createElement('div');
+      document.body.append(checks);
+      const showChecks = () => render(<Checks s={store.state} dispatch={registry.dispatch.bind(registry)} query={registry.query.bind(registry)} />, checks);
+      showChecks();
+      expect(checks.textContent).toContain('Assistant-reported checks');
+      expect(checks.textContent).toContain('not independently verified');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('Reaction balance');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('0 %');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('Recorded at Model rev 0');
+      store.set({ journal: { ...store.state.journal!, hash: 'edited' }, revision: 1 });
+      await tick();
+      showChecks();
+      expect(root.querySelector('.verify')!.textContent).toContain('Stale');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('Stale');
+      chatBridge.clear();
+      await tick();
+      expect(root.querySelector('.verify')).toBeNull();
+      expect(store.state.assistantVerifications).toHaveLength(1);
+      expect(checks.textContent).toContain('Reaction balance');
     } finally { provider.mockRestore(); }
   });
 

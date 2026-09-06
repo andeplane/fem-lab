@@ -30,7 +30,23 @@ export interface LastError {
   suggestion: string | null;
 }
 
+/** Assistant-authored observations, never engine measurements or a solver acceptance gate. */
+export interface AssistantVerification {
+  rows: { status: 'ok' | 'warn' | 'fail'; what: string; value: string }[];
+  model: string | null;
+  revision: number;
+  journalHash: string | null;
+  result: { step: string; revision: number } | null;
+}
+
+export function verificationState(record: AssistantVerification, state: UiState): string {
+  if (!record.journalHash || !state.journal?.hash) return 'Model revision unconfirmed';
+  if (record.journalHash !== state.journal.hash || record.model !== (state.model?.name ?? null) || record.revision !== state.revision || (record.result !== null && (state.result?.stale || record.result.step !== state.result?.step || record.result.revision !== state.result?.revision))) return 'Stale — Model or Result changed';
+  return `Recorded at Model rev ${record.revision}${record.result ? ` · Result ${record.result.step} rev ${record.result.revision}` : ' · no Result'}`;
+}
+
 export interface UiState {
+  assistantVerifications: AssistantVerification[];
   ready: boolean;
   /** What `query.autosave` last reported, so the start screen can offer `file.restore`. */
   autosave: AutosaveState['saved'];
@@ -123,6 +139,7 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
+  assistantVerifications: [],
   ready: false,
   autosave: null,
   model: null,

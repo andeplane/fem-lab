@@ -5,7 +5,7 @@
 import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { Store, UiState } from '../store';
+import { verificationState, type AssistantVerification, type Store, type UiState } from '../store';
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
 import './assistant.css';
@@ -57,7 +57,7 @@ const buffer = (text: string): void => {
 type Item =
   | { kind: 'user'; text: string; images: ImageBlock[] }
   | { kind: 'prose'; text: string }
-  | { kind: 'verify'; rows: VerifyRow[] }
+  | { kind: 'verify'; record: AssistantVerification }
   | { kind: 'skill'; name: string; note: string }
   | { kind: 'tool'; call: ToolCall }
   | { kind: 'diff'; entries: JournalEntry[]; steps: number; journal: string | null }
@@ -198,9 +198,15 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       setBusy('thinking…');
       add({ kind: 'user', text: line, images: attached });
       let prose = '';
+      let proseContext: Omit<AssistantVerification, 'rows'> | null = null;
       const finishProse = () => {
-        if (prose.trim()) flushProse(prose, add);
+        if (prose.trim()) flushProse(prose, add, (rows) => {
+          const record = { rows, ...proseContext! };
+          store.set({ assistantVerifications: [...store.state.assistantVerifications, record] });
+          return record;
+        });
         prose = '';
+        proseContext = null;
         setStreaming('');
       };
       try {
@@ -212,6 +218,10 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         const system = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
         for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current })) {
           if (event.type === 'text') {
+            if (!proseContext) {
+              const state = store.state;
+              proseContext = { model: state.model?.name ?? null, revision: state.revision, journalHash: state.journal?.hash ?? null, result: state.result ? { step: state.result.step, revision: state.result.revision } : null };
+            }
             prose += event.text;
             setStreaming(streamingProse(prose));
             setBusy('writing…');
@@ -340,7 +350,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
 
       <div class="messages">
         {items.map((item, i) => (
-          <Item key={i} item={item} registry={registry} dispatch={dispatch} />
+          <Item key={i} item={item} registry={registry} dispatch={dispatch} state={ui} />
         ))}
         {streaming ? <div class="prose streaming">{streaming}</div> : null}
         {busy ? (
@@ -562,13 +572,13 @@ function streamingProse(text: string): string {
 }
 
 /** Prose is split on its `<verification>` block, so the card and the sentences both survive. */
-function flushProse(text: string, add: (item: Item) => void): void {
+function flushProse(text: string, add: (item: Item) => void, record: (rows: VerifyRow[]) => AssistantVerification): void {
   const { rows, prose } = parseVerification(text);
   if (prose) add({ kind: 'prose', text: prose });
-  if (rows.length > 0) add({ kind: 'verify', rows });
+  if (rows.length > 0) add({ kind: 'verify', record: record(rows) });
 }
 
-function Item({ item, registry, dispatch }: { item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
+function Item({ item, registry, dispatch, state }: { state: UiState; item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
   const [undoState, setUndoState] = useState<'ready' | 'pending' | 'done' | 'failed'>('ready');
   const [undoError, setUndoError] = useState('');
   if (item.kind === 'user') {
@@ -598,10 +608,11 @@ function Item({ item, registry, dispatch }: { item: Item; registry: Registry; di
       <div class="card verify">
         <div class="head">
           <span>◎</span>
-          <span>VERIFICATION</span>
+          <span>VERIFICATION · also in Checks</span>
         </div>
+        <div class="out">Assistant-reported · not independently verified<br />{verificationState(item.record, state)}</div>
         <div class="rows">
-          {item.rows.map((row, i) => (
+          {item.record.rows.map((row, i) => (
             <div key={i}>
               <span class={`icon ${row.status}`}>{row.status === 'ok' ? '✓' : row.status === 'warn' ? '!' : '✕'}</span>
               <span class="what">{row.what}</span>
