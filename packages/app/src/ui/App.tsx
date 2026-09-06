@@ -153,7 +153,19 @@ export function probeLine(p: { face: string | null; body: string | null; point: 
 }
 
 const MODES = ['geometry', 'mesh', 'results'] as const;
-const PRESETS = ['iso', 'front', 'top'] as const;
+const PRESETS = [
+  { view: 'iso', shortcut: '⇧1' },
+  { view: 'front', shortcut: '⇧2' },
+  { view: 'top', shortcut: '⇧3' },
+] as const;
+const CAMERA_SHORTCUTS: Record<string, { cmd: 'view.preset'; view: (typeof PRESETS)[number]['view'] } | { cmd: 'view.fit' }> = {
+  Digit1: { cmd: 'view.preset', view: 'iso' },
+  Digit2: { cmd: 'view.preset', view: 'front' },
+  Digit3: { cmd: 'view.preset', view: 'top' },
+  Digit4: { cmd: 'view.fit' },
+};
+
+const isTypingInto = (target: EventTarget | null): boolean => target instanceof Element && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])') !== null;
 const LAYERS = ['edges', 'loads', 'constraints', 'grid'] as const;
 
 /** Design state 4: the centred solving card, with the one Command that stops it. */
@@ -406,12 +418,12 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
           <Cmd dispatch={dispatch} cmd="view.setClip" class="toggle" args={{ plane: s.clipOn ? null : { normal: [0, 1, 0], offset: 0 } }} pressed={s.clipOn}>
             clip
           </Cmd>
-          {PRESETS.map((view) => (
-            <Cmd key={view} dispatch={dispatch} cmd="view.preset" class="tbutton" args={{ view }}>
+          {PRESETS.map(({ view, shortcut }) => (
+            <Cmd key={view} dispatch={dispatch} cmd="view.preset" class="tbutton" args={{ view }} title={`${view} view · ${shortcut}`}>
               {view}
             </Cmd>
           ))}
-          <Cmd dispatch={dispatch} cmd="view.fit" class="tbutton">
+          <Cmd dispatch={dispatch} cmd="view.fit" class="tbutton" title="fit view · ⇧4">
             fit
           </Cmd>
         </div>
@@ -463,7 +475,9 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
-      if (meta && e.key.toLowerCase() === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
+      const camera = e.shiftKey && !meta && !e.altKey && !e.repeat && !isTypingInto(e.target) ? CAMERA_SHORTCUTS[e.code] : undefined;
+      if (camera) (e.preventDefault(), void dispatch(camera).catch(() => undefined));
+      else if (meta && e.key.toLowerCase() === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
       else if (meta && e.key.toLowerCase() === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
       else if (meta && e.key.toLowerCase() === 'c' && s.selection.refs.length > 0) void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined);
       else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial']) if (s.panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);

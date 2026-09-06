@@ -12,6 +12,40 @@ async function ready(page: Page): Promise<void> {
 }
 
 test.describe('@cpu the shell', () => {
+  test('camera shortcuts move the view without touching the Journal or typed input', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.model.new({ name: 'camera-shortcuts' }));
+    await page.waitForFunction(async () => {
+      try {
+        await window.fem.registry.query({ query: 'query.view' });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const journal = await page.evaluate(() => window.fem.query.journal());
+    const shortcuts = ['Digit1', 'Digit2', 'Digit3', 'Digit4'];
+    for (let i = 0; i < shortcuts.length; i++) {
+      const before = await page.evaluate(async (n) => {
+        await window.fem.dispatch({ cmd: 'view.setCamera', position: [10 + n, 11 + n, 12 + n], target: [0, 0, 0] });
+        return window.fem.registry.query({ query: 'query.view' });
+      }, i);
+      await page.keyboard.press(`Shift+${shortcuts[i]}`);
+      await expect.poll(() => page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).not.toEqual(before);
+    }
+
+    const input = page.locator('.props input').first();
+    await input.focus();
+    const beforeTyping = await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }));
+    const value = await input.inputValue();
+    await page.keyboard.press('Shift+Digit1');
+    expect(await input.inputValue()).toContain('!');
+    expect(await input.inputValue()).not.toBe(value);
+    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).toEqual(beforeTyping);
+    expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
+  });
+
   test('boots, builds a Model from window.fem, and shows it', async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
