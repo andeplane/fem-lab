@@ -4063,7 +4063,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
+      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.",
       "type": "object",
       "properties": {
         "step": {
