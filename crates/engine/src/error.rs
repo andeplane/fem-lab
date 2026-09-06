@@ -69,6 +69,8 @@ pub enum ErrorCode {
     SolveNotPositiveDefinite,
     #[serde(rename = "solve.stalled")]
     SolveStalled,
+    #[serde(rename = "solve.too-large")]
+    SolveTooLarge,
     #[serde(rename = "gpu.shader")]
     GpuShader,
     #[serde(rename = "gpu.too-large")]
@@ -164,6 +166,7 @@ mod tests {
             ErrorCode::ConstraintRigidModes,
             ErrorCode::SolveNotPositiveDefinite,
             ErrorCode::SolveStalled,
+            ErrorCode::SolveTooLarge,
             ErrorCode::GpuShader,
             ErrorCode::GpuTooLarge,
             ErrorCode::ExplicitUnstable,

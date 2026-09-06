@@ -2,10 +2,11 @@
 // (issue #41), the examples gallery and the ⌘K command palette. The palette is the registry made
 // visible — every row is one Command with its doc string, which is also the AI's tool description.
 import type { CommandDef, ProjectMeta } from '@femlab/registry';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { engineChip } from '../capabilities';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
+import { useDialogFocus } from './Dialog';
 import { humanise } from './schema';
 
 /** Substring-in-order match, the cheapest fuzzy filter that still feels like one. */
@@ -50,6 +51,8 @@ export function requiredOf(def: CommandDef): string[] {
 export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispatch; commands: CommandDef[] }) {
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(s.panels['palette'] === true, dialog);
   const rows = rankCommands(query, commands).slice(0, 60);
   const active = rows[Math.min(cursor, rows.length - 1)];
   if (!s.panels['palette']) return null;
@@ -58,7 +61,7 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
     void (requiredOf(def).length === 0 ? dispatch({ cmd: def.name }).then(() => dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })) : Promise.resolve(fill(def))).catch(() => undefined);
   return (
     <div class="overlay" onClick={() => void dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })}>
-      <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialog} class="palette" role="dialog" aria-modal="true" aria-label="Command palette" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div class="palette-head">
           <span class="mono prompt">›</span>
           <input
@@ -70,7 +73,7 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown') setCursor((c) => Math.min(c + 1, rows.length - 1));
               else if (e.key === 'ArrowUp') setCursor((c) => Math.max(c - 1, 0));
-              else if (e.key === 'Tab' && active) (e.preventDefault(), fill(active));
+              else if (e.key === 'Tab' && active && !e.shiftKey) (e.preventDefault(), fill(active));
               else if (e.key === 'Enter' && active) run(active);
             }}
           />
@@ -106,6 +109,8 @@ export interface ExampleEntry {
 export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const [items, setItems] = useState<ExampleEntry[]>([]);
   const open = s.panels['examples'] === true;
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, dialog);
   useEffect(() => {
     if (!open) return;
     fetch(`${import.meta.env.BASE_URL}examples/index.json`)
@@ -116,11 +121,12 @@ export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (!open) return null;
   return (
     <div class="overlay wide" onClick={() => void dispatch({ cmd: 'panel.toggle', panel: 'examples', open: false })}>
-      <div class="gallery" role="dialog" aria-modal="true" aria-label="Examples and benchmarks" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialog} class="gallery" role="dialog" aria-modal="true" aria-label="Examples and benchmarks" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div class="gallery-head">
           <span class="gallery-title">Examples &amp; benchmarks</span>
           <span class="gallery-sub">Each one opens as a Journal you can read, edit and rerun. Reference values ship with the app.</span>
           <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'examples', open: false }}>
+            <span class="sr-only">Close examples</span>
             ×
           </Cmd>
         </div>

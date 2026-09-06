@@ -8,7 +8,7 @@ export const OPENAI_DEFAULT = OPENAI_MODELS[0]!;
 
 export interface OpenAILike {
   responses: {
-    create(params: OpenAI.Responses.ResponseCreateParamsStreaming): Promise<AsyncIterable<OpenAI.Responses.ResponseStreamEvent>>;
+    create(params: OpenAI.Responses.ResponseCreateParamsStreaming, options?: { signal?: AbortSignal }): Promise<AsyncIterable<OpenAI.Responses.ResponseStreamEvent>>;
   };
 }
 
@@ -59,8 +59,30 @@ export function openaiProvider(apiKey: string, make: (key: string) => OpenAILike
           input: toResponseInput(req.messages),
           // Registry schemas intentionally have optional fields; strict mode would rewrite them.
           tools: req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.input_schema, strict: false })),
-        });
+        }, { signal: req.signal });
+        const preparing = new Map<number, { id: string; name: string; arguments: string }>();
+        let terminal = false;
         for await (const event of stream) {
+          if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
+            const call = { id: event.item.call_id, name: event.item.name, arguments: event.item.arguments };
+            preparing.set(event.output_index, call);
+            yield { type: 'tool_progress', ...call };
+          }
+          if (event.type === 'response.function_call_arguments.delta') {
+            const call = preparing.get(event.output_index);
+            if (call) {
+              call.arguments += event.delta;
+              yield { type: 'tool_progress', ...call };
+            }
+          }
+          if (event.type === 'response.function_call_arguments.done') {
+            const call = preparing.get(event.output_index);
+            if (call) {
+              call.arguments = event.arguments;
+              yield { type: 'tool_progress', ...call };
+            }
+          }
+          if (['response.completed', 'response.failed', 'response.incomplete', 'error'].includes(event.type)) terminal = true;
           if (event.type === 'response.output_text.delta') yield { type: 'text_delta', text: event.delta };
           if (event.type === 'response.completed') {
             const response = event.response;
@@ -78,7 +100,9 @@ export function openaiProvider(apiKey: string, make: (key: string) => OpenAILike
           if (event.type === 'response.failed') yield { type: 'error', message: event.response.error?.message ?? 'OpenAI response failed' };
           if (event.type === 'response.incomplete') yield { type: 'error', message: `OpenAI response incomplete: ${event.response.incomplete_details?.reason ?? 'unknown'}` };
         }
+        if (!terminal) yield { type: 'error', message: 'OpenAI stream ended before the response completed' };
       } catch (e) {
+        if (req.signal?.aborted) return;
         yield { type: 'error', message: e instanceof Error ? e.message : String(e) };
       }
     },
