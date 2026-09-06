@@ -57,6 +57,8 @@ pub fn free(sketch: &Sketch, size: f64, quadratic: bool, refine: &[RefineBox]) -
             return Err(GeomError(format!("refine box {i} has size {}; it must be finite and positive", b.size)));
         }
     }
+    // weka panics on crossing or degenerate input segments, so no sketch reaches it unchecked.
+    sketch.check()?;
     let loops = sketch.loops(CHORD_FRACTION * size)?;
     let mut lo = [f64::INFINITY; 2];
     let mut hi = [f64::NEG_INFINITY; 2];

@@ -167,6 +167,13 @@ fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result
                     return Err(Error::not_found("body", of, &model.names(ObjectKind::Body)).at("mesher.of"));
                 }
             };
+            // A sketch the triangulator cannot take fails with the loop and segment it is at,
+            // rather than the size the user did not get wrong.
+            sketch.check().map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.cause)
+                    .at(format!("shape.sketch.{}", e.where_))
+                    .suggest(e.suggestion)
+            })?;
             let part = free(sketch, *size, quadratic, refine).map_err(|e| {
                 Error::new(ErrorCode::MeshFailed, e.0)
                     .at("mesher.size")
