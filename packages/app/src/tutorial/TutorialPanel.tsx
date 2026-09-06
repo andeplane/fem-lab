@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Store } from '../store';
 import { TutorialRunner } from './runner';
 import { Spotlight, useTarget } from './Spotlight';
-import { candidates, fieldsOf, formHintsOf, place } from './target';
+import { candidates, fieldsOf, FORM, formHintsOf, place, rectOf } from './target';
 import { TUTORIALS, tutorialById } from './tutorials';
 import type { Step } from './types';
 import './tutorial.css';
@@ -76,7 +76,9 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
     store.set({ formHints: current ? formHintsOf(current) : null });
     return () => store.set({ formHints: null });
   }, [current, store]);
-  const spot = box ? place(box, cardSize, { width: innerWidth, height: innerHeight }) : null;
+  // Read live rather than remembered: `box` already changes on every resize and scroll, so the
+  // Properties panel is re-measured on exactly the occasions that can move it.
+  const spot = box ? place(box, cardSize, { width: innerWidth, height: innerHeight }, rectOf(FORM)) : null;
   // One "do it for me" at a time: the button is disabled until the Journal has been re-read,
   // so a second click cannot issue the same Command again (issue #37). Through the app's own
   // dispatch the Journal, tree, viewer and results all refresh; without it (a bare panel) the

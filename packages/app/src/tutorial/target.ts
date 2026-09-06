@@ -3,8 +3,9 @@
 // can hold every rung against a fixture DOM without mounting the app (issues #38, #46).
 import type { Step } from './types';
 
-/** The Properties panel's own subtree. Only rung 1 may ever point inside it — see `resolve`. */
-const FORM = '.props';
+/** The Properties panel's own subtree. Only rung 1 may ever point inside it — see `resolve`,
+ * and it is the one region the card must never cover — see `place` (issue #46). */
+export const FORM = '.props';
 
 /** A `highlight` that is a Command id rather than a raw CSS selector. */
 const IS_COMMAND = /^[\w.:-]+$/;
@@ -126,29 +127,56 @@ export interface Placement {
   left: number;
   top: number;
   /** Which side of the target the card ended up on, so its arrow points back at it. */
-  side: 'left' | 'right';
+  side: 'left' | 'right' | 'above' | 'below';
 }
 
 const GAP = 16;
 const EDGE = 8;
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(v, hi));
 
+/** Do two boxes share any pixel? */
+export function overlaps(a: Box, b: Box): boolean {
+  return a.left < b.left + b.width && b.left < a.left + a.width && a.top < b.top + b.height && b.top < a.top + a.height;
+}
+
+/** The DOM rect of the first `sel`, as a plain `Box`; `null` when it is not on the page. */
+export function rectOf(sel: string, doc: ParentNode = document): Box | null {
+  const el = doc.querySelector<HTMLElement>(sel);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { left: r.left, top: r.top, width: r.width, height: r.height };
+}
+
 /**
- * Put the card beside the target: to its right by preference, to its left when the right has no
- * room, clamped into the viewport either way. Never on top of it, and never over the Properties
- * panel when the target is in it — which is all #46 actually asked for (the drag handle it also
- * proposed is state to persist and a11y to get right for no gain; see the issue).
+ * Put the card next to the target without covering it or the Properties panel — which is all
+ * #46 actually asked for (the drag handle it also proposed is state to persist and a11y to get
+ * right for no gain; see the issue).
+ *
+ * Right, left, below, above, in that order: the first that fits the viewport and clears both
+ * `rect` and `avoid` wins. Beside is the nicest read, but at 1280 px the top bar's Solve button
+ * has the Properties panel a card's width to its right and the viewer to its left, so only
+ * *below* clears — which is why the order does not stop at two.
  */
-export function place(rect: Box, card: { width: number; height: number }, viewport: { width: number; height: number }): Placement {
-  const right = rect.left + rect.width + GAP;
-  const left = rect.left - card.width - GAP;
-  const fitsRight = right + card.width + EDGE <= viewport.width;
-  const side = fitsRight || left < EDGE ? 'right' : 'left';
-  return {
-    left: clamp(side === 'right' ? right : left, EDGE, Math.max(EDGE, viewport.width - card.width - EDGE)),
-    top: clamp(rect.top, EDGE, Math.max(EDGE, viewport.height - card.height - EDGE)),
-    side,
-  };
+export function place(rect: Box, card: { width: number; height: number }, viewport: { width: number; height: number }, avoid?: Box | null): Placement {
+  const maxLeft = Math.max(EDGE, viewport.width - card.width - EDGE);
+  const maxTop = Math.max(EDGE, viewport.height - card.height - EDGE);
+  // Each candidate is pinned on the axis that puts it beside the target, and free on the other,
+  // where it is simply clamped onto the screen. Clamping the free axis cannot move the card onto
+  // the target: beside is horizontally disjoint from it, below and above vertically.
+  const tries: Placement[] = [
+    { left: rect.left + rect.width + GAP, top: clamp(rect.top, EDGE, maxTop), side: 'right' },
+    { left: rect.left - card.width - GAP, top: clamp(rect.top, EDGE, maxTop), side: 'left' },
+    { left: clamp(rect.left, EDGE, maxLeft), top: rect.top + rect.height + GAP, side: 'below' },
+    { left: clamp(rect.left, EDGE, maxLeft), top: rect.top - card.height - GAP, side: 'above' },
+  ];
+  const box = (p: Placement): Box => ({ left: p.left, top: p.top, width: card.width, height: card.height });
+  const onScreen = (p: Placement): boolean => (p.side === 'right' || p.side === 'left' ? p.left >= EDGE && p.left <= maxLeft : p.top >= EDGE && p.top <= maxTop);
+  const clears = (p: Placement): boolean => !overlaps(box(p), rect) && (!avoid || !overlaps(box(p), avoid));
+  const good = tries.find((p) => onScreen(p) && clears(p));
+  if (good) return good;
+  // Nothing clears: keep it beside rather than on top of the control, and fully on screen.
+  const first = tries[0]!;
+  return { left: clamp(first.left, EDGE, maxLeft), top: clamp(first.top, EDGE, maxTop), side: first.side };
 }
 
 /** What to call the resolved control in prose, read off its own visible text so it can never

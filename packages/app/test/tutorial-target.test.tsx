@@ -2,7 +2,7 @@
 // order, what the card lists, and where the card lands (issues #38, #46). Pure functions only —
 // nothing here mounts the panel, which is `tutorial-panel.test.tsx`'s job.
 import { afterEach, describe, expect, it } from 'vitest';
-import { candidates, fieldsOf, formHintsOf, nameOf, place, prettyUnits, resolve } from '../src/tutorial/target';
+import { candidates, fieldsOf, formHintsOf, nameOf, overlaps, place, prettyUnits, resolve } from '../src/tutorial/target';
 import type { Step } from '../src/tutorial/types';
 
 const step = (patch: Partial<Step> = {}): Step => ({ title: 't', explain: 'e', expect: { cmd: 'material.add' }, highlight: 'material.add', doIt: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3, rho: '7850 kg/m^3' }, ...patch });
@@ -143,14 +143,55 @@ describe('place', () => {
     expect(place({ left: 1300, top: 120, width: 260, height: 40 }, card, viewport)).toEqual({ left: 964, top: 120, side: 'left' });
   });
 
+  it('never covers the target itself', () => {
+    for (const rect of [
+      { left: 100, top: 200, width: 180, height: 40 },
+      { left: 1300, top: 120, width: 260, height: 40 },
+      { left: 60, top: 10, width: 300, height: 40 },
+    ]) {
+      const p = place(rect, card, viewport);
+      expect(overlaps({ ...p, ...card }, rect), JSON.stringify(rect)).toBe(false);
+    }
+  });
+
+  // The CI regression: at Playwright's default 1280x720 the top bar's Solve button has the
+  // Properties panel within a card's width to its right, so the preferred side is out and the
+  // card has to give way rather than sit on the panel it is not talking about.
+  it('gives up its preferred side rather than cover the Properties panel', () => {
+    const small = { width: 1280, height: 720 };
+    const props = { left: 972, top: 46, width: 308, height: 674 };
+    const solve = { left: 700, top: 9, width: 63, height: 28 };
+    const p = place(solve, card, small, props);
+    expect(p.side).not.toBe('right');
+    expect(overlaps({ ...p, ...card }, props)).toBe(false);
+    expect(overlaps({ ...p, ...card }, solve)).toBe(false);
+  });
+
+  it('still prefers beside when beside clears the panel', () => {
+    const props = { left: 1292, top: 46, width: 308, height: 954 };
+    expect(place({ left: 100, top: 200, width: 180, height: 40 }, card, viewport, props).side).toBe('right');
+  });
+
+  it('drops below when the right is blocked and there is no room on the left', () => {
+    const small = { width: 1280, height: 720 };
+    const props = { left: 400, top: 46, width: 308, height: 600 };
+    const target = { left: 20, top: 300, width: 63, height: 28 };
+    const p = place(target, card, small, props);
+    expect(p.side).toBe('below');
+    expect(overlaps({ ...p, ...card }, props)).toBe(false);
+    expect(overlaps({ ...p, ...card }, target)).toBe(false);
+  });
+
   it('clamps into the viewport rather than drawing the card off the bottom', () => {
     const p = place({ left: 100, top: 960, width: 180, height: 40 }, card, viewport);
     expect(p.top).toBe(1000 - 300 - 8);
   });
 
-  it('stays on the right when neither side fits, so it is at least beside the target', () => {
+  it('takes another side rather than sit on the target when nothing fits beside it', () => {
     const narrow = { width: 400, height: 600 };
-    expect(place({ left: 60, top: 10, width: 300, height: 40 }, card, narrow).side).toBe('right');
+    const target = { left: 60, top: 10, width: 300, height: 40 };
+    const p = place(target, card, narrow);
+    expect(overlaps({ ...p, ...card }, target)).toBe(false);
   });
 });
 

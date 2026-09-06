@@ -10,6 +10,6 @@
 export { TutorialPanel } from './TutorialPanel';
 export { Tour } from './Tour';
 export { TutorialRunner, matches, parseTutorialHash, savedStep, tutorialHash, type RunnerDeps } from './runner';
-export { candidates, fieldsOf, formHintsOf, nameOf, place, resolve, type Box, type Placement } from './target';
+export { candidates, fieldsOf, formHintsOf, nameOf, overlaps, place, rectOf, resolve, type Box, type Placement } from './target';
 export { TUTORIALS, tutorialById } from './tutorials';
 export type { Step, StepExpect, Tutorial, TutorialCommand } from './types';

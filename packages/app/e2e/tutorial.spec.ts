@@ -82,7 +82,10 @@ test.describe('@cpu the guided tutorial', () => {
     test.setTimeout(180_000);
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.setViewportSize({ width: 1600, height: 1000 });
+    // Playwright's own default, stated rather than inherited: this is the width where the top
+    // bar's Solve button has the Properties panel a card's width to its right, which is the
+    // placement #46 is actually about. A roomier window hides the case.
+    await page.setViewportSize({ width: 1280, height: 720 });
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
     await ready(page);

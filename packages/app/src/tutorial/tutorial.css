@@ -176,16 +176,27 @@
 .tutorial-panel.anchored::before {
   content: '';
   position: absolute;
-  top: 14px;
   border: 7px solid transparent;
 }
 .tutorial-panel.anchored[data-side='right']::before {
+  top: 14px;
   right: 100%;
   border-right-color: var(--border-panel);
 }
 .tutorial-panel.anchored[data-side='left']::before {
+  top: 14px;
   left: 100%;
   border-left-color: var(--border-panel);
+}
+.tutorial-panel.anchored[data-side='below']::before {
+  left: 20px;
+  bottom: 100%;
+  border-bottom-color: var(--border-panel);
+}
+.tutorial-panel.anchored[data-side='above']::before {
+  left: 20px;
+  top: 100%;
+  border-top-color: var(--border-panel);
 }
 
 /* "Click + add material" / the ⌘K fallback: the control named in the app's own words. */
