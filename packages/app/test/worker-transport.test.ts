@@ -25,7 +25,7 @@ class FakeWorker {
   }
 }
 
-const ack = (over: Partial<Ack> = {}): Ack => ({ seq: 0, revision: 1, hash: 'h0', warnings: [], output: { kind: 'none' } as unknown as Ack['output'], ...over });
+const ack = (over: Partial<Ack> = {}): Ack => ({ seq: 0, revision: 1, hash: 'h0', warnings: [], output: { type: 'none' }, ...over });
 
 function make(answer: FakeWorker['answer']) {
   const workers: FakeWorker[] = [];

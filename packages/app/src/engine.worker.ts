@@ -93,7 +93,7 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
     case 'importFile': {
       need().import_file(JSON.stringify(req.payload));
       const { journal } = JSON.parse(need().export_file());
-      return { seq: -1, revision: need().revision(), hash: need().model_hash(), warnings: [], output: { kind: 'none' }, journal };
+      return { seq: -1, revision: need().revision(), hash: need().model_hash(), warnings: [], output: { type: 'none' }, journal };
     }
     case 'replay': {
       // Rebuild the full acknowledged history, then restore the active revision while keeping
