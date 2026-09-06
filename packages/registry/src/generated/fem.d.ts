@@ -296,8 +296,10 @@ export interface Fem {
      */
     path(args: Omit<Extract<Query, { query: 'query.path' }>, 'query'>): Promise<PathResult>;
     /**
-     * Cost of solving a Step before running it: DOF, matrix non-zeros, memory, and whether
-     * it fits the current host. Use it before solving large models.
+     * Cost before solving: DOF, matrix non-zero bounds and mandatory assembly memory lower
+     * bound. Counting uses at most 16 MiB scratch after meshing. Feasibility is false above
+     * a fixed 1.5 GiB planning budget, otherwise unknown: solver fill/workspace are excluded.
+     * Use before large solves; this query does not promise that a solve fits the current host.
      */
     cost(args: Omit<Extract<Query, { query: 'query.cost' }>, 'query'>): Promise<CostEstimate>;
     /**

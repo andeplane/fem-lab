@@ -3357,9 +3357,28 @@ export interface PathResult {
  */
 export interface CostEstimate {
   dofs: number;
+  /**
+   * Upper bound on matrix non-zeros; exact when equal to nnzLower.
+   */
   nnz: number;
+  /**
+   * Lower bound on matrix non-zeros.
+   */
+  nnzLower: number;
+  /**
+   * Mandatory assembly storage lower bound in bytes, including element slots and two CSRs.
+   * Excludes mesh/model, element buffers, reduction, solver storage/fill and time history.
+   */
   bytes: number;
-  feasible: boolean;
+  /**
+   * Fixed 1.5 GiB planning budget; not measured free memory on the current host.
+   */
+  budgetBytes: number;
+  /**
+   * False if mandatory storage exceeds the planning budget; null means feasibility is
+   * unknown. Fitting a lower bound does not establish that assembly or factorisation fits.
+   */
+  feasible?: boolean | null;
   note: string;
 }
 /**
