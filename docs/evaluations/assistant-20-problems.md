@@ -52,10 +52,10 @@ beam bending is z, and rectangular sections list y width × z height.
 | B2 | Cantilever: L 0.8 m, 50 × 80 mm, E 70 GPa, nu 0.33, −0.5 kN z tip load, xmin fixed | uz = −0.571429 mm | 5% | I = bh³/12 |
 | B3 | Cantilever: L 1.5 m, 120 × 180 mm, E 200 GPa, nu 0.30, −2 kN z tip load, xmin fixed | uz = −0.192901 mm | 5% | I = bh³/12 |
 | B4 | Cantilever: L 0.5 m, 40 × 60 mm, E 110 GPa, nu 0.29, +0.3 kN z tip load, xmin fixed | uz = +0.157828 mm | 5% | I = bh³/12 |
-| H1 | Steady 20 × 20 mm heat bar: L 0.20 m, ends 0 K and 100 K, constant k 40 W/(m K) | T(L/2) = 50.0 K | 1e-8 K | linear conduction |
-| H2 | Steady 20 × 20 mm heat bar: L 0.50 m, ends 300 K and 360 K, constant k 16 W/(m K) | T(L/2) = 330.0 K | 1e-8 K | linear conduction |
-| H3 | Steady 20 × 20 mm heat bar: L 0.12 m, ends 273.15 K and 373.15 K, constant k 205 W/(m K) | T(L/2) = 323.15 K | 1e-8 K | linear conduction |
-| H4 | Steady 20 × 20 mm heat bar: L 1.0 m, ends 320 K and 280 K, constant k 1.4 W/(m K) | T(L/2) = 300.0 K | 1e-8 K | linear conduction |
+| H1 | Steady 20 × 20 mm heat bar: L 0.20 m, ends 0 K and 100 K, E 1 GPa, nu 0.25, k 40 W/(m K) | T(L/2) = 50.0 K | 1e-8 K | linear conduction |
+| H2 | Steady 20 × 20 mm heat bar: L 0.50 m, ends 300 K and 360 K, E 1 GPa, nu 0.25, k 16 W/(m K) | T(L/2) = 330.0 K | 1e-8 K | linear conduction |
+| H3 | Steady 20 × 20 mm heat bar: L 0.12 m, ends 273.15 K and 373.15 K, E 1 GPa, nu 0.25, k 205 W/(m K) | T(L/2) = 323.15 K | 1e-8 K | linear conduction |
+| H4 | Steady 20 × 20 mm heat bar: L 1.0 m, ends 320 K and 280 K, E 1 GPa, nu 0.25, k 1.4 W/(m K) | T(L/2) = 300.0 K | 1e-8 K | linear conduction |
 | M1 | Modal cantilever: L 1.0 m, 50 × 25 mm, E 210 GPa, nu 0.30, rho 7850 kg/m³, xmin fixed | f1 = 20.8879 Hz | 5% | beta1 = 1.875104; weak-axis I |
 | M2 | Modal cantilever: L 0.6 m, 30 × 15 mm, E 70 GPa, nu 0.33, rho 2700 kg/m³, xmin fixed | f1 = 34.2717 Hz | 5% | beta1 = 1.875104; weak-axis I |
 | D1 | Unconstrained 100 mm cube, E 210 GPa, nu 0.30, rho 7800 kg/m³, in −z gravity 9.81 m/s², explicit to 1 ms | uz = gt²/2 = −0.004905 mm | 0.5% | final retained frame |
@@ -98,15 +98,15 @@ provider. Scripted providers and prepared Journals are used only by unit tests o
 scoring and are marked `live: false`.
 
 The dependencies remain explicit in the manifest: `query.validateScript`/#294, sourced
-`query.materialLibrary`/#295, immutable solve assumptions/#296 and provider accounting/#25. The
+`query.materialLibrary`/#295, immutable solve assumptions/#296, retained frame queries/#243 and provider accounting/#25. The
 runner may be developed against their public contracts, but a live report is produced only from one
-frozen commit containing all four reviewed changes. No pending branch is silently copied into the
+frozen commit containing all reviewed prerequisites. No pending branch is silently copied into the
 evaluation branch.
 
 Unit tests must prove at least: a correct value and balanced reactions pass; an independently wrong
 value fails while balance passes; an otherwise correct value fails when reaction balance is above
 1e-9; a missing named-material lookup and a validation call that mutates the Journal fail their
 cases; modal support/load invariants fail independently; and an explicit history row with nonuniform
-displacement or the wrong `g t²/2` value failss; secrets are absent from serialized artifacts; and unavailable credentials produce the
+displacement or the wrong `g t²/2` value fails; secrets are absent from serialized artifacts; and unavailable credentials produce the
 explicit not-run state. Adapter tests exercise all twenty IDs through both host interfaces. The live
 browser run must use actual Chromium, and the MCP run must use the packed stdio server.
