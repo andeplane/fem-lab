@@ -425,6 +425,8 @@ pub struct Extreme {
 #[serde(rename_all = "camelCase")]
 pub struct ResultSummary {
     pub step: String,
+    /// The Journal revision after the Command that produced this Result. It stays fixed while
+    /// later edits make the Result stale and when undo removes that producing Command.
     pub revision: u32,
     pub stale: bool,
     pub solver: String,
