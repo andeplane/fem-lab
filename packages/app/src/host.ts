@@ -1,12 +1,13 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type HostContext, type HostDef, type Selection } from '@femlab/registry';
+import { FemError, type AutosaveState, type HostContext, type HostDef, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import { chatBridge } from './ai';
 import type { HostCaps } from './capabilities';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
+import { type Autosave, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
 import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
@@ -25,6 +26,40 @@ async function fetchExample(name: string): Promise<string> {
   const res = await fetch(`${import.meta.env.BASE_URL}examples/${name}.json`);
   if (!res.ok) throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
   return res.text();
+}
+
+/**
+ * The autosave, and the last thing it wrote. It is created once here rather than in `main.tsx`
+ * so `file.autosave`, `file.restore` and `query.autosave` all see the same one; the boot hook
+ * only has to call `note` after every Command and `primeAutosave` once.
+ * `ponytail: one autosave slot, not a list of them — versioning is what file.save is for.`
+ */
+export const autosave: Autosave = makeAutosave({
+  // a browser with IndexedDB blocked (private mode, or a headless test) keeps working: the
+  // autosave is then simply per-session, and file.save is still there.
+  store: typeof indexedDB === 'undefined' ? memoryStore() : indexedDbStore(indexedDB),
+  initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
+  onError: (e) => console.warn('autosave failed', e),
+});
+
+/** Read once at boot so `query.autosave` can answer without waiting on IndexedDB. */
+let lastSaved: AutosaveState['saved'] = null;
+
+/** The other half of the boot hook: `await primeAutosave();` before the start screen renders. */
+export async function primeAutosave(): Promise<AutosaveState['saved']> {
+  const saved = await autosave.read();
+  lastSaved = saved && { name: saved.name, at: saved.at, commands: saved.cmds.length };
+  return lastSaved;
+}
+
+/**
+ * The boot hook proper: one line at the end of `main.tsx`'s `refresh()`, which already runs
+ * after every journaled Command and has just re-read the Model and the Journal.
+ */
+export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
+  if (!autosave.enabled()) return;
+  autosave.note(name, journal as never);
+  lastSaved = { name, at: Date.now(), commands: journal.length };
 }
 
 export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
@@ -123,7 +158,31 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         a.click();
         URL.revokeObjectURL(url);
       },
-      shareLink: soon('file.shareLink', 'use file.save and send the file'),
+      // The Journal alone, not the whole `femlab/1` file: replay rebuilds the Model, and the
+      // Commands deflate to a fraction of a Model snapshot.
+      shareLink: async (file) => {
+        const url = await shareUrl(
+          file.journal.entries.map((e) => e.cmd as unknown as { cmd: string } & Record<string, unknown>),
+          location.href,
+        );
+        await navigator.clipboard.writeText(url).catch(() => store.log('error', 'the link is below, but the clipboard refused it'));
+        store.log('command', 'share link copied');
+        return { url };
+      },
+      setAutosave: (on) => {
+        autosave.setEnabled(on);
+        localStorage.setItem('femlab.autosave', on ? 'on' : 'off');
+        if (on) return;
+        lastSaved = null;
+        void autosave.clear();
+      },
+      restore: async () => {
+        const saved = await autosave.read();
+        if (!saved) return null;
+        await applyShared({ dispatch: (cmd) => transport.dispatch(cmd as never) }, saved.cmds);
+        return { name: saved.name, at: saved.at, commands: saved.cmds.length };
+      },
+      autosave: () => ({ enabled: autosave.enabled(), saved: lastSaved }),
     },
     project: {
       open: soon('the project folder', 'use file.open and file.save for now'),

@@ -4,7 +4,7 @@ import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';
 import { EXPORT_FORMATS, extremesCsv, pathCsv, reactionsCsv } from '../src/host-commands';
-import { ACK, MODEL_FILE, PATH, PROJECT, RESULT, fakeHost, fakeTransport } from './fakes';
+import { ACK, MODEL_FILE, PATH, PROJECT, RESULT, SAVED, fakeHost, fakeTransport } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
 const make = (projectOpen = false) => {
@@ -45,6 +45,8 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
   'file.shareLink': {},
+  'file.autosave': { on: true },
+  'file.restore': {},
   'file.read': { path: 'AGENTS.md' },
   'file.write': { path: 'reports/a.md', text: '# a' },
   'project.open': { picker: true },
@@ -219,6 +221,23 @@ describe('Registry', () => {
     await expect(open.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' }, to: 'download' })).resolves.toMatchObject({ to: 'download' });
     await expect(open.registry.dispatch({ cmd: 'file.shareLink' })).resolves.toEqual({ url: 'https://x/#j' });
     expect(open.host.files.shareLink).toHaveBeenCalledWith(MODEL_FILE);
+  });
+
+  it('file.autosave switches the autosave, query.autosave reports it and file.restore reopens it', async () => {
+    const { registry, host } = make();
+    await expect(registry.query({ query: 'query.autosave' })).resolves.toEqual({ enabled: true, saved: SAVED });
+    await expect(registry.dispatch({ cmd: 'file.restore' })).resolves.toEqual(SAVED);
+
+    // turning it off forgets what was saved, so the start screen stops offering it
+    await expect(registry.dispatch({ cmd: 'file.autosave', on: false })).resolves.toEqual({ enabled: false, saved: null });
+    expect(host.files.setAutosave).toHaveBeenCalledWith(false);
+    await expect(registry.query({ query: 'query.autosave' })).resolves.toEqual({ enabled: false, saved: null });
+    await expect(registry.dispatch({ cmd: 'file.restore' })).resolves.toBeNull();
+
+    await expect(registry.dispatch({ cmd: 'file.autosave', on: true })).resolves.toEqual({ enabled: true, saved: SAVED });
+    // `on` is required and typed: the schema, not the host, rejects a bad call
+    await expect(registry.dispatch({ cmd: 'file.autosave' })).rejects.toMatchObject({ code: 'schema' });
+    await expect(registry.dispatch({ cmd: 'file.autosave', on: 'yes' })).rejects.toMatchObject({ code: 'schema' });
   });
 
   it('file.read and file.write stay inside the project folder and refuse big files', async () => {
