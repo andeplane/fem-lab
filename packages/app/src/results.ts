@@ -199,6 +199,11 @@ export class ResultsView {
       return;
     }
     const key = fieldKeyOf(f.field, f.component ?? null);
+    const result = this.store.state.result;
+    const choices = result
+      ? fieldChoices(result.extremes.map((e) => e.field), result.frequencies?.length ?? 0, this.store.state.yieldStress !== null)
+      : [];
+    if (!result || !choices.some((c) => c.key === key)) throw unavailableField(f.field, f.component ?? null);
     this.store.set({ fieldKey: key, viewMode: 'results' });
     this.viewer.current?.setMode('results');
     await this.refresh(true);
@@ -291,6 +296,16 @@ function unsupportedField(field: string, component: number | null): FemError {
     'unsupported',
     `the browser cannot contour result field '${field}'${suffix}`,
     'view.showField',
-    'choose a field and component from the Results picker',
+    'run query.result, then call view.showField with a supported field and component from that Result',
+  );
+}
+
+function unavailableField(field: string, component: number | null): FemError {
+  const suffix = component === null ? '' : ` component ${component}`;
+  return new FemError(
+    'unsupported',
+    `the current Result does not contain browser-contourable field '${field}'${suffix}`,
+    'view.showField',
+    'run query.result, then call view.showField with one of that Result\'s available fields and components',
   );
 }

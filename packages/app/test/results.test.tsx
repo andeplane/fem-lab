@@ -114,7 +114,7 @@ describe('fields and the legend', () => {
     expect(fieldKeyOf('displacement', 2)).toBe('uz');
     expect(fieldKeyOf('displacement', null)).toBe('umag');
     expect(fieldKeyOf('stress', 0)).toBe('sxx');
-    expect(() => fieldKeyOf('stress', 99)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField' }));
+    expect(() => fieldKeyOf('stress', 99)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField', suggestion: expect.stringContaining('query.result') }));
     expect(() => fieldKeyOf('reaction', 0)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField' }));
     expect(() => fieldKeyOf('nonsense', 0)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField' }));
     expect(choiceOf('nope').key).toBe('vonMises');
@@ -309,6 +309,7 @@ describe('ResultsView', () => {
 
   it('showField picks a scalar, and `{ field: null }` turns contours off', async () => {
     const { store, viewer, results } = harness();
+    store.set({ result: RESULT });
     await results.showField({ field: 'displacement', component: 2 });
     expect(store.state.fieldKey).toBe('uz');
     expect((viewer.current.setField.mock.calls.at(-1)![0] as Float32Array)[5]).toBeCloseTo(-0.1919, 5);
@@ -325,6 +326,8 @@ describe('ResultsView', () => {
     const structuralQueries = structural.transport.query.mock.calls.length;
     await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'reaction', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
     await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'stress', component: 99 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'mode:999' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
     expect(structural.store.state.fieldKey).toBe('uz');
     expect(structural.transport.query.mock.calls.length).toBe(structuralQueries);
 
@@ -338,6 +341,7 @@ describe('ResultsView', () => {
     const thermalRegistry = registryHarness(thermal);
     await thermalRegistry.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 0 });
     expect(thermalRegistry.store.state.fieldKey).toBe('temperature');
+    await expect(thermalRegistry.registry.dispatch({ cmd: 'view.showField', field: 'reaction', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
     await expect(thermalRegistry.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 1 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
     expect(thermalRegistry.store.state.fieldKey).toBe('temperature');
   });
