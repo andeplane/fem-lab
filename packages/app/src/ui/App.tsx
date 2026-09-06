@@ -727,7 +727,7 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
           </div>
         </div>
       ) : (
-        <div class={s.form ? 'start-layout with-properties' : 'start-layout'}>
+        <div class={s.form ? 'start-layout with-properties' : 'start-layout'} style={`--properties-width:${s.panelSizes.properties}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <Start s={s} dispatch={dispatch} />
           {s.form ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
         </div>

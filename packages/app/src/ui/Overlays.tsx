@@ -85,7 +85,7 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
   const resolve = () => void dispatch({ cmd: 'palette.resolve', text }).catch(() => undefined);
   const route = (object: ObjectRef) => {
     const action = objectRoute(object, s);
-    if (action) void dispatch(action).then(close).catch(() => undefined);
+    if (action) void close().then(() => dispatch(action)).catch(() => undefined);
   };
   const activate = (tab: boolean) => {
     if (objectMode) { if (objects[selected]) route(objects[selected]!); }

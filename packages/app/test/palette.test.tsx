@@ -155,3 +155,25 @@ it('routes current editable objects through form.edit without reconstructing his
     });
   }
 });
+
+
+it('closes the palette before opening an object form and consumes Enter', async () => {
+  const store = new Store();
+  store.set({ panels: { palette: true }, objects: [{ ref: 'load:tip', kind: 'load', name: 'tip', summary: 'tip load' }] });
+  const dispatch = vi.fn(async (_cmd: { cmd: string } & Record<string, unknown>) => undefined);
+  const root = document.createElement('div');
+  render(<Palette s={store.state} dispatch={dispatch} commands={commands} />, root);
+  const input = root.querySelector('input')!;
+  input.value = '@tip';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  await tick();
+  const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+  input.dispatchEvent(enter);
+  await tick();
+  expect(enter.defaultPrevented).toBe(true);
+  expect(dispatch.mock.calls.map(([command]) => command)).toEqual([
+    { cmd: 'panel.toggle', panel: 'palette', open: false },
+    { cmd: 'form.edit', kind: 'load', name: 'tip' },
+  ]);
+  render(null, root);
+});

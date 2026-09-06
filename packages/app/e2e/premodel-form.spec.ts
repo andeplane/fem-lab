@@ -9,6 +9,24 @@ test('@cpu model.new can be reviewed and edited from the palette before the firs
   await expect(drawer).toBeVisible();
   await drawer.locator('textarea').fill('Keep this draft while reviewing a new Model.');
   await drawer.evaluate((node) => node.setAttribute('data-mount-check', 'original'));
+  await page.evaluate(async () => {
+    await window.fem.dispatch({ cmd: 'panel.resize', panel: 'assistant', size: 520 });
+    await window.fem.dispatch({ cmd: 'panel.resize', panel: 'properties', size: 420 });
+  });
+  const checkLayout = async (withForm: boolean) => {
+    for (const width of [1320, 1494, 1800]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const start = await page.locator('.start').boundingBox();
+      const assistant = await drawer.boundingBox();
+      expect(start!.x + start!.width).toBeLessThanOrEqual(assistant!.x + 1);
+      if (withForm) {
+        const props = await page.locator('.props').boundingBox();
+        expect(props!.width).toBeCloseTo(420, 0);
+        expect(props!.x + props!.width).toBeLessThanOrEqual(assistant!.x + 1);
+      }
+    }
+  };
+  await checkLayout(false);
 
   await page.keyboard.press('Control+k');
   const palette = page.getByRole('dialog', { name: 'Command palette' });
@@ -18,6 +36,7 @@ test('@cpu model.new can be reviewed and edited from the palette before the firs
   await expect(page.locator('.start')).toBeVisible();
   await expect(page.locator('.props')).toBeVisible();
   await expect(page.locator('.props .panel-sub')).toHaveText('model.new');
+  await checkLayout(true);
   await expect(page.locator('.shell')).toHaveCount(0);
   expect(await page.evaluate(() => window.fem.query.journal())).toMatchObject({ entries: [] });
 

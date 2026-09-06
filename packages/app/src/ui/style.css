@@ -2270,8 +2270,7 @@ input.model-name:focus {
   top: 78px;
 }
 @media (min-width: 1494px) {
-  #app:has(> .assistant:not([hidden])) .workspace,
-  #app:has(> .assistant:not([hidden])) .start-layout.with-properties {
+  #app:has(> .assistant:not([hidden])) .workspace {
     margin-right: var(--assistant-width, 392px);
   }
 }
@@ -2279,8 +2278,8 @@ input.model-name:focus {
    sit over its composer. Wide enough for the 880 px column plus the drawer, it moves aside and
    centres in what is left; narrower, the drawer simply floats over it. */
 @media (min-width: 1320px) {
-  .start:has(~ .assistant) {
-    margin-right: 416px;
+  #app:has(> .assistant:not([hidden])) > .start-layout {
+    margin-right: var(--assistant-width, 392px);
   }
 }
 
