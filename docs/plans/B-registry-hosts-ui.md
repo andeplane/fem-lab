@@ -862,11 +862,14 @@ Decisions:
 - **Async and `&mut self`.** Verified to compile; the worker keeps a promise chain so at most one
   `dispatch`/`query` is in flight (a concurrent call would panic inside wasm-bindgen's borrow check).
 - **Cancel.** For CPU solves the wasm thread is busy and cannot observe a flag; `worker.terminate()`,
-  recreate the worker, then `replay_hashes(journal, skip_solves = true)` from the Journal the
-  transport fetched (`query.journal`) before the `solve.run`. Replaying rebuilds the Model *and* the
-  undo stack (a plain `import_file` would clear undo). What a cancel costs, stated in the UI note:
-  the redo stack and every earlier step's Result (Results are not in the ModelFile; they show as
-  "not solved"). For GPU solves the progress callback's `false` return is honoured at the next
+  recreate the worker, then `replay_hashes(journal, skip_solves = true)` from the transport's
+  acknowledged Journal shadow, including any redo tail. Undo back to the acknowledged active
+  revision after replay, preserving both undo and redo history. Undo/redo acknowledgements move
+  the active revision without becoming Journal entries; exports use the same acknowledged
+  dispatch path. Queued calls from the cancelled worker are rejected, and new calls wait for
+  recovery ([#110](https://github.com/andeplane/fem-lab/issues/110), building on #145).
+  Cancellation still discards every earlier step's Result (Results are not in the ModelFile;
+  they show as "not solved"). For GPU solves the progress callback's `false` return is honoured at the next
   await. Both paths are one `transport.cancel()`. With plan A's `on_progress` in `SolveOptions`
   (Reconciled table) the CPU path also becomes cooperative at 25-iteration granularity and the
   terminate path stays as the fallback for a hung solve.
@@ -1420,7 +1423,7 @@ their Commands, stores and tests immediately and their components when the desig
 | R9 | **Anthropic tool constraints**: names cannot contain `.` (`^[a-zA-Z0-9_-]{1,64}$`). | `toolNameFor` mapping with reverse lookup, asserted by the tool-list test; `run_script` + generated API reference as the primary mode (Anthropic/Cloudflare findings, note 05). Token cost is R20. |
 | R10 | **Schema drift** between Rust, JSON, TS, forms and tools. | Rust snapshot test + `codegen --check` + tool-list invariant test; three independent gates on one artefact. |
 | R11 | **Concurrent calls into the wasm `Engine`** panic ("recursive use of an object"). | The worker's promise queue; the transport never issues two calls at once; a test with a fake worker asserts ordering. |
-| R12 | **Cancelling a CPU solve** cannot interrupt wasm. | `terminate` + recreate + `replay(journal, skip_solves)`; the transport fetches the Journal before every `solve.run`; cancelled solve leaves the Journal as before the solve (the `solve.run` entry is appended only on `Ok`); earlier Results and the redo stack are lost and the UI says so. Plan A's `on_progress` in `SolveOptions` makes it cooperative later. |
+| R12 | **Cancelling a CPU solve** cannot interrupt wasm. | `terminate` + recreate + `replay(journal, skip_solves)` from the acknowledged shadow, then undo the redo tail back to the active revision. Cancelled and queued unacknowledged Commands stay outside the Journal; earlier Results are lost, while undo/redo history is preserved (#110). Plan A's `on_progress` in `SolveOptions` makes it cooperative later. |
 | R18 | **`showDirectoryPicker` cannot be automated** and needs a user gesture; handles need re-permission after reload. | `project.open { handle }` is the internal form; e2e uses an OPFS directory handle (same interface); reopen goes through a click that calls `requestPermission` first. |
 | R19 | **Clipboard writes need a user gesture** and `navigator.clipboard` is main-thread only. | `clipboard.copy` runs synchronously inside the ⌘C key handler; from a script/AI it returns `Unsupported` with the text in the error so the caller still gets it. |
 | R20 | **Tool count** is now ~70 (engine + host) ≈ 25–30 k tokens of definitions per turn. | Prompt caching on the tool prefix (tools render first and are stable); `run_script` first in the system rules; if evals show selection trouble, consolidate `view.*` into one `view` tool with an `action` field — a change in `toToolDefinitions`, not in the registry. |
