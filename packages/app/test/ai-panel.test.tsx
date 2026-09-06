@@ -6,8 +6,8 @@ import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as anthropic from '../src/ai/anthropic';
 import schema from '../../registry/src/generated/engine.schema.json';
-import { fakeTransport } from '../../registry/test/fakes';
-import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
+import { fakeHost, fakeTransport } from '../../registry/test/fakes';
+import { AssistantPanel, ToolCard, chatBridge, resultAssumptions } from '../src/ai/AssistantPanel';
 import { parseVerification } from '../src/ai/context';
 import { Store } from '../src/store';
 import { makeHostContext } from '../src/host';
@@ -142,6 +142,43 @@ describe('the assistant drawer', () => {
       expect(root.querySelector('.card .out')!.textContent).toContain('beam');
       expect(root.querySelector('.thinking')).toBeNull();
     } finally { provider.mockRestore(); }
+  });
+
+  it('renders every solver-used assumption from direct and script-returned Results beyond the JSON preview', () => {
+    const assumption = {
+      step: 'thermal-explicit',
+      body: 'heated-block',
+      material: 'catalogue-aluminium',
+      property: 'alpha' as const,
+      value: { value: 0, unit: '1/K' },
+      source: 'NASA NTRS 20120014854, Section 2, PDF p. 36',
+      cause: 'the resolved temperature field read the omitted thermal expansion coefficient as zero',
+    };
+    expect(resultAssumptions(JSON.stringify({ assumptions: [assumption] }))).toEqual([assumption]);
+
+    const result = JSON.stringify({
+      result: {
+        paddingBeforeTheSolveResult: 'x'.repeat(500),
+        output: { type: 'solve', summary: { assumptions: [assumption] } },
+      },
+      console: [],
+    });
+    const root = document.createElement('div');
+    document.body.append(root);
+    render(
+      <ToolCard call={{ id: 'script', tool: 'run_script', command: 'script.run', input: { code: 'return await fem.solve.run({ step: "thermal-explicit" })' }, ms: 4, ok: true, result }} />,
+      root,
+    );
+    expect(root.querySelector('.out')!.textContent).not.toContain(assumption.cause);
+    const shown = root.querySelector('.result-assumption')!.textContent!;
+    for (const text of [assumption.step, assumption.body, assumption.material, assumption.property, '0 1/K', assumption.cause, assumption.source]) {
+      expect(shown).toContain(text);
+    }
+    render(
+      <ToolCard call={{ id: 'failed', tool: 'run_script', command: 'script.run', input: {}, ms: 4, ok: false, result }} />,
+      root,
+    );
+    expect(root.querySelector('.result-assumption')).toBeNull();
   });
 
   it('shows the key source and the model in the settings sub-panel', async () => {

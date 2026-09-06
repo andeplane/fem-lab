@@ -2,7 +2,7 @@
 // journaled) and nothing else: every effect it has on the Model goes through `registry.dispatch`,
 // and every clickable carries the `data-cmd` of the Command behind it, so `test/data-cmd.test.tsx`
 // holds this panel against `registry.list()` the same way it holds the shell.
-import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry } from '@femlab/registry';
+import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { Store, UiState } from '../store';
@@ -152,7 +152,42 @@ function withRefs(text: string) {
   return text.split(/(@[a-z]+:[^\s,;)]+|@selection\b)/g).map((part, i) => (part.startsWith('@') ? <span class="ref" key={i}>{part}</span> : part));
 }
 
-function ToolCard({ call }: { call: ToolCall }) {
+const object = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+
+function isResultAssumption(value: unknown): value is ResultAssumption {
+  const row = object(value);
+  const valued = object(row?.value);
+  return row !== null
+    && typeof row.step === 'string'
+    && typeof row.body === 'string'
+    && typeof row.material === 'string'
+    && (row.property === 'rho' || row.property === 'alpha')
+    && valued !== null && typeof valued.value === 'number' && typeof valued.unit === 'string'
+    && (row.source === null || typeof row.source === 'string')
+    && typeof row.cause === 'string';
+}
+
+/** Read typed assumption rows from a Result, solve.run Ack, or a compatible value returned by a
+ * script. Shape validation keeps the dedicated display stable for other script return values. */
+export function resultAssumptions(json: string): ResultAssumption[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  for (let depth = 0; depth < 4; depth++) {
+    const row = object(value);
+    if (row === null) return [];
+    if (Array.isArray(row.assumptions)) return row.assumptions.filter(isResultAssumption);
+    value = row.summary ?? row.output ?? row.result;
+  }
+  return [];
+}
+
+export function ToolCard({ call }: { call: ToolCall }) {
+  const assumptions = call.ok ? resultAssumptions(call.result) : [];
   return (
     <div class={`card${call.ok ? '' : ' bad'}`}>
       <div class="head">
@@ -162,6 +197,19 @@ function ToolCard({ call }: { call: ToolCall }) {
       </div>
       <div class="args">{JSON.stringify(call.input)}</div>
       {call.result ? <div class="out">{call.result.slice(0, 400)}</div> : null}
+      {assumptions.length > 0 ? (
+        <div class="result-assumptions">
+          <div class="label">Solver-used assumptions</div>
+          {assumptions.map((row, i) => (
+            <div class="result-assumption" key={`${row.step}:${row.body}:${row.property}:${i}`}>
+              <div><strong>{row.step}</strong> · {row.body} · {row.material}</div>
+              <div><code>{row.property}</code> = {row.value.value} {row.value.unit}</div>
+              <div>{row.cause}</div>
+              <div class="source">{row.source ?? 'No material source recorded'}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
