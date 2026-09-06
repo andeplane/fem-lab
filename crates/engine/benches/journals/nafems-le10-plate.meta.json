@@ -1,6 +1,6 @@
 {
-  "title": "NAFEMS LE10 thick plate",
-  "tag": "NAFEMS",
+  "title": "LE10 full-face support variant",
+  "tag": "ESRD",
   "tags": [
     "static",
     "solid",
@@ -8,14 +8,14 @@
     "bending"
   ],
   "difficulty": 3,
-  "sentence": "LE1's elliptic membrane extruded into a 3D plate under uniform pressure — a 3D solid benchmark.",
+  "sentence": "Elliptic thick plate with the whole outer face held: the ESRD support variant of NAFEMS LE10.",
   "expected": {
     "quantity": "σ_yy at D on the upper surface",
-    "value": -5.348,
+    "value": -5.234,
     "unit": "MPa",
-    "reference": "NAFEMS LE10: −5.38 MPa"
+    "reference": "ESRD full-face LE10 variant: −5.25 MPa"
   },
-  "theory": "LE10 is LE1's section as a $0.6\\,\\mathrm{m}$ thick plate under $1\\,\\mathrm{MPa}$. The published target $\\sigma_{yy} = -5.38\\,\\mathrm{MPa}$ is on the upper surface at D, so it is a bending stress and needs enough elements through the thickness. This bundled model clamps the full outer face rather than LE10's mid-plane support line; issue #183 tracks the matching support variant, so the published value is context here rather than a claimed verification.",
+  "theory": "This $0.6\\,\\mathrm{m}$ elliptic plate carries $1\\,\\mathrm{MPa}$ pressure and fixes all displacements on the whole outer face. It implements the ESRD full-face-support variant, whose independently published target is $\\sigma_{yy}(D)=-5.25\\,\\mathrm{MPa}$. The original NAFEMS LE10 fixes vertical displacement only along the outer mid-plane line and has the different −5.38 MPa target. Eight quadratic layers give −5.234 MPa (0.30% from the full-face reference). Source: [ESRD StressCheck Benchmarks Guide, pp. 29–31](https://www.esrd.com/wp-content/uploads/dlm_uploads/Benchmarks-Guide-Standard-NAFEMS-Benchmarks-Linear-Elastic-Tests.pdf).",
   "tutorial": null,
   "thumbnail": null
 }

@@ -46,7 +46,7 @@ resolves it, since `docs/BENCHMARKS.md` owns the resolved answers.
 | `lame-cylinder-plane-strain` | σ_rr at the bore | −60 MPa (Lamé, = −p) | −59.65 MPa | −0.58 % | 0.02 s |
 | `cook-membrane` | tip u_y | 23.9 (Cook 1974, plane stress) | 23.93 | +0.14 % | 0.02 s |
 | `nafems-le1-membrane` | σ_yy at D | 92.7 MPa (NAFEMS LE1) | 92.16 MPa | −0.58 % | 0.02 s |
-| `nafems-le10-plate` | σ_yy at D, upper surface | −5.38 MPa (NAFEMS LE10) | −5.348 MPa | −0.60 % | 0.20 s |
+| `nafems-le10-plate` | σ_yy at D, upper surface | −5.25 MPa (ESRD full-face LE10 variant) | −5.234 MPa | −0.30 % | — |
 | `macneal-harder-beam` | tip deflection | 0.1081 (MacNeal & Harder 1985) | 0.10733 | −0.71 % | 0.02 s |
 
 The everyday models have no published reference, so their `expected` sidecar names the hand
@@ -83,7 +83,7 @@ is the one the example computes.
 | `lame-cylinder-plane-strain` | 3 | A thick-walled cylinder under internal pressure, modelled as a plane-strain quarter section. | σθθ(a) = 100 MPa, σrr(a) = −60 MPa | Lamé closed form; BENCHMARKS.md C2 |
 | `cook-membrane` | 2 | The classic tapered, shear-loaded panel used to test bending accuracy in a distorted mesh. | u_y at the tip ≈ 23.9 (plane stress, ν = 1/3) | Cook (1974); BENCHMARKS.md C4 |
 | `nafems-le1-membrane` | 3 | An elliptical plate with an elliptical hole under outward pressure — the standard curved-boundary benchmark. | σyy(D) = 92.7 MPa | NAFEMS Standard Benchmark LE1; BENCHMARKS.md C5 |
-| `nafems-le10-plate` | 3 | LE1's elliptic membrane extruded into a 3D plate under uniform pressure — a 3D solid benchmark. | σyy(D) = −5.38 MPa | NAFEMS Standard Benchmark LE10; BENCHMARKS.md D1 |
+| `nafems-le10-plate` | 3 | Elliptic thick plate with the whole outer face held; ESRD's variant of LE10. | σyy(D) = −5.25 MPa | ESRD StressCheck Benchmarks Guide pp. 29–31; BENCHMARKS.md D1 (#183) |
 | `macneal-harder-beam` | 2 | A short cantilever meshed as six regular quad elements — the classic shear-locking sensitivity check. | tip deflection 0.1081 (regular mesh) | MacNeal & Harder (1985); BENCHMARKS.md B2 |
 | `bar-transient-heat` | 3 | A bar driven by a sinusoidal surface temperature and held at zero at the other end — the θ-method marching in time. | 36.60 at x = 80 mm, t = 32 s | NAFEMS T3; BENCHMARKS.md E3; [transient-heat](../packages/app/tutorials/transient-heat.json) |
 
