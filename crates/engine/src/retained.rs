@@ -358,52 +358,52 @@ impl Engine {
         let total_nodes = target.record.built.mesh.n_nodes();
         let mut values = Vec::with_capacity(total_nodes * components);
         let mut outside_nodes = Vec::new();
-        for node in 0..total_nodes {
+        let sampled = (0..total_nodes).try_for_each(|node| {
             let target_value = selected_at(target.field, node, target.component);
             let source_value = if direct {
-                Some(selected_at(source.field, node, source.component))
+                Ok(Some(selected_at(source.field, node, source.component)))
             } else {
                 let point = target.record.built.mesh.node(node as u32);
-                match projected_at(&source.record.built.mesh, source.field, source.component, point) {
-                    Ok(value) => value,
-                    Err(error) => return Err(error),
-                }
+                projected_at(&source.record.built.mesh, source.field, source.component, point)
             };
-            if let Some(source_value) = source_value {
-                for (component, (target, source)) in target_value.iter().zip(source_value).enumerate() {
-                    let (left_value, right_value) = if target_is_left { (*target, source) } else { (source, *target) };
-                    match finite_difference(left_value, right_value, node, component) {
-                        Ok(value) => values.push(Some(value)),
-                        Err(error) => return Err(error),
+            source_value.and_then(|source_value| {
+                if let Some(source_value) = source_value {
+                    for (component, (target, source)) in target_value.iter().zip(source_value).enumerate() {
+                        let (left_value, right_value) =
+                            if target_is_left { (*target, source) } else { (source, *target) };
+                        values.push(Some(finite_difference(left_value, right_value, node, component)?));
                     }
+                } else {
+                    outside_nodes.push(node as u32);
+                    values.extend((0..components).map(|_| None));
                 }
+                Ok(())
+            })
+        });
+        sampled.map(|()| {
+            let warnings = if left.name.starts_with("mode:") || right.name.starts_with("mode:") {
+                vec![crate::error::Warning {
+                    code: "result.mode-uncorrelated".into(),
+                    text: "Modal signs and ordering are not correlated; values are raw left minus right without sign alignment"
+                        .into(),
+                    where_: Some("left.field/right.field".into()),
+                }]
             } else {
-                outside_nodes.push(node as u32);
-                values.extend((0..components).map(|_| None));
+                Vec::new()
+            };
+            let inside_nodes = total_nodes - outside_nodes.len();
+            crate::query::DifferenceField {
+                left: resolved_operand(&left),
+                right: resolved_operand(&right),
+                comparison_result_id: target.record.id.clone(),
+                components,
+                node_count: total_nodes,
+                unit: crate::units::UnitSet::default().resolve().fmt(0.0, dimension).1,
+                values,
+                interpolated: !direct,
+                coverage: crate::query::DifferenceCoverage { inside_nodes, total_nodes, outside_nodes },
+                warnings,
             }
-        }
-        let warnings = if left.name.starts_with("mode:") || right.name.starts_with("mode:") {
-            vec![crate::error::Warning {
-                code: "result.mode-uncorrelated".into(),
-                text: "Modal signs and ordering are not correlated; values are raw left minus right without sign alignment"
-                    .into(),
-                where_: Some("left.field/right.field".into()),
-            }]
-        } else {
-            Vec::new()
-        };
-        let inside_nodes = total_nodes - outside_nodes.len();
-        Ok(crate::query::DifferenceField {
-            left: resolved_operand(&left),
-            right: resolved_operand(&right),
-            comparison_result_id: target.record.id.clone(),
-            components,
-            node_count: total_nodes,
-            unit: crate::units::UnitSet::default().resolve().fmt(0.0, dimension).1,
-            values,
-            interpolated: !direct,
-            coverage: crate::query::DifferenceCoverage { inside_nodes, total_nodes, outside_nodes },
-            warnings,
         })
     }
 }

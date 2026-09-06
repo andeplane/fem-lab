@@ -233,6 +233,39 @@ fn difference_reactions_require_the_same_physical_quantity_and_keep_thermal_powe
 }
 
 #[test]
+fn difference_query_rejects_a_finite_temperature_difference_that_overflows() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"material.add","name":"thermal","E":"1 GPa","nu":0.3,"k":"1 W/(m K)"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"thermal","bodies":["bar"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"1 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":"1 K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"held","procedure":"heat-steady","constraints":["cold","right"],"loads":[],"output":["temperature"]}"#,
+    );
+    let mut ids = Vec::new();
+    for value in [f64::MAX, -f64::MAX] {
+        let quantity = format!("{value} K");
+        ok(&mut e, &json!({"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":quantity}).to_string());
+        ok(
+            &mut e,
+            &json!({"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":quantity}).to_string(),
+        );
+        ids.push(retained_solve(&mut e, "held"));
+    }
+    let error = retained_error(
+        &mut e,
+        json!({"query":"query.difference",
+          "left":{"resultId":ids[0],"field":"temperature","component":0},
+          "right":{"resultId":ids[1],"field":"temperature","component":0},"onto":"left"}),
+    );
+    assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::Unsupported, Some("values[0][0]")));
+    assert!(error.cause.contains("nonfinite"));
+}
+
+#[test]
 fn difference_fields_keep_two_dimensional_holes_outside_and_all_components_null() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"holed sheet"}"#);
