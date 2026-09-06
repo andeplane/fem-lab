@@ -264,9 +264,11 @@ describe('the assistant drawer', () => {
     };
     const picker = vi.spyOn(project, 'pickFolder').mockResolvedValue(fakeDir(files));
     try {
-      const { root, registry, store } = await mount();
+      const browserProject = { id: 'saved-beam', name: 'Saved beam', at: 20, createdAt: 10, commands: 3, hash: 'saved-hash', thumbnail: null, saving: false, autosave: true };
+      const { root, registry, store } = await mount({ project: browserProject });
       root.querySelector<HTMLButtonElement>('[data-cmd="folder.open"]')!.click();
       await vi.waitFor(() => expect(root.textContent).toContain('project-check'));
+      expect(store.state.project).toBe(browserProject);
       expect(picker).toHaveBeenCalledTimes(1);
       // Full project I/O is #13: opening skills must not change file.save's download default.
       expect(await registry.query({ query: 'query.folder' })).toBeNull();
@@ -282,6 +284,7 @@ describe('the assistant drawer', () => {
       await registry.dispatch({ cmd: 'folder.refresh' });
       await tick();
       expect(store.state.folder).toBe(folder);
+      expect(store.state.project).toBe(browserProject);
       expect(await invoke('beam-theory-check')).toMatchObject({ source: 'project', body: 'Updated project instructions.' });
       expect(root.querySelector('.chips')!.textContent).toContain('new-check');
       expect(root.querySelector('.chips')!.textContent).not.toContain('project-check');
@@ -309,6 +312,7 @@ describe('the assistant drawer', () => {
       expect(root.textContent).toContain('open a project folder');
       expect(root.querySelector('.chips')!.textContent).not.toContain('new-check');
       expect(store.state.skills).toEqual(BUILTIN_SKILLS);
+      expect(store.state.project).toBe(browserProject);
       expect(await invoke('beam-theory-check')).toMatchObject({ source: 'builtin', body: BUILTIN_SKILLS.find((s) => s.name === 'beam-theory-check')!.body });
       await expect(registry.dispatch({ cmd: 'folder.refresh' })).rejects.toMatchObject({ code: 'file.not-found' });
     } finally { picker.mockRestore(); }
