@@ -17,13 +17,14 @@ const argText = (cmd: Record<string, unknown>): string => {
 
 const clock = (at: number | undefined): string => (at === undefined ? '' : new Date(at).toTimeString().slice(0, 8));
 
-/** The retained `solve.*` that produced the Result currently on screen. */
+/** The retained solve or non-restoring convergence study that produced the Result on screen. */
 export function solveBoundary(entries: JournalEntry[], result: Pick<ResultSummary, 'step' | 'revision'> | null): number {
   if (!result) return -1;
   const entry = entries.find((e) => e.seq === result.revision);
   if (!entry) return -1;
-  const cmd = entry.cmd as unknown as { cmd: string; step?: string };
-  return cmd.cmd.startsWith('solve.') && cmd.step === result.step ? entry.seq : -1;
+  const cmd = entry.cmd as unknown as { cmd: string; step?: string; restore?: boolean };
+  const producesResult = cmd.cmd === 'solve.run' || (cmd.cmd === 'study.converge' && cmd.restore === false);
+  return producesResult && cmd.step === result.step ? entry.seq : -1;
 }
 
 function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {

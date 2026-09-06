@@ -221,6 +221,22 @@ describe('the shell', () => {
     expect(boundarySeq(mount({ journal: undone, result: result('static', false, 3) }).root)).toBeUndefined();
   });
 
+  it('attributes a retained convergence Result only to its exact producing study', () => {
+    const converged = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'study.converge', step: 'static', sizes: ['50 mm', '25 mm'], quantity: { kind: 'max', field: 'vonMises' }, restore: false },
+    );
+    expect(boundarySeq(mount({ journal: converged, result: result('static', false, 1) }).root)).toBe('1');
+
+    const restoring = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'study.converge', step: 'static', sizes: ['50 mm', '25 mm'], quantity: { kind: 'max', field: 'vonMises' }, restore: true },
+    );
+    // A restoring study never produces a cached Result, even if inconsistent host data points
+    // at that exact Journal line.
+    expect(boundarySeq(mount({ journal: restoring, result: result('static', false, 1) }).root)).toBeUndefined();
+  });
+
   it('renders the start screen with its four paths before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');
