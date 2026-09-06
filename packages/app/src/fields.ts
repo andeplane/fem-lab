@@ -1,6 +1,11 @@
 // What a Result field is called, what dimension it carries and how it reaches a legend. Pure
 // and dependency-free, so the engine Worker and the viewer chrome can share one table instead
 // of two that drift. The dimensions mirror `field_dimension` in crates/engine/src/solve_run.rs.
+//
+// A "field" here is the wire name `Engine::field_named` takes: a `Field` spelling
+// (`displacement`, `vonMises`, …) or `mode:k` for the k-th mode shape of a modal Step. Two
+// more names never reach the engine at all — `safety` and `utilisation` are computed in the
+// app from von Mises and the Material's yield, which is why they carry a `derived` tag.
 import type { Field, UnitSet } from '@femlab/registry';
 
 /** SI unit per dimension, the same strings `query.convert` normalises to. */
@@ -23,14 +28,21 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   temperature: 'temperature',
 };
 
+/** `mode:3` is a displacement; a safety factor and a utilisation are pure numbers. */
+export function dimensionOf(field: string): keyof typeof SI_UNIT {
+  if (field.startsWith('mode:')) return 'length';
+  if (field === 'safety' || field === 'utilisation') return 'dimensionless';
+  return FIELD_DIMENSION[field as Field] ?? 'dimensionless';
+}
+
 /** The SI unit a raw `transport.field` array is in. */
-export function siUnitOf(field: Field): string {
-  return SI_UNIT[FIELD_DIMENSION[field]] ?? '';
+export function siUnitOf(field: string): string {
+  return SI_UNIT[dimensionOf(field)] ?? '';
 }
 
 /** The unit the Model displays that dimension in, falling back to SI when it names none. */
-export function displayUnitOf(field: Field, units: UnitSet | undefined): string {
-  const dim = FIELD_DIMENSION[field];
+export function displayUnitOf(field: string, units: UnitSet | undefined): string {
+  const dim = dimensionOf(field);
   const named = (units as Record<string, string | null | undefined> | undefined)?.[dim];
   return named ?? siUnitOf(field);
 }
@@ -39,10 +51,18 @@ export function displayUnitOf(field: Field, units: UnitSet | undefined): string 
 export interface FieldChoice {
   key: string;
   label: string;
-  field: Field;
+  /** The wire name `transport.field` takes; `vonMises` for the two derived choices. */
+  field: string;
   /** `null` with `magnitude` fetches every component; `null` alone fetches the scalar. */
   component: number | null;
   magnitude?: true;
+  /**
+   * Computed in the app from the fetched array rather than by the engine: `safety` is
+   * `yield / σ_vM`, `utilisation` is `σ_vM / yield`. Both need the Material's yield.
+   */
+  derived?: 'safety' | 'utilisation';
+  /** The k of a `mode:k` shape, so the deformation bar knows to sweep it sinusoidally. */
+  mode?: number;
 }
 
 const VEC = ['x', 'y', 'z'];
@@ -55,19 +75,49 @@ const VOIGT = ['xx', 'yy', 'zz', 'xy', 'xz', 'yz'];
 export const FIELD_CHOICES: FieldChoice[] = [
   { key: 'vonMises', label: 'σ_vM', field: 'vonMises', component: 0 },
   { key: 'umag', label: '|u|', field: 'displacement', component: null, magnitude: true },
-  ...VEC.map((a, i) => ({ key: `u${a}`, label: `u${a}`, field: 'displacement' as Field, component: i })),
-  ...VOIGT.map((a, i) => ({ key: `s${a}`, label: `σ${a}`, field: 'stress' as Field, component: i })),
-  ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal' as Field, component: i })),
+  ...VEC.map((a, i) => ({ key: `u${a}`, label: `u${a}`, field: 'displacement', component: i })),
+  ...VOIGT.map((a, i) => ({ key: `s${a}`, label: `σ${a}`, field: 'stress', component: i })),
+  ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal', component: i })),
   { key: 'temperature', label: 'T', field: 'temperature', component: 0 },
 ];
 
-/** The picker's rows for a Result: temperature only when the Step actually computed one. */
-export function fieldChoices(fields: string[]): FieldChoice[] {
-  return FIELD_CHOICES.filter((c) => fields.includes(c.field));
+/** `yield / σ_vM` and its reciprocal: the two numbers a check is actually written against. */
+export const DERIVED_CHOICES: FieldChoice[] = [
+  { key: 'safety', label: 'n_y', field: 'vonMises', component: 0, derived: 'safety' },
+  { key: 'utilisation', label: 'σ/f_y', field: 'vonMises', component: 0, derived: 'utilisation' },
+];
+
+/** The k-th mode shape, contoured by its magnitude and swept by the deformation bar. */
+export function modeChoice(k: number): FieldChoice {
+  return { key: `mode:${k}`, label: `mode ${k}`, field: `mode:${k}`, component: null, magnitude: true, mode: k };
+}
+
+/**
+ * The picker's rows for a Result: the fields the Step computed, then one row per mode shape
+ * it found, then the two derived rows once a Material names a yield.
+ */
+export function fieldChoices(fields: string[], modes = 0, hasYield = false): FieldChoice[] {
+  return [
+    ...FIELD_CHOICES.filter((c) => fields.includes(c.field)),
+    ...Array.from({ length: modes }, (_, i) => modeChoice(i + 1)),
+    ...(hasYield && fields.includes('vonMises') ? DERIVED_CHOICES : []),
+  ];
+}
+
+/**
+ * The `view.showField` arguments that select this choice. A derived check is named by its own
+ * key even though the array it reads is von Mises — otherwise its chip would be the σ_vM chip.
+ */
+export function showFieldArgs(c: FieldChoice): { field: string; component?: number } {
+  if (c.derived) return { field: c.key };
+  return { field: c.field, ...(c.component === null ? {} : { component: c.component }) };
 }
 
 export function choiceOf(key: string): FieldChoice {
-  return FIELD_CHOICES.find((c) => c.key === key) ?? FIELD_CHOICES[0]!;
+  const known = [...FIELD_CHOICES, ...DERIVED_CHOICES].find((c) => c.key === key);
+  if (known) return known;
+  const k = /^mode:(\d+)$/.exec(key);
+  return k ? modeChoice(Number(k[1])) : FIELD_CHOICES[0]!;
 }
 
 /**

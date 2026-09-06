@@ -27,6 +27,21 @@ const MODEL = {
   warnings: [],
 } as unknown as ModelSummary;
 
+/** Enough of `query.result` for the Results group: one contourable field on one Step. */
+const RESULT = {
+  step: 'uls',
+  revision: 9,
+  stale: false,
+  solver: 'cpu-direct',
+  iterations: 1,
+  residual: 0,
+  timeMs: 1,
+  extremes: [{ field: 'vonMises', component: 0, min: v(0, 'MPa'), minAt: [], max: v(12.4, 'MPa'), maxAt: [] }],
+  reactions: [],
+  appliedTotal: [v(0, 'kN'), v(0, 'kN'), v(0, 'kN')],
+  balance: 0,
+} as unknown as NonNullable<UiState['result']>;
+
 const state = (model: ModelSummary | null): UiState => ({ ...initialState, model });
 const group = (s: UiState, label: string) => treeGroups(s).find((g) => g.label === label)!;
 
@@ -78,7 +93,10 @@ describe('treeGroups', () => {
   it('badges a group as ok, as warning, or as empty', () => {
     const s = state(MODEL);
     expect(group(s, 'Geometry').badge).toBe('ok');
-    expect(group(s, 'Results').badge).toBe('ok');
+    // Results badge from the Result itself, not from the Step's `solved` flag.
+    expect(group(s, 'Results').badge).toBe('—');
+    expect(group({ ...s, result: RESULT }, 'Results').badge).toBe('ok');
+    expect(group({ ...s, result: { ...RESULT, stale: true } }, 'Results').badge).toBe('stale');
     expect(group(s, 'Plugins').badge).toBe('—');
     const warned = state({ ...MODEL, warnings: [{ code: 'model.no-material', text: 'x', where: null }, { code: 'model.unloaded', text: 'y', where: null }] } as ModelSummary);
     expect(group(warned, 'Materials')).toMatchObject({ badge: '1 warning', badgeClass: 'badge warn' });

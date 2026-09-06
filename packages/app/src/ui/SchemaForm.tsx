@@ -23,6 +23,17 @@ export interface FormProps {
 const editor = (s: UiState, dispatch: Dispatch) => (path: string[], value: unknown) =>
   void dispatch({ cmd: 'form.open', command: s.form?.cmd ?? '', args: setAt(s.form?.values ?? {}, path, value), keepInitial: true }).catch(() => undefined);
 
+/**
+ * A multi-valued field's current value as a list. The form's values come from anywhere a
+ * Command can — a tree row, a script, the AI, a half-finished edit — so a field that wants an
+ * array will meet a string or an object, and drawing it must not throw. One value becomes a
+ * list of one; anything else draws empty and Apply lets the engine say why.
+ */
+export function asList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  return value === undefined || value === null || typeof value === 'object' ? [] : [String(value)];
+}
+
 /** The engine's `where` ("body 'beam'", "size.0") pointed at one field of this form. */
 export function errorFor(err: LastError | null, path: string[]): string | null {
   if (!err?.where) return null;
@@ -87,7 +98,7 @@ function Quantity({ value, dimension, onChange, query, keyField }: { value: unkn
 
 /** Chips for the Sets, Bodies or Steps a Command points at, with the design's "pick in viewer". */
 function Picker({ field, value, candidates, onChange, store, dispatch, armed }: { field: Field & { kind: 'ref' }; value: unknown; candidates: { name: string; summary: string }[]; onChange(v: unknown): void; store: Store; dispatch: Dispatch; armed: boolean }) {
-  const chosen = field.multi ? ((value as string[] | undefined) ?? []) : value ? [String(value)] : [];
+  const chosen = field.multi ? asList(value) : asList(value).slice(0, 1);
   const add = (name: string) => onChange(field.multi ? [...new Set([...chosen, name])] : name);
   const drop = (name: string) => onChange(field.multi ? chosen.filter((c) => c !== name) : undefined);
   return (
@@ -177,7 +188,7 @@ function FieldView(props: FormProps & { field: Field }) {
     );
   }
   if (field.kind === 'enum') {
-    const many = (value as string[] | undefined) ?? [];
+    const many = asList(value);
     return (
       <Row field={field} error={error}>
         <Segmented
@@ -291,13 +302,18 @@ export function SchemaForm(props: FormProps) {
   const cmd = { cmd: form.cmd, ...form.values };
   const name = String(form.values['name'] ?? '—');
   const label = applyLabel(form.cmd);
+  const apply = (): void => {
+    store.set({ formError: null });
+    void dispatch(cmd as { cmd: string }).catch(() => store.set({ formError: store.state.lastError }));
+  };
   return (
     <aside class="panel props">
       <div class="panel-head">
         <span class="section-label">Properties</span>
         <span class="mono panel-sub">{form.cmd}</span>
       </div>
-      <div class="props-body">
+      {/* A real form, so ↵ in any field is Apply — the design's "one Apply = one Command". */}
+      <form class="props-body" onSubmit={(e) => (e.preventDefault(), apply())}>
         <div class="prop-name">
           <span class="mono">{name}</span>
           <Cmd dispatch={dispatch} cmd="clipboard.copy" class="link" args={{ what: { kind: 'mention', ref: `${form.cmd.split('.')[0]}:${name}` } }}>
@@ -327,10 +343,7 @@ export function SchemaForm(props: FormProps) {
               class="apply"
               args={form.values}
               title={form.cmd}
-              onRun={() => {
-                store.set({ formError: null });
-                void dispatch(cmd as { cmd: string }).catch(() => store.set({ formError: store.state.lastError }));
-              }}
+              onRun={apply}
             >
               {label}
             </Cmd>
@@ -339,7 +352,7 @@ export function SchemaForm(props: FormProps) {
             </Cmd>
           </div>
         </div>
-      </div>
+      </form>
     </aside>
   );
 }

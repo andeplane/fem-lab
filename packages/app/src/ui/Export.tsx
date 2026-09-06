@@ -4,7 +4,8 @@
 // Command, because each file is its own artefact and its own Journal line.
 import { EXPORT_FORMATS, type ExportFormatRow } from '@femlab/registry';
 import { useState } from 'preact/hooks';
-import type { UiState } from '../store';
+import type { Store, UiState } from '../store';
+import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
 
 const GROUPS: ExportFormatRow['group'][] = ['Model & mesh', 'Results', 'Document & model file'];
@@ -26,7 +27,53 @@ export function specOf(row: ExportFormatRow, step: string | undefined): Record<s
 
 const line = (spec: Record<string, unknown>): string => `await fem.file.export({ spec: ${JSON.stringify(spec)} });`;
 
-export function ExportModal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+const SCALES = [1, 2];
+
+/**
+ * The design's 1× / 2× on the viewer image. The Command is `query.screenshot`, whose schema
+ * takes `width` and `height`; each chip asks for the canvas at that many device pixels and the
+ * chosen scale then rides on the legend the viewer burns in.
+ *
+ * ponytail: the scale reaches the viewer through `ResultsView.legendBurn()`, because neither
+ * `HostContext.view.screenshot` nor `buildExport`'s png branch forwards the Query's width and
+ * height. One line in each — `host.ts` and `registry/src/host-commands.ts` — replaces this.
+ */
+function Resolution({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
+  const canvas = typeof document === 'undefined' ? null : document.querySelector('canvas');
+  const w = canvas?.clientWidth ?? 1280;
+  const h = canvas?.clientHeight ?? 720;
+  return (
+    <div class="segmented" role="group" aria-label="image resolution">
+      {SCALES.map((n) => (
+        <Cmd
+          key={n}
+          dispatch={dispatch}
+          cmd="query.screenshot"
+          args={{ width: w * n, height: h * n }}
+          pressed={s.screenshotScale === n}
+          title={`query.screenshot ${w * n} × ${h * n} px`}
+          onRun={() => {
+            store.set({ screenshotScale: n });
+            void query({ query: 'query.screenshot', width: w * n, height: h * n })
+              .then((r) => save(`${s.model?.name ?? 'model'}@${n}x.png`, (r as { png: string }).png))
+              .catch(() => undefined);
+          }}
+        >
+          {n}×
+        </Cmd>
+      ))}
+    </div>
+  );
+}
+
+/** A data-URL PNG onto the person's disk. `file.export` does the same for the formats the
+ *  engine writes; a Query hands back bytes rather than writing them, so this is its other half. */
+function save(name: string, png: string): void {
+  const a = Object.assign(document.createElement('a'), { href: png, download: name });
+  a.click();
+}
+
+export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
   const [ticked, setTicked] = useState<string[]>([]);
   if (s.panels['export'] !== true) return null;
   const ctx = { hasMesh: Boolean(s.model?.meshSettings), hasResult: s.result !== null };
@@ -40,7 +87,7 @@ export function ExportModal({ s, dispatch }: { s: UiState; dispatch: Dispatch })
   };
   return (
     <div class="overlay wide" onClick={() => void dispatch(close)}>
-      <div class="export-modal" onClick={(e) => e.stopPropagation()}>
+      <div class="export-modal" role="dialog" aria-modal="true" aria-label="Export" onClick={(e) => e.stopPropagation()}>
         <div class="gallery-head">
           <span class="gallery-title">Export</span>
           <span class="gallery-sub">Every row is one Command, so anything here is also scriptable and callable by the Assistant.</span>
@@ -67,6 +114,7 @@ export function ExportModal({ s, dispatch }: { s: UiState; dispatch: Dispatch })
                   <span class="export-name">{row.name}</span>
                   <span class="export-note">{why ?? row.note}</span>
                   <span class="mono export-cmd">{line(spec)}</span>
+                  {row.format === 'png' ? <Resolution s={s} store={store} dispatch={dispatch} query={query} /> : null}
                   <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null} title={line(spec)}>
                     export
                   </Cmd>

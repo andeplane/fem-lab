@@ -1,19 +1,21 @@
 // TutorialPanel and Tour against a fake registry: picking a tutorial, "do it for me",
 // highlighting the target control, and the tour's dismissal. Preact batches a hook's state
-// update past the current tick (the same reason `form.test.tsx` keeps a `flush` helper), so
-// every assertion that follows a click or a direct `store` mutation awaits one first.
+// update past the current tick, so every assertion that follows a click or a direct `store`
+// mutation polls for what it is about to check (`./wait-for`) rather than sleeping for a
+// guessed number of milliseconds.
 import type { JournalDump, ModelSummary, Registry } from '@femlab/registry';
 import { render } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Store } from '../src/store';
+import { afterEffects, waitFor, waitForGone, waitForText } from './wait-for';
 import { Tour } from '../src/tutorial/Tour';
 import { TutorialPanel } from '../src/tutorial/TutorialPanel';
 
-const flush = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 const click = async (el: Element | null): Promise<void> => {
   el!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await flush();
+  await afterEffects();
 };
+const progress = () => root.querySelector('.tutorial-progress');
 
 function fakeRegistry(): Registry & { dispatch: ReturnType<typeof vi.fn>; query: ReturnType<typeof vi.fn> } {
   const journal: JournalDump = { entries: [], revision: 0, canUndo: false, canRedo: false };
@@ -46,23 +48,24 @@ describe('TutorialPanel', () => {
     const store = new Store();
     render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
     expect(root.querySelector('.tutorial-panel')).toBeNull();
-    await flush(); // let the panel's subscribe effect register before it is given anything to hear
+    // The panel's subscribe effect has to register before it is given anything to hear.
+    await afterEffects();
     store.togglePanel('tutorial', true);
-    await flush();
-    expect(root.querySelector('.tutorial-panel')).not.toBeNull();
+    await waitFor(() => root.querySelector('.tutorial-panel'), 'the tutorial panel');
   });
 
   it('lists the built-in tutorials, and picking one shows its first step', async () => {
     const store = new Store();
     store.togglePanel('tutorial', true);
     render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
-    await flush();
-    const picks = [...root.querySelectorAll('.tutorial-pick')];
-    expect(picks.length).toBeGreaterThanOrEqual(4);
-    const cantilever = picks.find((p) => p.textContent?.includes('Cantilever beam'))!;
-    await click(cantilever);
-    expect(root.querySelector('.tutorial-step-title')?.textContent).toContain('Start a Model');
-    expect(root.querySelector('.tutorial-progress')?.textContent).toContain('step 1 of');
+    await afterEffects();
+    const picks = await waitFor(() => {
+      const found = [...root.querySelectorAll('.tutorial-pick')];
+      return found.length >= 4 ? found : null;
+    }, 'four tutorials to list');
+    await click(picks.find((p) => p.textContent?.includes('Cantilever beam'))!);
+    await waitForText(() => root.querySelector('.tutorial-step-title'), 'Start a Model');
+    await waitForText(progress, 'step 1 of');
   });
 
   it('"do it for me" dispatches the step Command through the registry and advances on the resulting Journal', async () => {
@@ -70,14 +73,14 @@ describe('TutorialPanel', () => {
     store.togglePanel('tutorial', true);
     const registry = fakeRegistry();
     render(<TutorialPanel registry={registry} store={store} />, root);
-    await flush();
-    await click(root.querySelector('.tutorial-pick'));
-    await click(root.querySelector('.tutorial-btn.primary')); // "Do it for me"
+    await afterEffects();
+    await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
+    await click(await waitFor(() => root.querySelector('.tutorial-btn.primary'), '"Do it for me"'));
+    // The Journal now satisfies step 1 (model.new), so the panel moves to step 2.
+    await waitForText(progress, 'step 2 of');
     expect(registry.dispatch).toHaveBeenCalledOnce();
     expect(registry.query).toHaveBeenCalledWith({ query: 'query.journal' });
     expect(store.state.journal?.entries.length).toBe(1);
-    // the Journal now satisfies step 1 (model.new), so the panel has moved to step 2
-    expect(root.querySelector('.tutorial-progress')?.textContent).toContain('step 2 of');
   });
 
   it('highlights the control the step names, via data-tutorial-target', async () => {
@@ -87,11 +90,10 @@ describe('TutorialPanel', () => {
     const store = new Store();
     store.togglePanel('tutorial', true);
     render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
-    await flush();
-    const cantilever = [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Cantilever beam'))!;
+    await afterEffects();
+    const cantilever = await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Cantilever beam')), 'the cantilever tutorial');
     await click(cantilever);
-    await flush(200);
-    expect(target.hasAttribute('data-tutorial-target')).toBe(true);
+    await waitFor(() => target.hasAttribute('data-tutorial-target'), 'the target to be highlighted');
     target.remove();
   });
 
@@ -99,12 +101,11 @@ describe('TutorialPanel', () => {
     const store = new Store();
     store.togglePanel('tutorial', true);
     render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
-    await flush();
-    await click(root.querySelector('.tutorial-pick'));
-    expect(root.querySelector('.tutorial-progress')?.textContent).toContain('step 1 of');
-    const skip = [...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent === 'Skip')!;
-    await click(skip);
-    expect(root.querySelector('.tutorial-progress')?.textContent).toContain('step 2 of');
+    await afterEffects();
+    await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
+    await waitForText(progress, 'step 1 of');
+    await click([...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent === 'Skip')!);
+    await waitForText(progress, 'step 2 of');
   });
 });
 
@@ -114,10 +115,10 @@ describe('Tour', () => {
     document.body.append(tree);
     const store = new Store();
     render(<Tour store={store} />, root);
-    await flush();
-    expect(root.querySelector('.tour-callout')).not.toBeNull();
+    await afterEffects();
+    await waitFor(() => root.querySelector('.tour-callout'), 'the first tour stop');
     await click(root.querySelector('.tutorial-btn')); // "Skip tour"
-    expect(root.querySelector('.tour-callout')).toBeNull();
+    await waitForGone(() => root.querySelector('.tour-callout'), 'the tour callout');
     expect(localStorage.getItem('femlab.tour.dismissed')).toBe('1');
     tree.remove();
   });
@@ -132,13 +133,12 @@ describe('Tour', () => {
   it('the last stop starts the cantilever tutorial and opens the panel', async () => {
     const store = new Store();
     render(<Tour store={store} />, root);
-    await flush();
+    await afterEffects();
     for (let i = 0; i < 4; i++) {
-      await click(root.querySelector('.tutorial-btn.primary'));
+      await click(await waitFor(() => root.querySelector('.tutorial-btn.primary'), `tour stop ${i + 1}`));
     }
-    const start = [...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent?.includes('Start the cantilever tutorial'))!;
-    await click(start);
-    expect(store.state.panels['tutorial']).toBe(true);
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-btn')].find((b) => b.textContent?.includes('Start the cantilever tutorial')), 'the tutorial hand-off'));
+    await waitFor(() => store.state.panels['tutorial'] === true, 'the tutorial panel to open');
     expect(location.hash).toContain('tutorial=cantilever/0');
   });
 });

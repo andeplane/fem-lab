@@ -83,6 +83,19 @@ export interface UiState {
   assumptions: Warning[];
   /** display = SI x this, for the one dimension the camera needs: length. */
   lengthFactor: number;
+  /**
+   * The smallest `yield` any Material in the Journal names, in SI pascals, or `null` when
+   * none does. `query.model` does not carry it (MaterialRow has E, nu and rho), so it is read
+   * back off the Journal's own `material.add` lines — the Journal is the Model (ADR 0003).
+   * The smallest is the conservative one when several Materials disagree.
+   */
+  yieldStress: number | null;
+  /** Whether the deformation is being swept (`view.animate`), for the ▶ / ❚❚ button. */
+  playing: boolean;
+  /** Where in one sweep the scrub sits, in turns 0…1. */
+  phase: number;
+  /** Pixels per CSS pixel a saved PNG is rendered at: the export dialog's 1× / 2×. */
+  screenshotScale: number;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
 }
@@ -145,6 +158,10 @@ export const initialState: UiState = {
   assumptions: [],
   lengthFactor: 1,
   clipOn: false,
+  yieldStress: null,
+  playing: false,
+  phase: 0,
+  screenshotScale: 1,
 };
 
 const MAX_CONSOLE = 500;

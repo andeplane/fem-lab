@@ -4,7 +4,7 @@
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
-import { formatNumber } from '../fields';
+import { FIELD_CHOICES, formatNumber } from '../fields';
 import type { UiState } from '../store';
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
@@ -48,38 +48,45 @@ function Extremes({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
     target,
   });
   return (
-    <table class="rtable">
-      <thead>
-        <tr>
-          <th>field</th>
-          <th>min</th>
-          <th>max</th>
-          <th>at (max)</th>
-          <th />
-        </tr>
-      </thead>
-      <tbody>
-        {r.extremes.map((e) => (
-          <tr key={`${e.field}.${e.component}`} class={e === peak ? 'peak' : ''}>
-            <td class="mono">
-              {e.field}
-              <span class="faint">{e.component}</span>
-            </td>
-            <td class="mono n">{num(e.min)}</td>
-            <td class="mono n">{num(e.max)}</td>
-            <td class="mono n faint">
-              {at(e.maxAt)} {e.max.unit}
-            </td>
-            <td>
-              <Cmd dispatch={dispatch} cmd="view.setCamera" class="chip-add" args={goTo(siPoint(e.maxAt, s.lengthFactor))} title="centre the camera on this extreme">
-                go to
-              </Cmd>
-            </td>
+    <div class="rtable-wrap">
+      <table class="rtable">
+        <thead>
+          <tr>
+            <th>field</th>
+            <th>min</th>
+            <th>max</th>
+            <th>at (max)</th>
+            <th />
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {r.extremes.map((e) => (
+            <tr key={`${e.field}.${e.component}`} class={e === peak ? 'peak' : ''}>
+              <td class="mono">
+                {extremeLabel(e)}
+                <span class="faint">{e.field}</span>
+              </td>
+              <td class="mono n">{num(e.min)}</td>
+              <td class="mono n">{num(e.max)}</td>
+              <td class="mono loc faint">
+                {at(e.maxAt)} {e.max.unit}
+              </td>
+              <td>
+                <Cmd dispatch={dispatch} cmd="view.setCamera" class="chip-add" args={goTo(siPoint(e.maxAt, s.lengthFactor))} title="centre the camera on this extreme">
+                  go to
+                </Cmd>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
+}
+
+/** `displacement 2` is not what an engineer calls it: the field picker's own name is. */
+export function extremeLabel(e: { field: string; component: number }): string {
+  return FIELD_CHOICES.find((c) => c.field === e.field && c.component === e.component)?.label ?? `${e.field} ${e.component}`;
 }
 
 function Reactions({ s }: { s: UiState }) {
@@ -88,7 +95,7 @@ function Reactions({ s }: { s: UiState }) {
   const unit = r.appliedTotal[0]!.unit;
   const balance = balanceLine(r);
   return (
-    <>
+    <div class="rtable-wrap">
       <table class="rtable">
         <thead>
           <tr>
@@ -131,7 +138,7 @@ function Reactions({ s }: { s: UiState }) {
         <span>{balance.pass ? '✓' : '!'}</span>
         <span class="mono">{balance.text}</span>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -155,6 +162,15 @@ function Convergence({ s }: { s: UiState }) {
           </div>
         ))}
       </div>
+      <LineChart
+        x={study.rows.map((r) => r.size.value)}
+        y={study.rows.map((r) => r.value)}
+        xUnit={study.rows[0]?.size.unit ?? ''}
+        yUnit={study.unit}
+        xLabel="h"
+        yLabel="value"
+        mark={last?.value ?? null}
+      />
       <div class="rule-note mono">
         → {formatNumber(last?.value ?? 0)} {study.unit}
         {study.observedRate === null || study.observedRate === undefined ? '' : ` · rate ${formatNumber(study.observedRate)}`}
@@ -210,25 +226,146 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
   );
 }
 
-/** A 220 × 64 line plot; no chart library for one polyline. */
-export function PathPlot({ path }: { path: PathResult }) {
-  const points = path.values.map((v, i) => ({ v, i })).filter((p): p is { v: number; i: number } => p.v !== null);
-  if (points.length < 2) return <div class="empty-note">The path left the mesh at every sample.</div>;
-  const lo = Math.min(...points.map((p) => p.v));
-  const hi = Math.max(...points.map((p) => p.v));
-  const span = hi - lo || 1;
-  const sMax = path.s[path.s.length - 1] || 1;
-  const d = points.map((p) => `${(path.s[p.i]! / sMax) * 220},${60 - ((p.v - lo) / span) * 56}`).join(' ');
+// ── the one line chart ────────────────────────────────────────────────────────────────────
+// Every plot in the app is this component: the transient history, the convergence study and
+// the sampled path. Inline SVG, no chart library — a polyline, five ticks a side with the
+// unit written once, and a hover readout that names the point under the pointer.
+
+const PLOT = { w: 260, h: 108, l: 46, r: 8, t: 10, b: 20 };
+
+/** `n` round ticks spanning `lo…hi`, and where each sits as a fraction of the axis. */
+export function axisTicks(lo: number, hi: number, n = 5): { at: number; text: string }[] {
+  return Array.from({ length: n }, (_, i) => ({ at: i / (n - 1), text: formatNumber(lo + ((hi - lo) * i) / (n - 1)) }));
+}
+
+export interface ChartProps {
+  x: number[];
+  y: (number | null)[];
+  xUnit: string;
+  yUnit: string;
+  xLabel: string;
+  yLabel: string;
+  /** Draw a horizontal reference line at this y (the utilisation limit, a reference value). */
+  mark?: number | null;
+}
+
+/**
+ * A line chart with axis ticks in the Model's units and a readout under the pointer. The
+ * readout is the point of it: an engineer reads a history off the numbers, not the shape.
+ */
+export function LineChart({ x, y, xUnit, yUnit, xLabel, yLabel, mark = null }: ChartProps) {
+  const [hover, setHover] = useState<number | null>(null);
+  const points = y.map((v, i) => ({ v, i })).filter((p): p is { v: number; i: number } => p.v !== null && Number.isFinite(p.v));
+  if (points.length < 2) return <div class="empty-note">Not enough points to plot: {points.length} of {y.length} samples had a value.</div>;
+  const xs = points.map((p) => x[p.i] ?? p.i);
+  const x0 = Math.min(...xs);
+  const x1 = Math.max(...xs);
+  const y0 = Math.min(...points.map((p) => p.v), ...(mark === null ? [] : [mark]));
+  const y1 = Math.max(...points.map((p) => p.v), ...(mark === null ? [] : [mark]));
+  const px = (v: number) => PLOT.l + ((v - x0) / (x1 - x0 || 1)) * (PLOT.w - PLOT.l - PLOT.r);
+  const py = (v: number) => PLOT.h - PLOT.b - ((v - y0) / (y1 - y0 || 1)) * (PLOT.h - PLOT.t - PLOT.b);
+  const at = hover === null ? null : points[Math.max(0, Math.min(points.length - 1, hover))];
   return (
-    <svg class="plot" viewBox="0 0 220 64" role="img" aria-label={`path plot in ${path.unit}`}>
-      <polyline points={d} fill="none" stroke="#58b7d6" stroke-width="1.5" />
-      <text x="0" y="10" class="mono">
-        {formatNumber(hi)} {path.unit}
-      </text>
-      <text x="0" y="62" class="mono">
-        {formatNumber(lo)}
-      </text>
-    </svg>
+    <div class="chart">
+      <svg
+        class="plot"
+        viewBox={`0 0 ${PLOT.w} ${PLOT.h}`}
+        role="img"
+        aria-label={`${yLabel} against ${xLabel}, ${points.length} points`}
+        onMouseMove={(e) => {
+          const box = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
+          const frac = ((e.clientX - box.left) / box.width) * PLOT.w;
+          setHover(Math.round(((frac - PLOT.l) / (PLOT.w - PLOT.l - PLOT.r)) * (points.length - 1)));
+        }}
+        onMouseLeave={() => setHover(null)}
+      >
+        <line x1={PLOT.l} y1={PLOT.t} x2={PLOT.l} y2={PLOT.h - PLOT.b} stroke="#262a33" />
+        <line x1={PLOT.l} y1={PLOT.h - PLOT.b} x2={PLOT.w - PLOT.r} y2={PLOT.h - PLOT.b} stroke="#262a33" />
+        {axisTicks(y0, y1).map((t) => (
+          <text key={`y${t.at}`} class="mono" x={PLOT.l - 4} y={PLOT.h - PLOT.b - t.at * (PLOT.h - PLOT.t - PLOT.b) + 3} text-anchor="end">
+            {t.text}
+          </text>
+        ))}
+        {axisTicks(x0, x1, 3).map((t) => (
+          <text key={`x${t.at}`} class="mono" x={PLOT.l + t.at * (PLOT.w - PLOT.l - PLOT.r)} y={PLOT.h - 6} text-anchor={t.at === 0 ? 'start' : t.at === 1 ? 'end' : 'middle'}>
+            {t.text}
+          </text>
+        ))}
+        {mark === null ? null : <line x1={PLOT.l} y1={py(mark)} x2={PLOT.w - PLOT.r} y2={py(mark)} stroke="#d9a441" stroke-dasharray="3 3" />}
+        <polyline points={points.map((p) => `${px(x[p.i] ?? p.i)},${py(p.v)}`).join(' ')} fill="none" stroke="#58b7d6" stroke-width="1.5" />
+        {at ? <circle cx={px(x[at.i] ?? at.i)} cy={py(at.v)} r="2.5" fill="#e2703a" /> : null}
+      </svg>
+      <div class="mono chart-readout">
+        {at
+          ? `${xLabel} ${formatNumber(x[at.i] ?? at.i)} ${xUnit} · ${yLabel} ${formatNumber(at.v)} ${yUnit}`
+          : `${yLabel} ${yUnit === '' ? '' : `(${yUnit}) `}against ${xLabel}${xUnit === '' ? '' : ` (${xUnit})`} · hover to read a point`}
+      </div>
+    </div>
+  );
+}
+
+/** The sampled path, through the one chart. */
+export function PathPlot({ path }: { path: PathResult }) {
+  return <LineChart x={path.s} y={path.values} xUnit="m" yUnit={path.unit} xLabel="s" yLabel="value" />;
+}
+
+/**
+ * The transient history: what the field's extremes did over time. `query.result.history` is
+ * one row per output time, so this is a real plot of the Result and not of the animation.
+ */
+export function History({ s }: { s: UiState }) {
+  const rows = s.result?.history ?? [];
+  if (rows.length === 0) return null;
+  const unit = rows[0]!.max.unit;
+  return (
+    <>
+      <div class="section-label">History · {s.result!.step}</div>
+      <LineChart x={rows.map((r) => r.time.value)} y={rows.map((r) => r.max.value)} xUnit={rows[0]!.time.unit} yUnit={unit} xLabel="t" yLabel="max" />
+      <LineChart x={rows.map((r) => r.time.value)} y={rows.map((r) => r.min.value)} xUnit={rows[0]!.time.unit} yUnit={unit} xLabel="t" yLabel="min" />
+    </>
+  );
+}
+
+/**
+ * A modal Step's natural frequencies, with the Command that puts each mode shape on screen.
+ * Mode `k`'s shape is the Result field `mode:k` (crates/engine/src/solve_run.rs).
+ */
+export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  const f = s.result?.frequencies ?? [];
+  if (f.length === 0) return null;
+  return (
+    <>
+      <div class="section-label">Natural frequencies</div>
+      <div class="rtable-wrap">
+        <table class="rtable">
+          <thead>
+            <tr>
+              <th>mode</th>
+              <th>frequency</th>
+              <th>period</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {f.map((hz, i) => (
+              <tr key={i} class={s.fieldKey === `mode:${i + 1}` ? 'peak' : ''}>
+                <td class="mono">{i + 1}</td>
+                <td class="mono n">
+                  {formatNumber(hz.value)} {hz.unit}
+                </td>
+                <td class="mono n faint">{hz.value > 0 ? `${formatNumber(1 / hz.value)} s` : '—'}</td>
+                <td>
+                  <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
+                    show
+                  </Cmd>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div class="rule-note">A mode shape has no amplitude of its own: ▶ on the deformation bar sweeps it.</div>
+    </>
   );
 }
 
@@ -257,11 +394,13 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
           Extremes · {s.result.step} · {s.result.solver} · {Math.round(s.result.timeMs)} ms
         </div>
         <Extremes s={s} dispatch={dispatch} />
+        <Frequencies s={s} dispatch={dispatch} />
         <Sample s={s} query={query} />
       </div>
       <div class="rcol">
         <div class="section-label">Reactions</div>
         <Reactions s={s} />
+        <History s={s} />
         <Convergence s={s} />
       </div>
     </div>
