@@ -212,6 +212,19 @@ export interface Fem {
      */
     heatFlux(args: Omit<Extract<Command, { cmd: 'load.heatFlux' }>, 'cmd'>): Promise<Ack>;
     /**
+     * Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses
+     * `sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant
+     * sigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model
+     * displayed in degC is converted to kelvin before the fourth power is taken. `emissivity`
+     * is dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this
+     * holds the temperature, so a heat Step whose only boundary is radiation is still well
+     * posed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and
+     * solution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A
+     * heat-steady Result reports the number of passes as its solver iteration count, and a Step
+     * that runs out of them fails with solve.diverged rather than returning a wrong answer.
+     */
+    radiation(args: Omit<Extract<Command, { cmd: 'load.radiation' }>, 'cmd'>): Promise<Ack>;
+    /**
      * A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
      * It is a density, not a total: the heat delivered is `q` times each Body's volume.
      * Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
@@ -235,7 +248,9 @@ export interface Fem {
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
      * `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
      * conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
-     * `theta` must lie in [0, 1].
+     * `theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any
+     * Step whose system depends on its own answer — today a radiation load — and are ignored by
+     * a Step that is linear.
      */
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -264,13 +279,15 @@ export interface Fem {
     /**
      * Re-mesh at each size, re-solve the Step and report the quantity of interest per size,
      * the observed convergence rate and a Richardson estimate of the converged value. Sizes
-     * should halve each time (three or more). Restores the previous mesh settings afterwards
-     * unless `restore` is false. Uses the Step's actual procedure: static and steady heat
-     * measure equilibrium fields; transient heat and explicit dynamics measure the final
-     * field at the configured tEnd with the Step's time settings unchanged. Modal Steps are
-     * unsupported because a mode amplitude is not a mesh-independent quantity; compare
-     * frequencies with solve.run/query.result instead. Steps with after are unsupported:
-     * solve their dependencies and target at each mesh explicitly.
+     * may have unequal refinement ratios. Three distinct positive sizes are needed for a
+     * finite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate
+     * are unavailable. Restores the previous mesh settings afterwards unless `restore` is false.
+     * Uses the Step's actual procedure: static and steady heat measure equilibrium fields;
+     * transient heat and explicit dynamics measure the final field at the configured tEnd
+     * with the Step's time settings unchanged. Modal Steps are unsupported because a mode
+     * amplitude is not a mesh-independent quantity; compare frequencies with
+     * solve.run/query.result instead. Steps with after are unsupported: solve their
+     * dependencies and target at each mesh explicitly.
      */
     converge(args: Omit<Extract<Command, { cmd: 'study.converge' }>, 'cmd'>): Promise<Ack>;
   };
