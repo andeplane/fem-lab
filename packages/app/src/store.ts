@@ -3,6 +3,7 @@
 // here — it lives in the engine and arrives as `query.model` snapshots.
 import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
+import type { ActiveBenchmark } from './benchmark';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
@@ -71,6 +72,8 @@ export interface UiState {
   theme: 'dark' | 'light';
   /** `query.result` for the last solved Step; `stale` on it is the engine's own hash check. */
   result: ResultSummary | null;
+  /** Metadata for the bundled example that produced this Model, retained while edits stale it. */
+  benchmark: ActiveBenchmark | null;
   /** The Step a solve is running for, `null` when none is. */
   solving: string | null;
   /** Which scalar the viewer contours, as a `FIELD_CHOICES` key. */
@@ -155,6 +158,7 @@ export const initialState: UiState = {
   progress: null,
   theme: 'dark',
   result: null,
+  benchmark: null,
   solving: null,
   fieldKey: 'vonMises',
   legend: null,

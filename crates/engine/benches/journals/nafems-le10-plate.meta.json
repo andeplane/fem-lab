@@ -15,7 +15,7 @@
     "unit": "MPa",
     "reference": "NAFEMS LE10: −5.38 MPa"
   },
-  "theory": "LE10 is LE1's section as a $0.6\\,\\mathrm{m}$ thick plate under $1\\,\\mathrm{MPa}$, clamped at the outer rim. The target $\\sigma_{yy} = -5.38\\,\\mathrm{MPa}$ is on the upper surface at D, so it is a bending stress: it needs enough elements through the thickness, which is why the sweep uses four quadratic layers.",
+  "theory": "LE10 is LE1's section as a $0.6\\,\\mathrm{m}$ thick plate under $1\\,\\mathrm{MPa}$. The published target $\\sigma_{yy} = -5.38\\,\\mathrm{MPa}$ is on the upper surface at D, so it is a bending stress and needs enough elements through the thickness. This bundled model clamps the full outer face rather than LE10's mid-plane support line; issue #183 tracks the matching support variant, so the published value is context here rather than a claimed verification.",
   "tutorial": null,
   "thumbnail": null
 }

@@ -11,6 +11,7 @@ import '@fontsource/ibm-plex-sans/latin-600.css';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
+import { clearsBenchmark } from './benchmark';
 import { devApiKeys } from './dev-keys';
 import { appHostCommands, makeHostContext, noteAutosave, primeAutosave, type ViewerRef } from './host';
 import { ResultsView } from './results';
@@ -90,6 +91,7 @@ async function boot(): Promise<void> {
     try {
       const ack = await registry.dispatch(cmd);
       store.log('command', cmd.cmd);
+      if (clearsBenchmark(cmd.cmd, ack)) store.set({ benchmark: null });
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, so the Journal has to be re-read after it too.
       if (registry.describe(cmd.cmd).provider === 'engine' || cmd.cmd === 'file.export' || cmd.cmd === 'file.restore') {

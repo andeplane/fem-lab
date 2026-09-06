@@ -3,6 +3,7 @@
 // visible — every row is one Command with its doc string, which is also the AI's tool description.
 import type { CommandDef } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
+import type { ExampleEntry } from '../benchmark';
 import { engineChip } from '../capabilities';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
@@ -95,12 +96,6 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
       </div>
     </div>
   );
-}
-
-export interface ExampleEntry {
-  name: string;
-  commands: number;
-  summary: string;
 }
 
 export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {

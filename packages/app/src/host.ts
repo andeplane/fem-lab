@@ -3,6 +3,7 @@
 // except through the transport, and nothing in the registry knows the DOM exists.
 import { FemError, type AutosaveState, type HostContext, type HostDef, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { attachComparison, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import type { HostCaps } from './capabilities';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
@@ -31,6 +32,16 @@ async function fetchExample(name: string): Promise<string> {
   const res = await fetch(`${import.meta.env.BASE_URL}examples/${name}.json`);
   if (!res.ok) throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
   return res.text();
+}
+
+async function fetchExampleMetadata(name: string): Promise<ActiveBenchmark> {
+  const res = await fetch(`${import.meta.env.BASE_URL}examples/index.json`);
+  if (!res.ok) throw new FemError('file.not-found', 'the bundled example index could not be read', name, 'reload the app and open Examples again');
+  const entry = ((await res.json()) as { examples?: ExampleEntry[] }).examples?.find((example) => example.name === name);
+  if (!entry || typeof entry.theory !== 'string' || typeof entry.expected?.reference !== 'string') {
+    throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
+  }
+  return attachComparison(entry);
 }
 
 /**
@@ -279,7 +290,11 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
       tool: true,
       run: async (input) => {
         const { name } = input as { name: string };
+        const benchmark = await fetchExampleMetadata(name);
         const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
+        // From this point the current Model is being replaced. Do not leave the old example's
+        // theory beside a partial replay if a later Command fails.
+        store.set({ benchmark: null });
         // An example that ends on solve.run opens solved, and a solved Model is shown as one:
         // the last solve's Ack goes where the Solve button's would (results tab, contours).
         let solved: unknown = null;
@@ -291,6 +306,7 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         store.togglePanel('examples', false);
         await refresh();
         if (solved) await results?.onAck(solved);
+        store.set({ benchmark: { ...benchmark, modelRevision: store.state.revision } });
         return { name, commands: entries.length };
       },
     },
