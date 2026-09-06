@@ -280,10 +280,17 @@ test.describe('@cpu the shell', () => {
 
 test.describe('@sw without server headers', () => {
   test('the coi service worker makes the page cross-origin isolated after one reload', async ({ page }) => {
+    const navigations: string[] = [];
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.goto('./');
     // The first visit registers the worker and reloads itself once; the guard stops a loop.
     await page.waitForFunction(() => window.crossOriginIsolated === true, undefined, { timeout: 60_000 });
     expect(await page.evaluate(() => window.crossOriginIsolated)).toBe(true);
+    expect(await page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
+    expect(await page.evaluate(() => sessionStorage.getItem('coi-reset'))).toBe('1');
+    expect(navigations.filter((url) => url.endsWith('/fem-lab/'))).toHaveLength(2);
     await ready(page);
     const caps = (await page.evaluate(() => window.fem.query.capabilities())) as unknown as { crossOriginIsolated: boolean; threads: number };
     expect(caps.crossOriginIsolated).toBe(true);
