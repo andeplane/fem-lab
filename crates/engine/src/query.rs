@@ -716,8 +716,11 @@ pub enum Output {
         kind: ObjectKind,
         name: String,
     },
+    // Boxed: a Result summary is by far the largest thing an Ack can carry, and every other
+    // Command would otherwise pay for its size. The wire shape is unchanged, and a doc comment
+    // here would not be — it would put a description beside the $ref and split the type.
     Solve {
-        summary: ResultSummary,
+        summary: Box<ResultSummary>,
     },
     Study {
         report: StudyReport,

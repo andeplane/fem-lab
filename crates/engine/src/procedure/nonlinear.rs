@@ -247,6 +247,8 @@ struct Newton<'a> {
     /// because a constrained DOF's out-of-balance is its reaction, not an error.
     free: Vec<bool>,
     f_ref: &'a [f64],
+    /// `|f_ref|_inf`, which does not change between increments.
+    f_ref_norm: f64,
     pool: &'a Pool,
     gpu: Option<&'a crate::gpu::Gpu>,
 }
@@ -280,7 +282,9 @@ impl Newton<'_> {
                 Ok(a) => a,
                 // A folded deformed element is what a too-large increment looks like from
                 // inside the element loop; anything else is a real failure of the Model.
-                Err(e) if e.code == ErrorCode::MeshInverted => return Ok(Attempt::CutBack(iteration, residual)),
+                Err(e) if e.code == ErrorCode::MeshInverted => {
+                    return Ok(Attempt::CutBack(iteration, residual / scale.max(FLOOR)))
+                }
                 Err(e) => return Err(e),
             };
             // The residual lives on the free DOFs — a constrained DOF's out-of-balance is its
@@ -292,7 +296,7 @@ impl Newton<'_> {
                     r[i] = lambda * self.f_ref[i] - a.f_int[i];
                 }
             }
-            let external = lambda.abs() * norm_inf(self.f_ref);
+            let external = lambda.abs() * self.f_ref_norm;
             let internal = norm_inf(&a.f_int);
             residual = norm_inf(&r);
             *scale = scale.max(external).max(internal);
@@ -300,14 +304,17 @@ impl Newton<'_> {
             if converged(&o.converge, residual, *scale, correction, norm_inf(&increment)) {
                 return Ok(Attempt::Converged(u, Box::new(a), iteration, info));
             }
+            let relative = residual / scale.max(FLOOR);
             if iteration == o.converge.max_newton || !residual.is_finite() {
-                return Ok(Attempt::CutBack(iteration, residual));
+                return Ok(Attempt::CutBack(iteration, relative));
             }
+            // The fraction advances with the increment, never inside it: a cut-back increment
+            // is retried, and a progress bar that walked backwards would look like a fault.
             report(
                 progress,
                 "newton",
-                0.05 + 0.85 * (iteration as f64 / o.converge.max_newton as f64),
-                &format!("increment {number}, iteration {iteration}, residual {residual:.2e}"),
+                0.05 + 0.85 * ((number - 1) as f64 / o.increments as f64).min(1.0),
+                &format!("increment {number}, iteration {iteration}, relative residual {relative:.2e}"),
             )?;
             let red = assembly::reduce(&a.k, &r, self.rc_zero);
             let (du_f, solved) = solve(&red.k_ff, &red.f_f, &o.solver, self.pool, self.gpu, progress).await?;
@@ -350,7 +357,8 @@ pub async fn run(
     for &(dof, _) in &rc.fixed {
         free[dof as usize] = false;
     }
-    let newton = Newton { p, pat: &pat, o, rc: &rc, rc_zero: &rc_zero, free, f_ref: &f_ref, pool, gpu };
+    let f_ref_norm = norm_inf(&f_ref);
+    let newton = Newton { p, pat: &pat, o, rc: &rc, rc_zero: &rc_zero, free, f_ref: &f_ref, f_ref_norm, pool, gpu };
 
     let mut u = vec![0.0; p.n_dofs()];
     let mut committed = GpState::new(p).expect("the checks found a material for every element");

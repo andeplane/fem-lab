@@ -382,7 +382,7 @@ impl Engine {
         result.solver.time_ms = self.host.now_ms() - started;
         let hash = self.model_hash();
         self.results.insert(step.name.clone(), (hash, result));
-        Ok(Output::Solve { summary: self.result_summary(&step.name) })
+        Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)) })
     }
 
     /// `study.converge`: re-mesh at every size, re-solve the Step, and report the trend
