@@ -5,7 +5,7 @@
 // Values arrive from the engine in SI and are shown in the Model's own units, so the array the
 // viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
-import type { ResultSummary, StudyReport, Warning } from '@femlab/registry';
+import { FemError, type ResultSummary, type StudyReport, type Warning } from '@femlab/registry';
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store } from './store';
@@ -72,8 +72,9 @@ export class ResultsView {
 
   /** display = SI × scale + offset, derived from the engine once per unit pair. */
   private async conversion(field: string): Promise<{ scale: number; offset: number }> {
-    const si = siUnitOf(field);
-    const to = displayUnitOf(field, this.store.state.model?.units);
+    const reactionQuantity = this.store.state.result?.reactionQuantity;
+    const si = siUnitOf(field, reactionQuantity);
+    const to = displayUnitOf(field, this.store.state.model?.units, reactionQuantity);
     if (si === to) return { scale: 1, offset: 0 };
     const key = `${si}→${to}`;
     const hit = this.conversions.get(key);
@@ -181,18 +182,23 @@ export class ResultsView {
     const values = magnitude(raw, choice.magnitude === true);
     for (let i = 0; i < values.length; i++) values[i] = values[i]! * scale + offset;
     const [min, max] = extent(values);
-    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units) };
+    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units, this.store.state.result?.reactionQuantity) };
   }
 
   /** `view.showField`: `{ field: null }` turns contours off, anything else picks a scalar. */
   async showField(f: { field: string | null; component?: number | null }): Promise<void> {
-    if (!f.field) {
+    if (f.field === null) {
       this.store.set({ viewMode: 'geometry' });
       this.viewer.current?.setMode('geometry');
       this.viewer.current?.setField(null, [0, 1]);
       return;
     }
     const key = fieldKeyOf(f.field, f.component ?? null);
+    const result = this.store.state.result;
+    const choices = result
+      ? fieldChoices(result.extremes.map((e) => e.field), result.frequencies?.length ?? 0, this.store.state.yieldStress !== null)
+      : [];
+    if (!result || !choices.some((c) => c.key === key)) throw unavailableField(f.field, f.component ?? null);
     this.store.set({ fieldKey: key, viewMode: 'results' });
     this.viewer.current?.setMode('results');
     await this.refresh(true);
@@ -264,7 +270,38 @@ export function magnitude(values: Float32Array, on: boolean): Float32Array {
 
 /** `view.showField { field, component }` → the picker key that names the same scalar. */
 export function fieldKeyOf(field: string, component: number | null): string {
-  if (field.startsWith('mode:') || field === 'safety' || field === 'utilisation') return field;
-  const exact = FIELD_CHOICES.find((c) => c.field === field && c.component === component);
-  return (exact ?? FIELD_CHOICES.find((c) => c.field === field))?.key ?? 'vonMises';
+  if (field === 'safety' || field === 'utilisation') {
+    if (component !== null) throw unsupportedField(field, component);
+    return field;
+  }
+  if (field.startsWith('mode:')) {
+    if (!/^mode:[1-9]\d*$/.test(field) || component !== null) throw unsupportedField(field, component);
+    return field;
+  }
+  const choices = FIELD_CHOICES.filter((c) => c.field === field);
+  if (choices.length === 0) throw unsupportedField(field, component);
+  if (component === null) return choices.find((c) => c.component === null)?.key ?? choices[0]!.key;
+  const exact = choices.find((c) => c.component === component);
+  if (!exact) throw unsupportedField(field, component);
+  return exact.key;
+}
+
+function unsupportedField(field: string, component: number | null): FemError {
+  const suffix = component === null ? '' : ` component ${component}`;
+  return new FemError(
+    'unsupported',
+    `the browser cannot contour result field '${field}'${suffix}`,
+    'view.showField',
+    'run query.result, then call view.showField with a supported field and component from that Result',
+  );
+}
+
+function unavailableField(field: string, component: number | null): FemError {
+  const suffix = component === null ? '' : ` component ${component}`;
+  return new FemError(
+    'unsupported',
+    `the current Result does not contain browser-contourable field '${field}'${suffix}`,
+    'view.showField',
+    'run query.result, then call view.showField with one of that Result\'s available fields and components',
+  );
 }

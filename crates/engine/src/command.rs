@@ -126,7 +126,9 @@ pub enum Solver {
     GpuPcg,
 }
 
-/// Result fields.
+/// Result fields. Reaction is support force in N for structural Results and removed heat
+/// power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
+/// display units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
@@ -681,7 +683,7 @@ pub enum Command {
         description: Option<String>,
     },
 
-    /// Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage
+    /// Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage
     /// stays SI and every input may still use any unit of the right dimension; this only
     /// changes how values are reported back.
     #[serde(rename = "model.setUnits", rename_all = "camelCase")]
@@ -880,7 +882,8 @@ pub enum Command {
     LoadForce { name: String, on: SetRef, total: [Q<Force>; 3] },
 
     /// Gravity (or any uniform acceleration) as a body force on every Body whose Material has
-    /// a density; Bodies without one are skipped and listed in the warnings.
+    /// a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
+    /// apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
     #[serde(rename = "load.gravity", rename_all = "camelCase")]
     LoadGravity { name: String, g: [Q<Acceleration>; 3] },
 
