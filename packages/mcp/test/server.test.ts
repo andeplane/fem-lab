@@ -107,7 +107,7 @@ describe('run_script on its own', () => {
     const out = await runScript('console.warn("a"); console.error(1); console.debug({ x: 1 }); console.info(undefined); return () => 1;', nothing, nothing);
     expect(out.console).toEqual(['a', '1', '{"x":1}', 'undefined']);
     expect(out.result).toBe('() => 1');
-    expect((await runScript('return { self: globalThis };', nothing, nothing)).result).toBe('[object Object]');
+    expect((await runScript('const cyclic: any = {}; cyclic.self = cyclic; return cyclic;', nothing, nothing)).result).toBe('[object Object]');
     expect((await runScript('const nothing = 1;', nothing, nothing)).result).toBe(null);
   });
 
