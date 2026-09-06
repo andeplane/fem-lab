@@ -1122,6 +1122,41 @@ fn consistent_and_lumped_mass_both_total_rho_v() {
 }
 
 #[test]
+fn zero_density_element_mass_is_exactly_zero_and_negative_density_is_rejected() {
+    let mut mat = steel();
+    mat.rho = 0.0;
+    for kind in ALL_KINDS {
+        let el = element_for(kind);
+        let (coords, _, _) = simple(kind);
+        let n = el.n_dof();
+        let mut m = vec![f64::NAN; n * n];
+        for id in idealisations(kind) {
+            let c = ctx(&coords, &mat, id, Formulation::Full);
+            for lumped in [false, true] {
+                el.mass(&c, &mut m, lumped).expect("zero density is a valid zero element mass");
+                assert!(m.iter().all(|&v| v == 0.0), "{kind:?}, lumped = {lumped}: {m:?}");
+            }
+            let e = el.omega_max(&c).expect_err("a massless element has no frequency bound");
+            assert_eq!(e.code, ErrorCode::ModelIllPosed);
+            assert_eq!(e.where_.as_deref(), Some("material.rho"));
+        }
+    }
+
+    let kind = ElementKind::Hex8;
+    let el = element_for(kind);
+    let (coords, _, _) = simple(kind);
+    let mut m = vec![0.0; el.n_dof() * el.n_dof()];
+    for rho in [-1.0, f64::NAN] {
+        mat.rho = rho;
+        let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::Full);
+        let e = el.mass(&c, &mut m, true).expect_err("negative or non-finite mass is invalid");
+        assert_eq!(e.code, ErrorCode::ModelIllPosed);
+        assert_eq!(e.where_.as_deref(), Some("material.rho"));
+        assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("rho")));
+    }
+}
+
+#[test]
 fn a_constant_body_force_totals_f_times_volume() {
     let mat = steel();
     let g = [0.0, -9.81 * DENSITY, 0.0];
@@ -4017,7 +4052,16 @@ fn a_free_block_has_six_zero_frequencies() {
 #[test]
 fn a_modal_step_without_a_density_names_the_missing_property() {
     let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
-    let sets = sets_of(&mesh);
+    let mut sets = sets_of(&mesh);
+    sets.insert(
+        "all".to_string(),
+        ResolvedSet {
+            kind: SetKind::Node,
+            faces: Vec::new(),
+            nodes: (0..mesh.n_nodes() as u32).collect(),
+            elems: Vec::new(),
+        },
+    );
     let bodies = one_body();
     let mut p = problem(
         &mesh,
@@ -4037,6 +4081,129 @@ fn a_modal_step_without_a_density_names_the_missing_property() {
     let boom = Step::Explicit { t_end: 1e-3, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
     let e = run_step(&p, &boom).expect_err("no density, no time step");
     assert_eq!(e.code, ErrorCode::ModelIllPosed);
+
+    // Holding every DOF removes the per-node error, but a wholly massless model still has no
+    // frequency from which explicit dynamics could choose a time step.
+    p.constraints = vec![fix("all", "all", [true, true, true], 0.0)];
+    let e = run_step(&p, &boom).expect_err("a fully held massless model still has no time scale");
+    assert_eq!(e.where_.as_deref(), Some("materials"));
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("rho")));
+}
+
+/// A massive Body can give the model a finite frequency while a separate massless Body still
+/// leaves zero nodal masses. Explicit dynamics rejects those free DOFs before its first divide;
+/// correcting the material on the same Problem then runs, which proves the failure is recoverable.
+#[test]
+fn explicit_rejects_a_free_massless_body_in_a_mixed_model_and_recovers() {
+    let a = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
+    let b = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
+    let n_a = a.n_nodes() as u32;
+    let mut coords = a.coords.clone();
+    for xyz in b.coords.chunks_exact(3) {
+        coords.extend([xyz[0] + 0.2, xyz[1], xyz[2]]);
+    }
+    let mesh = Mesh {
+        dim: 3,
+        coords,
+        blocks: vec![
+            femlab_geometry::ElementBlock { kind: ElementKind::Hex8, conn: a.blocks[0].conn.clone(), first_elem: 0 },
+            femlab_geometry::ElementBlock {
+                kind: ElementKind::Hex8,
+                conn: b.blocks[0].conn.iter().map(|&node| node + n_a).collect(),
+                first_elem: 1,
+            },
+        ],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let sets = BTreeMap::from([(
+        "massless".to_string(),
+        ResolvedSet {
+            kind: SetKind::Node,
+            faces: Vec::new(),
+            nodes: (n_a..n_a + b.n_nodes() as u32).collect(),
+            elems: Vec::new(),
+        },
+    )]);
+    let bodies = vec!["massive".to_string(), "massless".to_string()];
+    let mut p = Problem {
+        mesh: &mesh,
+        sets: &sets,
+        body_of_block: &bodies,
+        material_of_block: vec![Some(0), Some(1)],
+        materials: vec![steel(), conductor(0.0, 0.0, 0.0)],
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::Full,
+        constraints: Vec::new(),
+        loads: Vec::new(),
+        temperature: None,
+        heat: false,
+        heat_loads: Vec::new(),
+    };
+    let step = Step::Explicit { t_end: 1e-8, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &step).expect_err("the second Body has free DOFs with no mass");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert_eq!(e.where_.as_deref(), Some("node 8.ux"));
+    assert!(e.cause.contains("positive mass at every free DOF"), "{}", e.cause);
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("material.assign")));
+
+    p.materials[1].rho = -1.0;
+    let e = run_step(&p, &step).expect_err("negative density must not enter explicit assembly");
+    assert_eq!(e.where_.as_deref(), Some("material.rho"));
+    assert!(e.cause.contains("non-negative"), "{}", e.cause);
+
+    p.materials[1].rho = 0.0;
+    p.constraints = vec![fix("hold-massless", "massless", [true, true, true], 0.0)];
+    let constrained = run_step(&p, &step).expect("zero mass is supported when all of its DOFs are held");
+    assert!(constrained.fields[&Field::Displacement].data.iter().all(|v| v.is_finite()));
+
+    p.constraints.clear();
+    p.materials[1].rho = DENSITY;
+    let result = run_step(&p, &step).expect("the corrected model remains usable");
+    assert!(result.scalars["dt"].is_finite());
+    assert!(result.fields[&Field::Displacement].data.iter().all(|v| v.is_finite()));
+}
+
+/// Positive assembled nodal mass is not enough to make a zero-density element safe: its
+/// stiffness has no local mass from which to derive the element CFL bound. Two overlapping
+/// blocks make that distinction exact because the massive block supplies mass at every node.
+#[test]
+fn explicit_rejects_massless_stiffness_even_when_shared_nodes_have_mass() {
+    let one = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
+    let mesh = Mesh {
+        dim: 3,
+        coords: one.coords.clone(),
+        blocks: vec![
+            femlab_geometry::ElementBlock { kind: ElementKind::Hex8, conn: one.blocks[0].conn.clone(), first_elem: 0 },
+            femlab_geometry::ElementBlock { kind: ElementKind::Hex8, conn: one.blocks[0].conn.clone(), first_elem: 1 },
+        ],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let sets = BTreeMap::new();
+    let bodies = vec!["massive".to_string(), "massless-stiffener".to_string()];
+    let p = Problem {
+        mesh: &mesh,
+        sets: &sets,
+        body_of_block: &bodies,
+        material_of_block: vec![Some(0), Some(1)],
+        materials: vec![steel(), conductor(0.0, 0.0, 0.0)],
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::Full,
+        constraints: Vec::new(),
+        loads: Vec::new(),
+        temperature: None,
+        heat: false,
+        heat_loads: Vec::new(),
+    };
+    let step = Step::Explicit { t_end: 1e-8, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &step).expect_err("massless stiffness makes the local CFL bound undefined");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert_eq!(e.where_.as_deref(), Some("element 1"));
+    assert!(e.cause.contains("finite explicit frequency bound is undefined"), "{}", e.cause);
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("constraint.fix")));
 }
 
 /// Benchmark F1: a free block given a rigid-body velocity keeps its momentum and its energy for

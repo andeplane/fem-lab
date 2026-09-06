@@ -481,6 +481,16 @@ fn mass_of(kind: ElementKind, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -
     let kin = kinematics(kind, c)?;
     let (nn, dim, nd) = (kin.n_nodes, kin.dim, kin.n_dof);
     m.fill(0.0);
+    if !c.material.rho.is_finite() || c.material.rho < 0.0 {
+        return Err(Error::new(ErrorCode::ModelIllPosed, "material density must be finite and non-negative")
+            .at("material.rho")
+            .suggest("material.add with rho >= \"0 kg/m^3\""));
+    }
+    // A material without `rho` resolves to zero density. Its consistent and lumped element
+    // masses are both the exact zero matrix; in particular HRZ must not evaluate 0 / 0.
+    if c.material.rho == 0.0 {
+        return Ok(());
+    }
     for g in 0..kin.n_gp {
         let n = &kin.n[g * nn..(g + 1) * nn];
         let wr = kin.w[g] * c.material.rho;
@@ -695,6 +705,11 @@ fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
     let mut mm = vec![0.0; n * n];
     // One `?`: the two integrals fail on exactly the same elements and materials.
     stiffness_of(kind, c, &mut k).and_then(|_| mass_of(kind, c, &mut mm, true))?;
+    if c.material.rho == 0.0 {
+        return Err(Error::new(ErrorCode::ModelIllPosed, "an element with zero density has no natural frequency")
+            .at("material.rho")
+            .suggest("material.add with rho, e.g. \"7850 kg/m^3\""));
+    }
     let minv: Vec<f64> = (0..n).map(|i| 1.0 / mm[i * n + i]).collect();
     let mut v: Vec<f64> = (0..n).map(|i| libm::sin(i as f64 + 1.0)).collect();
     for _ in 0..50 {
