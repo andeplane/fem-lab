@@ -134,6 +134,22 @@
   overflow-x: auto;
   overflow-y: hidden;
 }
+.report-figure {
+  margin: 15px 0 22px;
+}
+.report-figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid #d6d0c4;
+  background: #0d0f13;
+}
+.report-figure figcaption {
+  margin-top: 5px;
+  color: #7b7468;
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
 .report-status {
   margin-top: 90px;
   padding: 16px 18px;
@@ -199,11 +215,11 @@
     size: A4;
     margin: 15mm 13mm;
   }
-  body > * {
+  body:has(.report-screen) > * {
     visibility: hidden;
   }
-  .report-screen,
-  .report-screen * {
+  body:has(.report-screen) .report-screen,
+  body:has(.report-screen) .report-screen * {
     visibility: visible;
   }
   .report-screen {
@@ -236,7 +252,8 @@
   }
   .report-markdown table,
   .report-markdown pre,
-  .report-markdown .katex-display {
+  .report-markdown .katex-display,
+  .report-figure {
     break-inside: avoid;
   }
 }

@@ -131,7 +131,14 @@ export function makeHostContext(
       get: (): Selection => store.state.selection,
     },
     panels: { toggle: (panel, open) => store.togglePanel(panel, open) },
-    report: { print: printPage },
+    report: {
+      print: () => {
+        if (!store.state.panels['report'] || !store.state.reportReady) {
+          throw new FemError('unsupported', 'the calculation note is not ready to print', 'report', 'open Report and wait for its paper and viewer figure');
+        }
+        printPage();
+      },
+    },
     script: {
       // A script's Commands are the AI's, not the person's: the Journal's `who` column says so.
       run: async (code, timeoutMs) => {

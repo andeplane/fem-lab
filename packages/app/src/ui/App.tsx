@@ -504,7 +504,7 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       )}
       <Examples s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
-      {s.panels['report'] ? <Report s={s} dispatch={dispatch} query={read} /> : null}
+      {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
       {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer

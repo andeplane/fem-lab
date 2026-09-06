@@ -98,6 +98,8 @@ export interface UiState {
   phase: number;
   /** Pixels per CSS pixel a saved PNG is rendered at: the export dialog's 1× / 2×. */
   screenshotScale: number;
+  /** True only while the current report Markdown and viewer figure are mounted and printable. */
+  reportReady: boolean;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
 }
@@ -165,6 +167,7 @@ export const initialState: UiState = {
   playing: false,
   phase: 0,
   screenshotScale: 1,
+  reportReady: false,
 };
 
 const MAX_CONSOLE = 500;
