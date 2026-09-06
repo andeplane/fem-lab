@@ -169,7 +169,10 @@ describe('the assistant drawer', () => {
       const { root, registry } = await mount();
       const original = registry.query.bind(registry);
       vi.spyOn(registry, 'query').mockImplementation((q) => q.query === 'query.journal' ? Promise.resolve({ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }) : original(q));
-      vi.spyOn(registry, 'dispatch').mockResolvedValue({ result: null, console: ['built one body'], error: 'line 2: no such Set' });
+      const dispatch = registry.dispatch.bind(registry);
+      vi.spyOn(registry, 'dispatch').mockImplementation((cmd) => cmd.cmd === 'script.run'
+        ? Promise.resolve({ result: null, console: ['built one body'], error: 'line 2: no such Set' })
+        : dispatch(cmd));
       await type(root, 'Build it');
       root.querySelector<HTMLButtonElement>('button.send')!.click();
       await tick();
