@@ -70,6 +70,8 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
         }],
         loads: vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }],
         temperature: None,
+        heat: false,
+        heat_loads: Vec::new(),
     };
     let pat = pattern(&mesh, 3);
     let a = assemble_stiffness(&p, &pat).expect("steel on a box assembles");

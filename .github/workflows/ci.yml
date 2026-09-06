@@ -82,6 +82,7 @@ jobs:
         run: |
           mkdir -p hashes/native hashes/wasm
           for j in crates/engine/benches/journals/*.json; do
+            case "$j" in *.meta.json) continue;; esac
             n=$(basename "$j" .json)
             ./target/release/femlab run "$j" --hashes --skip-solves > "hashes/native/$n.txt"
             node tools/replay-wasm.mjs "$j" --skip-solves > "hashes/wasm/$n.txt"
