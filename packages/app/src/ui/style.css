@@ -1229,6 +1229,18 @@ textarea:focus {
 }
 
 /* ── start screen ──────────────────────────────────────────────────────────────────────── */
+.start-layout {
+  height: 100%;
+  min-width: 0;
+}
+.start-layout.with-properties {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+.start-layout > .start {
+  min-width: 0;
+  overflow: auto;
+}
 .start {
   display: grid;
   place-content: center;
@@ -1775,7 +1787,8 @@ button.solve.stale {
   top: 78px;
 }
 @media (min-width: 1494px) {
-  #app:has(> .assistant:not([hidden])) .workspace {
+  #app:has(> .assistant:not([hidden])) .workspace,
+  #app:has(> .assistant:not([hidden])) .start-layout.with-properties {
     margin-right: 392px;
   }
 }
