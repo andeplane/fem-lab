@@ -3,7 +3,7 @@
 import OpenAI from 'openai';
 import type { ChatEvent, ChatRequest, Message, Provider } from './provider';
 
-export const OPENAI_MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini'];
+export const OPENAI_MODELS = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4-mini'] satisfies OpenAI.ChatModel[];
 export const OPENAI_DEFAULT = OPENAI_MODELS[0]!;
 
 export interface OpenAILike {
@@ -53,6 +53,7 @@ export function openaiProvider(apiKey: string, make: (key: string) => OpenAILike
           max_output_tokens: req.maxTokens,
           stream: true,
           store: false,
+          service_tier: 'default',
           include: ['reasoning.encrypted_content'],
           instructions: req.system,
           input: toResponseInput(req.messages),
@@ -67,7 +68,8 @@ export function openaiProvider(apiKey: string, make: (key: string) => OpenAILike
             for (const call of calls) yield { type: 'tool_use', id: call.call_id, name: call.name, input: parseArgs(call.arguments) };
             if (response.usage) {
               const cacheRead = response.usage.input_tokens_details.cached_tokens;
-              yield { type: 'usage', usage: { input: response.usage.input_tokens - cacheRead, output: response.usage.output_tokens, cacheRead } };
+              const cacheWrite = response.usage.input_tokens_details.cache_write_tokens ?? 0;
+              yield { type: 'usage', usage: { input: response.usage.input_tokens - cacheRead, output: response.usage.output_tokens, cacheRead, ...(cacheWrite > 0 ? { cacheWrite } : {}) } };
             }
             yield { type: 'continuation', continuation: { provider: 'openai', value: response.output } };
             yield { type: 'done', stopReason: calls.length ? 'tool_use' : 'end_turn' };
