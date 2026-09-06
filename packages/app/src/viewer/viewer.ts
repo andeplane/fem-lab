@@ -225,7 +225,6 @@ export class Viewer {
       this.box = keep.length > 0 ? this.box.union(outlineBox) : outlineBox.clone();
     }
     this.paint();
-    if (this.deformation) this.drawDeformed(this.deformation, this.deformScale);
     this.setChrome();
     this.drawDeformed(this.deformation, this.deformScale);
   }
