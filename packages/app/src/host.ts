@@ -1,7 +1,7 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { FemError, type AiProvider, type EngineTransport, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
@@ -11,7 +11,6 @@ import { type ShareCommand, shareUrl } from './share';
 import { EMPTY_SELECTION, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
-import type { WorkerTransport } from './worker-transport';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -78,7 +77,7 @@ export function forkProject(): void {
   projects?.fork();
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
@@ -197,6 +196,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     chat: {
       send: (text) => void import('./ai').then((m) => m.chatBridge.send(text)),
       insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
+      setDraft: (text) => import('./ai').then((m) => m.chatBridge.setDraft(text)),
       clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
     },
     skills: () => store.state.skills,
@@ -266,7 +266,15 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     },
     examples: { fetch: fetchExample },
     ai: {
-      setKey: (key) => (key === null ? localStorage.removeItem('femlab.ai.key') : localStorage.setItem('femlab.ai.key', key)),
+      setKey: (key, provider: AiProvider) => {
+        const slot = provider === 'openai' ? 'femlab.ai.key.openai' : 'femlab.ai.key';
+        try {
+          if (key === null) localStorage.removeItem(slot);
+          else localStorage.setItem(slot, key);
+        } catch {
+          // Keep the app usable when a browser refuses localStorage.
+        }
+      },
       setModel: (model) => {
         localStorage.setItem('femlab.ai.model', model);
         store.set({ assistantModel: model });
@@ -283,7 +291,8 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: WorkerTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+  let editRequest = 0;
   return [
     {
       name: 'view.setMode',
@@ -294,6 +303,44 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         const { mode } = input as { mode: ViewMode };
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
+      },
+    },
+    {
+      name: 'form.edit',
+      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
+      schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
+      tool: true,
+      run: async (input) => {
+        const target = input as { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+        const request = ++editRequest;
+        const previousForm = store.state.form;
+        const revision = store.state.revision;
+        const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+        if (request !== editRequest || store.state.form !== previousForm || store.state.revision !== revision) return;
+        const { cmd, ...args } = command;
+        store.openForm(cmd, args);
+      },
+    },
+    {
+      name: 'chat.setDraft',
+      description: 'Replace the unsent Assistant draft with explicit text and open the drawer. Use this to insert a skill name for the person to complete with arguments; it does not invoke the skill or send a message.',
+      schema: z.object({ text: z.string() }),
+      tool: true,
+      run: async (input, ctx) => {
+        const { text } = input as { text: string };
+        store.togglePanel('assistant', true);
+        await ctx.chat.setDraft(text);
+      },
+    },
+    {
+      name: 'form.pick',
+      description: 'Arm the next viewer face click to fill the explicit field path of an open Command form. `command` must name the currently open form; `field` names its argument path. This sets both the picking target and the form destination, without editing the Model or Journal.',
+      schema: z.object({ command: z.string(), field: z.array(z.string().min(1)).min(1) }),
+      tool: true,
+      run: (input) => {
+        const { command, field } = input as { command: string; field: string[] };
+        if (store.state.form?.cmd !== command) throw new FemError('schema', 'the requested Command form is not open', 'command', `form.open for ${command} before form.pick`);
+        store.set({ pickInto: field, pickTarget: 'face' });
       },
     },
     {

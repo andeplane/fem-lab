@@ -307,7 +307,12 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'solve.cancel' });
     expect(transport.cancel).toHaveBeenCalled();
     await registry.dispatch({ cmd: 'ai.setKey', key: 'sk' });
-    expect(host.ai.setKey).toHaveBeenCalledWith('sk');
+    expect(host.ai.setKey).toHaveBeenCalledWith('sk', 'anthropic');
+    await registry.dispatch({ cmd: 'ai.setKey', key: 'sk-openai', provider: 'openai' });
+    expect(host.ai.setKey).toHaveBeenCalledWith('sk-openai', 'openai');
+    await registry.dispatch({ cmd: 'ai.setKey', key: null, provider: 'openai' });
+    expect(host.ai.setKey).toHaveBeenCalledWith(null, 'openai');
+    await expect(registry.dispatch({ cmd: 'ai.setKey', key: 'bad', provider: 'other' })).rejects.toMatchObject({ code: 'schema' });
     await registry.dispatch({ cmd: 'ai.setModel', model: 'm' });
     expect(host.ai.setModel).toHaveBeenCalledWith('m');
     await expect(registry.dispatch({ cmd: 'script.run', code: '1' })).resolves.toEqual({ result: 1, console: [] });

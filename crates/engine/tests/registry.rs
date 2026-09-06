@@ -4928,6 +4928,71 @@ fn automatic_hand_checks_require_the_steps_actual_supports_and_end_load() {
 }
 
 #[test]
+fn editable_definitions_preserve_every_public_object_variant() {
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("../../../tools/fixtures/editable-definitions.json")).unwrap();
+    for case in cases {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"base","size":["1 m","1 m","1 m"]}"#);
+        ok(&mut e, r#"{"cmd":"step.add","name":"prior","procedure":"heat-steady","constraints":[],"loads":[]}"#);
+        ok(&mut e, &case["command"].to_string());
+        let kind: ObjectKind = serde_json::from_value(case["kind"].clone()).unwrap();
+        for name in ["editable", "renamed", "copy"] {
+            if name == "renamed" {
+                ok(
+                    &mut e,
+                    &serde_json::json!({"cmd":"model.rename","kind":kind,"name":"editable","to":name}).to_string(),
+                );
+            }
+            if name == "copy" {
+                ok(
+                    &mut e,
+                    &serde_json::json!({"cmd":"model.duplicate","kind":kind,"name":"renamed","as":name}).to_string(),
+                );
+            }
+            let before = e.model().clone();
+            let revision = e.revision();
+            let QueryResult::Definition(def) = e.query(Query::Definition { kind, name: name.into() }).unwrap() else {
+                panic!("definition")
+            };
+            assert_eq!(e.revision(), revision, "a definition Query does not edit the Model");
+            ok(&mut e, &serde_json::to_string(&def.command).unwrap());
+            assert_eq!(e.model(), &before, "{} roundtrip of {name}", case["command"]);
+        }
+        let error = e.query(Query::Definition { kind, name: "missing".into() }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::NotFound);
+        assert!(error.suggestion.is_some());
+    }
+}
+
+#[test]
+fn definitions_refuse_internal_imported_shapes_without_erasing_face_tags() {
+    use femlab_geometry::Shape;
+    let named = Shape::Named { name: "original-face-owner".into(), shape: Box::new(Shape::Box { size: [1.0; 3] }) };
+    let box_ = Shape::Box { size: [2.0; 3] };
+    let shapes = vec![
+        named.clone(),
+        Shape::Union { shapes: vec![named.clone()] },
+        Shape::Intersect { shapes: vec![named.clone()] },
+        Shape::Subtract { from: Box::new(named.clone()), cut: vec![] },
+        Shape::Subtract { from: Box::new(box_), cut: vec![named.clone()] },
+        Shape::Transform { shape: Box::new(named), at: femlab_geometry::Affine3::translation([0.0; 3]) },
+    ];
+    for shape in shapes {
+        let mut e = engine();
+        let mut file = e.export_file();
+        file.model.bodies.push(femlab_engine::model::Body { name: "imported".into(), shape, material: None });
+        e.import_file(file).unwrap();
+        let before = e.model().clone();
+        let error = e.query(Query::Definition { kind: ObjectKind::Body, name: "imported".into() }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(error.where_.as_deref(), Some("shape"));
+        assert!(error.suggestion.is_some());
+        assert_eq!(e.model(), &before);
+    }
+}
+
+#[test]
 fn guarded_undo_checks_the_whole_history_at_execution() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"guarded"}"#);
@@ -5145,6 +5210,58 @@ fn unknown_selector_bodies_list_the_mapped_body_and_preserve_the_journal() {
         assert!(suggestion.contains("sheet"));
         assert!(suggestion.contains("query.model"));
         assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+}
+
+/// Public Commands reproduce rigid free fall on both implicit mapped and swept Bodies,
+/// including the quad8/hex20 cases whose consistent gravity opposed the lumped inertia.
+#[test]
+fn explicit_gravity_on_mapped_and_swept_bodies_is_rigid_free_fall() {
+    for order in [1, 2] {
+        for n in [1, 2, 4] {
+            for swept in [false, true] {
+                let mut e = engine();
+                ok(&mut e, r#"{"cmd":"model.new","name":"gravity"}"#);
+                ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+                ok(&mut e, r#"{"cmd":"material.add","name":"mat","E":"1 MPa","nu":0.25,"rho":"2 kg/m^3"}"#);
+                let block = format!(
+                    r#"{{"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","0.1 m"],["0 m","0.1 m"]],"n":[{n},1],"tags":["bottom","right","top","left"]}}"#
+                );
+                let mesher = if swept {
+                    format!(
+                        r#"{{"kind":"sweep","base":{{"kind":"mapped","body":"bar","blocks":[{block}]}},"sweep":{{"kind":"extrude","layers":1,"height":"0.1 m"}}}}"#
+                    )
+                } else {
+                    ok(
+                        &mut e,
+                        r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"0.1 m"}}"#,
+                    );
+                    format!(r#"{{"kind":"mapped","body":"bar","blocks":[{block}]}}"#)
+                };
+                ok(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{mesher},"order":{order}}}"#));
+                ok(&mut e, r#"{"cmd":"material.assign","material":"mat","bodies":["bar"]}"#);
+                ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","-9.81 m/s^2","0 m/s^2"]}"#);
+                for end in [0.00006, 0.0007, 0.0013] {
+                    ok(
+                        &mut e,
+                        &format!(
+                            r#"{{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"{end} s","dtFactor":0.5}}"#
+                        ),
+                    );
+                    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+                    for v in e.field(None, Field::Displacement).unwrap().data.chunks_exact(3) {
+                        assert!(v[0].abs() < 1e-12 && v[2].abs() < 1e-12);
+                        assert!(
+                            (v[1] + 4.905 * end * end).abs() < 1e-12,
+                            "order{order} n{n} swept{swept} t{end}: {v:?}"
+                        );
+                    }
+                    let z = if swept { "0.05 m" } else { "0 m" };
+                    let got = probe_at(&mut e, "fall", Field::Displacement, Some(1), ["0.5 m", "0.05 m", z]);
+                    assert!((got + 4.905 * end * end).abs() < 1e-12);
+                }
+            }
+        }
     }
 }
 

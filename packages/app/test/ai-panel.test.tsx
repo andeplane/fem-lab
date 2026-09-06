@@ -11,7 +11,7 @@ import { fakeTransport } from '../../registry/test/fakes';
 import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
 import { parseVerification } from '../src/ai/context';
 import { Store } from '../src/store';
-import { makeHostContext } from '../src/host';
+import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import type { WorkerTransport } from '../src/worker-transport';
 import type { ChatRequest } from '../src/ai/provider';
@@ -23,8 +23,13 @@ async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
   transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
   const store = new Store();
-  const host = makeHostContext(store, transport as WorkerTransport, { current: null }, readHostCaps({}));
-  const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: HOST_COMMANDS });
+  const viewer = { current: null };
+  const host = makeHostContext(store, transport as WorkerTransport, viewer, readHostCaps({}));
+  host.chat.send = (text) => chatBridge.send(text);
+  host.chat.insertMention = (ref) => chatBridge.insertMention(ref);
+  host.chat.setDraft = (text) => chatBridge.setDraft(text);
+  host.chat.clear = () => chatBridge.clear();
+  const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport as WorkerTransport, viewer, async () => undefined)] });
   store.set({ ready: true, ...patch });
   const root = document.createElement('div');
   document.body.append(root);
@@ -62,6 +67,7 @@ describe('the assistant drawer', () => {
     for (const root of [...document.body.children]) render(null, root as HTMLElement);
     document.body.innerHTML = '';
     chatBridge.pending = null;
+    chatBridge.pendingDraft = null;
     localStorage.clear();
   });
 
@@ -164,7 +170,10 @@ describe('the assistant drawer', () => {
       const { root, registry } = await mount();
       const original = registry.query.bind(registry);
       vi.spyOn(registry, 'query').mockImplementation((q) => q.query === 'query.journal' ? Promise.resolve({ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }) : original(q));
-      vi.spyOn(registry, 'dispatch').mockResolvedValue({ result: null, console: ['built one body'], error: 'line 2: no such Set' });
+      const dispatch = registry.dispatch.bind(registry);
+      vi.spyOn(registry, 'dispatch').mockImplementation((cmd) => cmd.cmd === 'script.run'
+        ? Promise.resolve({ result: null, console: ['built one body'], error: 'line 2: no such Set' })
+        : dispatch(cmd));
       await type(root, 'Build it');
       root.querySelector<HTMLButtonElement>('button.send')!.click();
       await tick();
@@ -324,7 +333,7 @@ describe('the assistant drawer', () => {
       expect(await registry.query({ query: 'query.skills' })).toContainEqual({ name: builtin.name, description: builtin.description, when: builtin.when, source: builtin.source });
       expect(await registry.dispatch({ cmd: 'skill.invoke', name: builtin.name, args: 'check the beam' })).toEqual({ name: builtin.name, body: builtin.body, source: 'builtin', args: 'check the beam' });
       await type(root, '/beam');
-      root.querySelector<HTMLButtonElement>('.popover [data-cmd="skill.invoke"]')!.click();
+      root.querySelector<HTMLButtonElement>('.popover [data-cmd="chat.setDraft"]')!.click();
       await tick();
       expect(root.querySelector('textarea')!.value).toBe('/beam-theory-check ');
       root.querySelector<HTMLButtonElement>('button.send')!.click();
