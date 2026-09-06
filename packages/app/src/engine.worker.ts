@@ -7,6 +7,7 @@ import wasmUrl from './generated/wasm/femlab_engine_wasm_bg.wasm?url';
 import { siUnitOf } from './fields';
 import type { AppReq, AppRes } from './protocol';
 import { toStructured } from './protocol';
+import { restoreHistory } from './recovery';
 
 let engine: Engine | undefined;
 /** Serialises the whole message loop: the engine is `&mut self` on every interesting call. */
@@ -87,14 +88,6 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
         raw: [values.buffer as ArrayBuffer],
       };
     }
-    case 'export': {
-      // `mesh.export` is an engine Command, so an export is journaled like everything else;
-      // the host re-reads the Journal afterwards (main.tsx).
-      const { format, step } = req.payload as { format: string; step?: string };
-      const json = await need().dispatch(JSON.stringify({ cmd: 'mesh.export', format, ...(step === undefined ? {} : { step }) }), undefined);
-      const { output } = JSON.parse(json) as { output: { filename: string; mime: string; text: string } };
-      return { filename: output.filename, mime: output.mime, bytes: new TextEncoder().encode(output.text) };
-    }
     case 'exportFile':
       return JSON.parse(need().export_file());
     case 'importFile': {
@@ -103,16 +96,17 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
       return { seq: -1, revision: need().revision(), hash: need().model_hash(), warnings: [], output: { kind: 'none' }, journal };
     }
     case 'replay': {
-      // Cancel-by-replay: a fresh Engine, then the Journal up to the last acknowledged revision.
-      const { entries, gpu, threads } = req.payload as { entries: unknown[]; gpu: boolean; threads: number };
+      // Rebuild the full acknowledged history, then restore the active revision while keeping
+      // the redo tail. Numerical solves are skipped by the engine's replay implementation.
+      const { entries, revision, gpu, threads } = req.payload as { entries: unknown[]; revision: number; gpu: boolean; threads: number };
       engine = await Engine.create({ gpu, threads });
-      await engine.replay_hashes(JSON.stringify(entries), true, false);
+      await restoreHistory(engine, entries, revision);
       return { revision: engine.revision(), hash: engine.model_hash() };
     }
     case 'gpuSelfTest':
       return need().gpu_self_test((req.payload as { n: number }).n);
     default:
-      throw { code: 'unsupported', cause: `the engine Worker has no '${req.op}' op`, where: req.op, suggestion: `known ops: create, dispatch, query, surface, field, export, exportFile, importFile, replay` };
+      throw { code: 'unsupported', cause: `the engine Worker has no '${req.op}' op`, where: req.op, suggestion: `known ops: create, dispatch, query, surface, field, exportFile, importFile, replay` };
   }
 }
 

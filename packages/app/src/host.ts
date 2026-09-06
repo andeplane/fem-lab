@@ -140,7 +140,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         store.set({ clipOn: p !== null });
         v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
       },
-      toggle: (layer, on) => v().setLayer(layer, on ?? true),
+      toggle: (layer, on) => {
+        const visible = v().setLayer(layer, on);
+        store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
+      },
       setVisible: (bodies, on) => v().setVisible(bodies, on),
       setTheme: (t) => {
         store.set({ theme: t });
@@ -192,7 +195,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
       clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
     },
-    skills: () => [],
+    skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
       beginSave: () => store.beginSave(),
@@ -243,9 +246,17 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       current: () => own.current(),
     },
     folder: {
+      // The Assistant picker supplies the folder skill source; full folder I/O is #13.
       open: soon('the folder on disk', 'use file.open and file.save for now'),
-      close: soon('the folder on disk', 'use file.open and file.save for now'),
-      refresh: soon('the folder on disk', 'use file.open and file.save for now'),
+      close: () => store.setFolder(null),
+      refresh: async () => {
+        const folder = store.state.folder;
+        if (!folder) throw new FemError('file.not-found', 'no folder is open', 'folder', 'open a project folder in the Assistant');
+        await folder.refresh();
+        // Closing/replacing a folder while this read is in flight must not restore the old one.
+        if (store.state.folder === folder) store.setFolder(folder);
+      },
+
       info: () => null,
       readText: soon('the folder on disk', 'use file.open for now'),
       writeText: soon('the folder on disk', 'use file.save for now'),
