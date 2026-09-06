@@ -41,7 +41,7 @@ export interface AssistantVerification {
 
 export function verificationState(record: AssistantVerification, state: UiState): string {
   if (!record.journalHash || !state.journal?.hash) return 'Model revision unconfirmed';
-  if (record.journalHash !== state.journal.hash || record.model !== (state.model?.name ?? null) || record.revision !== state.revision || (record.result !== null && (state.result?.stale || record.result.step !== state.result?.step || record.result.revision !== state.result?.revision))) return 'Stale — Model or Result changed';
+  if (record.journalHash !== state.journal.hash || record.model !== (state.model?.name ?? null) || record.revision !== state.revision || (record.result === null ? state.result !== null : state.result?.stale || record.result.step !== state.result?.step || record.result.revision !== state.result?.revision)) return 'Stale — Model or Result changed';
   return `Recorded at Model rev ${record.revision}${record.result ? ` · Result ${record.result.step} rev ${record.result.revision}` : ' · no Result'}`;
 }
 

@@ -285,6 +285,7 @@ describe('Assistant observations remain distinct from engine checks', () => {
     const record: AssistantVerification = { rows: [], model: null, revision: 10, journalHash: 'saved-history', result: { step: 'static', revision: 10 } };
     const state = { ...initialState, revision: 10, journal: { hash: 'saved-history', entries: [], revision: 10, canUndo: true, canRedo: false }, result: RESULT };
     expect(verificationState(record, state)).toContain('Result static rev 10');
+    expect(verificationState({ ...record, result: null }, state)).toContain('Stale');
     expect(verificationState(record, { ...state, journal: { ...state.journal, hash: 'same-revision-other-history' } })).toContain('Stale');
     expect(verificationState(record, { ...state, result: { ...RESULT, stale: true } })).toContain('Stale');
     expect(verificationState(record, { ...state, result: { ...RESULT, step: 'other' } })).toContain('Stale');
