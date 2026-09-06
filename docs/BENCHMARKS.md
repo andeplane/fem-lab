@@ -247,6 +247,11 @@ An independent cooled-slab Fourier series checks every retained node at 0.05, 0.
 with zero-temperature end faces and diffusivity 1 m²/s. Both element orders refine through
 8/16/32 cells with Crank–Nicolson at dt=0.0001 s; maximum nodal errors decrease on each mesh
 and stay below 2 K, with observed spatial rates at least 1.8/3.5 for linear/quadratic elements.
+The implementation sums the 50 odd terms `n=1..99`. For every tested `x` and `t≥0.05 s`,
+the omitted tail is bounded by
+`(400/π) exp(−a·101²) / (101·(1−exp(−203a)))`, where `a=π²·0.05`; this bounds even
+terms too and is therefore conservative. Its base-10 logarithm is `−2186.13`, so the
+truncation error is below `1e−2186 K` (and hence below the numerical tolerances).
 Backward-Euler steps 0.01/0.005/0.0025 s on 32 cells reduce errors by at
 least 1.7 per halving at each retained time. Public frame-aware line samples independently
 match the same continuum solution in Celsius. The existing NAFEMS T3 check remains in place.
