@@ -44,6 +44,29 @@ export interface AppProps {
   registry?: Registry;
 }
 
+/** Text controls own editing shortcuts; the shell must leave them to the browser. */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
+  if (target.isContentEditable) return true;
+  for (let node: HTMLElement | null = target; node; node = node.parentElement) {
+    const value = node.getAttribute('contenteditable');
+    if (value !== null) return value.toLowerCase() !== 'false';
+  }
+  return false;
+}
+
+export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionCount: number, panels: Record<string, boolean>): void {
+  if (e.defaultPrevented) return;
+  const meta = e.metaKey || e.ctrlKey;
+  const key = e.key.toLowerCase();
+  if (isEditableTarget(e.target) && meta && (key === 'z' || key === 'c')) return;
+  if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
+  else if (meta && key === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
+  else if (meta && key === 'c' && selectionCount > 0) (e.preventDefault(), void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined));
+  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
+}
+
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
 const VARIANTS = new Map<string, JsonSchema>(doc.commands.oneOf.map((v) => [v.properties['cmd']!.const!, v as unknown as JsonSchema]));
@@ -467,15 +490,9 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   }, [started, s.form, store]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
-      if (meta && e.key.toLowerCase() === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
-      else if (meta && e.key.toLowerCase() === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
-      else if (meta && e.key.toLowerCase() === 'c' && s.selection.refs.length > 0) void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined);
-      else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial']) if (s.panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
-    };
-    addEventListener('keydown', onKey);
-    return () => removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => handleGlobalKey(e, dispatch, s.selection.refs.length, s.panels);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [dispatch, s.selection.refs.length, s.panels]);
 
   // One fragment for both states, with the overlays at fixed positions: the start screen
