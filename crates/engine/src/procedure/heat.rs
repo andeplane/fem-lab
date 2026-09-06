@@ -15,9 +15,10 @@ use crate::command::Field;
 use crate::engine::OnProgress;
 use crate::error::Error;
 use crate::error::ErrorCode;
-use crate::fem::assembly::{expand, pattern, reduce, resolve, Csr, Pattern, ResolvedConstraints};
+use crate::fem::assembly::{expand, pattern, reactions, reduce, resolve, Csr, Pattern, Reduced, ResolvedConstraints};
 use crate::fem::checks;
 use crate::fem::heat::{capacity, conductivity, face_integrals, source, HeatLoad};
+use crate::fem::mpc::{self, Mpc};
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, Per};
@@ -218,11 +219,18 @@ pub async fn steady(
     // never calls a material law.
     let sys = pool.install(|| assemble(p, &pat)).expect("the checks accepted this mesh");
     let rc = resolve(p).expect("the checks resolved the constraints");
-    let red = reduce(&sys.k, &sys.f, &rc);
+    // With one DOF per node a bonded contact ties temperature: the two parts are at the same
+    // temperature across the interface, which is a perfect thermal contact.
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    let (kt, ft) = pool.install(|| mpc::transform(&sys.k, &sys.f, &mpc));
+    let red = reduce(&kt, &ft, &rc, &mpc.slaves);
     let (t_f, solver) = solve(&red.k_ff, &red.f_f, opts, pool, gpu, &mut progress).await?;
-    let t = expand(&red, &t_f);
+    let mut t = expand(&red, &t_f);
+    mpc::recover(&mpc, &mut t);
     report(&mut progress, "post", 0.9, "recovering the temperature field")?;
-    Ok(finish(p, &sys, &rc, &red.fixed, &t, solver))
+    let mut res = finish(p, &sys, &rc, &red, &mpc, &t, solver);
+    res.warnings = mpc.warnings;
+    Ok(res)
 }
 
 /// The Result of a temperature field: the field itself, the heat each Constraint carries, and
@@ -231,17 +239,15 @@ fn finish(
     p: &Problem<'_>,
     sys: &HeatSystem,
     rc: &ResolvedConstraints,
-    fixed: &[u32],
+    red: &Reduced,
+    mpc: &Mpc,
     t: &[f64],
     solver: SolveInfo,
 ) -> StepResult {
-    // The flow through a held node is `(K T − f)` there, which is the heat the support removes.
-    let mut kt = vec![0.0; sys.k.n];
-    sys.k.spmv(t, &mut kt);
-    let mut flow = vec![0.0; sys.k.n];
-    for &dof in fixed {
-        flow[dof as usize] = -(kt[dof as usize] - sys.f[dof as usize]);
-    }
+    // The flow through a held node is `−(K T − f)` there, which is the heat the support
+    // removes; the original operator and load, with the tie's own flux folded into the masters
+    // it holds, exactly as a structural reaction is built.
+    let flow: Vec<f64> = reactions(&sys.k, t, &sys.f, red, mpc).into_iter().map(|v| -v).collect();
     let mut res = blank(solver);
     res.reaction_quantity = crate::units::ReactionQuantity::Power;
     res.fields.insert(Field::Temperature, vector_field(t, 1));
@@ -295,8 +301,11 @@ pub fn transient(
         .install(|| assemble(p, &pat).and_then(|s| assemble_capacity(p, &pat).map(|c| (s, c))))
         .expect("the checks accepted this mesh");
     let rc = resolve(p).expect("the checks resolved the constraints");
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
     // `a = C/Δt + θK` is the matrix that is factorised once; `b = C/Δt − (1−θ)K` builds the
-    // right-hand side from the previous temperature.
+    // right-hand side from the previous temperature. Both are transformed by the same `T`, and
+    // the state the recurrence carries is therefore the reduced `v` with zeros at the slaves;
+    // `T v` is the temperature field, which `recover` rebuilds for the output and the flows.
     let mut a = sys.k.clone();
     let mut b = sys.k.clone();
     for i in 0..a.vals.len() {
@@ -307,18 +316,29 @@ pub fn transient(
     // Reducing `a` against a zero right-hand side leaves exactly `−A_fc u_c` at the base
     // prescribed values, which the amplitude scales linearly.
     let zeros = vec![0.0; a.n];
-    let red = reduce(&a, &zeros, &rc);
+    let (at, ft) = pool.install(|| mpc::transform(&a, &sys.f, &mpc));
+    let (bt, _) = pool.install(|| mpc::transform(&b, &zeros, &mpc));
+    let red = reduce(&at, &zeros, &rc, &mpc.slaves);
     drop(zeros);
+    drop(a);
+    let (a, b) = (at, bt);
     // Positive transport properties and theta make this positive definite for ordinary heat
     // boundaries. A malformed extension or unsupported boundary must still be an Error rather
     // than taking down the host Worker.
     let mut factored = pool.install(|| Direct::factor(&red.k_ff))?;
 
     let g = |time: f64| amplitude.map_or(1.0, |amp| amp.at(time));
-    let mut t = vec![initial; a.n];
-    for (i, &dof) in red.fixed.iter().enumerate() {
-        t[dof as usize] = red.u_fixed[i] * g(0.0);
+    // `v` is the state the recurrence carries: zero at every eliminated DOF, so that `T v`
+    // is the uniform initial field (the tie weights are a partition of unity).
+    let mut v = vec![initial; a.n];
+    for &s in &mpc.slaves {
+        v[s as usize] = 0.0;
     }
+    for (i, &dof) in red.fixed.iter().enumerate() {
+        v[dof as usize] = red.u_fixed[i] * g(0.0);
+    }
+    let mut t = v.clone();
+    mpc::recover(&mpc, &mut t);
     let every = output_every.max(1);
     let frames = retained_frame_count(n_steps, every).expect("time_grid bounds the retained-frame count");
     let mut history = History::with_initial(Field::Temperature, t.clone(), frames);
@@ -328,29 +348,32 @@ pub fn transient(
     let mut solver = SolveInfo { solver: "cpu-direct", iterations: 0, rel_residual: 0.0, time_ms: 0.0 };
     for step in 1..=n_steps {
         let time = if step == n_steps { t_end } else { step as f64 * dt };
-        b.spmv(&t, &mut rhs_full);
+        b.spmv(&v, &mut rhs_full);
         let scale = g(time);
         for (i, &dof) in red.free.iter().enumerate() {
-            rhs_f[i] = rhs_full[dof as usize] + sys.f[dof as usize] + scale * red.f_f[i];
+            rhs_f[i] = rhs_full[dof as usize] + ft[dof as usize] + scale * red.f_f[i];
         }
         // A factorised direct solve cannot fail; `LinearSolve` returns a Result for the
         // iterative solvers, which can run out of iterations.
         solver = factored.solve(&rhs_f, &mut t_f).expect("a factorised solve");
         solver.iterations = step;
-        t = expand(&red, &t_f);
+        v = expand(&red, &t_f);
         for (i, &dof) in red.fixed.iter().enumerate() {
-            t[dof as usize] = red.u_fixed[i] * scale;
+            v[dof as usize] = red.u_fixed[i] * scale;
         }
+        t = v.clone();
+        mpc::recover(&mpc, &mut t);
         if step % every == 0 || step == n_steps {
             history.times.push(time);
             history.values.push(t.clone());
         }
         report(&mut progress, "solve", 0.1 + 0.8 * step as f64 / n_steps as f64, "stepping in time")?;
     }
-    let mut res = finish(p, &sys, &rc, &red.fixed, &t, solver);
+    let mut res = finish(p, &sys, &rc, &red, &mpc, &t, solver);
     res.scalars.insert("dt".to_string(), dt);
     res.scalars.insert("steps".to_string(), n_steps as f64);
     res.history = Some(history);
+    res.warnings = mpc.warnings;
     Ok(res)
 }
 

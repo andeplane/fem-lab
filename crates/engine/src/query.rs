@@ -320,6 +320,19 @@ pub struct ConstraintRow {
     pub summary: String,
 }
 
+/// One connection between parts: a bonded contact, listed apart from the Constraints because
+/// it prescribes nothing and names two Sets. Pair counts and gaps are not here: they exist only
+/// on a built Mesh, and a Model summary must answer before there is one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionRow {
+    pub name: String,
+    pub kind: String,
+    pub master: String,
+    pub slave: String,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadRow {
@@ -353,6 +366,7 @@ pub struct ModelSummary {
     pub materials: Vec<MaterialRow>,
     pub sets: Vec<SetRow>,
     pub constraints: Vec<ConstraintRow>,
+    pub connections: Vec<ConnectionRow>,
     pub loads: Vec<LoadRow>,
     pub steps: Vec<StepRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -448,6 +462,10 @@ pub struct ResultSummary {
     /// by a prescribed displacement — where both totals are zero — still reports a meaningful
     /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
     pub balance: f64,
+    /// What the solve wanted the user to know but would not stop for: a bonded contact tied
+    /// across a gap, a slave face coarser than its master. Retained with the Result.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<Warning>,
 }
 
 /// One time of a transient Step's history: the extremes of the field at that instant.
@@ -711,8 +729,10 @@ pub enum Output {
         kind: ObjectKind,
         name: String,
     },
+    /// Boxed: a Result summary is much larger than every other variant, and an `Output` is
+    /// returned by value from every Command.
     Solve {
-        summary: ResultSummary,
+        summary: Box<ResultSummary>,
     },
     Study {
         report: StudyReport,

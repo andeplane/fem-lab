@@ -589,6 +589,45 @@
         ]
       },
       {
+        "description": "Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the\npoint it projects onto in `master`, in every displacement component. It is a linear\nconstraint inside the same operator — no iteration, no gap opening, no sliding — so a\nbonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the\nslave side: a node-to-face tie passes the patch test that way round. `tol` is the largest\ngap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the\nmaster than that is `contact.unpaired`. In a heat Step the same tie carries temperature,\nso the two parts are in perfect thermal contact. A tie is listed in a Step's\n`constraints` like any other, and is removed with constraint.remove. Ties add stiffness\nbetween Bodies that share no element, which query.cost does not count.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "master": {
+            "type": "string"
+          },
+          "slave": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ContactKind"
+          },
+          "tol": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Q_length"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cmd": {
+            "type": "string",
+            "const": "contact.add"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "master",
+          "slave",
+          "kind"
+        ]
+      },
+      {
         "description": "Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without\nit first. Removing a constraint makes existing Results of that Step stale.",
         "type": "object",
         "properties": {
@@ -2421,6 +2460,16 @@
         "$ref": "#/$defs/Quantity",
         "x-dimension": "temperature"
       },
+      "ContactKind": {
+        "description": "How two faces interact where they meet.",
+        "oneOf": [
+          {
+            "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+            "type": "string",
+            "const": "bonded"
+          }
+        ]
+      },
       "Q_force": {
         "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -3162,24 +3211,53 @@
           "step"
         ]
       },
-      "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
-        "type": "string",
-        "enum": [
-          "displacement",
-          "stress",
-          "stressUnaveraged",
-          "vonMises",
-          "principal",
-          "strain",
-          "reaction",
-          "temperature"
+      "FrameSample": {
+        "description": "How to select retained output; there is no temporal interpolation or extrapolation.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "const": "frame"
+              }
+            },
+            "required": [
+              "kind",
+              "index"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "time": {
+                "$ref": "#/$defs/Q_time"
+              },
+              "sampling": {
+                "$ref": "#/$defs/TimeSampling"
+              },
+              "kind": {
+                "type": "string",
+                "const": "time"
+              }
+            },
+            "required": [
+              "kind",
+              "time",
+              "sampling"
+            ]
+          }
         ]
       },
-      "Q_length": {
-        "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
+      "Q_time": {
+        "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
-        "x-dimension": "length"
+        "x-dimension": "time"
       },
       "Quantity": {
         "description": "A number with a unit, as text or as parts.",
@@ -3206,6 +3284,33 @@
             ]
           }
         ]
+      },
+      "TimeSampling": {
+        "description": "Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.\nNearest explicitly selects a retained time; equal-distance ties (within the same relative\nroundoff bound on the distances) choose the earlier frame.\nBoth reject times outside the retained interval (except endpoint conversion roundoff).",
+        "type": "string",
+        "enum": [
+          "exact",
+          "nearest"
+        ]
+      },
+      "Field": {
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "type": "string",
+        "enum": [
+          "displacement",
+          "stress",
+          "stressUnaveraged",
+          "vonMises",
+          "principal",
+          "strain",
+          "reaction",
+          "temperature"
+        ]
+      },
+      "Q_length": {
+        "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "length"
       },
       "ReportSection": {
         "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
@@ -3255,62 +3360,6 @@
             "type": "string",
             "const": "journal"
           }
-        ]
-      },
-      "FrameSample": {
-        "description": "How to select retained output; there is no temporal interpolation or extrapolation.",
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "index": {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              },
-              "kind": {
-                "type": "string",
-                "const": "frame"
-              }
-            },
-            "required": [
-              "kind",
-              "index"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "time": {
-                "$ref": "#/$defs/Q_time"
-              },
-              "sampling": {
-                "$ref": "#/$defs/TimeSampling"
-              },
-              "kind": {
-                "type": "string",
-                "const": "time"
-              }
-            },
-            "required": [
-              "kind",
-              "time",
-              "sampling"
-            ]
-          }
-        ]
-      },
-      "Q_time": {
-        "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
-        "$ref": "#/$defs/Quantity",
-        "x-dimension": "time"
-      },
-      "TimeSampling": {
-        "description": "Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.\nNearest explicitly selects a retained time; equal-distance ties (within the same relative\nroundoff bound on the distances) choose the earlier frame.\nBoth reject times outside the retained interval (except endpoint conversion roundoff).",
-        "type": "string",
-        "enum": [
-          "exact",
-          "nearest"
         ]
       }
     }
@@ -3418,6 +3467,12 @@
               "$ref": "#/$defs/ConstraintRow"
             }
           },
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ConnectionRow"
+            }
+          },
           "loads": {
             "type": "array",
             "items": {
@@ -3457,6 +3512,7 @@
           "materials",
           "sets",
           "constraints",
+          "connections",
           "loads",
           "steps",
           "warnings"
@@ -3672,6 +3728,34 @@
         "required": [
           "name",
           "on",
+          "summary"
+        ]
+      },
+      "ConnectionRow": {
+        "description": "One connection between parts: a bonded contact, listed apart from the Constraints because\nit prescribes nothing and names two Sets. Pair counts and gaps are not here: they exist only\non a built Mesh, and a Model summary must answer before there is one.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "master": {
+            "type": "string"
+          },
+          "slave": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "master",
+          "slave",
           "summary"
         ]
       },
@@ -4727,6 +4811,45 @@
               "name",
               "on",
               "value"
+            ]
+          },
+          {
+            "description": "Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the\npoint it projects onto in `master`, in every displacement component. It is a linear\nconstraint inside the same operator — no iteration, no gap opening, no sliding — so a\nbonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the\nslave side: a node-to-face tie passes the patch test that way round. `tol` is the largest\ngap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the\nmaster than that is `contact.unpaired`. In a heat Step the same tie carries temperature,\nso the two parts are in perfect thermal contact. A tie is listed in a Step's\n`constraints` like any other, and is removed with constraint.remove. Ties add stiffness\nbetween Bodies that share no element, which query.cost does not count.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "master": {
+                "type": "string"
+              },
+              "slave": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/ContactKind"
+              },
+              "tol": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "contact.add"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "master",
+              "slave",
+              "kind"
             ]
           },
           {
@@ -6486,6 +6609,16 @@
         "$ref": "#/$defs/Quantity",
         "x-dimension": "temperature"
       },
+      "ContactKind": {
+        "description": "How two faces interact where they meet.",
+        "oneOf": [
+          {
+            "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+            "type": "string",
+            "const": "bonded"
+          }
+        ]
+      },
       "Q_force": {
         "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -7002,6 +7135,13 @@
             "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
             "type": "number",
             "format": "double"
+          },
+          "warnings": {
+            "description": "What the solve wanted the user to know but would not stop for: a bonded contact tied\nacross a gap, a slave face coarser than its master. Retained with the Result.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Warning"
+            }
           }
         },
         "required": [
@@ -7110,6 +7250,147 @@
           "time",
           "min",
           "max"
+        ]
+      },
+      "FramesResult": {
+        "description": "`query.frames` response; stored components describe the unpadded History storage.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "field": {
+            "$ref": "#/$defs/Field"
+          },
+          "components": {
+            "description": "Public field layout, matching final FieldData (three components, zero-padded).",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "storedComponents": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "retainedBytes": {
+            "description": "Logical bytes of retained f64 times and unpadded primary values; excludes allocator\noverhead, spare capacity, final derived fields and temporary Query response copies.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/FrameStamp"
+            }
+          }
+        },
+        "required": [
+          "step",
+          "modelHash",
+          "stale",
+          "nodeCount",
+          "field",
+          "components",
+          "storedComponents",
+          "retainedBytes",
+          "frames"
+        ]
+      },
+      "FrameStamp": {
+        "description": "One retained frame's zero-based index and time in seconds and Model display units.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "timeSi": {
+            "type": "number",
+            "format": "double"
+          },
+          "time": {
+            "$ref": "#/$defs/Valued"
+          }
+        },
+        "required": [
+          "index",
+          "timeSi",
+          "time"
+        ]
+      },
+      "FrameResult": {
+        "description": "`query.frame` response: SI values in the existing component-fastest FieldData layout.",
+        "type": "object",
+        "properties": {
+          "sample": {
+            "$ref": "#/$defs/ResolvedFrame"
+          },
+          "field": {
+            "$ref": "#/$defs/Field"
+          },
+          "components": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "description": "SI unit for values: K for temperature, m for displacement, never a display unit.",
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "required": [
+          "sample",
+          "field",
+          "components",
+          "nodeCount",
+          "unit",
+          "values"
+        ]
+      },
+      "ResolvedFrame": {
+        "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "frame": {
+            "$ref": "#/$defs/FrameStamp"
+          }
+        },
+        "required": [
+          "step",
+          "modelHash",
+          "frame"
         ]
       },
       "ProbeResult": {
@@ -7777,147 +8058,6 @@
           "markdown",
           "sections"
         ]
-      },
-      "FramesResult": {
-        "description": "`query.frames` response; stored components describe the unpadded History storage.",
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string"
-          },
-          "modelHash": {
-            "type": "string"
-          },
-          "stale": {
-            "type": "boolean"
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "field": {
-            "$ref": "#/$defs/Field"
-          },
-          "components": {
-            "description": "Public field layout, matching final FieldData (three components, zero-padded).",
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "storedComponents": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "retainedBytes": {
-            "description": "Logical bytes of retained f64 times and unpadded primary values; excludes allocator\noverhead, spare capacity, final derived fields and temporary Query response copies.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "frames": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/FrameStamp"
-            }
-          }
-        },
-        "required": [
-          "step",
-          "modelHash",
-          "stale",
-          "nodeCount",
-          "field",
-          "components",
-          "storedComponents",
-          "retainedBytes",
-          "frames"
-        ]
-      },
-      "FrameStamp": {
-        "description": "One retained frame's zero-based index and time in seconds and Model display units.",
-        "type": "object",
-        "properties": {
-          "index": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "timeSi": {
-            "type": "number",
-            "format": "double"
-          },
-          "time": {
-            "$ref": "#/$defs/Valued"
-          }
-        },
-        "required": [
-          "index",
-          "timeSi",
-          "time"
-        ]
-      },
-      "FrameResult": {
-        "description": "`query.frame` response: SI values in the existing component-fastest FieldData layout.",
-        "type": "object",
-        "properties": {
-          "sample": {
-            "$ref": "#/$defs/ResolvedFrame"
-          },
-          "field": {
-            "$ref": "#/$defs/Field"
-          },
-          "components": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "unit": {
-            "description": "SI unit for values: K for temperature, m for displacement, never a display unit.",
-            "type": "string"
-          },
-          "values": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "format": "double"
-            }
-          }
-        },
-        "required": [
-          "sample",
-          "field",
-          "components",
-          "nodeCount",
-          "unit",
-          "values"
-        ]
-      },
-      "ResolvedFrame": {
-        "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string"
-          },
-          "modelHash": {
-            "type": "string"
-          },
-          "frame": {
-            "$ref": "#/$defs/FrameStamp"
-          }
-        },
-        "required": [
-          "step",
-          "modelHash",
-          "frame"
-        ]
       }
     }
   },
@@ -8204,6 +8344,13 @@
             "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
             "type": "number",
             "format": "double"
+          },
+          "warnings": {
+            "description": "What the solve wanted the user to know but would not stop for: a bonded contact tied\nacross a gap, a slave face coarser than its master. Retained with the Result.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Warning"
+            }
           }
         },
         "required": [
@@ -8482,6 +8629,8 @@
           "result.stale",
           "constraint.conflict",
           "constraint.rigid-modes",
+          "constraint.dependent",
+          "contact.unpaired",
           "solve.not-positive-definite",
           "solve.stalled",
           "solve.too-large",
@@ -9620,6 +9769,30 @@
             "required": [
               "kind",
               "value"
+            ]
+          },
+          {
+            "description": "A bonded contact: the Constraint's own Set is the slave, `master` names the face Set it\nis tied to, and `tol` is the largest pairing gap in metres (`None` scales with the Mesh).",
+            "type": "object",
+            "properties": {
+              "master": {
+                "type": "string"
+              },
+              "tol": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "bonded"
+              }
+            },
+            "required": [
+              "kind",
+              "master"
             ]
           }
         ]
@@ -11074,6 +11247,45 @@
               "name",
               "on",
               "value"
+            ]
+          },
+          {
+            "description": "Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the\npoint it projects onto in `master`, in every displacement component. It is a linear\nconstraint inside the same operator — no iteration, no gap opening, no sliding — so a\nbonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the\nslave side: a node-to-face tie passes the patch test that way round. `tol` is the largest\ngap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the\nmaster than that is `contact.unpaired`. In a heat Step the same tie carries temperature,\nso the two parts are in perfect thermal contact. A tie is listed in a Step's\n`constraints` like any other, and is removed with constraint.remove. Ties add stiffness\nbetween Bodies that share no element, which query.cost does not count.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "master": {
+                "type": "string"
+              },
+              "slave": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/ContactKind"
+              },
+              "tol": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "contact.add"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "master",
+              "slave",
+              "kind"
             ]
           },
           {
@@ -12814,6 +13026,16 @@
         "description": "A temperature with unit, e.g. \"20 degC\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
         "x-dimension": "temperature"
+      },
+      "ContactKind": {
+        "description": "How two faces interact where they meet.",
+        "oneOf": [
+          {
+            "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+            "type": "string",
+            "const": "bonded"
+          }
+        ]
       },
       "Q_force": {
         "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",

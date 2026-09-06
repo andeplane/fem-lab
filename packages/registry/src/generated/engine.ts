@@ -303,6 +303,22 @@ export type Command =
     }
   | {
       name: string;
+      master: string;
+      slave: string;
+      kind: ContactKind;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "contact.add";
+    }
+  | {
+      name: string;
       cmd: "constraint.remove";
     }
   | {
@@ -1299,6 +1315,10 @@ export type Dof = "ux" | "uy" | "uz";
  */
 export type Axis = "x" | "y" | "z";
 /**
+ * How two faces interact where they meet.
+ */
+export type ContactKind = "bonded";
+/**
  * Analysis procedures.
  */
 export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
@@ -2021,6 +2041,22 @@ export type ModelFile_Command =
             unit: string;
           };
       cmd: "constraint.temperature";
+    }
+  | {
+      name: string;
+      master: string;
+      slave: string;
+      kind: ContactKind;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "contact.add";
     }
   | {
       name: string;
@@ -2801,6 +2837,11 @@ export type Constraint1 =
   | {
       value: number;
       kind: "temperature";
+    }
+  | {
+      master: string;
+      tol?: number | null;
+      kind: "bonded";
     };
 /**
  * A Load.
@@ -3132,6 +3173,7 @@ export interface ModelSummary {
   materials: MaterialRow[];
   sets: SetRow[];
   constraints: ConstraintRow[];
+  connections: ConnectionRow[];
   loads: LoadRow[];
   steps: StepRow[];
   meshSettings?: MeshSettings | null;
@@ -3185,6 +3227,18 @@ export interface SetRow {
 export interface ConstraintRow {
   name: string;
   on: string;
+  summary: string;
+}
+/**
+ * One connection between parts: a bonded contact, listed apart from the Constraints because
+ * it prescribes nothing and names two Sets. Pair counts and gaps are not here: they exist only
+ * on a built Mesh, and a Model summary must answer before there is one.
+ */
+export interface ConnectionRow {
+  name: string;
+  kind: string;
+  master: string;
+  slave: string;
   summary: string;
 }
 export interface LoadRow {
@@ -3372,6 +3426,11 @@ export interface ResultSummary {
    * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
    */
   balance: number;
+  /**
+   * What the solve wanted the user to know but would not stop for: a bonded contact tied
+   * across a gap, a slave face coarser than its master. Retained with the Result.
+   */
+  warnings?: Warning[];
 }
 /**
  * One extreme of a field component.
@@ -3839,6 +3898,8 @@ export interface EngineError {
     | "result.stale"
     | "constraint.conflict"
     | "constraint.rigid-modes"
+    | "constraint.dependent"
+    | "contact.unpaired"
     | "solve.not-positive-definite"
     | "solve.stalled"
     | "solve.too-large"

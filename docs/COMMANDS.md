@@ -22,6 +22,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [constraint.remove](#commands-constraint-remove)
 - [constraint.symmetry](#commands-constraint-symmetry)
 - [constraint.temperature](#commands-constraint-temperature)
+- [contact.add](#commands-contact-add)
 - [geometry.add](#commands-geometry-add)
 - [geometry.addBox](#commands-geometry-addBox)
 - [geometry.nameFace](#commands-geometry-nameFace)
@@ -129,6 +130,30 @@ multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driv
 | on | yes | <code>{"type":"string"}</code> |  |
 | value | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"constraint.temperature"}</code> |  |
+
+<a id="commands-contact-add"></a>
+
+### contact.add
+
+Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
+point it projects onto in `master`, in every displacement component. It is a linear
+constraint inside the same operator — no iteration, no gap opening, no sliding — so a
+bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
+slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
+gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
+master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
+so the two parts are in perfect thermal contact. A tie is listed in a Step's
+`constraints` like any other, and is removed with constraint.remove. Ties add stiffness
+between Bodies that share no element, which query.cost does not count.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| master | yes | <code>{"type":"string"}</code> |  |
+| slave | yes | <code>{"type":"string"}</code> |  |
+| kind | yes | <code>{"$ref":"#/$defs/ContactKind"}</code> |  |
+| tol | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"contact.add"}</code> |  |
 
 <a id="commands-geometry-add"></a>
 
@@ -752,6 +777,24 @@ Expand a definition to inspect its complete schema. Definition names are local t
     "x",
     "y",
     "z"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ContactKind</summary>
+
+```json
+{
+  "description": "How two faces interact where they meet.",
+  "oneOf": [
+    {
+      "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+      "type": "string",
+      "const": "bonded"
+    }
   ]
 }
 ```

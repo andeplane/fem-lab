@@ -105,11 +105,31 @@ pub struct Pattern {
 /// Two nodes are coupled when they share an element, so the pattern is the node adjacency
 /// blown up by `dofs_per_node`; rows come out sorted because the neighbour lists are.
 pub fn pattern(mesh: &Mesh, dofs_per_node: usize) -> Pattern {
+    pattern_coupled(mesh, dofs_per_node, &[])
+}
+
+/// The pattern of [`pattern`] with extra node pairs merged into the neighbour lists.
+///
+/// Some entries of the assembled operator are created by neither an element nor the
+/// eliminations of `mpc::transform`, which builds its own sparsity: a thermal contact
+/// resistance couples the two sides of a tie directly in the operator. `extra` is the
+/// `[a, b]` node pairs that need room, in either order; both triangles are seeded.
+///
+/// Every node also seeds its own neighbour list, so a node that no element touches still owns
+/// a diagonal entry and `Csr::diag` is never zero by absence.
+pub fn pattern_coupled(mesh: &Mesh, dofs_per_node: usize, extra: &[[u32; 2]]) -> Pattern {
     let n_nodes = mesh.n_nodes();
     let adj = mesh.node_to_elems();
-    // Neighbour nodes of every node, sorted and unique.
+    let mut added: Vec<Vec<u32>> = vec![Vec::new(); n_nodes];
+    for &[a, b] in extra {
+        added[a as usize].push(b);
+        added[b as usize].push(a);
+    }
+    // Neighbour nodes of every node, sorted and unique, always including the node itself.
     let neighbours: Vec<Vec<u32>> = par::map_collect(n_nodes, |n| {
         let mut v: Vec<u32> = adj.of(n).iter().flat_map(|&e| mesh.elem_nodes(e).iter().copied()).collect();
+        v.push(n as u32);
+        v.extend_from_slice(&added[n]);
         v.sort_unstable();
         v.dedup();
         v
@@ -306,9 +326,17 @@ pub struct Reduced {
 
 /// Eliminate the constrained DOFs in one walk over the rows: the free-free entries build
 /// `K_ff`, the free-constrained ones move to the right-hand side.
-pub fn reduce(k: &Csr, f: &[f64], rc: &ResolvedConstraints) -> Reduced {
+///
+/// `eliminated` are DOFs that are not unknowns either but carry no prescribed value: the slaves
+/// of a multipoint constraint, whose row and column `mpc::transform` has already emptied. They
+/// leave the free set exactly like a DOF fixed at zero, which is exact because their columns
+/// are exactly zero, and `mpc::recover` fills them in after `expand`.
+pub fn reduce(k: &Csr, f: &[f64], rc: &ResolvedConstraints, eliminated: &[u32]) -> Reduced {
     let mut map = vec![0i64; k.n];
     for &(d, _) in &rc.fixed {
+        map[d as usize] = -1;
+    }
+    for &d in eliminated {
         map[d as usize] = -1;
     }
     let mut free = Vec::with_capacity(k.n - rc.fixed.len());
@@ -363,12 +391,25 @@ pub fn expand(r: &Reduced, u_f: &[f64]) -> Vec<f64> {
 }
 
 /// `R = K u − f` on the constrained DOFs and zero elsewhere: the force the supports carry.
-pub fn reactions(k: &Csr, u: &[f64], f: &[f64], r: &Reduced) -> Vec<f64> {
-    let mut ku = vec![0.0; k.n];
-    k.spmv(u, &mut ku);
+///
+/// `k` and `f` are the **original** operator and load, never the transformed ones, so a
+/// multipoint constraint's internal force can never be mistaken for a support reaction. That
+/// is not quite the whole story, though: at a DOF that is both held and a master of a tie, the
+/// residual `K u − f` is the support force *plus* the force the tie pushes into it, because the
+/// solved system only enforces equilibrium of the retained combination. `mpc::master_forces`
+/// adds that back, so what a support reports is what the support carries — and the sum over the
+/// supports balances the applied load whether or not a tie reaches them.
+pub fn reactions(k: &Csr, u: &[f64], f: &[f64], r: &Reduced, mpc: &crate::fem::mpc::Mpc) -> Vec<f64> {
+    let mut residual = vec![0.0; k.n];
+    k.spmv(u, &mut residual);
+    for (i, v) in residual.iter_mut().enumerate() {
+        *v -= f[i];
+    }
+    let mut tie = vec![0.0; k.n];
+    crate::fem::mpc::master_forces(mpc, &residual, &mut tie);
     let mut out = vec![0.0; k.n];
     for &dof in &r.fixed {
-        out[dof as usize] = ku[dof as usize] - f[dof as usize];
+        out[dof as usize] = residual[dof as usize] + tie[dof as usize];
     }
     out
 }

@@ -7,7 +7,7 @@ use crate::command::Field;
 use crate::engine::OnProgress;
 use crate::error::Error;
 use crate::fem::problem::Problem;
-use crate::fem::{assembly, checks, loads};
+use crate::fem::{assembly, checks, loads, mpc};
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, stress, Per};
 use crate::procedure::{report, vector_field, StepResult};
@@ -37,12 +37,18 @@ pub async fn run(
             loads::assemble_loads(p, &mut f).map(|applied| (a, applied, f))
         })
     })?;
-    // `checks::all` has already resolved these and found no conflict.
+    // `checks::all` has already resolved these and paired every contact.
     let rc = assembly::resolve(p).expect("the checks resolved the constraints");
-    let red = assembly::reduce(&a.k, &f, &rc);
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    // `TᵀKT v = Tᵀf` with the slaves dropped from the free set; the GPU never sees this step,
+    // because what reaches a solver is still a plain reduced `k_ff` (plan B §1).
+    let (kt, ft) = pool.install(|| mpc::transform(&a.k, &f, &mpc));
+    let red = assembly::reduce(&kt, &ft, &rc, &mpc.slaves);
     let (u_f, solver) = solve(&red.k_ff, &red.f_f, opts, pool, gpu, &mut progress).await?;
-    let u = assembly::expand(&red, &u_f);
-    let r = assembly::reactions(&a.k, &u, &f, &red);
+    let mut u = assembly::expand(&red, &u_f);
+    mpc::recover(&mpc, &mut u);
+    // The original `k` and `f`: a tie's internal force is never a support reaction.
+    let r = assembly::reactions(&a.k, &u, &f, &red, &mpc);
     report(&mut progress, "post", 0.9, "recovering fields")?;
 
     // The stiffness integral above already called this material on these elements, so the
@@ -82,6 +88,6 @@ pub async fn run(
         modes: Vec::new(),
         history: None,
         solver,
-        warnings: Vec::new(),
+        warnings: mpc.warnings,
     })
 }
