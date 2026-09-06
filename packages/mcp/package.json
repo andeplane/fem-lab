@@ -11,7 +11,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "esbuild src/femlab-mcp.ts src/script-worker.ts src/script-validation-worker.ts --bundle --platform=node --format=esm --target=node22 --external:quickjs-emscripten --external:typescript --outdir=dist --banner:js=\"#!/usr/bin/env node\"",
+    "build": "esbuild src/femlab-mcp.ts src/script-worker.ts src/script-validation-worker.ts --bundle --platform=node --format=esm --target=node22 --external:@jitl/quickjs-wasmfile-release-sync --external:quickjs-emscripten-core --external:typescript --outdir=dist --banner:js=\"#!/usr/bin/env node\"",
     "test": "vitest run --coverage",
     "typecheck": "tsc -p . --noEmit",
     "pretest": "node ../../tools/build-script-declarations.mjs && npm run build",
@@ -21,8 +21,9 @@
     "test:package": "node ../../tools/test-mcp-package.mjs"
   },
   "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "quickjs-emscripten": "^0.32.0",
+    "quickjs-emscripten-core": "^0.32.0",
     "sucrase": "^3.35.0",
     "zod": "^4.5.4",
     "typescript": "~5.9.3"
