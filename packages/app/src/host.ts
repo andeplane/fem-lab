@@ -235,7 +235,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       close: () => store.setFolder(null),
       refresh: async () => {
         const folder = store.state.folder;
-        if (!folder) throw new FemError('file.not-found', 'no project folder is open', 'project', 'open a project folder in the Assistant');
+        if (!folder) throw new FemError('file.not-found', 'no folder is open', 'folder', 'open a project folder in the Assistant');
         await folder.refresh();
         // Closing/replacing a folder while this read is in flight must not restore the old one.
         if (store.state.folder === folder) store.setFolder(folder);

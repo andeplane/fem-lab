@@ -314,7 +314,7 @@ describe('the assistant drawer', () => {
       expect(store.state.skills).toEqual(BUILTIN_SKILLS);
       expect(store.state.project).toBe(browserProject);
       expect(await invoke('beam-theory-check')).toMatchObject({ source: 'builtin', body: BUILTIN_SKILLS.find((s) => s.name === 'beam-theory-check')!.body });
-      await expect(registry.dispatch({ cmd: 'folder.refresh' })).rejects.toMatchObject({ code: 'file.not-found' });
+      await expect(registry.dispatch({ cmd: 'folder.refresh' })).rejects.toMatchObject({ code: 'file.not-found', where: 'folder' });
     } finally { picker.mockRestore(); }
 
   });
