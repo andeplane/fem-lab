@@ -125,7 +125,7 @@ it('opens a browser project against its captured Journal without marking a later
   const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: opened } })) } as unknown as WorkerTransport;
   let finish!: () => void;
   const onAck = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
-  const ctx = makeHostContext(store, transport, { current: null }, readHostCaps({ navigator: { userAgent: 'Chrome/1' } }), undefined, { onAck } as never);
+  const ctx = makeHostContext(store, transport, { current: null }, readHostCaps({ navigator: { userAgent: 'Chrome/1' } }), async () => undefined, undefined, { onAck } as never);
   const project = await ctx.projects.new('project');
   noteProject('project', opened, 'opened');
   await ctx.projects.save();
