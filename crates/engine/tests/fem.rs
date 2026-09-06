@@ -3726,6 +3726,93 @@ fn the_theta_method_converges_at_its_own_order_in_time() {
     }
 }
 
+/// E3 endpoint regression: uniform heating at q/(rho cp) = 1 K/s gives T(x,t) = t exactly.
+/// The held face follows the same ramp, so the free-node solution is independent of mesh
+/// spacing and theta. A final timestamp alone cannot hide an over/under-integrated field.
+#[test]
+fn transient_heat_reaches_the_requested_endpoint_with_the_correct_temperature() {
+    for nx in [2, 4] {
+        let mesh = Structured { kind: ElementKind::Hex8, n: [nx, 1, 1] }.box_([1.0, 0.1, 0.1]);
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(1.0, 2.0, 3.0),
+            vec![hold("left", "xmin", 1.0)],
+            vec![HeatLoad::Source { bodies: one_body(), q: 6.0 }],
+        );
+        for (dt, t_end) in [(0.6, 1.0), (0.4, 0.9), (2.0, 0.25)] {
+            for theta in [0.5, 1.0] {
+                let step = Step::HeatTransient {
+                    dt,
+                    t_end,
+                    theta,
+                    initial: 0.0,
+                    output_every: 2,
+                    amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, t_end], value: vec![0.0, t_end] }),
+                    solver: SolveOptions::default(),
+                };
+                let res = run_step(&p, &step).expect("a uniformly heated transient");
+                assert!(res.scalars["dt"] <= dt);
+                let h = res.history.as_ref().unwrap();
+                assert_eq!(*h.times.last().unwrap(), t_end);
+                for (&time, temperatures) in h.times.iter().zip(&h.values) {
+                    for temperature in temperatures {
+                        assert!(
+                            (temperature - time).abs() < 1e-10,
+                            "nx={nx}, dt={dt}, theta={theta}: T={temperature} at t={time}"
+                        );
+                    }
+                }
+                for temperature in temperature_of(&res) {
+                    assert!((temperature - t_end).abs() < 1e-10);
+                }
+            }
+        }
+    }
+}
+
+/// F2b endpoint regression: rigid free fall has u(t) = v0 t + g t²/2, exactly for leapfrog.
+#[test]
+fn explicit_free_fall_reaches_the_requested_endpoint_without_exceeding_its_step_bound() {
+    let velocity = [0.3, -0.2, 0.1];
+    let gravity = [0.0, 0.0, -9.81];
+    for nx in [1, 2] {
+        let mesh = Structured { kind: ElementKind::Hex8, n: [nx, 1, 1] }.box_([1.0, 0.1, 0.1]);
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+        p.loads = vec![Load::Gravity { g: gravity }];
+        let nominal = 0.9 * critical_step(&p);
+        for ratio in [0.25, 1.6, 2.25] {
+            let t_end = ratio * nominal;
+            let step = Step::Explicit {
+                t_end,
+                dt_factor: 0.9,
+                initial_velocity: Some(velocity.repeat(mesh.n_nodes())),
+                output_every: 2,
+            };
+            let res = run_step(&p, &step).expect("stable rigid free fall");
+            assert!(res.scalars["dt"] <= 0.9 * res.scalars["dt_crit"]);
+            let h = res.history.as_ref().unwrap();
+            assert_eq!(*h.times.last().unwrap(), t_end);
+            for (&time, values) in h.times.iter().zip(&h.values) {
+                for (i, displacement) in values.iter().enumerate() {
+                    let c = i % 3;
+                    let want = velocity[c] * time + 0.5 * gravity[c] * time * time;
+                    assert!(
+                        (displacement - want).abs() <= 1e-10 * t_end,
+                        "nx={nx}, ratio={ratio}: u={displacement} vs {want} at {time}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// One NAFEMS T3 run: the temperature at x = 0.08 m at `t_end`, the step it used, and how many
 /// history rows it kept.
 fn t3_probe(theta: f64, dt: f64, t_end: f64) -> (f64, f64, usize) {
@@ -4042,6 +4129,10 @@ fn an_explicit_step_needs_a_positive_end_time() {
     let step = Step::Explicit { t_end: 0.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
     let e = run_step(&p, &step).expect_err("no end time");
     assert_eq!(e.code, ErrorCode::Schema);
+    let step = Step::Explicit { t_end: 1.0, dt_factor: f64::INFINITY, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &step).expect_err("an infinite step factor cannot define a time grid");
+    assert_eq!(e.code, ErrorCode::Schema);
+    assert_eq!(e.where_.as_deref(), Some("dt"));
 }
 
 /// Every heat kernel refuses a folded element, with the same `mesh.inverted` error the elastic
