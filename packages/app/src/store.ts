@@ -100,6 +100,8 @@ export interface UiState {
   screenshotScale: number;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
+  /** Viewer layer visibility, mirrored from the Viewer so toolbar pressed state follows Commands. */
+  layerVisibility: Record<string, boolean>;
 }
 
 /** The design's states 4–7, as one word derived from what the store already holds. */
@@ -161,6 +163,7 @@ export const initialState: UiState = {
   assumptions: [],
   lengthFactor: 1,
   clipOn: false,
+  layerVisibility: { mesh: true, edges: true, loads: true, constraints: true, sets: true, legend: true, axes: true, grid: true },
   yieldStress: null,
   playing: false,
   phase: 0,

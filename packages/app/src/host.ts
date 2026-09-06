@@ -102,7 +102,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         store.set({ clipOn: p !== null });
         v().setClip(p ? { normal: p.normal, offset: p.offset } : null);
       },
-      toggle: (layer, on) => v().setLayer(layer, on ?? true),
+      toggle: (layer, on) => {
+        const visible = v().setLayer(layer, on);
+        store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
+      },
       setVisible: (bodies, on) => v().setVisible(bodies, on),
       setTheme: (t) => {
         store.set({ theme: t });

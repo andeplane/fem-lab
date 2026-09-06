@@ -405,7 +405,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             ))}
           </div>
           {LAYERS.map((layer) => (
-            <Cmd key={layer} dispatch={dispatch} cmd="view.toggle" class="toggle" args={{ layer }}>
+            <Cmd key={layer} dispatch={dispatch} cmd="view.toggle" class="toggle" args={{ layer }} pressed={s.layerVisibility[layer] ?? true}>
               {layer}
             </Cmd>
           ))}
