@@ -29,7 +29,7 @@ pub fn probe_checked(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Result<Option<(
         let kind = mesh.kind_of(elem);
         coords.resize(kind.n_nodes() * 3, 0.0);
         mesh.elem_coords(elem, &mut coords);
-        if !in_bbox(&coords, x) {
+        if !in_bbox(kind, &coords, x) {
             continue;
         }
         let element = element_for(kind);
@@ -57,8 +57,16 @@ pub fn probe_checked(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Result<Option<(
     }
 }
 
-/// Is `x` inside the box the element's nodes span, up to a relative slack?
-fn in_bbox(coords: &[f64], x: [f64; 3]) -> bool {
+/// Is `x` inside the box the element's nodes span, up to a relative slack? A quadratic
+/// isoparametric map can extend beyond every nodal coordinate while retaining a positive
+/// Jacobian, so only straight-sided elements can use the nodal box as a rejection test.
+fn in_bbox(kind: femlab_geometry::ElementKind, coords: &[f64], x: [f64; 3]) -> bool {
+    if kind.n_nodes() > kind.n_corners()
+        || coords.iter().any(|value| !value.is_finite())
+        || x.iter().any(|value| !value.is_finite())
+    {
+        return true;
+    }
     (0..3).all(|k| {
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
         for p in coords.chunks_exact(3) {

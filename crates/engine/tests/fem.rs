@@ -1381,9 +1381,89 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
                 assert!((back[k] - xi[k]).abs() <= 1e-10, "{kind:?} gp {i} dir {k}");
             }
         }
-        assert_eq!(el.inverse_map_status(&coords, [100.0, 100.0, 100.0]), InverseMap::Outside, "{kind:?} far point");
+        let outside_xi =
+            if matches!(kind, ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8) {
+                [1.1, 0.0, 0.0]
+            } else {
+                [-0.1, 0.0, 0.0]
+            };
+        el.shape_at(outside_xi, &mut n);
+        let outside =
+            std::array::from_fn(|k| n.iter().enumerate().map(|(node, value)| value * coords[3 * node + k]).sum());
+        assert_eq!(el.inverse_map_status(&coords, outside), InverseMap::Outside, "{kind:?} mapped outside point");
         assert_eq!(el.inverse_map_status(&folded(kind), [2.0, 1.0, 0.5]), InverseMap::Failed, "{kind:?} folded");
+        assert_eq!(el.inverse_map_status(&coords, [f64::NAN, 0.0, 0.0]), InverseMap::Failed, "{kind:?} nonfinite");
     }
+    assert_eq!(
+        element_for(ElementKind::Hex20).inverse_map_status(&distorted(ElementKind::Hex20), [100.0; 3]),
+        InverseMap::Failed,
+        "a valid curved element must report a far Newton failure rather than guessing from the last iterate"
+    );
+    assert_eq!(
+        element_for(ElementKind::Hex20).inverse_map_status(&distorted(ElementKind::Hex20), [f64::MAX; 3]),
+        InverseMap::Failed,
+        "a finite request whose Newton update overflows is still a locator failure"
+    );
+}
+
+#[test]
+fn a_curved_quadratic_probe_is_not_rejected_by_its_nodal_box() {
+    let kind = ElementKind::Quad8;
+    // This positively oriented isoparametric element has a curved top edge. At ξ = 5/6,
+    // its physical x is 1.0296, beyond the largest nodal x (1.0); a nodal AABB is therefore
+    // not a sound rejection bound for a quadratic element.
+    let coords = vec![
+        -1.0,
+        -1.0,
+        0.0,
+        1.0,
+        -1.0,
+        0.0,
+        1.0,
+        1.0,
+        0.0,
+        -1.0,
+        1.0,
+        0.0,
+        -0.623_871_456_418_218_1,
+        -0.403_780_038_227_63,
+        0.0,
+        0.533_587_919_073_732_5,
+        0.105_866_302_482_681_58,
+        0.0,
+        0.642_435_506_149_044_8,
+        1.561_562_153_585_714_7,
+        0.0,
+        -1.519_061_237_959_067_1,
+        0.008_414_688_222_026_179,
+        0.0,
+    ];
+    assert!(min_det_j(kind, &coords).is_some(), "the curved map is positively oriented at its integration points");
+    let element = element_for(kind);
+    let physical = |xi: [f64; 3]| {
+        let mut shape = vec![0.0; kind.n_nodes()];
+        element.shape_at(xi, &mut shape);
+        std::array::from_fn(|k| shape.iter().enumerate().map(|(node, value)| value * coords[3 * node + k]).sum())
+    };
+    let inside = physical([5.0 / 6.0, 1.0, 0.0]);
+    assert!(inside[0] > coords.iter().step_by(3).copied().fold(f64::NEG_INFINITY, f64::max));
+    let InverseMap::Inside(back) = element.inverse_map_status(&coords, inside) else {
+        panic!("the curved edge point is inside")
+    };
+    assert!((back[0] - 5.0 / 6.0).abs() < 1e-10 && (back[1] - 1.0).abs() < 1e-10);
+    assert_eq!(element.inverse_map_status(&coords, physical([1.2, 0.0, 0.0])), InverseMap::Outside);
+
+    let mesh = Mesh {
+        dim: 2,
+        coords: coords.clone(),
+        blocks: vec![ElementBlock { kind, conn: (0..8).collect(), first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let field = FieldData::new(Per::Node, 1, coords.iter().step_by(3).copied().collect());
+    let (_, value) = probe(&mesh, &field, inside).expect("quadratic probing must not use the unsafe nodal box");
+    assert!((value[0] - inside[0]).abs() < 1e-10, "linear-coordinate interpolation is exact");
 }
 
 #[test]

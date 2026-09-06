@@ -699,10 +699,27 @@ pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
 
 fn inverse_map_status_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> InverseMap {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
+    let mut span = 0.0f64;
+    let mut magnitude = 0.0f64;
+    for k in 0..dim {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for point in coords.chunks_exact(3) {
+            lo = lo.min(point[k]);
+            hi = hi.max(point[k]);
+        }
+        if !(lo.is_finite() && hi.is_finite() && x[k].is_finite()) {
+            return InverseMap::Failed;
+        }
+        span = span.max(hi - lo);
+        magnitude = magnitude.max(lo.abs()).max(hi.abs()).max(x[k].abs());
+    }
+    // The relative term follows the physical element size; the epsilon term covers subtraction
+    // when a small element is far from the origin. Both are physical-coordinate tolerances.
+    let residual_tolerance = 1e-12 * span + 64.0 * f64::EPSILON * magnitude;
     let mut xi = centre_xi(kind);
     let mut sh = vec![0.0; nn];
     let mut dn = vec![[0.0; 3]; nn];
-    for _ in 0..20 {
+    for iteration in 0..=20 {
         shape_of(kind, xi, &mut sh);
         dshape_of(kind, xi, &mut dn);
         let Some((inv, _)) = jac_inv(dim, coords, &dn) else {
@@ -712,15 +729,35 @@ fn inverse_map_status_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Inve
         for (i, ri) in r.iter_mut().enumerate().take(dim) {
             *ri = x[i] - (0..nn).map(|a| sh[a] * coords[3 * a + i]).sum::<f64>();
         }
-        for k in 0..dim {
-            xi[k] += (0..dim).map(|i| inv[k][i] * r[i]).sum::<f64>();
+        if r.iter().take(dim).any(|value| !value.is_finite()) {
+            return InverseMap::Failed;
+        }
+        if r.iter().take(dim).all(|value| value.abs() <= residual_tolerance) {
+            return if in_reference(kind, xi, 1e-8) { InverseMap::Inside(xi) } else { InverseMap::Outside };
+        }
+        if iteration < 20 {
+            let mut delta = [0.0; 3];
+            for k in 0..dim {
+                delta[k] = (0..dim).map(|i| inv[k][i] * r[i]).sum::<f64>();
+            }
+            // A bounded step keeps Newton inside the locally valid neighbourhood of a curved
+            // quadratic map. Linear maps retain their exact one-step inversion, including far
+            // outside points.
+            let trust = if kind.n_nodes() > kind.n_corners() {
+                let largest = delta.iter().take(dim).fold(0.0f64, |value, component| value.max(component.abs()));
+                (0.5 / largest).min(1.0)
+            } else {
+                1.0
+            };
+            for k in 0..dim {
+                xi[k] += trust * delta[k];
+            }
+            if xi.iter().take(dim).any(|value| !value.is_finite()) {
+                return InverseMap::Failed;
+            }
         }
     }
-    if in_reference(kind, xi, 1e-8) {
-        InverseMap::Inside(xi)
-    } else {
-        InverseMap::Outside
-    }
+    InverseMap::Failed
 }
 
 fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
