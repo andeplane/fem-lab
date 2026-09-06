@@ -1,5 +1,4 @@
 export type * from './generated/engine';
-export type { JournalEntry } from './host-commands';
 export type { Fem } from './generated/fem';
 export { FemError, nearest, type ErrorCode } from './error';
 export { Registry, type CommandDef, type QueryDef, type HostDef, type EngineSchema, type JsonSchema, type Provider, type RegistryOptions } from './registry';
