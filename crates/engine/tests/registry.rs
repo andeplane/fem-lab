@@ -6924,6 +6924,46 @@ fn transient_heat_propagates_a_rejected_direct_solve_without_panicking() {
     assert!(e.field(Some("heat"), Field::Temperature).unwrap().data.iter().all(|&t| t == 0.0));
 }
 
+fn radiating_heat_with_unrepresentable_temperature(procedure: &str) {
+    let mut e = engine();
+    heat_bar(&mut e);
+    // All inputs and the reduced matrix are finite and positive definite, but Q/k is about
+    // 1e498. A tiny positive emissivity selects the nonlinear radiation path without rescuing
+    // that unrepresentable temperature; zero emissivity is correctly rejected by the Command.
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"1 kg/m^3","k":"1e-200 W/(m K)","cp":"1e-200 J/(kg K)"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"1e300 W/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"space","on":"bar.xmax","emissivity":1e-300,"tInf":"0 K"}"#);
+    let time =
+        if procedure == "heat-transient" { r#", "dt":"1 s", "tEnd":"1 s", "theta":1, "initial":"0 K""# } else { "" };
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"step.add","name":"heat","procedure":"{procedure}","constraints":["cold"],"loads":["source","space"]{time}}}"#
+        ),
+    );
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    assert_eq!(error.code, ErrorCode::SolveStalled);
+    assert_eq!(error.where_.as_deref(), Some("solve"));
+    assert!(error.cause.contains("relative residual"));
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    assert_eq!(e.query(Query::Result { step: Some("heat".into()) }).unwrap_err().code, ErrorCode::NotFound);
+}
+
+#[test]
+fn steady_radiation_propagates_a_rejected_direct_solve_transactionally() {
+    radiating_heat_with_unrepresentable_temperature("heat-steady");
+}
+
+#[test]
+fn transient_radiation_propagates_a_rejected_direct_solve_transactionally() {
+    radiating_heat_with_unrepresentable_temperature("heat-transient");
+}
+
 #[test]
 fn modal_analysis_propagates_a_rejected_direct_solve_without_panicking() {
     let mut e = engine();
