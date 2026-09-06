@@ -279,6 +279,10 @@ describe('Registry', () => {
     expect(wrote()).toEqual(['beam.png', 'image/png', new Uint8Array([65, 66, 67])]);
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'png', legend: false } });
     expect(host.view.screenshot).toHaveBeenLastCalledWith({ legend: false });
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'png', width: 1200, height: 675, legend: false, title: 'Beam' } });
+    expect(host.view.screenshot).toHaveBeenLastCalledWith({ width: 1200, height: 675, legend: false, title: 'Beam' });
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'png', width: 0 } })).rejects.toThrow();
+    await expect(registry.query({ query: 'query.screenshot', height: -2 })).rejects.toThrow();
 
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv' } });
     expect(wrote()[0]).toBe('beam-extremes.csv');

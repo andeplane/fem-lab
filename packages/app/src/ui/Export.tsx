@@ -19,9 +19,10 @@ export function unavailable(row: ExportFormatRow, s: { hasMesh: boolean; hasResu
 }
 
 /** The `file.export` spec a row runs; CSV defaults to the extremes table. */
-export function specOf(row: ExportFormatRow, step: string | undefined): Record<string, unknown> {
+export function specOf(row: ExportFormatRow, step: string | undefined, image?: { width: number; height: number }): Record<string, unknown> {
   if (row.format === 'csv') return { format: 'csv', table: 'extremes', ...(step ? { step } : {}) };
   if (row.format === 'vtu' && step) return { format: 'vtu', step };
+  if (row.format === 'png' && image) return { format: 'png', ...image };
   return { format: row.format };
 }
 
@@ -31,17 +32,13 @@ const SCALES = [1, 2];
 
 /**
  * The design's 1× / 2× on the viewer image. The Command is `query.screenshot`, whose schema
- * takes `width` and `height`; each chip asks for the canvas at that many device pixels and the
- * chosen scale then rides on the legend the viewer burns in.
- *
- * ponytail: the scale reaches the viewer through `ResultsView.legendBurn()`, because neither
- * `HostContext.view.screenshot` nor `buildExport`'s png branch forwards the Query's width and
- * height. One line in each — `host.ts` and `registry/src/host-commands.ts` — replaces this.
+ * takes `width` and `height`; each chip requests an exact multiple of the canvas CSS size.
+ * The same dimensions are passed by the row export and Export selected actions.
  */
 function Resolution({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
-  const canvas = typeof document === 'undefined' ? null : document.querySelector('canvas');
-  const w = canvas?.clientWidth ?? 1280;
-  const h = canvas?.clientHeight ?? 720;
+  const canvas = typeof document === 'undefined' ? null : document.querySelector('.viewer canvas');
+  const w = canvas?.clientWidth || 1280;
+  const h = canvas?.clientHeight || 720;
   return (
     <div class="segmented" role="group" aria-label="image resolution">
       {SCALES.map((n) => (
@@ -78,11 +75,15 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
   if (s.panels['export'] !== true) return null;
   const ctx = { hasMesh: Boolean(s.model?.meshSettings), hasResult: s.result !== null };
   const step = s.result?.step;
+  const image = () => {
+    const canvas = document.querySelector<HTMLCanvasElement>('.viewer canvas');
+    return { width: Math.max(1, Math.round((canvas?.clientWidth || 1280) * s.screenshotScale)), height: Math.max(1, Math.round((canvas?.clientHeight || 720) * s.screenshotScale)) };
+  };
   const close = { cmd: 'panel.toggle', panel: 'export', open: false };
   const runAll = (): void => {
     for (const format of ticked) {
       const row = EXPORT_FORMATS.find((r) => r.format === format);
-      if (row) void dispatch({ cmd: 'file.export', spec: specOf(row, step) }).catch(() => undefined);
+      if (row) void dispatch({ cmd: 'file.export', spec: specOf(row, step, image()) }).catch(() => undefined);
     }
   };
   return (
@@ -100,7 +101,7 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
             <div class="section-label">{group}</div>
             {EXPORT_FORMATS.filter((r) => r.group === group).map((row) => {
               const why = unavailable(row, ctx);
-              const spec = specOf(row, step);
+              const spec = specOf(row, step, image());
               return (
                 <div key={row.format} class={why ? 'export-row off' : 'export-row'}>
                   <input
