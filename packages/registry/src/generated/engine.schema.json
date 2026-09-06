@@ -281,7 +281,7 @@
         ]
       },
       {
-        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
         "type": "object",
         "properties": {
           "name": {
@@ -4659,7 +4659,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
             "type": "object",
             "properties": {
               "name": {
@@ -9953,7 +9953,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
             "type": "object",
             "properties": {
               "name": {
