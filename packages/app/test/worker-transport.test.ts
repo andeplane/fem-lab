@@ -157,6 +157,7 @@ describe('WorkerTransport', () => {
 describe('toStructured', () => {
   it('passes an engine error through and fills the optional fields', () => {
     expect(toStructured({ code: 'set.empty', cause: 'nothing matched' })).toEqual({ code: 'set.empty', cause: 'nothing matched', where: null, suggestion: null });
+    expect(toStructured({ code: 'result.stale', cause: 'the predecessor belongs to an older Model', where: 'after', suggestion: 'solve.run the predecessor' })).toEqual({ code: 'result.stale', cause: 'the predecessor belongs to an older Model', where: 'after', suggestion: 'solve.run the predecessor' });
   });
 
   it('wraps anything else as internal', () => {
