@@ -2141,6 +2141,23 @@ fn a_host_reads_a_field_straight_off_the_result() {
     assert_eq!(e.field(None, Field::Displacement).expect("the last solved step").comps, 3);
     // temperature was never computed in a static Step
     assert_eq!(e.field(None, Field::Temperature).expect_err("no such field").code, ErrorCode::NotFound);
+    let before = e.revision();
+    let unavailable = e
+        .query(Query::Probe {
+            step: None,
+            field: Field::Temperature,
+            component: None,
+            at: [Q::text("500 mm"), Q::text("50 mm"), Q::text("50 mm")],
+        })
+        .expect_err("a current structural Result still has no temperature field");
+    assert_eq!(unavailable.code, ErrorCode::NotFound);
+    assert!(unavailable.cause.contains("no temperature field"));
+    assert!(unavailable.suggestion.unwrap().contains("query.result"));
+    assert_eq!(e.revision(), before);
+    let unsolved = engine();
+    let missing = unsolved.field(None, Field::Displacement).expect_err("a raw field needs a solved Step");
+    assert_eq!(missing.code, ErrorCode::NotFound);
+    assert_eq!(missing.suggestion.as_deref(), Some("solve.run"));
 }
 
 #[test]
