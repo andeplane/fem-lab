@@ -53,7 +53,7 @@ test.describe('@cpu the shell', () => {
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
         await expectCanvasSized(page);
         await assistant.getByTitle('Close the assistant', { exact: true }).click();
-        await expect(assistant).toHaveCount(0);
+        await expect(assistant).toBeHidden();
         const centre = (await page.locator('.centre').boundingBox())!;
         expect(centre.y).toBe(workspace.y);
         expect(centre.height).toBe(workspace.height);
@@ -74,7 +74,7 @@ test.describe('@cpu the shell', () => {
     expect(drawer.height).toBe(workspace.height);
     await expectCanvasSized(page);
     await assistant.getByTitle('Close the assistant', { exact: true }).click();
-    await expect(assistant).toHaveCount(0);
+    await expect(assistant).toBeHidden();
     await expectCanvasSized(page);
   });
 
