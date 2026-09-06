@@ -103,11 +103,13 @@ function withRefs(text: string) {
 
 function ToolCard({ call }: { call: ToolCall }) {
   return (
-    <div class={`card${call.ok ? '' : ' bad'}`}>
+    <div class={`card${call.status === 'failed' ? ' bad' : ''}`} data-status={call.status}>
       <div class="head">
-        <span class={call.ok ? 'ok' : 'fail'}>{call.ok ? '✓' : '✕'}</span>
+        <span class={call.status === 'pending' ? 'tool-pending' : call.status === 'succeeded' ? 'ok' : 'fail'} role="img" aria-label={call.status === 'pending' ? 'Running' : call.status === 'succeeded' ? 'Succeeded' : 'Failed'}>
+          {call.status === 'pending' ? '' : call.status === 'succeeded' ? '✓' : '✕'}
+        </span>
         <span class="cmd">{call.command}</span>
-        <span class="ms">{call.ms > 0 ? `${call.ms} ms` : '…'}</span>
+        <span class="ms">{call.status === 'pending' ? '…' : `${call.ms} ms`}</span>
       </div>
       <div class="args">{JSON.stringify(call.input)}</div>
       {call.result ? <div class="out">{call.result.slice(0, 400)}</div> : null}
@@ -208,7 +210,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
           } else if (event.type === 'turn') {
             if (prose.trim()) flushProse(prose, add);
             prose = '';
-            const wrote = event.turn.calls.filter((c) => c.ok && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
+            const wrote = event.turn.calls.filter((c) => c.status === 'succeeded' && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
             if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
             setTurn(event.turn);

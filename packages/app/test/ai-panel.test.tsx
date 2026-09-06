@@ -111,6 +111,9 @@ describe('the assistant drawer', () => {
       await tick();
       expect(root.textContent).toContain('Inspecting the beam.');
       expect(root.querySelector('.thinking')!.textContent).toContain('query.model');
+      expect(root.querySelector('.card')!.getAttribute('data-status')).toBe('pending');
+      expect(root.querySelector('.card [aria-label=Running]')).not.toBeNull();
+      expect(root.querySelector('.card .ok')).toBeNull();
       render(<AssistantPanel registry={registry} store={store} hidden />, root);
       await tick();
       expect(root.querySelector('aside')!.hidden).toBe(true);
@@ -124,7 +127,35 @@ describe('the assistant drawer', () => {
       expect(root.textContent).toContain('Inspecting the beam.');
       expect(root.textContent).toContain('The beam is ready.');
       expect(root.querySelector('.card .out')!.textContent).toContain('beam');
+      expect(root.querySelector('.card')!.getAttribute('data-status')).toBe('succeeded');
+      expect(root.querySelector('.card [aria-label=Succeeded]')).not.toBeNull();
       expect(root.querySelector('.thinking')).toBeNull();
+    } finally { provider.mockRestore(); }
+  });
+
+  it('shows a script error as a failed tool card with its partial console output', async () => {
+    localStorage.setItem('femlab.ai.key', 'test-key');
+    let round = 0;
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat() {
+        if (round++ === 0) yield { type: 'tool_use', id: 'script', name: 'run_script', input: { code: 'buildThenFail()' } };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry } = await mount();
+      const original = registry.query.bind(registry);
+      vi.spyOn(registry, 'query').mockImplementation((q) => q.query === 'query.journal' ? Promise.resolve({ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }) : original(q));
+      vi.spyOn(registry, 'dispatch').mockResolvedValue({ result: null, console: ['built one body'], error: 'line 2: no such Set' });
+      await type(root, 'Build it');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await tick();
+      await tick();
+      expect(root.querySelector('.card.bad')!.getAttribute('data-status')).toBe('failed');
+      expect(root.querySelector('.card [aria-label=Failed]')).not.toBeNull();
+      expect(root.querySelector('.card .out')!.textContent).toContain('built one body');
+      expect(root.querySelector('.card .out')!.textContent).toContain('line 2: no such Set');
     } finally { provider.mockRestore(); }
   });
 

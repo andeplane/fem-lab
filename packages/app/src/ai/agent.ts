@@ -16,7 +16,7 @@ export interface ToolCall {
   command: string;
   input: unknown;
   ms: number;
-  ok: boolean;
+  status: 'pending' | 'succeeded' | 'failed';
   /** The result or the error, as the JSON the model was given. */
   result: string;
 }
@@ -131,13 +131,14 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
     // stop calling tools in parallel.
     const results: ToolResultBlock[] = [];
     for (const p of pending) {
-      const call: ToolCall = { id: p.id, tool: p.name, command: commandNameFor(p.name, registry) ?? p.name, input: p.input, ms: 0, ok: true, result: '' };
+      const call: ToolCall = { id: p.id, tool: p.name, command: commandNameFor(p.name, registry) ?? p.name, input: p.input, ms: 0, status: 'pending', result: '' };
       calls.push(call);
       yield { type: 'tool_start', call };
       const at = now();
       try {
         const value = await callTool(registry, p.name, p.input);
         call.result = JSON.stringify(value ?? null);
+        call.status = p.name === RUN_SCRIPT && typeof (value as ScriptResult)?.error === 'string' ? 'failed' : 'succeeded';
         if (p.name === RUN_SCRIPT) owned.push(...((value as ScriptResult)?.journalEntries ?? []));
         else if ('journaled' in registry.describe(call.command) && (registry.describe(call.command) as { journaled: boolean }).journaled) {
           const ack = value as Ack;
@@ -145,11 +146,11 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
         }
         if (p.name === SKILL_TOOL) skills.push(String((p.input as { name?: string })?.name ?? ''));
       } catch (e) {
-        call.ok = false;
+        call.status = 'failed';
         call.result = errorJson(e);
       }
       call.ms = now() - at;
-      results.push({ type: 'tool_result', toolUseId: p.id, content: call.result, ...(call.ok ? {} : { isError: true }) });
+      results.push({ type: 'tool_result', toolUseId: p.id, content: call.result, ...(call.status === 'failed' ? { isError: true } : {}) });
       yield { type: 'tool_end', call };
     }
     messages.push({ role: 'user', content: results });

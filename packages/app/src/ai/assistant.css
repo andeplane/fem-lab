@@ -325,7 +325,10 @@
   font-size: 11.5px;
   color: var(--text-low);
 }
-.assistant .thinking i {
+.assistant .thinking i,
+.assistant .tool-pending {
+  display: inline-block;
+  flex: none;
   width: 9px;
   height: 9px;
   border: 1.5px solid var(--accent);
