@@ -258,38 +258,36 @@ describe('IndexedDB autosave transactions', () => {
     const request = { result: undefined, error: null } as IDBRequest<undefined>;
     const transaction = { objectStore: () => ({ delete: () => request }), error: null } as unknown as IDBTransaction;
     const close = vi.fn();
-    const database = { transaction: () => transaction, close } as unknown as IDBDatabase;
+    const database = { transaction: () => transaction, close, objectStoreNames: { contains: () => false } } as unknown as IDBDatabase;
     const open = { result: database, error: null } as IDBOpenDBRequest;
-    const factory = { open: () => open, cmp: () => 0, databases: async () => [], deleteDatabase: () => open } satisfies IDBFactory;
+    const factory = { open: () => { queueMicrotask(() => open.onsuccess!.call(open, new Event('success'))); return open; }, cmp: () => 0, databases: async () => [], deleteDatabase: () => open } satisfies IDBFactory;
     const store = indexedDbStore(factory);
     return { request, transaction, close, open, store };
   }
 
   it('waits for clear transaction commit after the delete request succeeds', async () => {
-    const { store, open, request, transaction, close } = transactionHarness();
+    const { store, request, transaction, close } = transactionHarness();
     let completed = false;
     const clearing = store.clear().then(() => { completed = true; });
-    open.onsuccess!.call(open, new Event('success'));
-    await Promise.resolve();
+    await vi.waitFor(() => expect(request.onsuccess).toBeTypeOf('function'));
     request.onsuccess!.call(request, new Event('success'));
     await new Promise((resolve) => setTimeout(resolve, 0));
     const completedBeforeCommit = completed;
     transaction.oncomplete!.call(transaction, new Event('complete'));
     await clearing;
     expect(completedBeforeCommit).toBe(false);
-    expect(close).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledTimes(2);
   });
 
   it('rejects an aborted clear even when its delete request already succeeded', async () => {
-    const { store, open, request, transaction, close } = transactionHarness();
+    const { store, request, transaction, close } = transactionHarness();
     const clearing = store.clear();
-    open.onsuccess!.call(open, new Event('success'));
-    await Promise.resolve();
+    await vi.waitFor(() => expect(request.onsuccess).toBeTypeOf('function'));
     request.onsuccess!.call(request, new Event('success'));
     Object.assign(transaction, { error: new DOMException('commit aborted', 'AbortError') });
     transaction.onabort!.call(transaction, new Event('abort'));
     await expect(clearing).rejects.toThrow('commit aborted');
-    expect(close).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -469,6 +467,23 @@ describe('autosave', () => {
     await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toMatchObject({ revisions: [{ name: 'b' }, { name: 'a' }] });
   });
 
+  it('keeps the newest revision when an older full batch commits after it', async () => {
+    const store = memoryStore();
+    let oldTime = 100;
+    const old = makeAutosave({ store, now: () => oldTime++, id: () => `old-${oldTime}` });
+    const newer = makeAutosave({ store, now: () => 1_000, id: () => 'newer' });
+    await old.readAll();
+    await newer.readAll();
+    for (let count = 1; count <= 20; count++) old.note(`old-${count}`, journal(count));
+    newer.note('newer', journal(1));
+    await newer.flush();
+    await old.flush();
+    expect((await old.readAll()).map((revision) => revision.name)).toEqual([
+      'newer',
+      ...Array.from({ length: 19 }, (_, i) => `old-${20 - i}`),
+    ]);
+  });
+
   it('keeps same-clock revisions distinct and restores either through the Registry', async () => {
     const store = memoryStore();
     const a = makeAutosave({ store, now: () => 100 });
@@ -609,7 +624,7 @@ describe('autosave', () => {
     await expect(registry.dispatch({ cmd: 'file.restore' })).resolves.toMatchObject({ name: 'b' });
   });
 
-  it('preserves a new revision after Registry autosave off/on while an older write clears', async () => {
+  it('keeps saved revisions and accepts a new revision after Registry autosave off/on', async () => {
     const { storage, store, entered, gate } = delayedStore();
     const a = makeAutosave({ store, ...fakeTimers() });
     const { registry } = autosaveRegistry(a);
@@ -623,7 +638,7 @@ describe('autosave', () => {
     const second = a.flush();
     gate.release();
     await Promise.all([first, second]);
-    expect((await storage.read()).map((revision) => revision.name)).toEqual(['new']);
+    expect((await storage.read()).map((revision) => revision.name)).toEqual(['new', 'old']);
     await expect(registry.dispatch({ cmd: 'file.restore', id: shown })).resolves.toMatchObject({ name: 'new' });
   });
 

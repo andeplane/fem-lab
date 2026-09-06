@@ -23,6 +23,7 @@
 // same autosave instance; `openShared` is here.
 import { FemError } from '@femlab/registry';
 import { z } from 'zod';
+import { openDb, REVISIONS } from './db';
 import schema from '../../registry/src/generated/engine.schema.json';
 
 /** A Command in the app's wire shape — the same thing the Journal holds. */
@@ -221,8 +222,7 @@ export interface JournalStore {
   clear(): Promise<void>;
 }
 
-const DB_NAME = 'femlab';
-const STORE = 'autosave';
+const STORE = REVISIONS;
 const KEY = 'last';
 
 function storedList(value: unknown): Saved[] {
@@ -238,13 +238,7 @@ function storedList(value: unknown): Saved[] {
 
 /** The real one: the existing `last` record is read as the first entry and migrated on write. */
 export function indexedDbStore(factory: IDBFactory): JournalStore {
-  const open = (): Promise<IDBDatabase> =>
-    new Promise((resolve, reject) => {
-      const req = factory.open(DB_NAME, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error ?? new Error('cannot open IndexedDB'));
-    });
+  const open = (): Promise<IDBDatabase> => openDb(factory);
   const tx = async <T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> => {
     const db = await open();
     try {
@@ -391,13 +385,10 @@ export function makeAutosave({
     storedList(saved).map((entry) => entry.id === undefined ? { ...entry, id: `legacy-${entry.at}` } : entry);
   const same = (a: Saved, b: Saved): boolean => a.name === b.name && JSON.stringify(a.cmds) === JSON.stringify(b.cmds);
   const merge = (current: Saved[], incoming: Saved[]): Saved[] => {
-    let merged = normalize(current);
-    for (const revision of incoming.slice().reverse()) {
-      const existing = merged.findIndex((saved) => saved.id === revision.id);
-      if (existing >= 0) merged.splice(existing, 1);
-      merged = [revision, ...merged];
-    }
-    return merged.slice(0, MAX_AUTOSAVES);
+    const ids = new Set(incoming.map((revision) => revision.id));
+    return [...incoming, ...normalize(current).filter((revision) => !ids.has(revision.id))]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, MAX_AUTOSAVES);
   };
   // Reads, writes and clears share one queue. A rejected read must not poison later writes.
   const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {

@@ -1,10 +1,10 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 test('@cpu deformation previews while dragging and commits once on release', async ({ page }) => {
   await page.goto('./');
   await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
-  const slider = page.getByRole('slider', { name: 'deformation scale', exact: true });
+  const slider = page.getByRole('slider', { name: 'exaggeration', exact: true });
   await expect(slider).toBeVisible();
   await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setDeformScale', scale: 100 }));
   const journal = await page.evaluate(() => window.fem.query.journal());
@@ -31,9 +31,12 @@ test('@cpu deformation previews while dragging and commits once on release', asy
   await expect.poll(() => page.evaluate(() => (window as unknown as { scaleCommands: unknown[] }).scaleCommands)).toEqual([{ cmd: 'view.setDeformScale', scale }]);
   expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
   expect((await page.evaluate(() => window.fem.query.result({}))).stale).toBe(false);
+  // One Command per keypress, a step down. The step is read off the slider rather than assumed:
+  // the track grows with the drawn scale (#42), so it is not always 10.
+  const stepSize = Number(await slider.getAttribute('step'));
   await slider.press('ArrowLeft');
   await expect.poll(() => page.evaluate(() => (window as unknown as { scaleCommands: unknown[] }).scaleCommands)).toEqual([
     { cmd: 'view.setDeformScale', scale },
-    { cmd: 'view.setDeformScale', scale: scale - 10 },
+    { cmd: 'view.setDeformScale', scale: scale - stepSize },
   ]);
 });

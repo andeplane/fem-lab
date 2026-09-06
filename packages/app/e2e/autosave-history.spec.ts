@@ -18,11 +18,11 @@ async function ready(page: Page): Promise<void> {
 
 async function storedAutosaves(page: Page): Promise<{ name: string; id?: string }[]> {
   return page.evaluate(() => new Promise<{ name: string; id?: string }[]>((resolve, reject) => {
-    const open = indexedDB.open('femlab', 1);
+    const open = indexedDB.open('femlab');
     open.onerror = () => reject(open.error);
     open.onsuccess = () => {
       const db = open.result;
-      const request = db.transaction('autosave', 'readonly').objectStore('autosave').get('last');
+      const request = db.transaction('revisions', 'readonly').objectStore('revisions').get('last');
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         resolve(Array.isArray(request.result) ? request.result : request.result ? [request.result] : []);
@@ -79,6 +79,29 @@ test.describe('@cpu autosave Journal revisions', () => {
     await page.evaluate((id) => window.fem.dispatch({ cmd: 'file.restore', id }), solvedRevision.id);
     await expect.poll(async () => (await page.evaluate(() => window.fem.query.journal())).entries.length).toBe(solvedRevision.commands);
     await expect.poll(async () => Boolean(await page.evaluate(() => window.fem.query.result()))).toBe(true);
+  });
+
+  test('restoring history forks a project and preserves the saved newer Journal', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'original' }));
+    const revisions = await page.evaluate(async () => (await window.fem.registry.query({ query: 'query.autosaveHistory' })) as { revisions: { id: string; commands: number }[] });
+    const old = revisions.revisions[0]!;
+    await page.evaluate(() => window.fem.geometry.addBox({ name: 'later-body', size: ['1 m', '1 m', '1 m'] }));
+    const newer = await page.evaluate(() => window.fem.query.journal());
+    const original = await page.evaluate(() => window.fem.dispatch({ cmd: 'project.save' })) as unknown as { id: string };
+    await expect.poll(async () => (await storedAutosaves(page)).some((revision) => revision.id === old.id)).toBe(true);
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'file.autosave', on: false }));
+    const historyBefore = await page.evaluate(() => window.fem.registry.query({ query: 'query.autosaveHistory' }));
+    await page.evaluate((id) => window.fem.dispatch({ cmd: 'file.restore', id }), old.id);
+    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.autosaveHistory' }))).toEqual(historyBefore);
+    expect((await page.evaluate(() => window.fem.query.journal())).entries).toHaveLength(old.commands);
+    const restored = await page.evaluate(() => window.fem.dispatch({ cmd: 'project.save' })) as unknown as { id: string };
+    expect(restored.id).not.toBe(original.id);
+    await page.reload();
+    await ready(page);
+    await page.evaluate((id) => window.fem.dispatch({ cmd: 'project.open', id }), original.id);
+    expect(await page.evaluate(() => window.fem.query.journal())).toEqual(newer);
   });
 
   test('atomically merges concurrent autosaves from two browser tabs', async ({ page }) => {
