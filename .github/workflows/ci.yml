@@ -4,6 +4,13 @@ on:
     branches: [main]
   pull_request:
 
+# One run per ref: a new push cancels the older run of the same branch, so the shared queue holds
+# only what can still matter (issue #290). Not on main: merges land minutes apart there, and a run
+# that is always cancelled never tells anyone whether main is green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -29,18 +36,18 @@ jobs:
       - run: cargo test --workspace
       - run: cargo check -p femlab-engine -p femlab-geometry -p femlab-engine-wasm --target wasm32-unknown-unknown
       # 100 % on the library crates. Regions stand in for branches: llvm-cov measures branches only on nightly.
-      # bridge: src/gpu is covered in the gpu job below; delete this exclusion when the gpu job is made
-      # required (target: when it has been green three runs in a row)
+      # bridge: src/gpu is covered in the GPU job below; delete this exclusion when that job is
+      # required after ADR 0007's week-long green soak.
       - name: coverage
         if: matrix.os == 'ubuntu-latest'
         run: |
           cargo install cargo-llvm-cov --locked
-          cargo llvm-cov -p femlab-engine -p femlab-geometry --ignore-filename-regex 'src/gpu/' --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+          CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --ignore-filename-regex 'src/gpu/' --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
 
   # GPU kernels for real on a GPU-less runner: Mesa lavapipe is the Vulkan adapter (ADR 0007).
   # Backends::PRIMARY picks Vulkan on Linux; wgpu reads WGPU_BACKEND only through Backends::from_env, which we do not call.
   gpu:
-    name: gpu kernels on lavapipe (allowed to fail until green three runs in a row)
+    name: gpu kernels on lavapipe (advisory during week-long soak)
     runs-on: ubuntu-latest
     continue-on-error: true
     env:
@@ -57,8 +64,9 @@ jobs:
       - run: cargo install cargo-llvm-cov --locked
       # Coverage is measured in debug: release inlining mis-attributes regions and the job then
       # reports 99 % on lines that ran. The 66k-DOF D5 sibling is `#[ignore]`d out of that binary
-      # and run on its own in release, where it takes seconds instead of ten minutes.
-      - run: cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
+      # and run on its own in release, where it takes seconds instead of ten minutes. Override
+      # the ordinary level-1 test profile here so instrumentation retains exact source regions.
+      - run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry --features gpu-tests --fail-under-lines 100 --fail-under-functions 100 --fail-under-regions 100
       - run: cargo test --release -p femlab-engine --features gpu-tests --test gpu_kernels -- --ignored sixty_six --nocapture
 
   # The engine is a library with two hosts: the same Journal must hash identically natively and in wasm.
@@ -83,6 +91,8 @@ jobs:
       # `web` job's size budget is measured on the module this job uploads.
       - run: npm ci
       - run: node tools/build-wasm.mjs
+      - run: node tools/test-units-wasm.mjs
+      - run: node tools/test-material-library-wasm.mjs
       - run: cargo build -p femlab --release
       - run: ./target/release/femlab schema --out engine.schema.json
       - name: replay every fixture natively and in wasm
@@ -104,9 +114,8 @@ jobs:
             engine.schema.json
 
   windows:
-    name: windows (allowed to fail until gated)
+    name: windows
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

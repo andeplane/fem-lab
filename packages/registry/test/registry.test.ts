@@ -4,12 +4,12 @@ import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';
 import { EXPORT_FORMATS, extremesCsv, pathCsv, reactionsCsv } from '../src/host-commands';
-import { ACK, MODEL_FILE, PATH, PROJECT, RESULT, SAVED, fakeHost, fakeTransport } from './fakes';
+import { ACK, FOLDER, MODEL_FILE, PATH, PROJECT, RESULT, fakeHost, fakeTransport } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
-const make = (projectOpen = false) => {
+const make = (folderOpen = false) => {
   const transport = fakeTransport();
-  const host = fakeHost(transport, projectOpen);
+  const host = fakeHost(transport, folderOpen);
   return { transport, host, registry: new Registry({ schema: engineSchema, host }) };
 };
 const schemaCommands = engineSchema.commands.oneOf.map((v) => v.properties['cmd']!.const!);
@@ -34,6 +34,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'selection.setPickTarget': { target: 'face' },
   'panel.toggle': { panel: 'palette', open: true },
   'report.print': {},
+  'query.validateScript': { code: '1 + 1' },
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
   'script.setSource': { code: 'fem.model.new({ name: "a" })', append: true },
@@ -47,12 +48,16 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'file.export': { spec: { format: 'vtu' } },
   'file.shareLink': {},
   'file.autosave': { on: true },
-  'file.restore': {},
   'file.read': { path: 'AGENTS.md' },
   'file.write': { path: 'reports/a.md', text: '# a' },
-  'project.open': { picker: true },
-  'project.close': {},
-  'project.refresh': {},
+  'folder.open': { picker: true },
+  'folder.close': {},
+  'folder.refresh': {},
+  'project.new': { name: 'beam' },
+  'project.open': { id: 'p1' },
+  'project.rename': { name: 'beam-2' },
+  'project.delete': { id: 'p1' },
+  'project.save': {},
   'example.open': { name: 'cantilever' },
   'solve.cancel': {},
   'ai.setKey': { key: null },
@@ -148,8 +153,20 @@ describe('Registry', () => {
       await registry.dispatch({ cmd: h.name, ...SAMPLES[h.name] });
     }
     expect(transport.dispatch).not.toHaveBeenCalled();
-    for (const h of HOST_QUERIES) await registry.query({ query: h.name });
+    for (const h of HOST_QUERIES) await registry.query({ query: h.name, ...SAMPLES[h.name] });
     expect(transport.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('validates scripts before execution and returns diagnostics without engine mutation', async () => {
+    const { registry, host, transport } = make();
+    const invalid = { ok: false, diagnostics: [{ code: 'TS2339', cause: 'unknown API', where: { line: 1, column: 1 }, hint: 'fix the call' }] };
+    vi.mocked(host.script.validate).mockResolvedValue(invalid);
+    await expect(registry.query({ query: 'query.validateScript', code: 'wrong', timeoutMs: 200 })).resolves.toEqual(invalid);
+    expect(host.script.validate).toHaveBeenCalledWith('wrong', 200);
+    await expect(registry.dispatch({ cmd: 'script.run', code: 'wrong' })).resolves.toMatchObject({ error: 'script.validation: correct validation diagnostics before running', diagnostics: invalid.diagnostics });
+    expect(host.script.run).not.toHaveBeenCalled();
+    expect(transport.dispatch).not.toHaveBeenCalled();
+    expect(transport.query).not.toHaveBeenCalled();
   });
 
   it('host Queries read the HostContext and query.capabilities merges engine and browser facts', async () => {
@@ -157,7 +174,7 @@ describe('Registry', () => {
     await expect(registry.query({ query: 'query.capabilities' })).resolves.toEqual({ gpu: false, threads: 4, engineVersion: '0', schemaVersion: '1', webgpu: true, crossOriginIsolated: true, userAgent: 'test', engine: 'local' });
     await expect(registry.query({ query: 'query.selection' })).resolves.toMatchObject({ refs: ['body:beam', 'face:beam.top'] });
     await expect(registry.query({ query: 'query.skills' })).resolves.toEqual([{ name: 'beam-theory-check', description: expect.any(String), when: 'a beam', source: 'builtin' }]);
-    await expect(registry.query({ query: 'query.project' })).resolves.toEqual(PROJECT);
+    await expect(registry.query({ query: 'query.folder' })).resolves.toEqual(FOLDER);
     await expect(registry.query({ query: 'query.view' })).resolves.toMatchObject({ position: [1, 2, 3] });
     await expect(registry.query({ query: 'query.screenshot', width: 800 })).resolves.toEqual({ png: 'data:image/png;base64,QUJD' });
     expect(host.view.screenshot).toHaveBeenCalledWith({ width: 800 });
@@ -199,11 +216,11 @@ describe('Registry', () => {
     expect(host.clipboard.writeText).toHaveBeenCalledTimes(4);
   });
 
-  it('file.open imports from json, project path or picker; example.open fetches then imports', async () => {
+  it('file.open imports from json, folder path or picker; example.open fetches then imports', async () => {
     const { registry, host, transport } = make(true);
     await registry.dispatch({ cmd: 'file.open', json: JSON.stringify(MODEL_FILE) });
     await registry.dispatch({ cmd: 'file.open', path: './models/beam.json' });
-    expect(host.project.readText).toHaveBeenCalledWith('models/beam.json');
+    expect(host.folder.readText).toHaveBeenCalledWith('models/beam.json');
     await expect(registry.dispatch({ cmd: 'file.open', json: 'not json' })).rejects.toMatchObject({ code: 'schema', where: 'json' });
     await expect(registry.dispatch({ cmd: 'file.open', path: '../secret.json' })).rejects.toMatchObject({ code: 'file.scope' });
     await registry.dispatch({ cmd: 'file.open', picker: true });
@@ -213,7 +230,7 @@ describe('Registry', () => {
     expect(transport.importFile).toHaveBeenCalledTimes(4);
   });
 
-  it('file.save and file.export deliver to the project folder when open, else download', async () => {
+  it('file.save and file.export deliver to the open folder when there is one, else download', async () => {
     const closed = make(false);
     await expect(closed.registry.dispatch({ cmd: 'file.save' })).resolves.toEqual({ name: 'beam.femlab.json', to: 'download' });
     expect(closed.host.files.download).toHaveBeenCalledWith('beam.femlab.json', 'application/json', expect.stringContaining('"femlab/1"'));
@@ -221,46 +238,74 @@ describe('Registry', () => {
     expect(closed.host.files.download).toHaveBeenCalledWith('beam.vtu', 'application/xml', new Uint8Array([1, 2]));
 
     const open = make(true);
-    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'v2.json' })).resolves.toEqual({ name: 'v2.json', to: 'project' });
-    expect(open.host.project.writeText).toHaveBeenCalledWith('v2.json', expect.any(String));
+    await expect(open.registry.dispatch({ cmd: 'file.save', name: 'v2.json' })).resolves.toEqual({ name: 'v2.json', to: 'folder' });
+    expect(open.host.folder.writeText).toHaveBeenCalledWith('v2.json', expect.any(String));
     await open.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' } });
-    expect(open.host.project.writeBytes).toHaveBeenCalledWith('beam.vtu', new Uint8Array([1, 2]));
+    expect(open.host.folder.writeBytes).toHaveBeenCalledWith('beam.vtu', new Uint8Array([1, 2]));
     await expect(open.registry.dispatch({ cmd: 'file.export', spec: { format: 'vtu' }, to: 'download' })).resolves.toMatchObject({ to: 'download' });
     await expect(open.registry.dispatch({ cmd: 'file.shareLink' })).resolves.toEqual({ url: 'https://x/#j' });
     expect(open.host.files.shareLink).toHaveBeenCalledWith(MODEL_FILE);
   });
 
-  it('file.autosave switches the autosave, query.autosave reports it and file.restore reopens it', async () => {
+  it('file.autosave switches the background save without touching what is already saved', async () => {
     const { registry, host } = make();
-    await expect(registry.query({ query: 'query.autosave' })).resolves.toEqual({ enabled: true, saved: SAVED });
-    await expect(registry.dispatch({ cmd: 'file.restore' })).resolves.toEqual(SAVED);
-
-    // turning it off forgets what was saved, so the start screen stops offering it
-    await expect(registry.dispatch({ cmd: 'file.autosave', on: false })).resolves.toEqual({ enabled: false, saved: null });
+    await expect(registry.dispatch({ cmd: 'file.autosave', on: false })).resolves.toEqual({ enabled: false });
     expect(host.files.setAutosave).toHaveBeenCalledWith(false);
-    await expect(registry.query({ query: 'query.autosave' })).resolves.toEqual({ enabled: false, saved: null });
-    await expect(registry.dispatch({ cmd: 'file.restore' })).resolves.toBeNull();
+    // Off stops writing; the projects saved in this browser are still listed and still openable.
+    await expect(registry.query({ query: 'query.projects' })).resolves.toEqual({ projects: [PROJECT] });
+    await expect(registry.query({ query: 'query.project' })).resolves.toMatchObject({ autosave: false });
 
-    await expect(registry.dispatch({ cmd: 'file.autosave', on: true })).resolves.toEqual({ enabled: true, saved: SAVED });
+    await expect(registry.dispatch({ cmd: 'file.autosave', on: true })).resolves.toEqual({ enabled: true });
     // `on` is required and typed: the schema, not the host, rejects a bad call
     await expect(registry.dispatch({ cmd: 'file.autosave' })).rejects.toMatchObject({ code: 'schema' });
     await expect(registry.dispatch({ cmd: 'file.autosave', on: 'yes' })).rejects.toMatchObject({ code: 'schema' });
   });
 
-  it('file.read and file.write stay inside the project folder and refuse big files', async () => {
+  it('project.* is one saved Model in this browser, and query.project* is a view of it', async () => {
+    const { registry, host } = make();
+    await expect(registry.query({ query: 'query.projects' })).resolves.toEqual({ projects: [PROJECT] });
+    await expect(registry.query({ query: 'query.project' })).resolves.toEqual({ ...PROJECT, saving: false, autosave: true });
+
+    await expect(registry.dispatch({ cmd: 'project.new' })).resolves.toMatchObject({ name: 'model', commands: 0 });
+    expect(host.projects.new).toHaveBeenCalledWith(undefined);
+    await expect(registry.dispatch({ cmd: 'project.new', name: 'corbel' })).resolves.toMatchObject({ name: 'corbel' });
+
+    await expect(registry.dispatch({ cmd: 'project.open', id: 'p9' })).resolves.toMatchObject({ id: 'p9' });
+    expect(host.projects.open).toHaveBeenCalledWith('p9');
+    await expect(registry.dispatch({ cmd: 'project.open' })).rejects.toMatchObject({ code: 'schema' });
+
+    // `id` defaults to the open project, which is what the top bar's inline field sends
+    await expect(registry.dispatch({ cmd: 'project.rename', name: 'ULS' })).resolves.toMatchObject({ name: 'ULS' });
+    expect(host.projects.rename).toHaveBeenCalledWith(undefined, 'ULS');
+    await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toMatchObject({ id: PROJECT.id, saving: false, journal: MODEL_FILE.journal });
+
+    await registry.dispatch({ cmd: 'project.delete', id: PROJECT.id });
+    expect(host.projects.delete).toHaveBeenCalledWith(PROJECT.id);
+    await expect(registry.query({ query: 'query.project' })).resolves.toBeNull();
+    await expect(registry.query({ query: 'query.projects' })).resolves.toEqual({ projects: [] });
+    await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toBeNull();
+  });
+
+  it('file.read and file.write stay inside the open folder and refuse big files', async () => {
     const { registry, host } = make(true);
     await expect(registry.dispatch({ cmd: 'file.read', path: 'AGENTS.md' })).resolves.toEqual({ text: 'content of AGENTS.md' });
     await expect(registry.dispatch({ cmd: 'file.read', path: 'big.txt' })).rejects.toMatchObject({ code: 'unsupported' });
     await expect(registry.dispatch({ cmd: 'file.read', path: '/etc/passwd' })).rejects.toMatchObject({ code: 'file.scope' });
     await registry.dispatch({ cmd: 'file.write', path: 'a\\b.md', text: 'x' });
-    expect(host.project.writeText).toHaveBeenCalledWith('a/b.md', 'x');
+    expect(host.folder.writeText).toHaveBeenCalledWith('a/b.md', 'x');
     await expect(registry.dispatch({ cmd: 'file.write', path: '../b.md', text: 'x' })).rejects.toMatchObject({ code: 'file.scope' });
   });
 
-  it('project.*, solve.cancel and ai.* call straight through', async () => {
+  it('folder.*, solve.cancel and ai.* call straight through', async () => {
     const { registry, host, transport } = make();
-    await registry.dispatch({ cmd: 'project.open', handle: { kind: 'directory' } });
-    expect(host.project.open).toHaveBeenCalledWith({ handle: { kind: 'directory' } });
+    await registry.dispatch({ cmd: 'folder.open', handle: { kind: 'directory' } });
+    expect(host.folder.open).toHaveBeenCalledWith({ handle: { kind: 'directory' } });
+    await registry.dispatch({ cmd: 'folder.close' });
+    expect(host.folder.close).toHaveBeenCalled();
+    await registry.dispatch({ cmd: 'folder.refresh' });
+    expect(host.folder.refresh).toHaveBeenCalled();
+    await expect(registry.query({ query: 'query.folder' })).resolves.toBeNull();
+    await expect(make(true).registry.query({ query: 'query.folder' })).resolves.toEqual(FOLDER);
     await registry.dispatch({ cmd: 'solve.cancel' });
     expect(transport.cancel).toHaveBeenCalled();
     await registry.dispatch({ cmd: 'ai.setKey', key: 'sk' });
