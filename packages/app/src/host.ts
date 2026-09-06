@@ -191,11 +191,15 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
       },
-      animate: (a) => v().animate(a.playing),
+      animate: (a) => {
+        v();
+        if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
+        return results.animate(a);
+      },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
         const burn = o.legend === false ? null : results?.legendBurn();
-        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined) };
+        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
     },
     selection: {

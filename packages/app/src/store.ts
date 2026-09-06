@@ -122,6 +122,7 @@ export interface UiState {
   phase: number;
   /** Pixels per CSS pixel a saved PNG is rendered at: the export dialog's 1× / 2×. */
   screenshotScale: number;
+  animationSpeed: number;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
   /** Viewer layer visibility, mirrored from the Viewer so toolbar pressed state follows Commands. */
@@ -223,6 +224,7 @@ export const initialState: UiState = {
   playing: false,
   phase: 0,
   screenshotScale: 1,
+  animationSpeed: 1,
   // --- plan D ---
   projects: [],
   project: null,
