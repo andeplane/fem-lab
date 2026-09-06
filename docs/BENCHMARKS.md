@@ -50,8 +50,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | macneal-harder-trapezoid-quad8 | green | 3/3 | 0.097152 | 0.097152 | 0.00 % |
 | nafems-le1-quad4 | green | 3/3 | 92.480463 | 92.7 | 0.24 % |
 | nafems-le1-quad8 | green | 3/3 | 92.582436 | 92.7 | 0.13 % |
-| nafems-le10-hex20 | green | 3/3 | -5.347745 | -5.38 | 0.60 % |
-| nafems-le10-hex8 | green | 3/3 | -5.400396 | -5.400396 | 0.00 % |
+| le10-full-face-hex20 | green | 3/3 | -5.234137 | -5.25 | 0.30 % |
+| le10-full-face-hex8 | green | 3/3 | -5.400396 | -5.400396 | 0.00 % |
 | nafems-t3-transient | green | 4/4 | 36.792975 | 36.6 | 0.53 % |
 | nafems-t4-conduction | green | 2/2 | 18.254191 | 18.3 | 0.25 % |
 | near-incompressible-049 | green | 4/4 | 5.9894e-5 | 5.9898e-5 | 0.01 % |
@@ -171,21 +171,29 @@ of the loaded edge, which is what the literature values belong to; plans A and C
 
 | # | Case | Reference | Tolerance | Proves | Status |
 |---|---|---|---|---|---|
-| D1 | NAFEMS LE10 thick plate under pressure | σyy(D) = −5.38 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark | green |
+| D1 | LE10 full-face support variant (ESRD) | σyy(D) = −5.25 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark; original NAFEMS line support is a different problem | green |
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
 | D4 | Manufactured solution, elasticity and Poisson, hex/tet p=1,2 | prescribed u(x); L2 rate p+1, H1 rate p | rate ± 0.1 | convergence machinery, body loads | |
 | D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale | green |
 
-**D1's support is approximated, and the layer count matters more than the mesh.** LE10 holds the
-outer face's *mid-plane line* vertically, and no Set predicate in the registry can name a line
-where a box cannot: a box at the mid-plane catches the whole mid-surface, which suppresses the
-bending and gives −0.72 MPa. This model holds u_z on the whole outer face instead, which is the
-same support once u_x = u_y = 0 has already clamped it in plane. Through-thickness resolution
-dominates the answer: at 12 × 12 in plane, two hex20 layers give −5.576 MPa and four give
-−5.348 MPa (0.6 % from −5.38). The hex8 row with incompatible modes gives −5.400 MPa at the same
-mesh, much better than the ~−29 % a fully integrated hex8 shows. tet10 is not here: no Command
-hands out simplices, so `split_to_simplices` is reachable only from the geometry crate.
+**D1 uses ESRD's full-face support variant of LE10.** The original NAFEMS problem holds
+vertical displacement only along the outer face's mid-plane line and reports −5.38 MPa.
+Our model holds all three displacement components on the whole outer face. These boundary
+conditions are not equivalent. The [ESRD StressCheck Benchmarks Guide (2018), pp. 29–31](https://www.esrd.com/wp-content/uploads/dlm_uploads/Benchmarks-Guide-Standard-NAFEMS-Benchmarks-Linear-Elastic-Tests.pdf)
+explicitly distinguishes its full-face variant and reports a converged −5.25 MPa. D1 uses that
+independent reference with the existing **2 % tolerance unchanged**; it does not claim to
+validate the original line-supported problem.
+
+Both in-plane and thickness resolution matter for the averaged nodal stress at D. Hex20
+changes from −5.489432 MPa at 6 × 6 × 2 to −5.234137 MPa at 12 × 12 × 8: the error against
+−5.25 MPa falls from 4.56 % to 0.30 %. The previous 12 × 12 × 4 full-face result, −5.347745 MPa,
+was close to the original −5.38 MPa through discretization error; that did not establish
+boundary-condition equivalence. The hex8 incompatible-mode row remains a recorded result
+at 12 × 12 × 4 (−5.400396 MPa), not an independent stress oracle. The bundled example keeps
+its existing `nafems-le10-plate` identifier for compatibility, but its visible title and
+reference explicitly identify the full-face variant. Correction: #183; command-reachable
+Tet10 validation follows under #4.
 
 ## E. Heat transfer (phase 2)
 
