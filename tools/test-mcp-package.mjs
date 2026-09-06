@@ -22,7 +22,7 @@ try {
   // Lifecycle scripts may write before npm's final JSON array, even with --json.
   const [packed] = JSON.parse(output.slice(output.lastIndexOf('\n[') + 1));
   const files = new Set(packed.files.map(({ path }) => path));
-  for (const file of ['dist/femlab-mcp.js', 'dist/script-worker.js', 'dist/wasm-node/femlab_engine_wasm.js', 'dist/wasm-node/femlab_engine_wasm_bg.wasm', 'dist/wasm-node/package.json']) {
+  for (const file of ['dist/femlab-mcp.js', 'dist/script-worker.js', 'dist/script-validation-worker.js', 'dist/wasm-node/femlab_engine_wasm.js', 'dist/wasm-node/femlab_engine_wasm_bg.wasm', 'dist/wasm-node/package.json']) {
     assert(files.has(file), `tarball is missing ${file}`);
   }
   writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ name: 'isolated-mcp-smoke', private: true }));
@@ -42,7 +42,7 @@ try {
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(installed, manifest.bin['femlab-mcp'])], cwd: directory, env, stderr: 'inherit' }));
   const { tools } = await client.listTools();
   const names = new Set(tools.map(({ name }) => name));
-  for (const name of ['query_model', 'model_new', 'run_script']) assert(names.has(name), `missing installed tool ${name}`);
+  for (const name of ['query_model', 'model_new', 'run_script', 'validate_script']) assert(names.has(name), `missing installed tool ${name}`);
   const call = async (name, args) => {
     const response = await client.callTool({ name, arguments: args });
     assert.notEqual(response.isError, true, JSON.stringify(response));
@@ -50,7 +50,14 @@ try {
   };
   await call('model_new', { name: 'installed artifact' });
   assert.equal((await call('query_model', {})).name, 'installed artifact');
-  const script = await call('run_script', { code: 'const m = await fem.query.model({}); return m.name;' });
+  const beforeValidation = await call('query_journal', {});
+  const invalid = await call('validate_script', { code: 'await fem.geometry.addBox({name: "invalid", size: [false, "1 m", "1 m"]});' });
+  assert.equal(invalid.ok, false);
+  assert(invalid.diagnostics.length > 0, 'installed validation worker must return diagnostics');
+  const valid = await call('validate_script', { code: 'const m = await fem.query.model(); return m.name;' });
+  assert.equal(valid.ok, true, JSON.stringify(valid));
+  assert.deepEqual(await call('query_journal', {}), beforeValidation, 'validation must not mutate the installed engine');
+  const script = await call('run_script', { code: 'const m = await fem.query.model(); return m.name;' });
   assert.equal(script.error, undefined);
   assert.equal(script.result, 'installed artifact');
   console.log(`Installed ${packed.filename}: stdio tools, engine, worker script and exact WASM payload passed`);
