@@ -1,9 +1,9 @@
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
-import { HOST_COMMANDS, Registry, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type Command, type QueryResult, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
 import { h, render } from 'preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
@@ -116,6 +116,9 @@ async function cleanupShells() {
 }
 
 describe('the shell', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ examples: [] }) })));
+  });
   afterEach(cleanupShells);
 
   it('releases shell keyboard handlers before removing its DOM', async () => {
@@ -132,11 +135,28 @@ describe('the shell', () => {
     expect(document.body.children).toHaveLength(0);
   });
 
+  it('closes the command palette before opening a parameterized Command form', async () => {
+    const { root, commands } = mount({ panels: { palette: true } });
+    const input = root.querySelector<HTMLInputElement>('.palette input')!;
+    input.value = 'load.traction';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await afterEffects();
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    input.dispatchEvent(enter);
+    // Closing restores focus to the opener before Chromium performs Enter's default click.
+    expect(enter.defaultPrevented).toBe(true);
+    await waitForGone(() => root.querySelector('.palette'), 'the command palette');
+    expect(commands.slice(-2)).toEqual([
+      { cmd: 'panel.toggle', panel: 'palette', open: false },
+      { cmd: 'form.open', command: 'load.traction' },
+    ]);
+  });
+
   it('names only Commands the registry has on every clickable, in every panel', async () => {
     const seen = new Set<string>();
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
       await cleanupShells();
-      const { root, registry } = mount({ tab, panels: { palette: true } });
+      const { root, registry } = mount({ tab, panels: { palette: true, examples: true } });
       const { commands, queries } = registry.list();
       const known = new Set([...commands, ...queries].map((d) => d.name));
       const used = [...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
@@ -144,7 +164,7 @@ describe('the shell', () => {
       expect([...new Set(used)].filter((c) => !known.has(c)), tab).toEqual([]);
     }
     // Every panel of the design is represented, not just the top bar.
-    for (const cmd of ['form.open', 'script.run', 'selection.setPickTarget', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode']) expect([...seen]).toContain(cmd);
+    for (const cmd of ['form.open', 'script.run', 'form.pick', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode', 'example.filter']) expect([...seen]).toContain(cmd);
   });
 
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {
@@ -452,10 +472,49 @@ describe('the shell', () => {
 
   it('keeps semantic object selection and Properties on the Journal object', async () => {
     const { registry, store } = mount();
+    const definition = { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3, rho: '7800 kg/m^3', alpha: '12e-6 1/K' } satisfies Command;
+    const query = vi.spyOn(transport, 'query').mockResolvedValueOnce({ command: definition });
     await registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    expect(query).toHaveBeenCalledWith({ query: 'query.definition', kind: 'material', name: 'steel' });
     expect(store.state.selection.refs).toEqual(['material:steel']);
     expect(store.state.selection.bodies).toEqual([]);
-    expect(store.state.form).toMatchObject({ cmd: 'material.add', values: { name: 'steel' } });
+    const { cmd, ...values } = definition;
+    expect(store.state.form).toMatchObject({ cmd, values });
+    query.mockRestore();
+  });
+
+  it('keeps a newer explicit form edit when a Journal selection definition returns late', async () => {
+    const { registry, store } = mount();
+    let resolveSelection!: (value: QueryResult) => void;
+    const query = vi.spyOn(transport, 'query')
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSelection = resolve; }))
+      .mockResolvedValueOnce({ command: { cmd: 'load.pressure', name: 'newer', on: 'beam.top', value: '3 MPa' } });
+    const selection = registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    await registry.dispatch({ cmd: 'form.edit', kind: 'load', name: 'newer' });
+    resolveSelection({ command: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3 } });
+    await selection;
+    expect(store.state.form).toMatchObject({ cmd: 'load.pressure', values: { name: 'newer', on: 'beam.top', value: '3 MPa' } });
+    query.mockRestore();
+  });
+
+  it.each([
+    { cmd: 'selection.clear' },
+    { cmd: 'selection.set', bodies: ['beam'] },
+  ])('does not open a late Journal definition after $cmd changes the selection', async (next) => {
+    const { registry, store } = mount();
+    const previousForm = store.state.form;
+    let resolveSelection!: (value: QueryResult) => void;
+    const query = vi.spyOn(transport, 'query')
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSelection = resolve; }));
+    const selection = registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    await registry.dispatch(next);
+    const selected = store.state.selection;
+    resolveSelection({ command: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3 } });
+    await selection;
+    expect(store.state.form).toBe(previousForm);
+    expect(store.state.selection).toBe(selected);
+    expect(store.state.selection.refs).not.toContain('material:steel');
+    query.mockRestore();
   });
 
   // Issue #41: the start screen leads with the assistant composer, then New project, then the

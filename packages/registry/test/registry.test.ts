@@ -4,7 +4,7 @@ import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';
 import { EXPORT_FORMATS, extremesCsv, pathCsv, reactionsCsv } from '../src/host-commands';
-import { ACK, FOLDER, MODEL_FILE, PATH, PROJECT, RESULT, fakeHost, fakeTransport } from './fakes';
+import { ACK, AUTOSAVES, FOLDER, MODEL_FILE, PATH, PROJECT, RESULT, fakeHost, fakeTransport } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
 const make = (folderOpen = false) => {
@@ -49,6 +49,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'file.export': { spec: { format: 'vtu' } },
   'file.shareLink': {},
   'file.autosave': { on: true },
+  'file.restore': {},
   'file.read': { path: 'AGENTS.md' },
   'file.write': { path: 'reports/a.md', text: '# a' },
   'folder.open': { picker: true },
@@ -289,6 +290,14 @@ describe('Registry', () => {
     await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toBeNull();
   });
 
+  it('lists bounded autosave revisions and restores the explicitly selected Journal', async () => {
+    const { registry, host } = make();
+    await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toEqual({ enabled: true, revisions: AUTOSAVES });
+    await registry.dispatch({ cmd: 'file.restore', id: 'older' });
+    expect(host.files.restore).toHaveBeenCalledWith('older');
+    await expect(registry.dispatch({ cmd: 'file.restore', id: 7 })).rejects.toMatchObject({ code: 'schema', where: 'id' });
+  });
+
   it('file.read and file.write stay inside the open folder and refuse big files', async () => {
     const { registry, host } = make(true);
     await expect(registry.dispatch({ cmd: 'file.read', path: 'AGENTS.md' })).resolves.toEqual({ text: 'content of AGENTS.md' });
@@ -312,7 +321,12 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'solve.cancel' });
     expect(transport.cancel).toHaveBeenCalled();
     await registry.dispatch({ cmd: 'ai.setKey', key: 'sk' });
-    expect(host.ai.setKey).toHaveBeenCalledWith('sk');
+    expect(host.ai.setKey).toHaveBeenCalledWith('sk', 'anthropic');
+    await registry.dispatch({ cmd: 'ai.setKey', key: 'sk-openai', provider: 'openai' });
+    expect(host.ai.setKey).toHaveBeenCalledWith('sk-openai', 'openai');
+    await registry.dispatch({ cmd: 'ai.setKey', key: null, provider: 'openai' });
+    expect(host.ai.setKey).toHaveBeenCalledWith(null, 'openai');
+    await expect(registry.dispatch({ cmd: 'ai.setKey', key: 'bad', provider: 'other' })).rejects.toMatchObject({ code: 'schema' });
     await registry.dispatch({ cmd: 'ai.setModel', model: 'm' });
     expect(host.ai.setModel).toHaveBeenCalledWith('m');
     await expect(registry.dispatch({ cmd: 'script.run', code: '1' })).resolves.toEqual({ result: 1, console: [] });
@@ -334,6 +348,10 @@ describe('Registry', () => {
     expect(wrote()).toEqual(['beam.png', 'image/png', new Uint8Array([65, 66, 67])]);
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'png', legend: false } });
     expect(host.view.screenshot).toHaveBeenLastCalledWith({ legend: false });
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'png', width: 1200, height: 675, legend: false, title: 'Beam' } });
+    expect(host.view.screenshot).toHaveBeenLastCalledWith({ width: 1200, height: 675, legend: false, title: 'Beam' });
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'png', width: 0 } })).rejects.toThrow();
+    await expect(registry.query({ query: 'query.screenshot', height: -2 })).rejects.toThrow();
 
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv' } });
     expect(wrote()[0]).toBe('beam-extremes.csv');
@@ -385,4 +403,28 @@ describe('Registry', () => {
     expect(run).toHaveBeenCalledWith({}, host);
     expect(registry.list().commands).toHaveLength(schemaCommands.length + 1);
   });
+});
+
+
+it('rejects oversized Model files from every input route before importing', async () => {
+  const { registry, host, transport } = make(true);
+  const oversized = ' '.repeat(16 * 1024 * 1024 + 1);
+  await expect(registry.dispatch({ cmd: 'file.open', json: oversized })).rejects.toMatchObject({ code: 'schema', where: 'json' });
+  // Character count alone misses multi-byte UTF-8 data.
+  await expect(registry.dispatch({ cmd: 'file.open', json: 'é'.repeat(8 * 1024 * 1024 + 1) })).rejects.toMatchObject({ code: 'schema', where: 'json' });
+  vi.mocked(host.files.pick).mockResolvedValue(oversized);
+  await expect(registry.dispatch({ cmd: 'file.open', picker: true })).rejects.toMatchObject({ code: 'schema' });
+  vi.mocked(host.folder.readText).mockResolvedValue(oversized);
+  await expect(registry.dispatch({ cmd: 'file.open', path: 'model.json' })).rejects.toMatchObject({ code: 'schema' });
+  expect(transport.importFile).not.toHaveBeenCalled();
+});
+
+it('rejects script source and deadlines outside the documented bounds before validation', async () => {
+  const { registry, host } = make();
+  for (const timeoutMs of [0, -1, 30001, Infinity, NaN]) {
+    await expect(registry.dispatch({ cmd: 'script.run', code: '1', timeoutMs })).rejects.toMatchObject({ code: 'schema' });
+  }
+  await expect(registry.dispatch({ cmd: 'script.run', code: ' '.repeat(64001) })).rejects.toMatchObject({ code: 'schema' });
+  expect(host.script.validate).not.toHaveBeenCalled();
+  expect(host.script.run).not.toHaveBeenCalled();
 });

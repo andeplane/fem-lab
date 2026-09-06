@@ -136,7 +136,9 @@ impl Engine {
     }
 
     /// What the viewer draws, as fresh typed arrays: the Mesh skin once the Model has mesh
-    /// settings, otherwise the Bodies' geometry triangles. `triSet` indexes `setNames`
+    /// settings, otherwise the Bodies' geometry triangles and tagged Sheet outlines.
+    /// `edges` contains vertex-index pairs, with `edgeSet`/`edgeBody` identifying each edge.
+    /// `triSet` indexes `setNames`
     /// (`u32::MAX` for a triangle in no Set) and `triBody` indexes `bodyNames`.
     pub fn surface(&mut self) -> Result<JsValue, JsValue> {
         let mut positions: Vec<f32> = Vec::new();
@@ -145,6 +147,9 @@ impl Engine {
         let mut tri_set_offsets: Vec<u32> = Vec::new();
         let mut tri_sets: Vec<u32> = Vec::new();
         let mut tri_body: Vec<u32> = Vec::new();
+        let mut edges: Vec<u32> = Vec::new();
+        let mut edge_set: Vec<u32> = Vec::new();
+        let mut edge_body: Vec<u32> = Vec::new();
         let mut set_names: Vec<String> = Vec::new();
         let mut membership_names: Vec<String> = Vec::new();
         let mut body_names: Vec<String> = Vec::new();
@@ -159,13 +164,19 @@ impl Engine {
                 membership_names.iter().map(|name| (name.as_str(), built.sets[name].faces.as_slice())).collect();
             (tri_set_offsets, tri_sets) = face_memberships(&s.tri_face, &s.faces, &memberships);
             tri_body.extend(s.tri_elem.iter().map(|&e| built.mesh.block_of(e).0 as u32));
+            if !s.edges.is_empty() {
+                edges.extend(s.edges.iter().flatten().copied());
+                edge_set.extend(s.set_of_face.iter().map(|set| set.unwrap_or(u32::MAX)));
+                edge_body.extend(s.faces.iter().map(|face| built.mesh.block_of(face.elem).0 as u32));
+            }
             set_names = s.set_names;
             body_names = built.body_of_block.clone();
             "mesh"
         } else {
             // CSR always has one more offset than triangles, including an empty surface.
             tri_set_offsets.push(0);
-            for (body, tri) in self.inner.geometry_surface().map_err(|e| throw(&e))? {
+            for preview in self.inner.geometry_surface().map_err(|e| throw(&e))? {
+                let tri = preview.triangles;
                 let offset = (positions.len() / 3) as u32;
                 positions.extend(tri.positions.iter().flat_map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]));
                 for (t, v) in tri.triangles.iter().enumerate() {
@@ -180,7 +191,20 @@ impl Engine {
                     tri_set_offsets.push(tri_sets.len() as u32);
                     tri_body.push(body_names.len() as u32);
                 }
-                body_names.push(body);
+                for outline in preview.outlines {
+                    let start = (positions.len() / 3) as u32;
+                    positions.extend(outline.pts.iter().flat_map(|p| [p[0] as f32, p[1] as f32, 0.0]));
+                    for (i, tag) in outline.tags.iter().enumerate() {
+                        edges.extend([start + i as u32, start + ((i + 1) % outline.pts.len()) as u32]);
+                        let at = set_names.iter().position(|n| n == tag).unwrap_or_else(|| {
+                            set_names.push(tag.clone());
+                            set_names.len() - 1
+                        });
+                        edge_set.push(at as u32);
+                        edge_body.push(body_names.len() as u32);
+                    }
+                }
+                body_names.push(preview.body);
             }
             membership_names.clone_from(&set_names);
             "geometry"
@@ -192,6 +216,9 @@ impl Engine {
         put(&out, "triSetOffsets", js_sys::Uint32Array::from(&tri_set_offsets[..]).into());
         put(&out, "triSets", js_sys::Uint32Array::from(&tri_sets[..]).into());
         put(&out, "triBody", js_sys::Uint32Array::from(&tri_body[..]).into());
+        put(&out, "edges", js_sys::Uint32Array::from(&edges[..]).into());
+        put(&out, "edgeSet", js_sys::Uint32Array::from(&edge_set[..]).into());
+        put(&out, "edgeBody", js_sys::Uint32Array::from(&edge_body[..]).into());
         put(&out, "setNames", strings(&set_names));
         put(&out, "membershipNames", strings(&membership_names));
         put(&out, "bodyNames", strings(&body_names));

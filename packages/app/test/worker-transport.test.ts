@@ -91,6 +91,37 @@ describe('WorkerTransport', () => {
     expect(s.source).toBe('mesh');
   });
 
+  it('rebuilds Sheet edge arrays from a bulk reply', async () => {
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const indices = new Uint32Array([0, 1, 2]);
+    const { transport } = make((req, reply) =>
+      reply(
+        {
+          id: req.id,
+          ok: true,
+          value: { faceNames: ['b.top'], bodyNames: ['b'], source: 'geometry' },
+          buffers: [
+            { name: 'positions', dtype: 'f32', length: 9 },
+            { name: 'indices', dtype: 'u32', length: 3 },
+            { name: 'triFace', dtype: 'u32', length: 1 },
+            { name: 'triBody', dtype: 'u32', length: 1 },
+            { name: 'edges', dtype: 'u32', length: 2 },
+            { name: 'edgeFace', dtype: 'u32', length: 1 },
+            { name: 'edgeBody', dtype: 'u32', length: 1 },
+          ],
+        },
+        [positions.buffer as ArrayBuffer, indices.buffer as ArrayBuffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer, new Uint32Array([0, 1]).buffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer],
+      ),
+    );
+    const s = await transport.surface();
+    expect(Array.from(s.positions)).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    expect(s.faceNames[s.triFace[0]!]).toBe('b.top');
+    expect(s.source).toBe('geometry');
+    expect(s.edges).toEqual(new Uint32Array([0, 1]));
+    expect(s.faceNames[s.edgeFace![0]!]).toBe('b.top');
+    expect(s.bodyNames[s.edgeBody![0]!]).toBe('b');
+  });
+
   it('rejects with the engine\'s structured error, not a string', async () => {
     const { transport } = make((req, reply) => reply({ id: req.id, ok: false, error: { code: 'name.taken', cause: "a body is already called 'beam'", where: 'name', suggestion: 'pick another name' } }));
     await expect(transport.query({ query: 'query.model' })).rejects.toBeInstanceOf(FemError);

@@ -10,7 +10,7 @@ import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
 import './assistant.css';
 import { buildSystem, buildTurn, downscaleImage, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
-import { defaultProvider, maskKey, MODELS, resolveKey, storedModel, storeKey } from './keys';
+import { defaultProvider, maskKey, MODELS, resolveKey, storedModel } from './keys';
 import { Prose, toolDisplay } from './Prose';
 import { openaiProvider } from './openai';
 import { ProjectFolder, pickFolder, watchAgents, type DirHandle } from './project';
@@ -40,6 +40,8 @@ export interface AssistantPanelProps {
 export const chatBridge = {
   /** The one line a `chat.send` before the drawer left behind; the panel takes it on mount. */
   pending: null as string | null,
+  pendingDraft: null as string | null,
+  setDraft: (text: string): void => { chatBridge.pendingDraft = text; },
   send: (text: string): void => {
     chatBridge.pending = text;
   },
@@ -365,6 +367,11 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       void send(text);
     };
     chatBridge.insertMention = insert;
+    chatBridge.setDraft = setDraft;
+    if (chatBridge.pendingDraft !== null) {
+      setDraft(chatBridge.pendingDraft);
+      chatBridge.pendingDraft = null;
+    }
     chatBridge.clear = () => {
       chatBridge.pending = null;
       if (activeRequest.current) return;
@@ -378,6 +385,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     if (queued !== null) void send(queued);
     return () => {
       chatBridge.send = buffer;
+      chatBridge.setDraft = (text: string): void => { chatBridge.pendingDraft = text; };
     };
   });
 
@@ -393,12 +401,12 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const mentionRows: Row[] = mentionsOpen
     ? [
         ...(ui.selection.refs.length > 0 && query === ''
-          ? [{ key: '@selection', kind: 'context', name: 'selection', meta: ui.selection.refs.join(' '), cmd: 'chat.insertMention', run: () => ui.selection.refs.forEach((r) => insert(r)) }]
+          ? [{ key: '@selection', kind: 'context', name: 'selection', meta: ui.selection.refs.join(' '), cmd: 'chat.insertMention', run: () => void Promise.all(ui.selection.refs.map((ref) => dispatch({ cmd: 'chat.insertMention', ref }))) }]
           : []),
         ...(query === '' ? [{ key: '@view', kind: 'context', name: 'view', meta: 'attach the current view as an image', cmd: 'query.screenshot', run: () => void attachView() }] : []),
         ...index
           .filter((e) => !query || e.ref.toLowerCase().includes(query.toLowerCase()))
-          .map((e) => ({ key: e.ref, kind: e.kind, name: e.name, meta: e.summary, cmd: 'chat.insertMention', run: () => insert(e.ref) })),
+          .map((e) => ({ key: e.ref, kind: e.kind, name: e.name, meta: e.summary, cmd: 'chat.insertMention', run: () => void dispatch({ cmd: 'chat.insertMention', ref: e.ref }) })),
       ]
     : [];
   const slash = /^\/(\S*)$/.exec(draft);
@@ -408,8 +416,8 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     kind: s.source,
     name: s.name,
     meta: s.description,
-    cmd: 'skill.invoke',
-    run: () => setDraft(`/${s.name} `),
+    cmd: 'chat.setDraft',
+    run: () => void dispatch({ cmd: 'chat.setDraft', text: `/${s.name} ` }),
   }));
   // Only one is ever open, so one cursor serves both.
   const menu = groupRows(mentionRows.length > 0 ? mentionRows : skillRows);
@@ -425,20 +433,20 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         <span class="title">Assistant</span>
         <span class="note">shares this Model</span>
         <span class="grow" />
-        <Cmd cmd="panel.toggle" title="Settings" run={() => store.togglePanel('assistant.settings')}>
+        <Cmd cmd="panel.toggle" title="Settings" run={() => void dispatch({ cmd: 'panel.toggle', panel: 'assistant.settings' })}>
           ⚙
         </Cmd>
-        <Cmd cmd="chat.clear" disabled={busy !== ''} title="Start a new conversation" run={() => chatBridge.clear()}>
+        <Cmd cmd="chat.clear" disabled={busy !== ''} title="Start a new conversation" run={() => void dispatch({ cmd: 'chat.clear' })}>
           ⟲
         </Cmd>
-        <Cmd cmd="panel.toggle" title="Close the assistant" run={() => store.togglePanel('assistant', false)}>
+        <Cmd cmd="panel.toggle" title="Close the assistant" run={() => void dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: false })}>
           ×
         </Cmd>
       </header>
 
       <div class="strip">
         {folder ? (
-          <Cmd cmd="panel.toggle" class="agents" title="The project rules in force" run={() => store.togglePanel('assistant.rules')}>
+          <Cmd cmd="panel.toggle" class="agents" title="The project rules in force" run={() => void dispatch({ cmd: 'panel.toggle', panel: 'assistant.rules' })}>
             <span class="mono">{openPanel('rules') ? '▾' : '▸'}</span>
             <span class="file">{folder.agentsMd?.file ?? 'no AGENTS.md'}</span>
             <span class="count">{folder.agentsMd ? `${rules.length} project rules in force` : 'no project rules'}</span>
@@ -457,7 +465,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
           {skills.map((s) => {
             const on = ui.panels[`skill:${s.name}`] !== false;
             return (
-              <Cmd key={s.name} cmd="panel.toggle" title={s.description} pressed={on} run={() => store.togglePanel(`skill:${s.name}`, !on)}>
+              <Cmd key={s.name} cmd="panel.toggle" title={s.description} pressed={on} run={() => void dispatch({ cmd: 'panel.toggle', panel: `skill:${s.name}`, open: !on })}>
                 <span class="dot" />
                 <span>{s.name}</span>
               </Cmd>
@@ -567,7 +575,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
                 }
                 if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !e.repeat) {
                   e.preventDefault();
-                  void send(compose());
+                  void dispatch({ cmd: 'chat.send', text: compose() }).catch(() => undefined);
                 }
               }}
               onPaste={(e) => {
@@ -598,10 +606,10 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             />
           </div>
           <div class="bar">
-            <Cmd cmd="panel.toggle" class="at" title="Reference a Model object, a file or a Result" run={() => void refreshIndex().then(() => store.togglePanel('assistant.mentions'))}>
+            <Cmd cmd="panel.toggle" class="at" title="Reference a Model object, a file or a Result" run={() => void refreshIndex().then(() => dispatch({ cmd: 'panel.toggle', panel: 'assistant.mentions' }))}>
               @
             </Cmd>
-            <Cmd cmd="chat.insertMention" title="Reference the current selection" disabled={ui.selection.refs.length === 0} run={() => ui.selection.refs.forEach(insert)}>
+            <Cmd cmd="chat.insertMention" title="Reference the current selection" disabled={ui.selection.refs.length === 0} run={() => void Promise.all(ui.selection.refs.map((ref) => dispatch({ cmd: 'chat.insertMention', ref })))}>
               @selection
             </Cmd>
             <Cmd
@@ -625,7 +633,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
                 }}
               />
             </label>
-            <Cmd cmd="chat.send" class="send" disabled={compose() === '' && !(busy && queued.length)} run={() => send(compose())}>
+            <Cmd cmd="chat.send" class="send" disabled={compose() === '' && !(busy && queued.length)} run={() => dispatch({ cmd: 'chat.send', text: compose() })}>
               {busy ? (compose() === '' && queued.length ? 'Send next' : 'Queue') : 'Send'}
             </Cmd>
           </div>
@@ -648,7 +656,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         </div> : null}
         <div class="cost">
           <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
-          <span>{key.source === 'stored' ? 'key stored in this browser' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
+          <span>{key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
         </div>
       </div>
 
@@ -674,8 +682,9 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             <Cmd
               cmd="ai.setKey"
               title="Keep this key in this browser only"
-              run={() => {
-                storeKey(provider, keyDraft || null);
+              run={async () => {
+                const key = keyDraft || null;
+                await dispatch({ cmd: 'ai.setKey', key, provider });
                 setKeyDraft('');
                 setProvider(provider);
               }}
@@ -684,7 +693,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             </Cmd>
           </label>
           <span class="source">
-            {key.source === 'stored' ? 'from localStorage in this browser' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
+            {key.source === 'stored' ? 'from sessionStorage in this tab' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
           </span>
         </div>
       ) : null}

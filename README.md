@@ -1,9 +1,11 @@
 # FEM Lab
 
-A finite-element engine written as a headless TypeScript library, with a browser app as its
-first host and a Node server as its second. Every action is a typed Command, so a person, a
-script, a Python notebook or an AI can do anything the UI can do. Solves on the GPU through
-WebGPU, in the browser and on the server alike.
+A finite-element engine written in Rust, with a TypeScript browser app, a native CLI and a
+Node MCP host. The browser runs the headless engine as WebAssembly; Commands and Queries
+provide the typed boundary for the UI, scripts and tools.
+
+Start with the [documentation index](docs/README.md), [getting-started guide](docs/GETTING-STARTED.md),
+[generated Command reference](docs/COMMANDS.md) or [contribution guide](CONTRIBUTING.md).
 
 ## Run it
 
@@ -12,8 +14,8 @@ supported browser (ADR 0014).
 
 ```sh
 cargo install --locked wasm-bindgen-cli --version "$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | tail -1 | cut -d'"' -f2)"
-node tools/build-wasm.mjs      # engine → packages/app/src/generated/wasm (gitignored)
 npm ci
+node tools/build-wasm.mjs      # engine → packages/app/src/generated/wasm (gitignored)
 npm run dev                    # http://localhost:5173/fem-lab/
 ```
 
