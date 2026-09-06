@@ -244,5 +244,5 @@ export async function readBenchmark(comparison: BenchmarkComparison, result: Res
 }
 
 export function clearsBenchmark(command: string, output: unknown = true): boolean {
-  return command === 'model.new' || command === 'file.open' || (command === 'file.restore' && output !== null);
+  return ['model.new', 'file.open', 'project.open', 'project.new', 'example.open'].includes(command) || (command === 'file.restore' && output !== null);
 }

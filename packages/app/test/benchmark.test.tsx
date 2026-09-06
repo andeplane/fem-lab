@@ -138,7 +138,7 @@ describe('benchmark comparison registry', () => {
   });
 
   it('clears provenance only when another Model is opened or created', () => {
-    expect(['model.new', 'file.open', 'file.restore'].map((command) => clearsBenchmark(command, {}))).toEqual([true, true, true]);
+    expect(['model.new', 'file.open', 'file.restore', 'project.open', 'project.new', 'example.open'].map((command) => clearsBenchmark(command, {}))).toEqual([true, true, true, true, true, true]);
     expect(clearsBenchmark('file.restore', null)).toBe(false);
     expect(clearsBenchmark('load.traction')).toBe(false);
     expect(clearsBenchmark('view.fit')).toBe(false);
