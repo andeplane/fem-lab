@@ -1,8 +1,12 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const CI = !!process.env['CI'];
-const PREVIEW = 'http://localhost:4173/fem-lab/';
-const HEADERLESS = 'http://localhost:4180/fem-lab/';
+// Ports come from PW_PORT so every worktree can run its own servers: with many checkouts on one
+// machine, a shared 4173 plus reuseExistingServer means a green run may have tested another
+// branch's build. The header-less server takes the port seven above.
+const PORT = Number(process.env['PW_PORT'] ?? 4173);
+const PREVIEW = `http://localhost:${PORT}/fem-lab/`;
+const HEADERLESS = `http://localhost:${PORT + 7}/fem-lab/`;
 
 /**
  * Chromium only (ADR 0014), three projects:
@@ -19,8 +23,8 @@ export default defineConfig({
   reporter: CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: { trace: 'retain-on-failure', screenshot: 'only-on-failure' },
   webServer: [
-    { command: 'npm run preview -- --port 4173 --strictPort', url: PREVIEW, reuseExistingServer: !CI, timeout: 120_000 },
-    { command: 'node ../../tools/static-serve.mjs dist 4180', url: HEADERLESS, reuseExistingServer: !CI, timeout: 120_000 },
+    { command: `npm run preview -- --port ${PORT} --strictPort`, url: PREVIEW, reuseExistingServer: !CI, timeout: 120_000 },
+    { command: `node ../../tools/static-serve.mjs dist ${PORT + 7}`, url: HEADERLESS, reuseExistingServer: !CI, timeout: 120_000 },
   ],
   projects: [
     { name: 'cpu', grep: /@cpu/, use: { ...devices['Desktop Chrome'], baseURL: PREVIEW } },
