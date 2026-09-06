@@ -2,6 +2,7 @@
 // ground grid, flat grey geometry, quad edges, axis triad, z-up, hemisphere plus two
 // directional lights. It draws what the engine hands it and never changes Model state — every
 // change of view arrives as a `view.*` Command, every pick leaves as `selection.set`.
+import { FemError } from '@femlab/registry';
 import {
   AxesHelper,
   Box3,
@@ -55,8 +56,6 @@ export interface LegendBurn {
   min: number;
   max: number;
   colormap: ColormapName;
-  /** Pixels per CSS pixel for a saved image: the export dialog's 1× / 2×. */
-  scale?: number;
 }
 
 const GREY_GEOMETRY = 0.58;
@@ -469,12 +468,12 @@ export class Viewer {
    * Pausing puts the shape back where `setDeformed` left it, so a paused viewer and a viewer
    * that never played show the same picture.
    */
-  animate(playing: boolean, speed = 1): void {
+  animate(playing: boolean, speed = 1, phase?: number): void {
     cancelAnimationFrame(this.frame);
-    if (!playing) return void this.drawDeformed(this.deformation, this.deformScale);
+    if (!playing) return phase === undefined ? void this.drawDeformed(this.deformation, this.deformScale) : this.setPhase(phase);
     const t0 = performance.now();
     const step = () => {
-      this.drawDeformed(this.deformation, this.deformScale * Math.sin(((performance.now() - t0) / 1000) * speed * 2 * Math.PI));
+      this.drawDeformed(this.deformation, this.deformScale * Math.sin((((performance.now() - t0) / 1000) * speed + (phase ?? 0)) * 2 * Math.PI));
       this.frame = requestAnimationFrame(step);
     };
     this.frame = requestAnimationFrame(step);
@@ -520,33 +519,49 @@ export class Viewer {
    * painted into the right-hand edge when one is given: a saved image has to be readable on
    * its own, and the HTML legend is not part of the WebGL canvas.
    */
-  screenshot(legend?: LegendBurn): string {
-    const scale = Math.max(1, Math.min(4, legend?.scale ?? 1));
-    // ponytail: 2× re-renders at double the drawing-buffer size and puts it back. Enough for a
-    // report figure; a genuinely large plate (4× of a 4k canvas) wants an offscreen target.
-    const restore = scale === 1 ? null : this.renderer.getPixelRatio();
-    if (restore !== null) {
-      this.renderer.setPixelRatio(restore * scale);
-      this.renderer.setSize(this.canvas.clientWidth || 640, this.canvas.clientHeight || 480, false);
-    }
-    this.render();
-    const png = this.burn(legend);
-    if (restore !== null) {
-      this.renderer.setPixelRatio(restore);
+  screenshot(legend?: LegendBurn, options: { width?: number; height?: number; title?: string } = {}): string {
+    const size = this.renderer.getDrawingBufferSize(new Vector2());
+    const width = options.width ?? (options.height === undefined ? size.x : Math.max(1, Math.round(options.height * size.x / size.y)));
+    const height = options.height ?? (options.width === undefined ? size.y : Math.max(1, Math.round(options.width * size.y / size.x)));
+    const gl = this.renderer.getContext();
+    const limit = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number;
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width > limit || height > limit)
+      throw new FemError('schema', `image dimensions must be positive whole pixels, at most ${limit} on this device`, 'query.screenshot', 'query.screenshot with a smaller width and height');
+    const ratio = this.renderer.getPixelRatio();
+    try {
+      // Render at the requested pixel dimensions, including its aspect ratio. CSS size and
+      // camera position stay untouched; finally restores the interactive backing buffer.
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(width, height, false);
+      this.perspective.aspect = width / height;
+      this.perspective.updateProjectionMatrix();
+      this.frameOrtho(width / height);
+      this.render();
+      return this.burn(legend, options.title);
+    } finally {
+      this.renderer.setPixelRatio(ratio);
       this.resize();
     }
-    return png;
   }
 
-  private burn(legend?: LegendBurn): string {
-    if (!legend) return this.canvas.toDataURL('image/png');
+  private burn(legend?: LegendBurn, title?: string): string {
+    if (!legend && !title) return this.canvas.toDataURL('image/png');
     const out = document.createElement('canvas');
     out.width = this.canvas.width;
     out.height = this.canvas.height;
     const g = out.getContext('2d');
-    if (!g) return this.canvas.toDataURL('image/png');
+    if (!g) throw new FemError('unsupported', 'a 2D canvas is required to draw the requested legend or title', 'query.screenshot', 'query.screenshot without a legend or title');
     g.drawImage(this.canvas, 0, 0);
-    drawLegend(g, out.width, out.height, legend);
+    // A title owns the first line. Start the legend beneath it so both remain distinct even in
+    // a small requested image; the colour bar contracts before it clips at the bottom.
+    if (legend) drawLegend(g, out.width, out.height, legend, title ? 78 : 56);
+    if (title) {
+      g.font = '16px sans-serif';
+      g.fillStyle = '#101218ee';
+      g.fillRect(12, 12, Math.max(0, Math.min(out.width - 24, g.measureText(title).width + 20)), 30);
+      g.fillStyle = '#e9edf3';
+      g.fillText(title, 22, 33, Math.max(1, out.width - 44));
+    }
     return out.toDataURL('image/png');
   }
 
@@ -619,19 +634,17 @@ export class Viewer {
     this.render();
   }
 
-  private frameOrtho(): void {
+  private frameOrtho(aspect = (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480)): void {
     const h = Math.max(this.box.getSize(new Vector3()).length() * 0.7, 1e-6);
-    const aspect = (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480);
     Object.assign(this.orthographic, { left: -h * aspect, right: h * aspect, top: h, bottom: -h });
     this.orthographic.updateProjectionMatrix();
   }
 }
 
 /** The legend the screenshot burns in: gradient bar, title, unit and six ticks, in one column. */
-function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: LegendBurn): void {
+function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: LegendBurn, top = 56): void {
   const x = w - 132;
-  const top = 56;
-  const barH = Math.max(120, Math.min(300, h - 160));
+  const barH = Math.max(24, Math.min(300, h - top - 104));
   const stops = MAPS[l.colormap];
   const grad = g.createLinearGradient(0, top + barH, 0, top);
   stops.forEach((c, i) => grad.addColorStop(i / (stops.length - 1), c));
@@ -643,8 +656,9 @@ function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: Legend
   g.font = '13px ui-monospace, monospace';
   g.fillText(`${l.title} ${l.unit}`.trim(), x - 8, top - 14);
   g.font = '11px ui-monospace, monospace';
-  for (let i = 0; i < 6; i++) {
-    const t = i / 5;
+  const ticks = Math.max(2, Math.min(6, Math.floor(barH / 18) + 1));
+  for (let i = 0; i < ticks; i++) {
+    const t = i / (ticks - 1);
     g.fillStyle = i === 0 ? '#e2703a' : '#8b929d';
     g.fillText(String(Number((l.max - (l.max - l.min) * t).toPrecision(4))), x + 22, top + barH * t + 4);
   }
