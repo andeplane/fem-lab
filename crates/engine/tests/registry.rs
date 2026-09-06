@@ -1395,18 +1395,17 @@ fn the_vtu_writer_round_trips_through_base64() {
     }
 }
 
-/// The payload of one named DataArray: the header block, then the data block, each base64.
+/// The payload of one named DataArray: decode one block, then remove its UInt64 length.
 fn decode_array(text: &str, name: &str) -> Vec<u8> {
     let at = text.find(&format!("Name=\"{name}\"")).expect("the array is in the file");
     let body = &text[at..];
     let start = body.find("binary\">").expect("binary payload") + "binary\">".len();
     let end = body.find("</DataArray>").expect("closed");
     let payload = &body[start..end];
-    // a UInt64 header is 8 bytes, which base64 encodes in exactly 12 characters
-    let bytes = from_base64(&payload[12..]);
-    let len = u64::from_le_bytes(from_base64(&payload[..12])[..8].try_into().unwrap()) as usize;
-    assert_eq!(len, bytes.len().min(len));
-    bytes[..len].to_vec()
+    let bytes = from_base64(payload);
+    let len = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+    assert_eq!(len, bytes.len() - 8);
+    bytes[8..].to_vec()
 }
 
 fn from_base64(s: &str) -> Vec<u8> {
@@ -1436,6 +1435,25 @@ fn decode_i64(text: &str, name: &str) -> Vec<i64> {
 
 fn decode_u8(text: &str, name: &str) -> Vec<u8> {
     decode_array(text, name)
+}
+
+#[test]
+fn independent_vtk_reader_accepts_all_binary_padding_lengths() {
+    for nx in 1..=3 {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);
+        ok(
+            &mut e,
+            &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{{"nx":{nx},"ny":1,"nz":1}}}}}}"#),
+        );
+        let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#).output;
+        let Output::Export { text, .. } = output else { panic!("a VTU export") };
+        let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("VTK cell types with zero, one or two padding bytes");
+        let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+        assert_eq!(piece.num_points(), (nx + 1) * 4);
+        assert_eq!(piece.cells.types, vec![vtkio::model::CellType::Hexahedron; nx]);
+        assert_eq!(piece.cells.cell_verts.num_verts(), nx * 8);
+    }
 }
 
 /// C §7 C4: Cook's membrane as one mapped block, which is its own geometry.
@@ -2158,6 +2176,16 @@ fn exporting_a_step_writes_its_fields_as_point_data() {
     assert_eq!(decode_f64(&text, "Displacement").len(), nodes * 3);
     assert_eq!(decode_f64(&text, "VonMises").len(), nodes);
     assert_eq!(decode_f64(&text, "Stress").len(), nodes * 6);
+    // An independent VTK implementation must accept the unmodified file and all tuple
+    // counts. The former helper decoded header and payload separately, hiding invalid XML.
+    let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("independent VTK reader accepts the result export");
+    let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+    assert_eq!(piece.num_points(), nodes);
+    assert_eq!(piece.cells.num_cells(), e.mesh().unwrap().mesh.n_elems());
+    for attribute in &piece.data.point {
+        let vtkio::model::Attribute::DataArray(array) = attribute else { panic!("XML point DataArray") };
+        assert_eq!(array.data.len(), nodes * array.num_comp(), "{} tuple count", array.name);
+    }
     // the same export without a Step carries the Mesh alone
     let ack = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#);
     let Output::Export { text, .. } = ack.output else { panic!() };
@@ -2638,6 +2666,19 @@ fn a_steady_heat_step_conducts_a_linear_profile_and_exports_it() {
         panic!("an export")
     };
     assert!(text.contains("Name=\"Temperature\""), "the VTU carries the temperature field");
+    let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("independent VTK reader accepts the temperature export");
+    let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+    let points = piece.points.into_vec::<f64>().unwrap();
+    let attribute = piece.data.point.iter().find(|a| a.name() == "Temperature").expect("Temperature point field");
+    let vtkio::model::Attribute::DataArray(array) = attribute else { panic!("XML point DataArray") };
+    let temperature = array.data.cast_into::<f64>().unwrap();
+    // Results use three components, with a one-DOF heat field in x.
+    assert_eq!(array.num_comp(), 3);
+    assert_eq!(temperature.len(), points.len());
+    for (point, value) in points.chunks_exact(3).zip(temperature.chunks_exact(3)) {
+        assert!((value[0] - (273.15 + 100.0 * point[0])).abs() < 1e-9, "T(x) = 273.15 + 100 x kelvin");
+        assert_eq!(&value[1..], &[0.0, 0.0]);
+    }
 }
 
 /// Convection, flux and source loads reach the Model, report themselves, survive a Body rename,
