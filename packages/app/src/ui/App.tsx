@@ -475,7 +475,7 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
     const active = gesture.current;
     if (!active) return;
     gesture.current = null;
-    if (commit && store.state.panelSizes[panel] !== active.size) void dispatch({ cmd: 'panel.resize', panel, size: store.state.panelSizes[panel] }).catch(() => preview(active.size));
+    if (commit && store.state.panelSizes[panel] !== active.previous) void dispatch({ cmd: 'panel.resize', panel, size: store.state.panelSizes[panel] }).catch(() => preview(active.previous));
     else if (!commit) store.resizePanel(panel, active.previous);
   };
   return (

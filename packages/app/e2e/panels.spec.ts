@@ -129,6 +129,18 @@ test.describe('@cpu panel resizing', () => {
         await expect(propertiesHandle).toHaveAttribute('aria-valuenow', String(Math.round(propertiesPanel.width)));
         expect(Math.round(treePanel.width)).toBe(220);
         expect(Math.round(propertiesPanel.width)).toBe(240);
+        // A click without movement must not turn a clamped preferred width into a Command.
+        await page.evaluate(() => {
+          const registry = window.fem.registry;
+          const original = registry.dispatch.bind(registry);
+          (window as unknown as { resizeCalls: unknown[] }).resizeCalls = [];
+          registry.dispatch = async command => {
+            if (command.cmd === 'panel.resize') (window as unknown as { resizeCalls: unknown[] }).resizeCalls.push(command);
+            return original(command);
+          };
+        });
+        await treeHandle.click();
+        expect(await page.evaluate(() => (window as unknown as { resizeCalls: unknown[] }).resizeCalls)).toEqual([]);
         const treeStart = Number(await treeHandle.getAttribute('aria-valuenow'));
         const treeBox = (await treeHandle.boundingBox())!;
         await page.mouse.move(treeBox.x + treeBox.width / 2, treeBox.y + 100);
