@@ -85,7 +85,7 @@ describe('animation capture', () => {
     expect(() => env.recorder(document.createElement('canvas'), 30, { stopped: () => undefined, failed: () => undefined })).toThrowError(expect.objectContaining({ code: 'unsupported' }));
   });
 
-  it('stops canvas tracks when MediaRecorder construction fails', () => {
+  it('stops canvas tracks when MediaRecorder construction or stopping fails', () => {
     const stop = vi.fn();
     class BrokenRecorder {
       static isTypeSupported(): boolean { return true; }
@@ -101,6 +101,17 @@ describe('animation capture', () => {
     const env = browserAnimationCaptureEnvironment(host as never);
 
     expect(() => env.recorder(canvas as unknown as HTMLCanvasElement, 30, { stopped: () => undefined, failed: () => undefined })).toThrow('constructor failed');
+    expect(stop).toHaveBeenCalledOnce();
+
+    stop.mockClear();
+    class StopBrokenRecorder {
+      static isTypeSupported(): boolean { return true; }
+      start(): void {}
+      stop(): void { throw new Error('stop failed'); }
+    }
+    const stopEnv = browserAnimationCaptureEnvironment({ ...host, MediaRecorder: StopBrokenRecorder } as never);
+    const recorder = stopEnv.recorder(canvas as unknown as HTMLCanvasElement, 30, { stopped: () => undefined, failed: () => undefined });
+    expect(() => recorder.stop()).toThrow('stop failed');
     expect(stop).toHaveBeenCalledOnce();
   });
 

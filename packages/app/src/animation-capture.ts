@@ -175,7 +175,14 @@ export function browserAnimationCaptureEnvironment(host: MediaRecorderHost = glo
             throw error;
           }
         },
-        stop: () => media.stop(),
+        stop: () => {
+          try {
+            media.stop();
+          } catch (error) {
+            for (const track of stream.getTracks()) track.stop();
+            throw error;
+          }
+        },
       };
     },
   };
