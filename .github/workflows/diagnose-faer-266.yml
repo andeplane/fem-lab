@@ -1,0 +1,31 @@
+name: faer platform discriminator (#266)
+on:
+  push:
+    branches: [codex/266-windows-direct-solve]
+    paths:
+      - tools/diagnose-faer-266/**
+      - .github/workflows/diagnose-faer-266.yml
+permissions:
+  contents: read
+jobs:
+  discriminate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: target
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: diagnose-faer-266
+      - name: Exact products and SPD grids in Seq, Rayon(1), Rayon(4)
+        run: cargo run --locked --manifest-path tools/diagnose-faer-266/Cargo.toml
