@@ -235,7 +235,14 @@ fn the_csr_spmv_matches_an_f64_sum_of_the_same_f32_numbers() {
 /// D5's CI sibling: 66k degrees of freedom solved on the GPU inside the f64 refinement loop,
 /// against the direct factorisation of the same matrix. The wall time is printed, never
 /// asserted — software adapters are for correctness, not for timing (AGENTS.md).
+///
+/// Ignored by default and run in release by the `gpu` CI job
+/// (`cargo test --release --features gpu-tests --test gpu_kernels -- --ignored sixty_six`):
+/// instrumented debug code on a software adapter takes ten minutes here, and coverage measured
+/// in release attributes inlined functions wrongly, so the coverage run stays in debug and
+/// this test stays out of it. The kernels it exercises are covered by the smaller tests above.
 #[test]
+#[ignore]
 fn the_sixty_six_thousand_dof_cantilever_matches_the_direct_solver() {
     let g = gpu();
     let (k, f) = cantilever([50, 20, 20]);

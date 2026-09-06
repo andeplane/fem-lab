@@ -68,5 +68,7 @@ number in a log.
 
 One operational consequence: D5's CI sibling is 40 000 f32 CG iterations and one 66k-DOF
 Cholesky — 4 s in `--release` on Metal, 218 s for the whole `gpu_kernels` binary under
-`cargo llvm-cov` (instrumented debug). The coverage job should pass `--release`; on a software
-adapter this is the longest test in the suite either way.
+`cargo llvm-cov` (instrumented debug) and ten minutes on lavapipe. Measuring coverage in
+release was tried and mis-attributes inlined functions (99 % on code that ran), so the
+coverage job stays in debug and the sibling is `#[ignore]`d out of it; the `gpu` job runs it
+on its own in release afterwards (`cargo test --release … -- --ignored sixty_six`).
