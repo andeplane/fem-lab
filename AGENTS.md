@@ -94,6 +94,11 @@ here at once, and the issue tracker is the only shared view of who is doing what
   not start on an issue that already carries the label; message its owner instead.
 - **Branch and PR carry the number**: `fix/36-lazy-initialiser`, PR body ends with
   `Closes #36`. One issue per PR unless the issues are inseparable; say so in the body.
+- **Never check out a branch in the main checkout.** `~/projects/personal/fem-lab` (or wherever the
+  repo was cloned) stays on `main`: it is the entry point people run the dev server from. Do your
+  work in a worktree (`git worktree add ../fem-lab-<issue> -b <branch> origin/main`) and remove it
+  when the PR merges. Use a port of your own for any server you start, and never kill a process
+  you did not start.
 - **Finish by closing.** The PR merge closes the issue and drops the label; if the work stops,
   remove the label and comment why. Never leave an `in progress` issue silent for a day.
 - **Labels mean something**: `bug`, `enhancement`; areas `engine`, `geometry`, `numerics`,
