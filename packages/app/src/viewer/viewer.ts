@@ -111,9 +111,14 @@ export class Viewer {
   private dim = false;
   private hoverFace: string | null = null;
   private readonly hidden = new Set<string>();
+  /** Visibility survives the replacement of mesh, edge, grid and axis objects. */
+  private readonly layerVisibility = new Map<string, boolean>();
   private box = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
   private pickCb: ((p: Pick | null) => void) | null = null;
   private frame = 0;
+  private disposed = false;
+  private readonly click = (e: MouseEvent) => this.pickCb?.(this.pick(e.clientX, e.clientY));
+  private readonly pointerMove = (e: PointerEvent) => this.hoverAt(e);
   /** The last displacement handed to `setDeformed`, and the scale it was drawn at, so the
    *  animation can sweep the same array without the host re-fetching it every frame. */
   private deformation: Float32Array | null = null;
@@ -141,8 +146,8 @@ export class Viewer {
     this.controls.enableDamping = false;
     this.controls.addEventListener('change', () => this.render());
 
-    canvas.addEventListener('click', (e) => this.pickCb?.(this.pick(e.clientX, e.clientY)));
-    canvas.addEventListener('pointermove', (e) => this.hoverAt(e));
+    canvas.addEventListener('click', this.click);
+    canvas.addEventListener('pointermove', this.pointerMove);
     this.setChrome();
     this.resize();
     this.fit();
@@ -163,7 +168,7 @@ export class Viewer {
   }
 
   render(): void {
-    this.renderer.render(this.scene, this.camera);
+    if (!this.disposed) this.renderer.render(this.scene, this.camera);
   }
 
   /** False until the first `setSurface`: until then `this.box` is a placeholder and anything
@@ -209,18 +214,44 @@ export class Viewer {
     geom.computeBoundingBox();
     if (geom.boundingBox && keep.length > 0) this.box = geom.boundingBox.clone();
 
-    for (const old of [this.mesh, this.edges]) {
-      if (!old) continue;
-      this.layers.remove(old);
-      old.geometry.dispose();
-    }
+    this.disposeSurface();
     this.mesh = new Mesh(geom, this.material);
     this.edges = this.buildEdges();
     this.layers.add(this.mesh, this.edges);
+    this.applyLayerVisibility();
     this.paint();
     if (this.deformation) this.drawDeformed(this.deformation, this.deformScale);
     this.setChrome();
     this.render();
+  }
+
+  /** Surface meshes share the viewer material; edges own theirs. */
+  private disposeSurface(): void {
+    if (this.mesh) {
+      this.layers.remove(this.mesh);
+      this.mesh.geometry.dispose();
+      this.mesh = null;
+    }
+    this.disposeEdges();
+  }
+
+  private disposeEdges(): void {
+    if (!this.edges) return;
+    this.layers.remove(this.edges);
+    this.edges.geometry.dispose();
+    const materials = Array.isArray(this.edges.material) ? this.edges.material : [this.edges.material];
+    for (const material of materials) material.dispose();
+    this.edges = null;
+  }
+
+  private disposeChrome(): void {
+    for (const helper of [this.grid, this.triad]) {
+      if (!helper) continue;
+      this.scene.remove(helper);
+      helper.dispose();
+    }
+    this.grid = null;
+    this.triad = null;
   }
 
   /**
@@ -278,7 +309,7 @@ export class Viewer {
 
   /** Ground grid at the model's scale with round ticks, and an axis triad beside it. */
   private setChrome(): void {
-    for (const old of [this.grid, this.triad]) if (old) this.scene.remove(old);
+    this.disposeChrome();
     const size = this.box.getSize(new Vector3());
     const extent = Math.max(size.x, size.y, size.z, 1e-6) * 3;
     const tick = niceTick(extent);
@@ -292,16 +323,28 @@ export class Viewer {
     this.grid = grid;
     this.triad = triad;
     this.scene.add(grid, triad);
+    this.applyLayerVisibility();
+  }
+
+  private layerTarget(layer: string): GridHelper | AxesHelper | Mesh | LineSegments | null {
+    return layer === 'grid' ? this.grid : layer === 'axes' ? this.triad : layer === 'edges' ? this.edges : layer === 'mesh' ? this.mesh : null;
+  }
+
+  private applyLayerVisibility(): void {
+    for (const layer of ['grid', 'axes', 'edges', 'mesh']) {
+      const target = this.layerTarget(layer);
+      if (target) target.visible = this.layerVisibility.get(layer) ?? true;
+    }
   }
 
   // ── view Commands ───────────────────────────────────────────────────────────────────────
   setMode(mode: ViewMode): void {
     this.mode = mode;
     if (this.edges) {
-      this.layers.remove(this.edges);
-      this.edges.geometry.dispose();
+      this.disposeEdges();
       this.edges = this.buildEdges();
       this.layers.add(this.edges);
+      this.applyLayerVisibility();
     }
     this.paint();
     this.render();
@@ -373,6 +416,10 @@ export class Viewer {
     }
     pos.needsUpdate = true;
     geom.computeVertexNormals();
+    // Raycasting and frustum culling cache these bounds. They must follow the drawn shape;
+    // `this.box` is a separate undeformed copy used for framing and auto exaggeration.
+    geom.computeBoundingBox();
+    geom.computeBoundingSphere();
     this.render();
   }
 
@@ -382,10 +429,13 @@ export class Viewer {
     this.render();
   }
 
-  setLayer(layer: string, on: boolean): void {
-    const target = layer === 'grid' ? this.grid : layer === 'axes' ? this.triad : layer === 'edges' ? this.edges : layer === 'mesh' ? this.mesh : null;
-    if (target) target.visible = on;
+  setLayer(layer: string, on?: boolean): boolean {
+    const visible = on ?? !(this.layerVisibility.get(layer) ?? true);
+    this.layerVisibility.set(layer, visible);
+    const target = this.layerTarget(layer);
+    if (target) target.visible = visible;
     this.render();
+    return visible;
   }
 
   setVisible(bodies: string[], on: boolean): void {
@@ -501,8 +551,23 @@ export class Viewer {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     cancelAnimationFrame(this.frame);
+    this.canvas.removeEventListener('click', this.click);
+    this.canvas.removeEventListener('pointermove', this.pointerMove);
+    this.pickCb = null;
     this.controls.dispose();
+    this.disposeSurface();
+    this.disposeChrome();
+    this.material.dispose();
+    this.scene.clear();
+    this.surface = null;
+    this.field = null;
+    this.deformation = null;
+    this.base = new Float32Array(0);
+    this.vert = new Uint32Array(0);
+    this.tri = new Uint32Array(0);
     this.renderer.dispose();
   }
 

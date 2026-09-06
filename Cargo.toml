@@ -20,6 +20,11 @@ thiserror = "2"
 opt-level = 3
 lto = "thin"
 
+# The CLI test replays and solves every bundled example. Level 1 keeps test-profile debug
+# assertions while avoiding minutes of unoptimized sparse assembly and factorization.
+[profile.test]
+opt-level = 1
+
 # Only `tools/build-wasm.mjs` uses this profile, so tuning it for size cannot touch the numbers
 # `cargo test` checks: the native `release` profile above is unchanged.
 [profile.wasm]

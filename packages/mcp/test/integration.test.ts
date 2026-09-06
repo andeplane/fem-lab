@@ -94,12 +94,26 @@ it('builds and solves the cantilever through tool calls, with no browser', async
 
 it('leaves the real Model unchanged after a timed-out script schedules a delayed Command', async () => {
   const before = await call('query_model', {});
-  const timed = await call('run_script', {
+  const response = await client.callTool({ name: 'run_script', arguments: {
     code: 'console.log("waiting"); await new Promise(r => setTimeout(r, 1200)); await fem.model.new({ name: "too late" });',
     timeoutMs: 800,
-  }) as { console: string[]; error: string };
+  } }) as { isError?: boolean; content: { text: string }[] };
+  expect(response.isError).toBe(true);
+  const timed = JSON.parse(response.content[0]!.text) as { console: string[]; error: string };
   expect(timed.console).toEqual(['waiting']);
   expect(timed.error).toContain('did not finish');
   await new Promise((resolve) => setTimeout(resolve, 1300));
+  expect(await call('query_model', {})).toEqual(before);
+});
+
+
+it('returns source diagnostics as an MCP tool error before any script Command can run', async () => {
+  const before = await call('query_model', {});
+  const code = 'await fem.model.new({ name: "must not happen" });\nawait fem.geometry.notReal({});';
+  const validation = await call('validate_script', { code });
+  expect(validation).toMatchObject({ ok: false, diagnostics: [{ code: 'TS2339', where: { line: 2, column: 20 } }] });
+  const response = await client.callTool({ name: 'run_script', arguments: { code } }) as { isError?: boolean; content: { text: string }[] };
+  expect(response.isError).toBe(true);
+  expect(JSON.parse(response.content[0]!.text)).toMatchObject({ diagnostics: (validation as { diagnostics: unknown }).diagnostics });
   expect(await call('query_model', {})).toEqual(before);
 });
