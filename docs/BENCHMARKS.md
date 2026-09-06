@@ -146,6 +146,7 @@ Harder's parallelogram specimen *is* a parallelogram, whose own converged answer
 | C6 | NAFEMS FV32 cantilevered tapered membrane, modal | 44.623, 130.03, 162.70, 246.05, 379.90, 391.44 Hz | 1 % | 2D eigen | engine test |
 | C7 | NAFEMS T4 steady conduction + convection | T(E) = 18.3 °C (converged 18.25) | 0.5 °C | convection BC | engine test + green |
 | C8 | Thermal → structural chain, restrained plate (**substitute for NAFEMS T1**) | σxx = −E α ΔT/(1−ν) = −150 MPa at mid-height | 2 % | thermal → structural coupling | green |
+| C9 | Free 2D mesh with overlapping refinement boxes | finer overlap mean triangle area ≤ 0.5 · 0.25²; outside the coarse box, a triangle area > 0.9 · 0.5 · 2² | exact | centroid-based refinement selection, input-order determinism | geometry test |
 
 **C1's finite width is 3 %, not 1.6 %.** Plan C's half-width of 10 hole radii was measured and
 extrapolates to K_t = 3.094 — three per cent above Kirsch's infinite-plate 3.00, not the 1.6 %
@@ -173,6 +174,14 @@ n = 4, 8, 16, 32 quad8 gives 23.969 in plane stress and 21.526 in plane strain, 
 23.9 and arXiv 1806.07500's 21.520 respectively. The monitored point is C = (48, 52), the midpoint
 of the loaded edge, which is what the literature values belong to; plans A and C say the top corner
 (48, 60), which is a different quantity — 25.18 and 22.63 by the same extrapolation.
+
+**C9 checks local refinement selection independently of the implementation.** A 10 m square uses
+a global size of 2 m, a coarse box of size 1 m, and a nested box of size 0.25 m. The test computes
+each triangle's area directly from its node coordinates with the shoelace formula, groups triangles
+by their independently computed centroids, and checks the fine-overlap mean against 0.5 · 0.25²
+(measured 0.0283569 m²) and the outside maximum against the global behavior (1.953125 m² > 1.8 m²).
+Both box orders must produce exactly equal mesh points and connectivity, so order independence is
+checked beyond aggregate counts.
 
 ## D. Three-dimensional solids (phase 2–3)
 

@@ -1250,6 +1250,17 @@ fn sampled_area(sketch: &Sketch, chord_tol: f64) -> f64 {
     sketch.loops(chord_tol).unwrap().iter().map(|l| l.signed_area()).sum()
 }
 
+fn triangle_area(m: &Mesh, e: u32) -> f64 {
+    let [a, b, c] = [m.node(m.elem_nodes(e)[0]), m.node(m.elem_nodes(e)[1]), m.node(m.elem_nodes(e)[2])];
+    0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs()
+}
+
+fn triangle_centroid(m: &Mesh, e: u32) -> [f64; 2] {
+    let nodes = m.elem_nodes(e);
+    let p = [m.node(nodes[0]), m.node(nodes[1]), m.node(nodes[2])];
+    [(p[0][0] + p[1][0] + p[2][0]) / 3.0, (p[0][1] + p[1][1] + p[2][1]) / 3.0]
+}
+
 #[test]
 fn the_free_mesher_fills_a_plate_with_a_hole_and_keeps_every_tag() {
     let sketch = plate_with_hole(1.0);
@@ -1307,6 +1318,44 @@ fn a_refine_box_makes_smaller_triangles_where_it_covers() {
     assert!(mean_out > 4.0 * mean_in, "outside stays coarse: {mean_out} vs {mean_in}");
     assert!(biggest_out > 2.0 * biggest_in, "and so does the largest: {biggest_out} vs {biggest_in}");
     assert!(free(&sketch, 2.0, false, &[]).unwrap().n_elems() < m.n_elems());
+}
+
+#[test]
+fn overlapping_refine_boxes_choose_the_finer_bound_independent_of_order() {
+    let sketch = Sketch::rect(10.0, 10.0);
+    let coarse = RefineBox { min: [2.0, 2.0], max: [8.0, 8.0], size: 1.0 };
+    let fine = RefineBox { min: [3.0, 3.0], max: [7.0, 7.0], size: 0.25 };
+    let runs = [vec![coarse.clone(), fine.clone()], vec![fine, coarse]];
+    let mut meshes = Vec::new();
+    let mut summaries = Vec::new();
+    for boxes in runs {
+        let m = free(&sketch, 2.0, false, &boxes).unwrap();
+        m.validate().unwrap();
+        let mut overlap_sum = 0.0;
+        let mut overlap_count = 0;
+        let mut outside_max: f64 = 0.0;
+        for e in 0..m.n_elems() as u32 {
+            let c = triangle_centroid(&m, e);
+            let area = triangle_area(&m, e);
+            if (3.0..=7.0).contains(&c[0]) && (3.0..=7.0).contains(&c[1]) {
+                overlap_sum += area;
+                overlap_count += 1;
+            }
+            if !(2.0..=8.0).contains(&c[0]) || !(2.0..=8.0).contains(&c[1]) {
+                outside_max = outside_max.max(area);
+            }
+        }
+        assert!(overlap_count > 0, "nested refinement produced no overlap triangles");
+        summaries.push((m.n_elems(), overlap_sum / overlap_count as f64, outside_max));
+        meshes.push(m);
+    }
+    assert_eq!(meshes[0], meshes[1], "box order changes mesh points or connectivity");
+    assert_eq!(summaries[0], summaries[1], "box order changes measured areas");
+    for (elements, overlap_mean, outside_max) in summaries {
+        assert!(elements > 100, "nested refinement should add elements");
+        assert!(overlap_mean < 0.5 * 0.25 * 0.25, "fine overlap mean area is {overlap_mean}");
+        assert!(outside_max > 0.9 * 0.5 * 2.0 * 2.0, "outside boxes lost the global coarse behavior: {outside_max}");
+    }
 }
 
 #[test]
