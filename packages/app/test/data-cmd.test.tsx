@@ -3,14 +3,15 @@
 // wired to nothing, fails here rather than in front of a person.
 import { HOST_COMMANDS, Registry, type EngineSchema, type ModelSummary } from '@femlab/registry';
 import { h, render } from 'preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
-import { Store } from '../src/store';
+import { Store, visibilityReducer } from '../src/store';
 import { App, handleGlobalKey, isEditableTarget } from '../src/ui/App';
 import type { WorkerTransport } from '../src/worker-transport';
+import { afterEffects, waitFor, waitForGone } from './wait-for';
 
 // `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40
 // is about *where* that chunk is mounted, so this file swaps in a marker element it can find.
@@ -46,21 +47,28 @@ const transport = { dispatch: async () => undefined, query: async () => undefine
 function mount(
   patch: Partial<Parameters<Store['set']>[0]> = {},
   dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> = vi.fn(async () => undefined),
-): { root: HTMLElement; registry: Registry; store: Store; dispatch: typeof dispatch } {
+): { root: HTMLElement; registry: Registry; store: Store; dispatch: typeof dispatch; commands: ({ cmd: string } & Record<string, unknown>)[] } {
   const store = new Store();
+  const commands: ({ cmd: string } & Record<string, unknown>)[] = [];
   const viewer = { current: null };
   const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
   const registry = new Registry({
     schema: schema as unknown as EngineSchema,
-    host: makeHostContext(store, transport, viewer, host, async () => undefined),
+    host: makeHostContext(store, transport, viewer, host),
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, async () => undefined)],
   });
   store.set({ ready: true, model: model(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
-  act(() => render(<App store={store} dispatch={dispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root));
-  return { root, registry, store, dispatch };
+  const shellDispatch = async (cmd: { cmd: string } & Record<string, unknown>): Promise<unknown> => {
+    commands.push(cmd);
+    if (cmd.cmd === 'panel.toggle') store.togglePanel(String(cmd['panel']), cmd['open'] as boolean | undefined);
+    if (cmd.cmd === 'view.setVisible') store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, cmd['bodies'] as string[], Boolean(cmd['on'])) });
+    return dispatch(cmd);
+  };
+  act(() => render(<App store={store} dispatch={shellDispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root));
+  return { root, registry, store, dispatch, commands };
 }
 
 async function cleanupShells() {
@@ -72,6 +80,9 @@ async function cleanupShells() {
 }
 
 describe('the shell', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ examples: [] }) })));
+  });
   afterEach(cleanupShells);
 
   it('releases shell keyboard handlers before removing its DOM', async () => {
@@ -86,11 +97,28 @@ describe('the shell', () => {
     expect(document.body.children).toHaveLength(0);
   });
 
+  it('closes the command palette before opening a parameterized Command form', async () => {
+    const { root, commands } = mount({ panels: { palette: true } });
+    const input = root.querySelector<HTMLInputElement>('.palette input')!;
+    input.value = 'load.traction';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await afterEffects();
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    input.dispatchEvent(enter);
+    // Closing restores focus to the opener before Chromium performs Enter's default click.
+    expect(enter.defaultPrevented).toBe(true);
+    await waitForGone(() => root.querySelector('.palette'), 'the command palette');
+    expect(commands.slice(-2)).toEqual([
+      { cmd: 'panel.toggle', panel: 'palette', open: false },
+      { cmd: 'form.open', command: 'load.traction' },
+    ]);
+  });
+
   it('names only Commands the registry has on every clickable, in every panel', async () => {
     const seen = new Set<string>();
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
       await cleanupShells();
-      const { root, registry } = mount({ tab, panels: { palette: true } });
+      const { root, registry } = mount({ tab, panels: { palette: true, examples: true } });
       const { commands, queries } = registry.list();
       const known = new Set([...commands, ...queries].map((d) => d.name));
       const used = [...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
@@ -98,17 +126,65 @@ describe('the shell', () => {
       expect([...new Set(used)].filter((c) => !known.has(c)), tab).toEqual([]);
     }
     // Every panel of the design is represented, not just the top bar.
-    for (const cmd of ['form.open', 'script.run', 'selection.setPickTarget', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode']) expect([...seen]).toContain(cmd);
+    for (const cmd of ['form.open', 'script.run', 'form.pick', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode', 'example.filter']) expect([...seen]).toContain(cmd);
   });
 
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {
     const { root, registry } = mount();
     const known = new Set(registry.list().commands.map((d) => d.name));
+    await afterEffects();
     root.querySelector('.tree .row')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 20)); // preact re-renders after the state change
+    await waitFor(() => root.querySelector('.menu'), 'the tree context menu');
     const menu = [...root.querySelectorAll('.menu [data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
     expect(menu).toEqual(['model.rename', 'model.duplicate', 'geometry.remove', 'selection.set', 'clipboard.copy']);
     expect(menu.filter((c) => !known.has(c))).toEqual([]);
+  });
+
+  it('collapses groups and exposes body visibility and row actions as Commands', async () => {
+    const { root, store, commands } = mount();
+    await afterEffects();
+    const geometry = root.querySelector<HTMLButtonElement>('.group-head')!;
+    expect(geometry.getAttribute('aria-expanded')).toBe('true');
+    geometry.click();
+    await waitFor(() => root.querySelector('.group-head')?.getAttribute('aria-expanded') === 'false', 'the Geometry group to collapse');
+    expect(root.querySelector('.group-head')!.getAttribute('aria-expanded')).toBe('false');
+    await waitForGone(() => root.querySelector('#tree-geometry-items'), 'the Geometry group body');
+    expect(store.state.revision).toBe(3);
+    root.querySelector<HTMLButtonElement>('.group-head')!.click();
+    await waitFor(() => root.querySelector('#tree-geometry-items'), 'the Geometry group body');
+
+    root.querySelector<HTMLButtonElement>('[aria-label="Hide beam in viewer"]')!.click();
+    await waitFor(() => root.querySelector('[aria-label="Show beam in viewer"]'), 'the hidden-body eye');
+    expect(store.state.hiddenBodies).toEqual(['beam']);
+    expect(root.querySelector('[aria-label="Show beam in viewer"]')).not.toBeNull();
+    root.querySelector<HTMLButtonElement>('[aria-label="Actions for beam"]')!.click();
+    await waitFor(() => root.querySelector('.menu'), 'the body actions menu');
+    expect(root.querySelector('.menu')).not.toBeNull();
+    expect(commands.slice(-4)).toEqual([
+      { cmd: 'panel.toggle', panel: 'tree.geometry', open: false },
+      { cmd: 'panel.toggle', panel: 'tree.geometry', open: true },
+      { cmd: 'view.setVisible', bodies: ['beam'], on: false },
+      { cmd: 'panel.toggle', panel: 'tree.menu.body:beam', open: true },
+    ]);
+  });
+
+  it('keeps row menus exclusive and a closed menu closed across unrelated panel changes', async () => {
+    const { root, store } = mount();
+    await afterEffects();
+    const actions = [...root.querySelectorAll<HTMLButtonElement>('[aria-label^="Actions for"]')];
+    expect(actions.length).toBeGreaterThan(1);
+    const secondName = actions[1]!.getAttribute('aria-label')!.slice('Actions for '.length);
+    actions[0]!.click();
+    await waitFor(() => root.querySelector('.menu'), 'the first row menu');
+    actions[1]!.click();
+    await waitFor(() => root.querySelector('.menu')?.closest('.row')?.querySelector('.name')?.textContent === secondName, 'the second row menu');
+    expect(Object.entries(store.state.panels).filter(([key, open]) => key.startsWith('tree.menu.') && open)).toHaveLength(1);
+
+    root.querySelector('.menu')!.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    await waitForGone(() => root.querySelector('.menu'), 'the dismissed row menu');
+    store.togglePanel('examples', true);
+    await afterEffects();
+    expect(root.querySelector('.menu')).toBeNull();
   });
 
   it('names only Commands the registry has on every clickable', () => {
@@ -229,7 +305,7 @@ describe('the shell', () => {
     const store = new Store();
     const viewer = { current: null };
     const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
-    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: makeHostContext(store, transport, viewer, host, async () => undefined), hostCommands: HOST_COMMANDS });
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: makeHostContext(store, transport, viewer, host), hostCommands: HOST_COMMANDS });
     store.set({ panels: { assistant: true } });
     const root = document.createElement('div');
     document.body.append(root);
@@ -330,8 +406,7 @@ describe('the shell', () => {
     const known = new Set(registry.list().commands.map((d) => d.name));
     const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
     expect(chip).toBeTruthy();
-    chip.click();
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => chip.click());
     const menu = [...root.querySelectorAll('.add-menu [data-cmd]')];
     expect(menu.map((el) => el.textContent)).toEqual(['▭box', '⬭cylinder', '◯sphere', '▱sheet', '⬒extrude', '◑revolve', '⬬union', '⊖subtract', '⊗intersect', '⇲transform', '∖cut']);
     expect(menu.map((el) => el.getAttribute('data-cmd')!).filter((c) => !known.has(c))).toEqual([]);
@@ -341,15 +416,15 @@ describe('the shell', () => {
   it('closes the shape menu on Escape and returns focus to the chip', async () => {
     const { root } = mount();
     const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
-    chip.click();
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => chip.click());
     expect(root.querySelector('.add-menu')).toBeTruthy();
 
     // From inside the menu, which is where the keystroke actually lands.
     const item = root.querySelector<HTMLElement>('.add-menu [data-cmd]')!;
-    item.focus();
-    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => {
+      item.focus();
+      item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
     expect(root.querySelector('.add-menu')).toBeNull();
     expect(document.activeElement).toBe(chip);
   });

@@ -36,6 +36,8 @@ it('commits the name exactly once on Enter or blur, cancels Escape, and rejects 
   document.body.append(root);
   render(<ModelName name="beam" dirty dispatch={dispatch} />, root);
   const input = root.querySelector('input')!;
+  expect(input.title).toBe('beam');
+  expect(input.getAttribute('aria-description')).toContain('Escape to cancel');
   const edit = async (value: string, key?: string) => {
     input.focus();
     input.value = value;
@@ -69,7 +71,7 @@ it('establishes an exact saved baseline only after a bundled example opens compl
   };
   const store = new Store({ ...new Store().state, savedJournal: 'previous baseline' });
   const dispatch = vi.fn(async () => ({ output: { type: 'none' } }));
-  const transport = { dispatch } as unknown as WorkerTransport;
+  const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: [first, second] } })) } as unknown as WorkerTransport;
   const refresh = vi.fn(async () => store.set({ journal: { entries: [first, second], revision: 2, hash: 'journal', canUndo: true, canRedo: false } }));
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => JSON.stringify([{ cmd: first.cmd }, { cmd: second.cmd }]) })));
   const open = appHostCommands(store, transport, { current: null }, refresh).find((def) => def.name === 'file.openExample')!;
@@ -91,7 +93,7 @@ it('does not include an edit made while an opened example restores its Result', 
   const edited = [...opened, { seq: 1, cmd: { cmd: 'model.setName' as const, name: 'later edit' }, hashAfter: 'edited' }];
   const store = new Store();
   const dispatch = vi.fn(async () => ({ output: { kind: 'solve' } }));
-  const transport = { dispatch } as unknown as WorkerTransport;
+  const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: opened } })) } as unknown as WorkerTransport;
   const refresh = vi.fn(async () => store.set({ journal: { entries: opened, revision: 1, hash: 'opened', canUndo: true, canRedo: false } }));
   let finishResult!: () => void;
   const onAck = vi.fn(() => new Promise<void>((resolve) => { finishResult = resolve; }));
@@ -125,7 +127,7 @@ it('opens a browser project against its captured Journal without marking a later
   const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: opened } })) } as unknown as WorkerTransport;
   let finish!: () => void;
   const onAck = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
-  const ctx = makeHostContext(store, transport, { current: null }, readHostCaps({ navigator: { userAgent: 'Chrome/1' } }), async () => undefined, undefined, { onAck } as never);
+  const ctx = makeHostContext(store, transport, { current: null }, readHostCaps({ navigator: { userAgent: 'Chrome/1' } }), undefined, { onAck } as never);
   const project = await ctx.projects.new('project');
   noteProject('project', opened, 'opened');
   await ctx.projects.save();

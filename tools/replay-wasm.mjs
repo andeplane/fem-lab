@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Replay a Journal fixture in the wasm build (Node) and print one Model hash per line,
-// exactly like `femlab run <journal> --hashes`. Usage: node tools/replay-wasm.mjs <journal.json> [--skip-solves]
+// exactly like `femlab run <journal> --hashes`. Usage: node tools/replay-wasm.mjs <journal.json> [--skip-solves] [--query <Query JSON>]
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,10 +12,17 @@ const wasm = require(path.join(root, "tools", "wasm-node", "femlab_engine_wasm.j
 
 const file = process.argv[2];
 if (!file) {
-  console.error("usage: node tools/replay-wasm.mjs <journal.json> [--skip-solves]");
+  console.error("usage: node tools/replay-wasm.mjs <journal.json> [--skip-solves] [--query <Query JSON>]");
   process.exit(2);
 }
 const skipSolves = process.argv.includes("--skip-solves");
+const queries = [];
+for (let i = 3; i < process.argv.length; i++) {
+  if (process.argv[i] === "--query") {
+    if (!process.argv[i + 1]) throw new Error("--query requires schema-owned Query JSON");
+    queries.push(process.argv[++i]);
+  }
+}
 const text = readFileSync(file, "utf8");
 const parsed = JSON.parse(text);
 let entries = Array.isArray(parsed) ? parsed : parsed.journal?.entries;
@@ -31,7 +38,8 @@ const verify = entries.every((e) => e.hashAfter);
 const engine = new wasm.Engine(1);
 try {
   const hashes = JSON.parse(await engine.replay_hashes(JSON.stringify(entries), skipSolves, verify));
-  for (const h of hashes) console.log(h);
+  if (queries.length) console.log(JSON.stringify(queries.map(q => JSON.parse(engine.query(q)))));
+  else for (const h of hashes) console.log(h);
 } catch (e) {
   console.error(JSON.stringify(e));
   process.exit(3);

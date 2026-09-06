@@ -55,7 +55,7 @@ it('runs timers, cancellation, queries and errors without exposing native I/O', 
 it('bounds guest memory, output and messages and remains usable afterwards', async () => {
   expect((await runScript('return "x".repeat(100 * 1024 * 1024)', nothing, nothing)).error).toContain('out of memory');
   expect((await runScript('console.log("x".repeat(1024 * 1024))', nothing, nothing)).error).toContain('message exceeds');
-  expect((await runScript('for (let i = 0; i < 20; i++) console.log("x".repeat(100000));', nothing, nothing)).error).toContain('console limit');
+  expect((await runScript('for (let i = 0; i < 3; i++) console.log("💥".repeat(100000));', nothing, nothing)).error).toContain('console limit');
   expect(await runScript('return 42', nothing, nothing)).toEqual({ console: [], result: 42 });
 });
 
@@ -97,7 +97,7 @@ describe('runtime lifecycle and the hostile message boundary', () => {
     fake.events.emit('message', text);
     expect((await result).error).toBe('invalid script runtime message');
   });
-  it.each([{}, 'x'.repeat(1024 * 1024 + 1)])('bounds raw worker messages', async (text) => {
+  it.each([{}, 'x'.repeat(1024 * 1024 + 1), '💥'.repeat(300_000)])('bounds raw worker messages', async (text) => {
     const fake = fakeRuntime();
     const result = runScript('', nothing, nothing, undefined, fake.deps);
     fake.events.emit('message', text);
@@ -108,6 +108,18 @@ describe('runtime lifecycle and the hostile message boundary', () => {
     const result = runScript('', nothing, nothing, undefined, fake.deps);
     for (let n = 0; n < 10_001; n++) fake.emit({ kind: 'log', value: '' });
     expect((await result).error).toContain('message limit');
+  });
+  it.each([
+    ['oversized', '💥'.repeat(300_000), 'exceeds 1 MiB'],
+    ['non-JSON', (() => { const value: { self?: unknown } = {}; value.self = value; return value; })(), 'not JSON'],
+  ])('rejects %s RPC replies without posting the value', async (_name, value, cause) => {
+    const fake = fakeRuntime();
+    const result = runScript('', nothing, async () => value, undefined, fake.deps);
+    fake.emit({ kind: 'query', id: 7, value: { query: 'query.model' } });
+    await vi.waitFor(() => expect(fake.sent).toHaveLength(1));
+    expect(JSON.parse(fake.sent[0] as string)).toEqual({ id: 7, error: expect.stringContaining(cause) });
+    fake.emit({ kind: 'done', value: null });
+    await result;
   });
   it('closes the gate before termination and ignores late success, error, exit and replies', async () => {
     const fake = fakeRuntime();
