@@ -149,7 +149,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
       clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
     },
-    skills: () => [],
+    skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
       pick: () =>
@@ -209,9 +209,17 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       autosave: () => ({ enabled: autosave.enabled(), saved: lastSaved }),
     },
     project: {
+      // The Assistant picker supplies the shared skill source. Full project I/O is #13;
+      // info stays null while writes are unsupported so file.save still defaults to download.
       open: soon('the project folder', 'use file.open and file.save for now'),
-      close: soon('the project folder', 'use file.open and file.save for now'),
-      refresh: soon('the project folder', 'use file.open and file.save for now'),
+      close: () => store.setProject(null),
+      refresh: async () => {
+        const folder = store.state.project;
+        if (!folder) throw new FemError('file.not-found', 'no project folder is open', 'project', 'open a project folder in the Assistant');
+        await folder.refresh();
+        // Closing/replacing a folder while this read is in flight must not restore the old one.
+        if (store.state.project === folder) store.setProject(folder);
+      },
       info: () => null,
       readText: soon('the project folder', 'use file.open for now'),
       writeText: soon('the project folder', 'use file.save for now'),

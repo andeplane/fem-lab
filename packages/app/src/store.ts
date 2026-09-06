@@ -1,8 +1,10 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
+import { projectSkills, type ProjectFolder } from './ai/project';
+import { BUILTIN_SKILLS } from './ai/skills';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
@@ -31,6 +33,10 @@ export interface LastError {
 }
 
 export interface UiState {
+  /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
+  project: ProjectFolder | null;
+  /** One available catalog; project skills override built-ins by name. */
+  skills: Skill[];
   ready: boolean;
   /** What `query.autosave` last reported, so the start screen can offer `file.restore`. */
   autosave: AutosaveState['saved'];
@@ -123,6 +129,8 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
+  project: null,
+  skills: BUILTIN_SKILLS,
   ready: false,
   autosave: null,
   model: null,
@@ -214,6 +222,11 @@ export class Store {
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /** Publish a fresh catalog even when refresh mutated the same ProjectFolder instance. */
+  setProject(project: ProjectFolder | null): void {
+    this.set({ project, skills: projectSkills(BUILTIN_SKILLS, project) });
   }
 
   set(patch: Partial<UiState>): void {
