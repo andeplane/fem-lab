@@ -1,7 +1,7 @@
 // The full-screen states of docs/design/README.md that are not the workspace: the start screen's
 // four paths, the examples gallery and the ⌘K command palette. The palette is the registry made
 // visible — every row is one Command with its doc string, which is also the AI's tool description.
-import type { CommandDef } from '@femlab/registry';
+import type { CommandDef, ObjectRef } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import { engineChip } from '../capabilities';
 import type { UiState } from '../store';
@@ -47,51 +47,89 @@ export function requiredOf(def: CommandDef): string[] {
   return required.filter((r) => r !== 'cmd' && r !== 'query');
 }
 
+/** Route only objects returned by query.objects; geometric selection and editing use the registry. */
+export function objectRoute(object: ObjectRef, s: UiState): { cmd: string; [key: string]: unknown } | null {
+  if (object.ref.endsWith('.*')) return null; // query.objects can describe a family of cut faces, not one selectable Set.
+  if (object.kind === 'body') return { cmd: 'selection.set', bodies: [object.name], mode: 'replace' };
+  if (object.kind === 'set' || object.kind === 'face') return { cmd: 'selection.set', sets: [object.name], mode: 'replace' };
+  const entries = s.journal?.entries ?? [];
+  const entry = object.kind === 'journal' ? entries.find((e) => e.seq === Number(object.name)) : [...entries].reverse().find((e) => {
+    const c = e.cmd as { cmd: string; name?: string };
+    return c.name === object.name && c.cmd.startsWith(`${object.kind}.`);
+  });
+  if (!entry) return null;
+  const { cmd, ...args } = entry.cmd;
+  return { cmd: 'form.open', command: cmd, args };
+}
+
 export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispatch; commands: CommandDef[] }) {
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
-  const rows = rankCommands(query, commands).slice(0, 60);
-  const active = rows[Math.min(cursor, rows.length - 1)];
+  const text = query.trim();
+  const objectMode = /^@[^\s]*$/.test(text);
+  const exact = commands.some((c) => c.name.toLowerCase() === text.toLowerCase());
+  const intent = s.paletteIntent?.text === text && !exact ? s.paletteIntent : null;
+  const stale = intent !== null && intent.modelHash !== (s.model?.hash ?? null);
+  const commandRows = rankCommands(query, commands).slice(0, 60);
+  const objects = objectMode ? s.objects.filter((o) => fuzzy(text.slice(1), `${o.ref} ${o.name}`)).slice(0, 60) : [];
+  const proposals = intent?.status === 'ready' ? intent.proposals : [];
+  const preview = intent?.status === 'ready';
+  const count = objectMode ? objects.length : preview ? proposals.length : commandRows.length;
+  const selected = Math.max(0, Math.min(cursor, count - 1));
+  const plainWords = !objectMode && !exact && /\s/.test(text);
   if (!s.panels['palette']) return null;
-  const fill = (def: CommandDef): void => void dispatch({ cmd: 'form.open', command: def.name }).then(() => dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })).catch(() => undefined);
-  const run = (def: CommandDef): void =>
-    void (requiredOf(def).length === 0 ? dispatch({ cmd: def.name }).then(() => dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })) : Promise.resolve(fill(def))).catch(() => undefined);
+  const close = () => dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false });
+  const fill = (name: string, args?: Record<string, unknown>): void => void dispatch({ cmd: 'form.open', command: name, ...(args ? { args } : {}) }).then(close).catch(() => undefined);
+  const run = (def: CommandDef): void => void (requiredOf(def).length === 0 ? dispatch({ cmd: def.name }).then(close) : Promise.resolve(fill(def.name))).catch(() => undefined);
+  const resolve = () => void dispatch({ cmd: 'palette.resolve', text }).catch(() => undefined);
+  const route = (object: ObjectRef) => {
+    const action = objectRoute(object, s);
+    if (action) void dispatch(action).then(close).catch(() => undefined);
+  };
+  const activate = (tab: boolean) => {
+    if (objectMode) { if (objects[selected]) route(objects[selected]!); }
+    else if (preview) { if (!stale && proposals[selected]) fill(proposals[selected]!.command, proposals[selected]!.args); }
+    else if (!tab && plainWords) resolve();
+    else if (commandRows[selected]) tab ? fill(commandRows[selected]!.name) : run(commandRows[selected]!);
+    else if (text) resolve();
+  };
   return (
-    <div class="overlay" onClick={() => void dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })}>
+    <div class="overlay" onClick={() => void close()}>
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette" onClick={(e) => e.stopPropagation()}>
         <div class="palette-head">
           <span class="mono prompt">›</span>
-          <input
-            class="mono"
-            autoFocus
-            placeholder="Search commands or ask in plain words"
-            value={query}
+          <input class="mono" autoFocus placeholder="Search commands, @objects or ask in plain words" value={query}
             onInput={(e) => (setQuery((e.target as HTMLInputElement).value), setCursor(0))}
             onKeyDown={(e) => {
-              if (e.key === 'ArrowDown') setCursor((c) => Math.min(c + 1, rows.length - 1));
-              else if (e.key === 'ArrowUp') setCursor((c) => Math.max(c - 1, 0));
-              else if (e.key === 'Tab' && active) (e.preventDefault(), fill(active));
-              else if (e.key === 'Enter' && active) run(active);
-            }}
-          />
+              if (e.key === 'ArrowDown') { e.preventDefault(); setCursor((c) => Math.min(c + 1, Math.max(0, count - 1))); }
+              else if (e.key === 'ArrowUp') { e.preventDefault(); setCursor((c) => Math.max(c - 1, 0)); }
+              else if (e.key === 'Tab' && count > 0) { e.preventDefault(); activate(true); }
+              else if (e.key === 'Enter') { e.preventDefault(); activate(false); }
+              else if (e.key === 'Escape') { e.preventDefault(); void close(); }
+            }} />
           <span class="palette-note">every entry is one Command</span>
         </div>
+        {text && !objectMode && !exact ? <div class="palette-intent">
+          <Cmd dispatch={dispatch} cmd="palette.resolve" args={{ text }} disabled={intent?.status === 'loading'}>{intent?.status === 'loading' ? 'Preparing preview…' : 'Prepare intent preview'}</Cmd>
+          <span class="faint">Uses your Assistant provider; review parameters before Apply.</span>
+        </div> : null}
+        {intent?.clarification ? <div class="empty-note" role="status">{intent.clarification}</div> : null}
+        {stale ? <div class="empty-note">The Model changed. Prepare the preview again before choosing a command.</div> : null}
+        {intent?.status === 'error' ? <Cmd dispatch={dispatch} cmd="panel.toggle" args={{ panel: 'assistant.settings', open: true }} onRun={() => void dispatch({ cmd: 'panel.toggle', panel: 'assistant.settings', open: true }).then(() => dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true })).then(close)}>Assistant Settings</Cmd> : null}
         <div class="palette-rows">
-          {rows.map((c, i) => (
-            <Cmd key={c.name} dispatch={dispatch} cmd="form.open" class={i === Math.min(cursor, rows.length - 1) ? 'prow active' : 'prow'} args={{ command: c.name }} title={c.name} onRun={() => run(c)}>
-              <span class={`mono pname ${c.provider}`}>{c.name}</span>
-              <span class="pdesc">{c.description.split('\n')[0]}</span>
-              <span class="mono pkey">{requiredOf(c).length === 0 ? '↵' : '⇥'}</span>
-            </Cmd>
-          ))}
-          {rows.length === 0 ? <div class="empty-note">Nothing in the registry matches. Every capability is a Command, so if it is not here it does not exist yet.</div> : null}
+          {objectMode ? objects.map((object, i) => {
+            const action = objectRoute(object, s);
+            return <Cmd key={object.ref} dispatch={dispatch} cmd={action?.cmd ?? 'form.open'} class={i === selected ? 'prow active' : 'prow'} disabled={!action} onRun={() => route(object)} title={object.ref}>
+              <span class="mono pname">@{object.ref}</span><span class="pdesc">{object.summary}</span><span class="mono pkey">{action?.cmd === 'selection.set' ? 'select' : action ? 'review' : 'no direct route'}</span>
+            </Cmd>;
+          }) : preview ? proposals.map((p, i) => <Cmd key={`${p.command}:${i}`} dispatch={dispatch} cmd="form.open" args={{ command: p.command, args: p.args }} disabled={stale} class={i === selected ? 'prow active' : 'prow'} onRun={() => fill(p.command, p.args)}>
+            <span class="mono pname">{p.command}</span><span class="pdesc">{JSON.stringify(p.args)}{p.missing.length ? ` · Fill in: ${p.missing.join(', ')}` : ''}</span><span class="mono pkey">review ⇥</span>
+          </Cmd>) : commandRows.map((c, i) => <Cmd key={c.name} dispatch={dispatch} cmd="form.open" class={i === selected ? 'prow active' : 'prow'} args={{ command: c.name }} title={c.name} onRun={() => run(c)}>
+            <span class={`mono pname ${c.provider}`}>{c.name}</span><span class="pdesc">{c.description.split('\n')[0]}</span><span class="mono pkey">{requiredOf(c).length === 0 ? '↵' : '⇥'}</span>
+          </Cmd>)}
+          {count === 0 ? <div class="empty-note">{objectMode ? 'No Model object matches this reference.' : preview ? 'Clarify the request above, then prepare another preview.' : 'No command name matches. Describe the operation and prepare an intent preview.'}</div> : null}
         </div>
-        <div class="palette-foot mono">
-          <span>↑↓ move</span>
-          <span>↵ run</span>
-          <span>⇥ fill parameters</span>
-          <span>esc close</span>
-        </div>
+        <div class="palette-foot mono"><span>↑↓ move</span><span>{preview || plainWords ? '↵ preview' : '↵ run'}</span><span>⇥ fill parameters</span><span>esc close</span></div>
       </div>
     </div>
   );

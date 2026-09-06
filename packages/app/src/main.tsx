@@ -75,10 +75,10 @@ async function boot(): Promise<void> {
     await results.refresh();
     noteAutosave(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? []);
   };
-  const registry = new Registry({
+  const registry: Registry = new Registry({
     schema: schema as unknown as EngineSchema,
     host: ctx,
-    hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results)],
+    hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results, () => registry)],
   });
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
