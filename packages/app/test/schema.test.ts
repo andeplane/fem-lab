@@ -3,7 +3,7 @@
 import type { EngineSchema, JsonSchema } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
-import { applyLabel, blockers, commandLine, defaultTaggedUnions, type Defs, type Field, dimensionTag, fieldsOf, getAt, humanise, parseQuantity, resolve, setAt, siUnit, step, tsValue } from '../src/ui/schema';
+import { applyLabel, blockers, commandLine, defaultFormValues, type Defs, type Field, dimensionTag, fieldsOf, getAt, humanise, parseQuantity, resolve, setAt, siUnit, step, tsValue } from '../src/ui/schema';
 
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
@@ -123,8 +123,8 @@ describe('paths and labels', () => {
       tag: 'kind',
       variants: [{ kind: 'first', fields: [] }],
     };
-    expect(defaultTaggedUnions({}, [optional])).toEqual({});
-    expect(defaultTaggedUnions({ choice: {} }, [optional])).toEqual({ choice: { kind: 'first' } });
+    expect(defaultFormValues({}, [optional])).toEqual({});
+    expect(defaultFormValues({ choice: {} }, [optional])).toEqual({ choice: { kind: 'first' } });
   });
 
   it('sets and reads nested values, and removes a key when the value goes away', () => {
@@ -132,7 +132,7 @@ describe('paths and labels', () => {
     expect(getAt({ mesher: { size: '25 mm' } }, ['mesher', 'size'])).toBe('25 mm');
     expect(getAt({}, ['a', 'b'])).toBeUndefined();
     expect(setAt({ a: 1, b: 2 }, ['a'], '')).toEqual({ b: 2 });
-    expect(setAt({ a: [1] }, ['a'], [])).toEqual({});
+    expect(setAt({ a: [1] }, ['a'], [])).toEqual({ a: [] });
     expect(setAt({ a: 1 }, [], 2)).toEqual({ a: 1 });
   });
 

@@ -5,6 +5,7 @@ import { HOST_COMMANDS, Registry, type EngineSchema, type JsonSchema, type Model
 import { fakeHost, fakeTransport } from '../../registry/test/fakes';
 import { appHostCommands } from '../src/host';
 import { render } from 'preact';
+import { z } from 'zod';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from './wait-for';
 import schema from '../../registry/src/generated/engine.schema.json';
@@ -168,7 +169,41 @@ describe('SchemaForm', () => {
     field(root, 'bodies').querySelector<HTMLButtonElement>('.chip-cand')!.click();
     expect(store.state.form!.values['bodies']).toEqual(['beam']);
     field(root, 'bodies').querySelector<HTMLButtonElement>('.chip-set button')!.click();
-    expect(store.state.form!.values['bodies']).toBeUndefined();
+    expect(store.state.form!.values['bodies']).toEqual([]);
+  });
+
+  it.each(['modal', 'static'])('submits an untouched empty required picker for a %s Step', (procedure) => {
+    const { root, sent } = mount('step.add');
+    type(field(root, 'name').querySelector('input')!, 'free');
+    [...field(root, 'procedure').querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === procedure)!.click();
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    const applied = sent.at(-1)!;
+    expect(applied).toEqual({ cmd: 'step.add', name: 'free', procedure, constraints: [], loads: [] });
+    expect(z.fromJSONSchema(schema.commands as never).safeParse(applied).success).toBe(true);
+    // Optional output remains absent, so the engine can apply its documented defaults.
+    expect(applied).not.toHaveProperty('output');
+  });
+
+  it('preserves required empty arrays after removing the final constraint/load chip', () => {
+    const { root, sent, store } = mount('step.add', { name: 'free', procedure: 'modal', constraints: ['root'], loads: ['tip'] });
+    field(root, 'constraints').querySelector<HTMLButtonElement>('.chip-set button')!.click();
+    field(root, 'loads').querySelector<HTMLButtonElement>('.chip-set button')!.click();
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(store.state.form!.values).toMatchObject({ constraints: [], loads: [] });
+    expect(z.fromJSONSchema(schema.commands as never).safeParse(sent.at(-1)).success).toBe(true);
+  });
+
+  it.each([['model.rename', 'to'], ['model.duplicate', 'as']])('fills the required ObjectKind in %s from empty arguments', (command, target) => {
+    const { root, sent } = mount(command!);
+    const kind = field(root, 'kind');
+    expect(kind.textContent).not.toContain('(optional)');
+    [...kind.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'body')!.click();
+    type(field(root, 'name').querySelector('input')!, 'beam');
+    type(field(root, target!).querySelector('input')!, 'beam-copy');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    const applied = sent.at(-1)!;
+    expect(applied).toEqual({ cmd: command, kind: 'body', name: 'beam', [target!]: 'beam-copy' });
+    expect(z.fromJSONSchema(schema.commands as never).safeParse(applied).success).toBe(true);
   });
 
   it('dispatches the visually selected default kind when its tagged-union sub-form is edited', () => {

@@ -59,7 +59,12 @@ describe('the generated Properties form, for every Command in the schema', () =>
     // Every required field is on screen; optional ones say so.
     const fields = fieldsOf(VARIANTS.get(cmd)!, DEFS);
     const drawn = [...empty.querySelectorAll('.props-body > .field')].map((e) => e.getAttribute('data-field'));
-    expect(drawn).toEqual(fields.map((f) => f.path.join('.')));
+    // Derive the expected properties directly from the source schema, independently
+    // of fieldsOf, so a dropped required field cannot validate its own omission.
+    const properties = VARIANTS.get(cmd)!['properties'] as Record<string, JsonSchema>;
+    expect(drawn).toEqual(Object.entries(properties)
+      .filter(([name, property]) => !(['cmd', 'query', 'kind'].includes(name) && property['const'] !== undefined))
+      .map(([name]) => name));
 
     document.body.innerHTML = '';
     const wrong = mount(cmd, wrongValues(fields));

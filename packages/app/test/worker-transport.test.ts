@@ -100,8 +100,7 @@ describe('WorkerTransport', () => {
     expect(workers[0]!.sent).toHaveLength(1);
     while (pending.length > 0) {
       pending.shift()!();
-      await Promise.resolve().then(() => undefined);
-      await Promise.resolve().then(() => undefined);
+      await new Promise((r) => setTimeout(r, 0));
     }
     await Promise.all(calls);
     expect(workers[0]!.sent).toHaveLength(3);
@@ -133,6 +132,42 @@ describe('WorkerTransport', () => {
     await transport.dispatch({ cmd: 'journal.undo' } as unknown as Command);
     await transport.cancel();
     expect((workers[1]!.sent[1]!.payload as { entries: unknown[] }).entries).toHaveLength(1);
+  });
+
+  it('restarts the engine after a wasm panic, reports it once, and keeps working', async () => {
+    const panic = 'recursive use of an object detected which would lead to unsafe aliasing in rust';
+    let crashes = 0;
+    const { transport, workers } = make((req, reply) => {
+      // `mesh.set` panics inside wasm: once as a Worker that throws, once as the structured
+      // error the Worker reports when it catches the panic itself. Both poison the Engine.
+      if (req.op === 'dispatch' && (req.payload as { cmd: string }).cmd === 'mesh.set' && crashes < 2) {
+        crashes += 1;
+        if (crashes === 1) throw new Error(panic);
+        return reply({ id: req.id, ok: false, error: { code: 'internal', cause: panic, where: null, suggestion: null } });
+      }
+      reply(ok(req.id, req.op === 'dispatch' ? ack({ seq: (req.payload as { seq?: number }).seq ?? 0, revision: ((req.payload as { seq?: number }).seq ?? 0) + 1 }) : null));
+    });
+    await transport.dispatch({ cmd: 'model.new', name: 'x', seq: 0 } as unknown as Command);
+    const boom = transport.dispatch({ cmd: 'mesh.set', seq: 1 } as unknown as Command);
+    await expect(boom).rejects.toBeInstanceOf(FemError);
+    await expect(boom).rejects.toMatchObject({ code: 'internal', where: 'engine.worker' });
+    await expect(boom).rejects.toMatchObject({ cause: `the engine restarted after a crash: ${panic}` });
+
+    // a fresh Worker, booted and replayed up to the Command that was acknowledged
+    expect(workers[0]!.terminated).toBe(true);
+    expect(workers).toHaveLength(2);
+    const [create, replay] = workers[1]!.sent;
+    expect(create).toMatchObject({ op: 'create', payload: { gpu: true, threads: 4 } });
+    expect((replay!.payload as { entries: { cmd: Command }[] }).entries.map((e) => (e.cmd as unknown as { cmd: string }).cmd)).toEqual(['model.new']);
+
+    // the same panic reported as a structured error restarts the engine just as well
+    const again = transport.dispatch({ cmd: 'mesh.set', seq: 1 } as unknown as Command);
+    await expect(again).rejects.toMatchObject({ code: 'internal', cause: `the engine restarted after a crash: ${panic}` });
+    expect(workers).toHaveLength(3);
+
+    // and the next Command goes through on the new Worker
+    await expect(transport.dispatch({ cmd: 'geometry.addBox', name: 'b', seq: 1 } as unknown as Command)).resolves.toMatchObject({ revision: 2 });
+    expect(workers).toHaveLength(3);
   });
 
   it('fails every in-flight call when the worker itself dies', async () => {

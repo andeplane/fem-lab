@@ -6,7 +6,7 @@ import type { JsonSchema } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import type { LastError, Store, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
-import { applyLabel, commandLine, defaultTaggedUnions, type Defs, type Field, fieldsOf, getAt, parseQuantity, setAt, siUnit, step } from './schema';
+import { applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, parseQuantity, setAt, siUnit, step } from './schema';
 
 export type Query = (q: { query: string } & Record<string, unknown>) => Promise<unknown>;
 
@@ -23,7 +23,7 @@ type FieldProps = FormProps & { field: Field; values: Record<string, unknown>; f
 
 /** Every control writes the whole argument object back through `form.open`; that is its Command. */
 const editor = (s: UiState, dispatch: Dispatch, values: Record<string, unknown>, fields: Field[]) => (path: string[], value: unknown) =>
-  void dispatch({ cmd: 'form.open', command: s.form?.cmd ?? '', args: defaultTaggedUnions(setAt(values, path, value), fields), keepInitial: true }).catch(() => undefined);
+  void dispatch({ cmd: 'form.open', command: s.form?.cmd ?? '', args: defaultFormValues(setAt(values, path, value), fields), keepInitial: true }).catch(() => undefined);
 
 /**
  * A multi-valued field's current value as a list. The form's values come from anywhere a
@@ -296,7 +296,7 @@ export function SchemaForm(props: FormProps) {
     );
   }
   const fields = fieldsOf(variant, defs);
-  const values = defaultTaggedUnions(form.values, fields);
+  const values = defaultFormValues(form.values, fields);
   const cmd = { cmd: form.cmd, ...values };
   const name = String(values['name'] ?? '—');
   const label = applyLabel(form.cmd);
