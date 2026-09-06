@@ -178,3 +178,16 @@
   justify-content: space-between;
   gap: 8px;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .tutorial-panel *,
+  .tutorial-panel *::before,
+  .tutorial-panel *::after,
+  .tour-callout *,
+  .tour-callout *::before,
+  .tour-callout *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
