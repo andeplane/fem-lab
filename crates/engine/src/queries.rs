@@ -385,14 +385,6 @@ impl Engine {
         }
         let dim = crate::solve_run::field_dimension(field, reaction_quantity);
         self.mesh()?;
-        let nodes = self.mesh.as_ref().expect("built above").mesh.n_nodes();
-        if f.len() != nodes {
-            return Err(Error::new(
-                ErrorCode::NotFound,
-                format!("the Result has {} nodes but the Mesh now has {nodes}", f.len()),
-            )
-            .suggest("solve.run again: the Mesh changed under the Result"));
-        }
         Ok((f, dim))
     }
 
