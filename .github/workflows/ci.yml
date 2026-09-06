@@ -36,8 +36,8 @@ jobs:
       - run: cargo test --workspace
       - run: cargo check -p femlab-engine -p femlab-geometry -p femlab-engine-wasm --target wasm32-unknown-unknown
       # 100 % on the library crates. Regions stand in for branches: llvm-cov measures branches only on nightly.
-      # bridge: src/gpu is covered in the gpu job below; delete this exclusion when the gpu job is made
-      # required (target: when it has been green three runs in a row)
+      # bridge: src/gpu is covered in the GPU job below; delete this exclusion when that job is
+      # required after ADR 0007's week-long green soak.
       - name: coverage
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -47,7 +47,7 @@ jobs:
   # GPU kernels for real on a GPU-less runner: Mesa lavapipe is the Vulkan adapter (ADR 0007).
   # Backends::PRIMARY picks Vulkan on Linux; wgpu reads WGPU_BACKEND only through Backends::from_env, which we do not call.
   gpu:
-    name: gpu kernels on lavapipe (allowed to fail until green three runs in a row)
+    name: gpu kernels on lavapipe (advisory during week-long soak)
     runs-on: ubuntu-latest
     continue-on-error: true
     env:
@@ -113,9 +113,8 @@ jobs:
             engine.schema.json
 
   windows:
-    name: windows (allowed to fail until gated)
+    name: windows
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
