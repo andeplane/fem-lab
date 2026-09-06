@@ -552,8 +552,7 @@ impl Engine {
                     if implicit.as_deref() == Some(b.as_str()) {
                         continue;
                     }
-                    let mut known = self.model.names(ObjectKind::Body);
-                    known.extend(implicit.as_deref());
+                    let known = self.model.names(ObjectKind::Body);
                     self.model.body(b).ok_or_else(|| Error::not_found("body", b, &known))?;
                 }
                 if implicit.is_some_and(|b| bodies.contains(&b)) {
@@ -590,6 +589,25 @@ impl Engine {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
                 }
                 let settings = crate::mesh::mesher_settings(mesher)?;
+                let old_body = self.model.implicit_body();
+                let new_body = settings.implicit_body();
+                if let Some(body) = new_body {
+                    check_name(body).map_err(|e| e.at("mesher.body"))?;
+                    if self.model.body(body).is_some() || self.model.cuts.iter().any(|c| c.name == body) {
+                        return Err(Error::new(
+                            ErrorCode::NameTaken,
+                            format!("'{body}' already names explicit geometry"),
+                        )
+                        .at("mesher.body")
+                        .suggest("retry mesh.set with another mesher.body name"));
+                    }
+                }
+                if old_body != new_body {
+                    if let Some(body) = old_body {
+                        self.check_body_unused(body)?;
+                    }
+                    self.model.mesher_material = None;
+                }
                 self.model.mesh =
                     Some(MeshSettings { mesher: settings, order, formulation: formulation.unwrap_or_default() });
                 Ok(Output::None)
@@ -866,6 +884,11 @@ impl Engine {
 
     fn add_body(&mut self, name: &str, shape: Shape) -> Result<Output, Error> {
         check_name(name)?;
+        if self.model.implicit_body() == Some(name) {
+            return Err(Error::new(ErrorCode::NameTaken, format!("'{name}' is the mesher-defined Body"))
+                .at("name")
+                .suggest("edit its geometry with mesh.set or use another Body name"));
+        }
         if self.model.cuts.iter().any(|c| c.name == name) {
             return Err(
                 Error::new(ErrorCode::NameTaken, format!("'{name}' is already a cut")).at(format!("body '{name}'"))
@@ -884,10 +907,18 @@ impl Engine {
 
     fn add_cut(&mut self, name: &str, from: &str, shape: Shape) -> Result<Output, Error> {
         check_name(name)?;
-        if self.model.body(name).is_some() {
+        if self.model.names(ObjectKind::Body).contains(&name) {
             return Err(
                 Error::new(ErrorCode::NameTaken, format!("'{name}' is already a body")).at(format!("cut '{name}'"))
             );
+        }
+        if self.model.implicit_body() == Some(from) {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "cuts require explicit geometry; mapped blocks cannot be cut",
+            )
+            .at("from")
+            .suggest("edit the mapped geometry with mesh.set"));
         }
         let body = self
             .model
@@ -905,36 +936,47 @@ impl Engine {
         Ok(if replaced { Output::Replaced { kind: ObjectKind::Body, name: name.to_string() } } else { Output::None })
     }
 
+    /// Removing mesher-owned geometry must obey the same references as explicit geometry.
+    fn check_body_unused(&self, name: &str) -> Result<(), Error> {
+        let m = &self.model;
+        let mut users: Vec<String> = Vec::new();
+        for c in &m.constraints {
+            if set_refers_to(&c.on, name) {
+                users.push(format!("constraint '{}'", c.name));
+            }
+        }
+        for l in &m.loads {
+            if l.kind.set().is_some_and(|s| set_refers_to(s, name)) || l.kind.bodies().iter().any(|body| body == name) {
+                users.push(format!("load '{}'", l.name));
+            }
+        }
+        for s in &m.sets {
+            let refers = match &s.source {
+                SetSource::Face { of, .. } => of == name,
+                SetSource::Region { where_: femlab_geometry::RegionPredicate::Body { name: body } } => body == name,
+                SetSource::Region { .. } => false,
+            };
+            if refers {
+                users.push(format!("set '{}'", s.name));
+            }
+        }
+        if m.mesh.as_ref().and_then(|mesh| mesh.mesher.source_body()) == Some(name) {
+            users.push("mesher geometry".into());
+        }
+        if !users.is_empty() {
+            let u: Vec<&str> = users.iter().map(String::as_str).collect();
+            return Err(in_use("body", name, &u, "objects"));
+        }
+        Ok(())
+    }
+
     fn geometry_remove(&mut self, name: &str) -> Result<Output, Error> {
         let m = &self.model;
-        if m.body(name).is_some() {
-            let mut users: Vec<String> = Vec::new();
-            for c in &m.constraints {
-                if set_refers_to(&c.on, name) {
-                    users.push(format!("constraint '{}'", c.name));
-                }
-            }
-            for l in &m.loads {
-                if l.kind.set().is_some_and(|s| set_refers_to(s, name))
-                    || l.kind.bodies().iter().any(|body| body == name)
-                {
-                    users.push(format!("load '{}'", l.name));
-                }
-            }
-            for s in &m.sets {
-                let refers = match &s.source {
-                    SetSource::Face { of, .. } => of == name,
-                    SetSource::Region { where_ } => {
-                        matches!(where_, femlab_geometry::RegionPredicate::Body { name: b } if b == name)
-                    }
-                };
-                if refers {
-                    users.push(format!("set '{}'", s.name));
-                }
-            }
-            if !users.is_empty() {
-                let u: Vec<&str> = users.iter().map(String::as_str).collect();
-                return Err(in_use("body", name, &u, "objects"));
+        if m.body(name).is_some() || m.implicit_body() == Some(name) {
+            self.check_body_unused(name)?;
+            if self.model.implicit_body() == Some(name) {
+                self.model.mesh = None;
+                self.model.mesher_material = None;
             }
             self.model.bodies.retain(|b| b.name != name);
             self.model.cuts.retain(|c| c.from != name);
@@ -999,8 +1041,7 @@ impl Engine {
     /// A Body reference may name explicit geometry or the Body defined by a mapped/swept mesher.
     /// This validates identity only; selectors and loads resolve against the actual Mesh.
     fn check_body(&self, body: &str) -> Result<(), Error> {
-        let mut known = self.model.names(ObjectKind::Body);
-        known.extend(self.model.implicit_body());
+        let known = self.model.names(ObjectKind::Body);
         if known.contains(&body) {
             Ok(())
         } else {
@@ -1028,11 +1069,15 @@ impl Engine {
             || (kind == ObjectKind::Body && self.model.cuts.iter().any(|cut| cut.name == to))
         {
             return Err(Error::new(ErrorCode::NameTaken, format!("name '{to}' is already in use"))
-                .at(format!("{} '{to}'", kind.label())));
+                .at(format!("{} '{to}'", kind.label()))
+                .suggest("retry model.rename with another name"));
         }
         let m = &mut self.model;
         match kind {
             ObjectKind::Body => {
+                if let Some(mesh) = &mut m.mesh {
+                    mesh.mesher.rename_body(name, to);
+                }
                 for b in &mut m.bodies {
                     if b.name == name {
                         b.name = to.into();
@@ -1177,6 +1222,14 @@ impl Engine {
         let m = &mut self.model;
         match kind {
             ObjectKind::Body => {
+                if m.implicit_body() == Some(name) {
+                    return Err(Error::new(
+                        ErrorCode::Unsupported,
+                        "a mesher-defined Body cannot be duplicated: the Model has one mesher geometry slot",
+                    )
+                    .at(format!("body '{name}'"))
+                    .suggest("use model.rename to rename it, or mesh.set to define replacement geometry"));
+                }
                 let mut b = m.body(name).expect("checked").clone();
                 b.name = as_.into();
                 m.bodies.push(b);

@@ -63,7 +63,7 @@
         ]
       },
       {
-        "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind.",
+        "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
         "type": "object",
         "properties": {
           "kind": {
@@ -88,7 +88,7 @@
         ]
       },
       {
-        "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.",
+        "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
         "type": "object",
         "properties": {
           "kind": {
@@ -150,7 +150,7 @@
         ]
       },
       {
-        "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.",
+        "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
         "type": "object",
         "properties": {
           "name": {
@@ -210,7 +210,7 @@
         ]
       },
       {
-        "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.",
+        "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
         "type": "object",
         "properties": {
           "name": {
@@ -281,7 +281,7 @@
         ]
       },
       {
-        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
+        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
         "type": "object",
         "properties": {
           "name": {
@@ -421,7 +421,7 @@
         ]
       },
       {
-        "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters.",
+        "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.",
         "type": "object",
         "properties": {
           "mesher": {
@@ -4054,7 +4054,7 @@
             ]
           },
           {
-            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind.",
+            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
             "type": "object",
             "properties": {
               "kind": {
@@ -4079,7 +4079,7 @@
             ]
           },
           {
-            "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.",
+            "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
             "type": "object",
             "properties": {
               "kind": {
@@ -4141,7 +4141,7 @@
             ]
           },
           {
-            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.",
+            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -4201,7 +4201,7 @@
             ]
           },
           {
-            "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.",
+            "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -4272,7 +4272,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
             "type": "object",
             "properties": {
               "name": {
@@ -4412,7 +4412,7 @@
             ]
           },
           {
-            "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters.",
+            "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.",
             "type": "object",
             "properties": {
               "mesher": {
@@ -10240,7 +10240,7 @@
             ]
           },
           {
-            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind.",
+            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
             "type": "object",
             "properties": {
               "kind": {
@@ -10265,7 +10265,7 @@
             ]
           },
           {
-            "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.",
+            "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
             "type": "object",
             "properties": {
               "kind": {
@@ -10327,7 +10327,7 @@
             ]
           },
           {
-            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.",
+            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -10387,7 +10387,7 @@
             ]
           },
           {
-            "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.",
+            "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -10458,7 +10458,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
             "type": "object",
             "properties": {
               "name": {
@@ -10598,7 +10598,7 @@
             ]
           },
           {
-            "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters.",
+            "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.",
             "type": "object",
             "properties": {
               "mesher": {

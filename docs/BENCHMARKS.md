@@ -429,6 +429,22 @@ copy, removal after dependent Commands are removed, undo/redo, and deterministic
 Journal replay with identical memberships and displacement. Unknown Bodies give structured
 errors identifying the selector argument and leave the Model and Journal unchanged.
 
+The lifecycle regression `implicit_body_rename_preserves_the_exact_patch_and_replay` repeats
+that independent uniaxial solution after renaming the implicit Body, for mapped quad4/quad8
+and swept hex8/hex20 meshes at two mesh densities. It checks every displacement against
+`ux=1e-4 x`, `uy,uz=-2.5e-5 y,z` within 1e-12 m and stress against 20 MPa within 1e-3 Pa;
+force balance remains below 1e-10. Whole-Body measure remains 2 m² or 6 m³. Undo/redo restore
+the exact Model hash and Journal replay reproduces the solution bit-for-bit. This verifies
+that renamed material and named/auto selectors retain their physical meaning, rather than
+only checking rewritten strings.
+
+Companion lifecycle cases cover direct mechanical and thermal auto-face references, named
+Face and Body-region dependencies, structured unsupported duplication, same-name remeshing,
+replacement/removal with unrelated explicit geometry, name collisions and unchanged Model
+and Journal on rejection. Free and swept-free source references follow explicit Body rename
+and block removal until the mesher changes. See ADR 0016 and
+[#251](https://github.com/andeplane/fem-lab/issues/251).
+
 ## Thermal Body loads on mapped and swept meshers (#260)
 
 The registry regressions use a 2 × 1 m mapped rectangle with 0.25 m plane-stress thickness
