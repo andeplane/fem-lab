@@ -111,6 +111,8 @@ export class Viewer {
   private dim = false;
   private hoverFace: string | null = null;
   private readonly hidden = new Set<string>();
+  /** Visibility survives the replacement of mesh, edge, grid and axis objects. */
+  private readonly layerVisibility = new Map<string, boolean>();
   private box = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
   private pickCb: ((p: Pick | null) => void) | null = null;
   private frame = 0;
@@ -216,6 +218,7 @@ export class Viewer {
     this.mesh = new Mesh(geom, this.material);
     this.edges = this.buildEdges();
     this.layers.add(this.mesh, this.edges);
+    this.applyLayerVisibility();
     this.paint();
     if (this.deformation) this.drawDeformed(this.deformation, this.deformScale);
     this.setChrome();
@@ -320,6 +323,18 @@ export class Viewer {
     this.grid = grid;
     this.triad = triad;
     this.scene.add(grid, triad);
+    this.applyLayerVisibility();
+  }
+
+  private layerTarget(layer: string): GridHelper | AxesHelper | Mesh | LineSegments | null {
+    return layer === 'grid' ? this.grid : layer === 'axes' ? this.triad : layer === 'edges' ? this.edges : layer === 'mesh' ? this.mesh : null;
+  }
+
+  private applyLayerVisibility(): void {
+    for (const layer of ['grid', 'axes', 'edges', 'mesh']) {
+      const target = this.layerTarget(layer);
+      if (target) target.visible = this.layerVisibility.get(layer) ?? true;
+    }
   }
 
   // ── view Commands ───────────────────────────────────────────────────────────────────────
@@ -329,6 +344,7 @@ export class Viewer {
       this.disposeEdges();
       this.edges = this.buildEdges();
       this.layers.add(this.edges);
+      this.applyLayerVisibility();
     }
     this.paint();
     this.render();
@@ -413,10 +429,13 @@ export class Viewer {
     this.render();
   }
 
-  setLayer(layer: string, on: boolean): void {
-    const target = layer === 'grid' ? this.grid : layer === 'axes' ? this.triad : layer === 'edges' ? this.edges : layer === 'mesh' ? this.mesh : null;
-    if (target) target.visible = on;
+  setLayer(layer: string, on?: boolean): boolean {
+    const visible = on ?? !(this.layerVisibility.get(layer) ?? true);
+    this.layerVisibility.set(layer, visible);
+    const target = this.layerTarget(layer);
+    if (target) target.visible = visible;
     this.render();
+    return visible;
   }
 
   setVisible(bodies: string[], on: boolean): void {

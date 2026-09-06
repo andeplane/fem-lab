@@ -103,6 +103,8 @@ export interface UiState {
   screenshotScale: number;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
+  /** Viewer layer visibility, mirrored from the Viewer so toolbar pressed state follows Commands. */
+  layerVisibility: Record<string, boolean>;
   // --- plan D ---------------------------------------------------------------------------
   /** `query.projects`: every project saved in this browser, newest first (the Recent list). */
   projects: ProjectMeta[];
@@ -176,6 +178,7 @@ export const initialState: UiState = {
   assumptions: [],
   lengthFactor: 1,
   clipOn: false,
+  layerVisibility: { mesh: true, edges: true, loads: true, constraints: true, sets: true, legend: true, axes: true, grid: true },
   yieldStress: null,
   playing: false,
   phase: 0,
