@@ -209,6 +209,11 @@ the cold one to 1e-9. A volumetric source in a slab held at both faces is checke
 own closed form `T = T_s + q(Lx − x²)/2k` in the same commit, which is the oracle for
 `load.heatSource`.
 
+The registry's E1 VTU export is also read, unmodified, by the independent `vtkio` reader.
+Every exported temperature must match `T(x) = 273.15 + 100 x` K within 1e-9 K, with positions
+in metres; the B1 export checks point-field tuple counts and mesh topology through the same
+reader. This catches file-format errors that an encoder-specific test decoder would miss (#186).
+
 **E2's tolerance is 2 %, not 1 %, and the reason is physics.** The published fin formula is
 one-dimensional; the model is the real two-dimensional slab, whose mid-plane has to conduct
 across the half-thickness before the film can take the heat away. That resistance keeps the fin

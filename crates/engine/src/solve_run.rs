@@ -410,6 +410,21 @@ impl Engine {
         Ok((name, hash, res))
     }
 
+    /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
+    /// changed coordinates or connectivity; the Model hash covers every mesh input.
+    pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
+        let (name, hash, result) = self.stored(step)?;
+        if *hash != self.model_hash() {
+            return Err(Error::new(
+                ErrorCode::ResultStale,
+                format!("step '{name}' has a Result that does not match the current Model state"),
+            )
+            .at(format!("step '{name}'"))
+            .suggest(format!("solve.run on step '{name}' again")));
+        }
+        Ok(result)
+    }
+
     /// One Result field by its wire name, which is what a host passes through: a `Field`
     /// spelling (`displacement`, `vonMises`, …) or `mode:k` for the k-th mode shape of a modal
     /// Step, counting from 1.

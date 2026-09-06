@@ -782,7 +782,7 @@ impl Engine {
                 // A Step's fields are point data on the same Mesh; without a Step the file is
                 // the Mesh alone, which is what a user exports before solving.
                 let point: Vec<(&str, usize, Vec<f64>)> = match step {
-                    Some(s) => crate::solve_run::export_fields(self.stored(Some(s))?.2),
+                    Some(s) => crate::solve_run::export_fields(self.current_result(Some(s))?),
                     None => Vec::new(),
                 };
                 let built = self.mesh()?;

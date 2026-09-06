@@ -1224,18 +1224,17 @@ fn the_vtu_writer_round_trips_through_base64() {
     }
 }
 
-/// The payload of one named DataArray: the header block, then the data block, each base64.
+/// The payload of one named DataArray: decode one block, then remove its UInt64 length.
 fn decode_array(text: &str, name: &str) -> Vec<u8> {
     let at = text.find(&format!("Name=\"{name}\"")).expect("the array is in the file");
     let body = &text[at..];
     let start = body.find("binary\">").expect("binary payload") + "binary\">".len();
     let end = body.find("</DataArray>").expect("closed");
     let payload = &body[start..end];
-    // a UInt64 header is 8 bytes, which base64 encodes in exactly 12 characters
-    let bytes = from_base64(&payload[12..]);
-    let len = u64::from_le_bytes(from_base64(&payload[..12])[..8].try_into().unwrap()) as usize;
-    assert_eq!(len, bytes.len().min(len));
-    bytes[..len].to_vec()
+    let bytes = from_base64(payload);
+    let len = u64::from_le_bytes(bytes[..8].try_into().unwrap()) as usize;
+    assert_eq!(len, bytes.len() - 8);
+    bytes[8..].to_vec()
 }
 
 fn from_base64(s: &str) -> Vec<u8> {
@@ -1265,6 +1264,25 @@ fn decode_i64(text: &str, name: &str) -> Vec<i64> {
 
 fn decode_u8(text: &str, name: &str) -> Vec<u8> {
     decode_array(text, name)
+}
+
+#[test]
+fn independent_vtk_reader_accepts_all_binary_padding_lengths() {
+    for nx in 1..=3 {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);
+        ok(
+            &mut e,
+            &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{{"nx":{nx},"ny":1,"nz":1}}}}}}"#),
+        );
+        let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#).output;
+        let Output::Export { text, .. } = output else { panic!("a VTU export") };
+        let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("VTK cell types with zero, one or two padding bytes");
+        let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+        assert_eq!(piece.num_points(), (nx + 1) * 4);
+        assert_eq!(piece.cells.types, vec![vtkio::model::CellType::Hexahedron; nx]);
+        assert_eq!(piece.cells.cell_verts.num_verts(), nx * 8);
+    }
 }
 
 /// C §7 C4: Cook's membrane as one mapped block, which is its own geometry.
@@ -1956,8 +1974,90 @@ fn probing_and_walking_a_solved_field() {
         at: [Q::text("1 m"), Q::text("50 mm"), Q::text("50 mm")],
     };
     let e2 = e.query(q).expect_err("the mesh moved");
-    assert_eq!(e2.code, ErrorCode::NotFound);
-    assert!(e2.cause.contains("nodes"), "{}", e2.cause);
+    assert_eq!(e2.code, ErrorCode::ResultStale);
+    assert!(e2.cause.contains("current Model"), "{}", e2.cause);
+}
+
+fn assert_stale_mesh_consumers(e: &mut Engine) {
+    let revision = e.revision();
+    let export = err(e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#);
+    let probe = e
+        .query(
+            serde_json::from_str(
+                r#"{
+        "query":"query.probe","field":"displacement","component":2,
+        "at":["500 mm","50 mm","50 mm"]
+    }"#,
+            )
+            .unwrap(),
+        )
+        .expect_err("a stale field cannot be sampled on the current Mesh");
+    let path = e
+        .query(
+            serde_json::from_str(
+                r#"{
+        "query":"query.path","step":"static","field":"displacement","component":2,
+        "from":["0 m","50 mm","50 mm"],"to":["1 m","50 mm","50 mm"],"n":5
+    }"#,
+            )
+            .unwrap(),
+        )
+        .expect_err("a stale field cannot be sampled along the current Mesh");
+    for error in [export, probe, path] {
+        assert_eq!(error.code, ErrorCode::ResultStale);
+        assert_eq!(error.where_.as_deref(), Some("step 'static'"));
+        assert_eq!(error.suggestion.as_deref(), Some("solve.run on step 'static' again"));
+    }
+    assert_eq!(e.revision(), revision, "failed export and Queries cannot append Commands");
+    assert!(result(e).stale, "the stored summary remains available and explicitly stale");
+}
+
+#[test]
+fn result_mesh_consumers_reject_changed_counts_and_same_count_geometry() {
+    let changes = [
+        (r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"25 mm"},"order":1}"#, false),
+        (
+            r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"],"at":["0 m","10 mm","0 m"]}"#,
+            true,
+        ),
+    ];
+    for (change, same_count) in changes {
+        let mut e = engine();
+        solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+        let before = e.mesh().unwrap().mesh.clone();
+        ok(&mut e, change);
+        let after = &e.mesh().unwrap().mesh;
+        assert_eq!(before.n_nodes() == after.n_nodes(), same_count);
+        assert_ne!(before.coords, after.coords, "the current Mesh really changed");
+        assert_stale_mesh_consumers(&mut e);
+        // Restoring the exact solved Model makes the stored field safe again, even though
+        // the Journal revision moved. Re-solving is not required just to undo the edit.
+        ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+        assert!(!result(&mut e).stale);
+        assert!(tip_uz(&mut e) < 0.0);
+        let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#).output;
+        let Output::Export { text, .. } = output else { panic!("a VTU export") };
+        let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("independent VTK reader accepts the restored Result");
+        let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+        assert_eq!(piece.num_points(), before.n_nodes());
+        // The suggested Command repairs the edited Model for all three consumers as well.
+        ok(&mut e, change);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+        assert!(tip_uz(&mut e) < 0.0);
+        let path = serde_json::from_str(
+            r#"{"query":"query.path","field":"displacement","component":2,
+                "from":["0 m","50 mm","50 mm"],"to":["1 m","50 mm","50 mm"],"n":5}"#,
+        )
+        .unwrap();
+        let QueryResult::Path(path) = e.query(path).unwrap() else { panic!("a path") };
+        assert_eq!(path.values.len(), 5);
+        assert!(path.values.iter().all(Option::is_some));
+        let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#).output;
+        let Output::Export { text, .. } = output else { panic!("a VTU export") };
+        let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("independent VTK reader accepts the re-solved Result");
+        let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+        assert_eq!(piece.num_points(), e.mesh().unwrap().mesh.n_nodes());
+    }
 }
 
 #[test]
@@ -1987,6 +2087,16 @@ fn exporting_a_step_writes_its_fields_as_point_data() {
     assert_eq!(decode_f64(&text, "Displacement").len(), nodes * 3);
     assert_eq!(decode_f64(&text, "VonMises").len(), nodes);
     assert_eq!(decode_f64(&text, "Stress").len(), nodes * 6);
+    // An independent VTK implementation must accept the unmodified file and all tuple
+    // counts. The former helper decoded header and payload separately, hiding invalid XML.
+    let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("independent VTK reader accepts the result export");
+    let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+    assert_eq!(piece.num_points(), nodes);
+    assert_eq!(piece.cells.num_cells(), e.mesh().unwrap().mesh.n_elems());
+    for attribute in &piece.data.point {
+        let vtkio::model::Attribute::DataArray(array) = attribute else { panic!("XML point DataArray") };
+        assert_eq!(array.data.len(), nodes * array.num_comp(), "{} tuple count", array.name);
+    }
     // the same export without a Step carries the Mesh alone
     let ack = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#);
     let Output::Export { text, .. } = ack.output else { panic!() };
@@ -2122,6 +2232,8 @@ fn result_queries_refuse_what_they_cannot_answer() {
     assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"t"}"#), ErrorCode::SetEmpty);
     ok(&mut e, r#"{"cmd":"step.add","name":"u","procedure":"static","constraints":["root"],"loads":["tug"]}"#);
     assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"u"}"#), ErrorCode::SetEmpty);
+    // The added Steps changed the Model; refresh the valid Result before testing bad units.
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
     // a point in the wrong dimension, on the probe and on both ends of a path
     let mut bad = |q: Query| e.query(q).expect_err("a mass is not a length").code;
     assert_eq!(
@@ -2153,7 +2265,7 @@ fn result_queries_refuse_what_they_cannot_answer() {
         component: Some(2),
         at: [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")],
     };
-    assert_eq!(e.query(q).expect_err("a 3D body in a 2D idealisation").code, ErrorCode::ModelIllPosed);
+    assert_eq!(e.query(q).expect_err("the Result predates the invalid idealisation").code, ErrorCode::ResultStale);
 }
 
 // ---------------------------------------------------- heat, modal, transient and explicit Steps
@@ -2220,6 +2332,19 @@ fn a_steady_heat_step_conducts_a_linear_profile_and_exports_it() {
         panic!("an export")
     };
     assert!(text.contains("Name=\"Temperature\""), "the VTU carries the temperature field");
+    let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("independent VTK reader accepts the temperature export");
+    let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+    let points = piece.points.into_vec::<f64>().unwrap();
+    let attribute = piece.data.point.iter().find(|a| a.name() == "Temperature").expect("Temperature point field");
+    let vtkio::model::Attribute::DataArray(array) = attribute else { panic!("XML point DataArray") };
+    let temperature = array.data.cast_into::<f64>().unwrap();
+    // Results use three components, with a one-DOF heat field in x.
+    assert_eq!(array.num_comp(), 3);
+    assert_eq!(temperature.len(), points.len());
+    for (point, value) in points.chunks_exact(3).zip(temperature.chunks_exact(3)) {
+        assert!((value[0] - (273.15 + 100.0 * point[0])).abs() < 1e-9, "T(x) = 273.15 + 100 x kelvin");
+        assert_eq!(&value[1..], &[0.0, 0.0]);
+    }
 }
 
 /// Convection, flux and source loads reach the Model, report themselves, survive a Body rename,
