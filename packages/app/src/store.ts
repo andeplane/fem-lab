@@ -9,8 +9,8 @@ import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
-export type Tab = 'journal' | 'script' | 'results' | 'checks' | 'console';
-export const TABS: Tab[] = ['journal', 'script', 'results', 'checks', 'console'];
+import { TABS, type Tab } from './ui/tabs';
+export { TABS, type Tab };
 
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
