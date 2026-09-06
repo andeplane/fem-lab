@@ -89,10 +89,10 @@ async function boot(): Promise<void> {
     store.set({ autosaves: autosaveHistory() });
     noteProject(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? [], (model as { hash: string | null }).hash);
   };
-  const registry = new Registry({
+  const registry: Registry = new Registry({
     schema: schema as unknown as EngineSchema,
     host: ctx,
-    hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results)],
+    hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results, () => registry)],
   });
 
   /**
