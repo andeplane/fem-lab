@@ -320,7 +320,11 @@ export class Viewer {
       if (d > max) max = d;
     }
     const diagonal = this.box.getSize(new Vector3()).length();
-    return max > 0 ? Math.round((0.1 * diagonal) / max) : 1;
+    if (!(max > 0)) return 1;
+    // A mass-normalised mode shape is already about the size of the model, so the exaggeration
+    // it wants is a fraction: rounding that to an integer would draw it at zero.
+    const want = (0.1 * diagonal) / max;
+    return want >= 1 ? Math.round(want) : Number(want.toPrecision(2));
   }
 
   /** `position = X + scale·u`, on the CPU; the Result never changes, only the drawing. */

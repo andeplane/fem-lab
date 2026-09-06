@@ -104,6 +104,15 @@ export function fieldChoices(fields: string[], modes = 0, hasYield = false): Fie
   ];
 }
 
+/**
+ * The `view.showField` arguments that select this choice. A derived check is named by its own
+ * key even though the array it reads is von Mises — otherwise its chip would be the σ_vM chip.
+ */
+export function showFieldArgs(c: FieldChoice): { field: string; component?: number } {
+  if (c.derived) return { field: c.key };
+  return { field: c.field, ...(c.component === null ? {} : { component: c.component }) };
+}
+
 export function choiceOf(key: string): FieldChoice {
   const known = [...FIELD_CHOICES, ...DERIVED_CHOICES].find((c) => c.key === key);
   if (known) return known;

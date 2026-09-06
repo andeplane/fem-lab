@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/engine.schema.json';
 import { AssistantPanel } from '../ai';
 import { engineChip } from '../capabilities';
-import { choiceOf, fieldChoices, formatNumber, legendTicks } from '../fields';
+import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
 import { solveLabel, stageOf, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
@@ -245,9 +245,9 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
             dispatch={dispatch}
             cmd="view.showField"
             class="field-chip mono"
-            args={{ field: c.field, ...(c.component === null ? {} : { component: c.component }) }}
+            args={showFieldArgs(c)}
             pressed={s.fieldKey === c.key}
-            title={`view.showField ${c.field}`}
+            title={`view.showField ${showFieldArgs(c).field}`}
           >
             {c.label}
           </Cmd>

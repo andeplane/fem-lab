@@ -6,7 +6,7 @@
 // viewer colours by is scaled once, here, with the factor `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
 import type { JournalDump, ResultSummary, StudyReport, Warning } from '@femlab/registry';
-import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, siUnitOf } from './fields';
+import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store } from './store';
 import type { WorkerTransport } from './worker-transport';
@@ -51,6 +51,21 @@ export function derive(vonMises: Float32Array, yieldSi: number, kind: 'safety' |
  */
 export function derivedRange(kind: 'safety' | 'utilisation', max: number): [number, number] {
   return kind === 'utilisation' ? [0, Math.max(1, max)] : [0, Math.min(SAFETY_CAP, Math.max(1, max))];
+}
+
+/**
+ * The picker key to contour a Result by: the one already chosen when this Result has it, the
+ * first mode shape when it is a modal Step, and otherwise the first field it did compute. A
+ * Result is not obliged to carry the field the previous one did.
+ */
+export function available(current: string, result: ResultSummary, hasYield: boolean): string {
+  const choices = fieldChoices(
+    result.extremes.map((e) => e.field),
+    result.frequencies?.length ?? 0,
+    hasYield,
+  );
+  if (choices.some((c) => c.key === current)) return current;
+  return (result.frequencies?.length ?? 0) > 0 ? 'mode:1' : (choices[0]?.key ?? 'vonMises');
 }
 
 export class ResultsView {
@@ -110,10 +125,15 @@ export class ResultsView {
       return;
     }
     this.viewer.current?.setDim(result.stale);
-    const key = `${result.step}|${this.store.state.fieldKey}|${String(this.store.state.clamp)}|${this.store.state.journal?.revision ?? 0}`;
+    // A modal Step computes no stress and a heat Step no displacement, so the field the last
+    // Result was contoured by may not exist in this one. Choosing before loading is what keeps
+    // a solve from failing on `step 'modes' has no vonMises field`.
+    const yieldStress = await this.readYield();
+    const fieldKey = available(this.store.state.fieldKey, result, yieldStress !== null);
+    this.store.set({ yieldStress, ...(fieldKey === this.store.state.fieldKey ? {} : { fieldKey }) });
+    const key = `${result.step}|${fieldKey}|${String(this.store.state.clamp)}|${this.store.state.journal?.revision ?? 0}`;
     if (!force && key === this.loadedFor) return;
     this.loadedFor = key;
-    this.store.set({ yieldStress: await this.readYield() });
     await this.load(result);
   }
 
@@ -137,10 +157,11 @@ export class ResultsView {
     v.setField(values, range);
     this.store.set({ legend: { min: range[0], max: range[1], unit } });
 
-    // A mode shape is its own deformation; every other field rides on the Step's displacement.
-    const shape = choice.mode === undefined ? await this.transport.field(result.step, 'displacement') : { values: magnitude(scalar.values, false) };
+    // A mode shape is its own deformation; every other field rides on the Step's displacement,
+    // which a heat Step does not have — there the mesh simply stays where it is.
+    const moves = choice.mode !== undefined || result.extremes.some((e) => e.field === 'displacement');
+    this.displacement = !moves ? null : choice.mode === undefined ? (await this.transport.field(result.step, 'displacement')).values : scalar.values;
     this.store.set({ lengthFactor: await this.factor('displacement') });
-    this.displacement = shape.values;
     v.setDeformed(this.displacement, this.store.state.deformScale);
     // A mode's amplitude is arbitrary, so it opens at a visible one rather than at ×1.
     if (choice.mode !== undefined) this.setDeformScale('auto');
@@ -213,9 +234,6 @@ export class ResultsView {
     const warnings = (ack as { warnings?: Warning[] }).warnings ?? [];
     this.store.set({ tab: 'results', viewMode: 'results', assumptions: warnings });
     this.viewer.current?.setMode('results');
-    // A modal Step has no stress to contour: open on its first mode shape instead.
-    const modal = (await this.readResult())?.frequencies?.length ?? 0;
-    if (modal > 0) this.store.set({ fieldKey: 'mode:1' });
     await this.refresh(true);
     // A real displacement is invisible at ×1, so a fresh Result opens exaggerated (design §5).
     this.setDeformScale('auto');

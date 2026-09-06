@@ -4,7 +4,7 @@
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
 import type { ModelSummary } from '@femlab/registry';
 import { useState } from 'preact/hooks';
-import { fieldChoices } from '../fields';
+import { fieldChoices, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 
@@ -23,6 +23,12 @@ export interface TreeItem {
   remove: string | null;
   /** Rows that are not edited in a form (Results) say for themselves when they are current. */
   active?: boolean;
+  /**
+   * A row whose Command is run rather than put in the Properties form. Model objects are edited
+   * by re-issuing the Command that made them (brief §2.1); a Result is not edited at all, so its
+   * row performs `view.showField` — the same Command the legend's chips dispatch.
+   */
+  run?: boolean;
 }
 export interface TreeGroup {
   label: string;
@@ -64,7 +70,9 @@ function boxArgs(b: ModelSummary['bodies'][number]): Record<string, unknown> {
 export function resultItems(s: UiState): TreeItem[] {
   const r = s.result;
   if (!r) return [];
-  const extreme = (c: { field: string; component: number | null }) => r.extremes.find((e) => e.field === c.field && (c.component === null || e.component === c.component));
+  // Only an exact component: `|u|` is a magnitude and has no extreme of its own, and borrowing
+  // ux's would put the wrong numbers under its name.
+  const extreme = (c: { field: string; component: number | null }) => r.extremes.find((e) => e.field === c.field && e.component === c.component);
   return fieldChoices(
     r.extremes.map((e) => e.field),
     r.frequencies?.length ?? 0,
@@ -74,7 +82,8 @@ export function resultItems(s: UiState): TreeItem[] {
     const hz = c.mode === undefined ? undefined : r.frequencies?.[c.mode - 1];
     return {
       cmd: 'view.showField',
-      args: { field: c.field, ...(c.component === null ? {} : { component: c.component }) },
+      args: showFieldArgs(c) as Record<string, unknown>,
+      run: true,
       kind: 'result',
       glyph: '◧',
       glyphClass: s.fieldKey === c.key ? 'glyph green' : 'glyph low',
@@ -290,7 +299,13 @@ export function ModelTree({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
             </div>
             {group.items.map((item, i) => (
               <div key={`${item.kind}:${item.name}`} class={(item.active ?? selected === item.name) ? 'row selected' : 'row'} onContextMenu={(e) => (e.preventDefault(), setMenu(`${item.kind}:${item.name}`))}>
-                <Cmd dispatch={dispatch} cmd="form.open" class="row-main" args={{ command: item.cmd, args: item.args }} title={`${item.cmd} — ${item.name}`}>
+                <Cmd
+                  dispatch={dispatch}
+                  cmd={item.run ? item.cmd : 'form.open'}
+                  class="row-main"
+                  args={item.run ? item.args : { command: item.cmd, args: item.args }}
+                  title={`${item.cmd} — ${item.name}`}
+                >
                   <span class={item.glyphClass}>{item.glyph}</span>
                   <span class="row-text">
                     <span class="mono name">{item.name}</span>
