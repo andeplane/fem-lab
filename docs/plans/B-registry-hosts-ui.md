@@ -1041,6 +1041,13 @@ Playwright's smoke checks the DOM agrees (`[data-cmd]` set ⊆ registry).
 | Start / empty state (5.9) | three paths and a capability line | `chat.send`, `panel.toggle { examples }`, the geometry "Add…" form; reads `query.capabilities` |
 | Status bar (8) | progress from `dispatch` progress events, capability notes (no WebGPU → CPU; not isolated → single thread; not Chromium → best effort), engine local/remote, engine version | reads `query.capabilities` |
 
+Editing existing objects (#141) uses `form.edit { kind, name }` and the engine's
+`query.definition` to read an exact upsert Command from the current Model. Rounded
+`query.model` summaries only label rows; they never supply editable values. Definitions
+retain all shape, material, constraint, load and Step parameters after rename or duplicate.
+Structured SI quantities display as round-trippable unit text; a delayed edit response
+cannot replace a newer form. Imported internal-only shapes are refused explicitly.
+
 Hover highlighting (tree ↔ viewer) is transient view state with no control and no Command; the
 brief's "hover is view state" sentence covers it. Everything a click does is a row above.
 
