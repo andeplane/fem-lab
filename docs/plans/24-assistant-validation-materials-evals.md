@@ -16,10 +16,10 @@ The existing browser worker and MCP QuickJS worker strip TypeScript before execu
 it. Stripping types does not establish that a call exists or that arguments and
 returned fields have the declared types. A shared validator will use a virtual
 TypeScript compiler host with the generated `fem.d.ts` and its `engine` declarations,
-explicit standard libraries and a script wrapper matching the runtime's top-level
+explicit standard libraries, host argument types generated from each actual registry, and a script wrapper matching the runtime's top-level
 await/return behavior. Source positions must map back to the authored script.
 
-Expose validation through the schema-first registry as a read-only capability and
+Expose validation through the schema-first registry as the read-only `query.validateScript` capability and
 through the Assistant/MCP `validate_script` tool. All I/O, worker creation, clock and
 limits belong to injected host adapters. Compilation must not execute source,
 dispatch a Command, replay a Journal or resolve arbitrary imports from the network
@@ -27,6 +27,9 @@ or filesystem. The browser compiler is lazy-loaded off the UI thread. Validation
 failures return structured diagnostics with code, cause, source position and hint.
 The AI script execution path validates before invoking its existing isolated runner;
 validation never substitutes for runtime schema and engine checks.
+
+Engine query results retain their generated types. Host return values without a declared
+response schema remain dynamically typed; do not claim to check their result fields.
 
 Ordinary TypeScript validation cannot establish physical admissibility, the existence
 of a dynamically named Model object, arbitrary control-flow termination or the

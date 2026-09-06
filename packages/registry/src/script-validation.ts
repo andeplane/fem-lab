@@ -2,23 +2,14 @@
 // this module never uses ts.sys, a filesystem, an engine transport or script execution.
 import ts from 'typescript';
 
-export interface ScriptDiagnostic {
-  code: string;
-  cause: string;
-  where: { line: number; column: number } | null;
-  hint: string;
-}
-export interface ScriptValidation {
-  ok: boolean;
-  diagnostics: ScriptDiagnostic[];
-}
-export type ScriptDeclarations = Readonly<Record<string, string>>;
-export const MAX_SCRIPT_CHARACTERS = 64_000;
+import { MAX_SCRIPT_CHARACTERS, type ScriptDiagnostic, type ScriptValidation, type ScriptDeclarations } from './script-validation-types';
+export type { ScriptDiagnostic, ScriptValidation, ScriptDeclarations } from './script-validation-types';
+export { MAX_SCRIPT_CHARACTERS } from './script-validation-types';
 
 const PREFIX = `import type { Fem } from './fem';
 declare const fem: Fem;
 declare const console: { log(...values: unknown[]): void; info(...values: unknown[]): void; warn(...values: unknown[]): void; error(...values: unknown[]): void; debug(...values: unknown[]): void };
-declare function setTimeout(callback: () => void, delay?: number): number;
+declare function setTimeout(callback: (...args: any[]) => void, delay?: number): number;
 declare function clearTimeout(id: number): void;
 async function __fem_script__() {
 `;
@@ -46,7 +37,7 @@ export function validateScript(code: string, declarations: ScriptDeclarations): 
     getNewLine: newline,
     fileExists: (name) => files[name] !== undefined,
     readFile,
-    resolveModuleNames: (names) => names.map((name) => name === './fem' || name === './engine'
+    resolveModuleNames: (names) => names.map((name) => name === './fem' || name === './engine' || name === './host'
       ? { resolvedFileName: `/${name.slice(2)}.d.ts`, extension: ts.Extension.Dts }
       : undefined),
   };
@@ -56,7 +47,7 @@ export function validateScript(code: string, declarations: ScriptDeclarations): 
   }, host);
   const diagnostics = ts.getPreEmitDiagnostics(program).map((diagnostic): ScriptDiagnostic => {
     const position = diagnostic.file?.getLineAndCharacterOfPosition(diagnostic.start!);
-    const authored = diagnostic.file?.fileName === '/script.ts' && position !== undefined;
+    const authored = diagnostic.file?.fileName === '/script.ts' && position !== undefined && position.line >= PREFIX_LINES;
     return {
       code: `TS${diagnostic.code}`,
       cause: ts.flattenDiagnosticMessageText(diagnostic.messageText, host.getNewLine()),

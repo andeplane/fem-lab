@@ -9,3 +9,5 @@ export { makeFemProxy, type Dispatch, type QueryFn } from './script-api';
 export { parseMentions, refOf, MENTION_KINDS, type MentionKind, type Chip } from './mentions';
 export { parseSkill, mergeSkills, type Skill } from './skills';
 export { normalisePath, assertInside } from './project-paths';
+export type { ScriptDiagnostic, ScriptValidation, ScriptDeclarations } from './script-validation-types';
+export { ScriptValidator, type ValidationWorker, type ValidationClock } from './script-validator-host';

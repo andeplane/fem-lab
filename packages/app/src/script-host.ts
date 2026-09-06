@@ -2,7 +2,7 @@
 // MessageChannel wired to the Registry so the script's `fem` calls are real Commands, and kill
 // the Worker on `script.stop` or the timeout. The Worker factory is injected, so the unit test
 // drives the whole protocol with a fake.
-import { FemError, type Ack, type Command, type JournalEntry, type ScriptResult } from '@femlab/registry';
+import { FemError, type Ack, type Command, type JournalEntry, type ScriptResult, type ScriptValidator, type ScriptValidation } from '@femlab/registry';
 import type { ScriptCall, ScriptDone, ScriptReply } from './script.worker';
 
 export type Call = (payload: Record<string, unknown>) => Promise<unknown>;
@@ -18,10 +18,16 @@ export class ScriptHost {
     private readonly spawn: () => Worker,
     private readonly dispatch: Call,
     private readonly query: Call,
+    private readonly validator?: ScriptValidator,
   ) {}
 
+  validate(code: string, timeoutMs?: number): Promise<ScriptValidation> {
+    if (!this.validator) throw new FemError('unsupported', 'no validation Worker is available', 'query.validateScript', 'use a host with a script validator');
+    return this.validator.validate(code, timeoutMs);
+  }
+
   get running(): boolean {
-    return this.worker !== null;
+    return this.worker !== null || this.validator?.running === true;
   }
 
   run(code: string, timeoutMs = DEFAULT_TIMEOUT): Promise<ScriptResult> {
@@ -68,6 +74,7 @@ export class ScriptHost {
 
   /** Commands the script already dispatched stay in the Journal; `journal.undo` takes them back. */
   stop(): void {
+    this.validator?.stop();
     this.finish?.({ result: null, console: [], error: 'stopped' });
   }
 }

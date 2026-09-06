@@ -57,6 +57,13 @@ describe('toToolDefinitions', () => {
     expect(tools.find((t) => t.name === 'query_model')!.input_schema).toEqual({ description: expect.any(String), type: 'object', properties: {}, required: [], 'x-returns': 'ModelSummary' });
   });
 
+  it('exposes read-only script validation under validate_script and reverses the alias', () => {
+    const registry = new Registry({ schema: engineSchema, host: fakeHost() });
+    const validation = toToolDefinitions(registry).find((tool) => tool.name === 'validate_script');
+    expect(validation?.input_schema['required']).toEqual(['code']);
+    expect(commandNameFor('validate_script', registry)).toBe('query.validateScript');
+  });
+
   it('run_script wraps script.run, and is absent when there is no script.run', () => {
     const run = tools.find((t) => t.name === RUN_SCRIPT)!;
     expect(run.input_schema['required']).toEqual(['code']);

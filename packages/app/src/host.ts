@@ -124,9 +124,14 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     },
     panels: { toggle: (panel, open) => store.togglePanel(panel, open) },
     script: {
+      validate: (code, timeoutMs) => {
+        if (!scripts) throw new FemError('unsupported', 'no validation Worker is available', 'query.validateScript', 'run the app with script workers');
+        return scripts.validate(code, timeoutMs);
+      },
       // A script's Commands are the AI's, not the person's: the Journal's `who` column says so.
       run: async (code, timeoutMs) => {
         if (!scripts) throw new FemError('unsupported', 'no script Worker is available in this host', 'script.run', 'run the app, not the test harness');
+        if (scripts.running) throw new FemError('unsupported', 'a script or validation is already running', 'script.run', 'stop it with script.stop first');
         store.set({ scriptRunning: true, scriptOut: [], source: 'ai', tab: 'script' });
         try {
           const out = await scripts.run(code, timeoutMs);

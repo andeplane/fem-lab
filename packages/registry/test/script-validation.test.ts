@@ -19,6 +19,7 @@ describe('read-only script validation', () => {
     'const length: string = "1 m"; await fem.geometry.addBox({ name: "beam", size: [length, "1 m", "1 m"] });',
     'throw new Error("never execute validation input");',
     'while (true) {}',
+    'await new Promise(resolve => setTimeout(resolve, 10));',
     'await new Promise<void>((resolve) => { const id = setTimeout(resolve, 1); clearTimeout(id); });',
   ])('accepts well-typed source without executing it: %s', (code) => {
     expect(validateScript(code, declarations)).toEqual({ ok: true, diagnostics: [] });
@@ -39,6 +40,16 @@ describe('read-only script validation', () => {
     expect(result.diagnostics.every((item) => item.code.startsWith('TS') && item.hint.includes('before running'))).toBe(true);
   });
 
+  it('validates registered host arguments and limits host commands to the serving host', () => {
+    const browser = JSON.parse(readFileSync(new URL('../src/generated/script-declarations-browser.json', import.meta.url), 'utf8')) as ScriptDeclarations;
+    const mcp = JSON.parse(readFileSync(new URL('../src/generated/script-declarations-mcp.json', import.meta.url), 'utf8')) as ScriptDeclarations;
+    expect(validateScript('await fem.view.fit();', browser)).toEqual({ ok: true, diagnostics: [] });
+    expect(validateScript('await fem.view.setMode({ mode: 7 });', browser).ok).toBe(false);
+    expect(validateScript('await fem.view.fit();', mcp).ok).toBe(false);
+    expect(validateScript('await fem.export.file({ format: "journal", path: "model.json" });', mcp)).toEqual({ ok: true, diagnostics: [] });
+    expect(validateScript('await fem.export.file({ format: "invented", path: "model.json" });', mcp).ok).toBe(false);
+  });
+
   it('maps an argument error to its authored line and column', () => {
     const result = validateScript('// first line\nawait fem.model.new({ name: 7 });', declarations);
     expect(result.diagnostics[0]?.where).toEqual({ line: 2, column: 23 });
@@ -47,7 +58,7 @@ describe('read-only script validation', () => {
   it('reports missing compiler declarations instead of silently accepting an untyped API', () => {
     const result = validateScript('', {});
     expect(result.ok).toBe(false);
-    expect(result.diagnostics.some((item) => item.where === null && item.hint.includes('Rebuild'))).toBe(true);
+    expect(result.diagnostics.every((item) => item.where === null && item.hint.includes('Rebuild'))).toBe(true);
   });
 
   it('rejects oversized input before constructing a compiler program', () => {
