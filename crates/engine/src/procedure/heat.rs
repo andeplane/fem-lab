@@ -365,9 +365,15 @@ pub fn transient(
         report(&mut progress, "solve", 0.1 + 0.8 * step as f64 / n_steps as f64, "stepping in time")?;
     }
     let evaluated: Vec<f64> = previous.iter().zip(&t).map(|(old, new)| (1.0 - theta) * old + theta * new).collect();
-    let rate: Vec<f64> = previous.iter().zip(&t).map(|(old, new)| (new - old) / dt).collect();
+    // Reuse the last internal temperature buffer: balance recovery needs its rate after the
+    // θ-stage temperature is formed, and no longer needs it after applying the capacity.
+    let mut rate = previous;
+    for (old, new) in rate.iter_mut().zip(&t) {
+        *old = (new - *old) / dt;
+    }
     let mut capacity_rate = vec![0.0; cap.n];
     cap.spmv(&rate, &mut capacity_rate);
+    drop(rate);
     let mut res = finish(p, &sys, &rc, &t, &evaluated, &capacity_rate, solver);
     res.scalars.insert("dt".to_string(), dt);
     res.scalars.insert("steps".to_string(), n_steps as f64);

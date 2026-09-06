@@ -2466,7 +2466,7 @@ fn the_cost_of_a_step_is_the_sparsity_of_its_mesh() {
         if procedure == "heat-transient" {
             assert_eq!(heat.retained_frames, 11, "initial plus all ten steps");
             assert_eq!(heat.retained_bytes, 11 * (1025 + 1) * 8);
-            assert_eq!(heat.transient_work_bytes, 1025 * 5 * 8);
+            assert_eq!(heat.transient_work_bytes, 1025 * 9 * 8);
             assert_eq!(heat.transport_staging_bytes, 1025 * 3 * 8);
             assert_eq!(heat.bytes, heat.assembly_bytes + heat.retained_bytes + heat.transient_work_bytes);
         } else {
@@ -3564,6 +3564,29 @@ fn an_over_budget_transient_preserves_the_prior_result_and_engine() {
     assert_eq!(rejected.code, ErrorCode::SolveTooLarge);
     assert_eq!(rejected.where_.as_deref(), Some("step 'warm'.outputEvery"));
     assert!(rejected.suggestion.as_deref().unwrap().contains("outputEvery at least"));
+
+    // Choose the largest History that the old five-vector allowance admitted. The four
+    // additional balance-recovery buffers must now reject it before any History allocation.
+    let frame_bytes = (cost.dofs + 1) * 8;
+    let old_work = cost.dofs * 5 * 8;
+    let frames = (cost.budget_bytes - cost.assembly_bytes - old_work) / frame_bytes;
+    assert!(cost.assembly_bytes + old_work + frames * frame_bytes <= cost.budget_bytes);
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["cold"],
+                "loads":[],"dt":"1 s","tEnd":"{} s","theta":1.0,"initial":"20 degC","outputEvery":1}}"#,
+            frames - 1
+        ),
+    );
+    let QueryResult::Cost(boundary) = e.query(Query::Cost { step: "warm".into() }).unwrap() else { panic!() };
+    assert_eq!(boundary.retained_frames, frames);
+    assert!(boundary.bytes > boundary.budget_bytes);
+    assert_eq!(boundary.feasible, Some(false));
+    let before_rejected_solve = e.journal().clone();
+    let rejected = err(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
+    assert_eq!(rejected.code, ErrorCode::SolveTooLarge);
+    assert_eq!(e.journal(), &before_rejected_solve);
 
     ok(&mut e, ordinary);
     let retained = result_of(&mut e, Some("warm"));

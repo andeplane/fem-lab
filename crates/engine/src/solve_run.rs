@@ -262,7 +262,9 @@ pub(crate) fn planned_cost(
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;
             let base = crate::solve::cost_estimate(mesh, 1, solver.solver);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, 5)
+            // The original five-vector allowance plus film, evaluated temperature, reused
+            // previous/rate, and capacity_rate, which coexist during balance recovery.
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, 9)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "heat-transient")) });
         }
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {

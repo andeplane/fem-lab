@@ -669,10 +669,14 @@ Vec headers, spare capacity and allocator overhead are deliberately separate; Hi
 the exact outer frame count and remains the only full-series allocation.
 
 The cost Query reports two phases. The integration phase counts the #122 assembly lower bound,
-the retained payload and a conservative full-field f64 working allowance: `5 × nodes × 8` bytes
+the retained payload and a conservative full-field f64 working allowance: `9 × nodes × 8` bytes
 for heat and `6 × nodes × storedComponents × 8` bytes for explicit dynamics. Heat's free-DOF
-vectors are charged at the full nodal length; the five-field allowance covers the temporary old
-and new temperature vectors during `expand`. The frame-read phase counts retained payload plus one
+vectors are charged at the full nodal length; the original five-field allowance covers the temporary old
+and new temperature vectors during `expand`. Heat balance recovery (#208) adds four nodal
+buffers at its capacity-multiplication peak: film weights, θ-stage temperature, the previous
+temperature reused in place as its rate, and capacity times that rate. The rate is dropped before
+final field recovery. These nine vectors extend the existing counted allowance, not the
+excluded assembly/solver allocations or final derived fields. The frame-read phase counts retained payload plus one
 normalized three-component f64 response (`24 × nodes` bytes) for a native Query. WASM/Worker transport has two
 normalized numeric payloads alive at once: the current JSON path's parsed source and structured
 clone, or #245's transferred `Float64Array` and final schema-owned `number[]`. Its separately
@@ -687,6 +691,9 @@ unknown.
 An end-to-end heat regression first stores a valid Result, then requests 1,000,000,001 frames.
 `query.cost` reports the exact count and an over-budget peak; `solve.run` returns structured
 `solve.too-large` before History allocation, suggests a larger `outputEvery`, and leaves the prior
-Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
+Result intact. The same regression also chooses the largest History admitted by the old five-vector
+heat allowance and verifies that the additional balance buffers now cause preallocation rejection
+without changing the Journal. Restoring the original Step makes that Result current and a later
+solve succeeds.
 An explicit regression independently checks that the pre-solve count equals the history rows
 produced by its element-frequency-derived integration schedule.
