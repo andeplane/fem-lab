@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -18,13 +18,14 @@ describe('codegen', () => {
     doc.commands.oneOf.pop();
     const tmp = path.join(tmpdir(), `femlab-codegen-check-${process.pid}.json`);
     let out = 0;
+    // written directly: the schema is far past Linux's 128 KB per-argument limit
+    writeFileSync(tmp, JSON.stringify(doc));
     try {
-      execFileSync(process.execPath, ['-e', `require('fs').writeFileSync(process.argv[1], process.argv[2])`, tmp, JSON.stringify(doc)]);
       execFileSync(process.execPath, [path.join(root, 'tools/codegen.mjs'), '--check', '--from', tmp], { stdio: 'pipe' });
     } catch (e) {
       out = (e as { status: number }).status;
     } finally {
-      execFileSync(process.execPath, ['-e', `require('fs').rmSync(process.argv[1], { force: true })`, tmp]);
+      rmSync(tmp, { force: true });
     }
     expect(out).toBe(1);
   });
