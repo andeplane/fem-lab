@@ -12,6 +12,7 @@ import { type Autosave, type ShareCommand, applyShared, indexedDbStore, makeAuto
 import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
+import type { TransientInput } from './transient';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -22,6 +23,8 @@ import type { CameraState, Viewer } from './viewer/viewer';
 export interface ViewerRef {
   current: Viewer | null;
   onReady?: () => void;
+  /** A scrub preview; only the final gesture is dispatched as a host Command. */
+  previewTransient?: (input: TransientInput) => Promise<void>;
 }
 
 const soon = (what: string, suggestion: string) => (): never => {
@@ -196,6 +199,11 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
         v();
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
         return results.animate(a);
+      },
+      playTransient: (a) => {
+        v();
+        if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.playTransient', 'solve a transient Step in the app');
+        return results.playTransient(a);
       },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {

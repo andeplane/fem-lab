@@ -58,7 +58,11 @@ async function boot(): Promise<void> {
     browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })),
   );
 
-  const results = new ResultsView(store, transport, viewer);
+  const results = new ResultsView(store, transport, viewer, {
+    now: () => performance.now(),
+    schedule: (callback, ms) => setTimeout(callback, ms),
+    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  });
   const ctx = makeHostContext(store, transport, viewer, host, scripts, results);
   // One sink is enough: the transport runs one Command at a time, so `Solving n %` can only
   // ever be about the Command the person is waiting for.
@@ -112,6 +116,7 @@ async function boot(): Promise<void> {
     // Before, not after: `file.openExample` refreshes on its own way out, and by then the fork
     // has to have happened or the example is written over the project it replaced.
     if (cmd.cmd === 'file.openExample') forkProject();
+    if (registry.describe(cmd.cmd).provider === 'engine' || ['file.open', 'file.restore', 'example.open', 'script.run'].includes(cmd.cmd)) results.invalidateTransient();
     // A long Command owns the Solve button and the solving card until it settles either way.
     const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
