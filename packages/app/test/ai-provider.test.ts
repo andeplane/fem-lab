@@ -140,6 +140,15 @@ describe('the OpenAI adapter', () => {
     ]);
   });
 
+  it('keeps cache writes inside uncached input and exposes their premium separately', async () => {
+    const event = completed();
+    const { client } = fakeOpenAI([{ ...event, response: { ...event.response, usage: {
+      input_tokens: 20, output_tokens: 5, input_tokens_details: { cached_tokens: 8, cache_write_tokens: 3 },
+    } } }]);
+    const events = await collect(openaiProvider('k', () => client).chat(request()));
+    expect(events.find((item) => item.type === 'usage')).toEqual({ type: 'usage', usage: { input: 12, output: 5, cacheRead: 8, cacheWrite: 3 } });
+  });
+
   it('hands unparseable arguments back rather than pretending they were empty', async () => {
     const { client } = fakeOpenAI([completed([call('c1', '{oops')])]);
     expect((await collect(openaiProvider('k', () => client).chat(request())))[0]).toEqual({ type: 'tool_use', id: 'c1', name: 'geometry_addBox', input: { unparsed: '{oops' } });
@@ -161,7 +170,7 @@ describe('the OpenAI adapter', () => {
   it('sends non-strict functions and request settings without server storage', async () => {
     const { client, seen } = fakeOpenAI([completed()]);
     const events = await collect(openaiProvider('k', () => client).chat(request()));
-    expect(seen[0]).toMatchObject({ instructions: 'rules', max_output_tokens: 100, store: false, stream: true });
+    expect(seen[0]).toMatchObject({ instructions: 'rules', max_output_tokens: 100, store: false, stream: true, service_tier: 'default' });
     expect(seen[0]!.tools).toEqual([{ type: 'function', name: 'geometry_addBox', description: 'add a box', parameters: { type: 'object' }, strict: false }]);
     expect(events.at(-1)).toEqual({ type: 'done', stopReason: 'end_turn' });
     const { client: bad } = fakeOpenAI([], new Error('429 rate limit'));
@@ -181,7 +190,7 @@ describe('the OpenAI adapter', () => {
 describe('cost and text helpers', () => {
   it('prices a turn from the table and refuses to invent a price for an unknown model', () => {
     expect(costOf('claude-opus-5', { input: 1e6, output: 1e6, cacheRead: 1e6 })).toBeCloseTo(5 + 25 + 0.5, 6);
-    expect(costOf('gpt-6-astra', { input: 1, output: 1, cacheRead: 0 })).toBeNull();
+    expect(costOf('unpriced-model', { input: 1, output: 1, cacheRead: 0 })).toBeNull();
   });
 
   it('joins the text blocks of an assistant turn and ignores the rest', () => {

@@ -1,7 +1,7 @@
 // The results state machine and everything it computes on the way to the screen: the design's
 // states 4–7 as one word, the Solve button's label, the legend's ticks, the balance line, and
 // the field→unit table both the Worker and the viewer read.
-import type { ModelSummary, PathResult, ResultSummary, Valued } from '@femlab/registry';
+import type { CostEstimate, ModelSummary, PathResult, ResultSummary, Valued } from '@femlab/registry';
 import { render } from 'preact';
 import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
@@ -10,7 +10,7 @@ import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
 import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
 import { Store, initialState, solveLabel, stageOf } from '../src/store';
 import { exaggerationHelp, probeLine } from '../src/ui/App';
-import { PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
+import { Checks, PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
 import { specOf, unavailable } from '../src/ui/Export';
 import type { WorkerTransport } from '../src/worker-transport';
 
@@ -494,4 +494,28 @@ describe("the viewer's rounding and its stale-displacement guard", () => {
     expect(fitsSurface(new Float32Array(6), positions)).toBe(false);
     expect(fitsSurface(null, positions)).toBe(false);
   });
+});
+
+
+it.each([null, false] as const)('shows honest cost bounds and %s feasibility in Checks', async (feasible) => {
+  const { waitForText } = await import('./wait-for');
+  const root = document.createElement('div');
+  const cost: CostEstimate = {
+    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, budgetBytes: 1_610_612_736,
+    feasible, note: 'Excludes direct-factor fill/workspace.',
+  };
+  const model = { bodies: [], warnings: [], meshSettings: {}, steps: [{ name: 'static' }] } as unknown as ModelSummary;
+  const query = vi.fn(async (q: { query: string }) => q.query === 'query.cost' ? cost : null);
+  render(<Checks s={{ ...initialState, model }} dispatch={async () => undefined} query={query} />, root);
+  try {
+    const text = await waitForText(() => root, feasible === false ? 'over budget' : 'not established');
+    expect(query).toHaveBeenCalledWith({ query: 'query.cost', step: 'static' });
+    expect(text).toContain('matrix non-zeros (upper bound)1296');
+    expect(text).toContain('mandatory memory (at least)1.7 GB');
+    expect(text).toContain('planning budget1.6 GB');
+    expect(text).toContain('Excludes direct-factor fill/workspace.');
+    expect(text).not.toContain('feasible here');
+  } finally {
+    render(null, root);
+  }
 });

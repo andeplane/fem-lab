@@ -12,8 +12,26 @@ conflicting published values and must be settled before the number is hard-coded
 
 The **Status** column has three states. `engine test` means a Rust test in
 `crates/engine/tests/` asserts it; `green` means the Command-level form in
-`crates/engine/benches/cases/*.json` passes under `femlab bench`, which is what makes a row a
+`crates/femlab/benches/cases/*.json` passes under `femlab bench`, which is what makes a row a
 Benchmark in the sense of PLAN rule 8; blank means not implemented yet.
+
+## Installed CLI cases (#306)
+
+`femlab bench` embeds every canonical `crates/femlab/benches/cases/*.json` file in filename
+order at build time. A copied release executable needs no checkout or adjacent data directory.
+The JSON Journals, published reference values and tolerances are unchanged. New case files are
+picked up automatically by the build and included in the Cargo source package.
+
+`--filter` still selects by case-name substring; text, `--json`, `--markdown` and
+`--update-docs <path>` keep their existing report interfaces. Explicit `--cases <directory>`
+uses only that directory, including an empty directory; a missing or malformed custom directory
+reports an error and never falls back to built-ins.
+
+Packaging verification copies a release executable out of a disposable build checkout, removes
+that owned checkout, and runs its embedded cases plus a custom case. The CLI regression also
+checks the installed-style heat bar against the independent linear conduction values
+25 °C at x/L = 1/4 and 50 °C at x/L = 1/2, and compares the complete embedded reports against
+those from the canonical JSON directory (excluding elapsed times).
 
 ## Measured status
 
@@ -73,6 +91,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | A6 | Free thermal expansion of a block | ε = αΔT, σ = 0 | 1e-10 | thermal strain path | engine test |
 | A7 | Reaction balance, every case | Σ reactions = −Σ applied loads | 1e-9 rel | Dirichlet handling and reaction recovery | engine test + green |
 | A8 | Journal replay, every case | Model hash identical after replay | exact | the engine is deterministic and scriptable | engine test |
+| A9 | GPU CG early convergence on identity and positive diagonal systems, 1 / 7 / 257 equations | `x_i = b_i / d_i`, including zero RHS | exact for powers-of-four diagonals | converged corrections survive the rest of a 25-iteration submission; reused contexts reset correctly | GPU test |
 
 A5 is run for all eight element kinds, driven by a prescribed end displacement so the reaction
 *is* `F`; A7's scale is the largest force that flows through the model, because a Step driven by
@@ -89,6 +108,14 @@ while unequal increments are rejected with both Load names and the Body. A8's nu
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
+
+A9 runs the shipped CG shaders on the adapter with budgets of 2, 25 and 50 iterations,
+including matrix chunks of three rows and a vector crossing the 256-thread workgroup boundary.
+The positive diagonal cases also pass through Jacobi scaling and f64 refinement at 1 and 2 CPU
+threads. These are algebraic identities at every tested size, so no mesh convergence rate
+applies. A coupled 2×2 SPD system checks the nonzero beta recurrence against its closed-form
+inverse; zero and negative curvature check that a broken-down batch preserves its last finite
+correction instead of dividing by an invalid denominator.
 
 A1 also runs all eight element families at length factors `1e-9`, `1e-6`, `1e-5`, `1e-3`,
 `1`, `1e3`, and `1e6`, with full and incompatible-mode formulations and every applicable
@@ -356,6 +383,26 @@ copy, removal after dependent Commands are removed, undo/redo, and deterministic
 Journal replay with identical memberships and displacement. Unknown Bodies give structured
 errors identifying the selector argument and leave the Model and Journal unchanged.
 
+## Thermal Body loads on mapped and swept meshers (#260)
+
+The registry regressions use a 2 × 1 m mapped rectangle with 0.25 m plane-stress thickness
+and its 3 m solid extrusion, at both element orders and 1, 2 and 4 axial subdivisions.
+`load.temperature` with ΔT = 50 K and α = 1e-5/K gives exact free strain 5e-4 in every
+direction and zero stress. Fixing both x ends instead gives σxx = −EαΔT = −100 MPa for
+E = 200 GPa and ν = 0.25; the free transverse strain is (1+ν)αΔT = 6.25e-4. Every node's
+displacement agrees within 1e-12 m and every stress component within 1e-3 Pa.
+
+For `load.heatSource`, q = 100 W/m³ and k = 10 W/(m·K), with both x ends held at 300 K,
+give `T(x) = 300 + 5x(2−x)` K. The assembled source power agrees with the independent
+prescribed-volume values qV = 50 W (Sheet including thickness) and 600 W (solid) within
+1e-9 W. All nodal temperatures agree with the parabola within 1e-9 K. At the first element's
+midpoint, linear interpolation has the exact error `5/n²` K, decreasing by four under each
+refinement; quadratic interpolation reproduces the parabola within 1e-9 K.
+
+The same Commands and analytical solutions survive undo/redo and verified exported Journal
+replay. Unknown Body names, including a bad name after a valid implicit target in the same
+list, report the indexed argument and preserve the previous Model and Journal.
+
 ## Where the reference values are published
 
 - NAFEMS "The Standard NAFEMS Benchmarks" P18 (1990); FV set in R0015 (1987). Values as
@@ -399,3 +446,20 @@ mapped geometry. The hook only recognizes uncut, axis-aligned 3D lattice boxes
 with one fully fixed end and one single-component force at the opposite end.
 Other geometries and boundary conditions explicitly report no applicable
 automatic reference; their verification belongs to a dedicated Benchmark.
+
+## Cost-query memory benchmark (#122)
+
+The estimator is tested against every small element-family assembly pattern at one, two and
+three DOFs per node, including shared nodes and unused nodes. Its mandatory-storage lower
+bound equals the actual lengths of two CSR arrays, element slots and their offsets, and one
+RHS; it makes no claim about unknown factor fill or solver workspace.
+
+A synthetic 50 × 50 × 100 Hex8 grid (250,000 elements) has exactly
+`9 × (3×50+1) × (3×50+1) × (3×100+1) = 61,767,909` directed scalar matrix entries at three
+DOFs per node. The independent tensor-neighbour graph formula checks the count while a
+per-thread allocator measures peak live scratch **after** mesh construction: at most 16 MiB,
+compared with 576 MB for element slots alone. A 750,000-element repeated overlapping-clique
+mesh forces the bounded fallback; its known graph count lies within the returned interval,
+the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
+1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
+These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.

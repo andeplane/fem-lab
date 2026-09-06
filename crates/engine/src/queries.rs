@@ -56,6 +56,9 @@ impl Engine {
                 let converted = units::convert(si, &to, Some(from.dim))?;
                 Ok(QueryResult::Converted(Converted { value: converted, unit: to }))
             }
+            Query::MaterialLibrary { name } => {
+                crate::material_library::query(name.as_deref()).map(QueryResult::MaterialLibrary)
+            }
             Query::Objects { kinds } => Ok(QueryResult::Objects(self.query_objects(kinds.as_deref()))),
             Query::Capabilities {} => Ok(QueryResult::Capabilities(Capabilities {
                 gpu: self.gpu.is_some(),
@@ -441,10 +444,20 @@ impl Engine {
 
     /// `query.cost`: what solving this Step would take, from the sparsity alone.
     pub(crate) fn query_cost(&mut self, step: &str) -> Result<CostEstimate, Error> {
-        self.model.step(step).ok_or_else(|| Error::not_found("step", step, &self.model.names(ObjectKind::Step)))?;
+        let procedure = self
+            .model
+            .step(step)
+            .ok_or_else(|| Error::not_found("step", step, &self.model.names(ObjectKind::Step)))?
+            .procedure;
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
-        Ok(crate::solve::cost_estimate(&built.mesh, built.mesh.dim, crate::command::Solver::Auto))
+        let dpn =
+            if matches!(procedure, crate::command::Procedure::HeatSteady | crate::command::Procedure::HeatTransient) {
+                1
+            } else {
+                built.mesh.dim
+            };
+        Ok(crate::solve::cost_estimate(&built.mesh, dpn, crate::command::Solver::Auto))
     }
 
     fn query_objects(&self, kinds: Option<&[ObjectKind]>) -> ObjectList {

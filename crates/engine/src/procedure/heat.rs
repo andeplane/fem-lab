@@ -14,6 +14,7 @@
 use crate::command::Field;
 use crate::engine::OnProgress;
 use crate::error::Error;
+use crate::error::ErrorCode;
 use crate::fem::assembly::{expand, pattern, reduce, resolve, Csr, Pattern, ResolvedConstraints};
 use crate::fem::checks;
 use crate::fem::heat::{capacity, conductivity, face_integrals, source, HeatLoad};
@@ -22,6 +23,53 @@ use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, Per};
 use crate::procedure::{blank, report, time_grid, vector_field, History, StepResult};
 use crate::solve::{direct::Direct, solve, LinearSolve, SolveInfo, SolveOptions};
+
+fn finite_positive(value: f64) -> bool {
+    value.is_finite() && value > 0.0
+}
+
+fn valid_theta(theta: f64) -> bool {
+    (0.0..=1.0).contains(&theta)
+}
+
+/// Require one positive transport property on every material used by the heat mesh.
+///
+/// These properties belong to the element-side Material extension point rather than the
+/// built-in constitutive law, so this check applies unchanged when the law is supplied by a
+/// plugin. A zero is also how an omitted optional property reaches the resolved Problem.
+fn positive_material_property(
+    p: &Problem<'_>,
+    procedure: &str,
+    field: &str,
+    description: &str,
+    value: fn(&crate::fem::element::Material) -> f64,
+) -> Result<(), Error> {
+    for (block, material) in p.material_of_block.iter().enumerate() {
+        let material = &p.materials[material.expect("checks accepted the material assignments")];
+        let got = value(material);
+        if !finite_positive(got) {
+            let body = &p.body_of_block[block];
+            return Err(Error::new(
+                ErrorCode::ModelIllPosed,
+                format!("Body '{body}' cannot run {procedure}: {description} must be finite and positive, got {got}"),
+            )
+            .at(format!("body '{body}'"))
+            .suggest(format!("material.add with {field}")));
+        }
+    }
+    Ok(())
+}
+
+/// Steady heat needs conductivity; transient heat additionally needs thermal capacity `rho cp`.
+fn validate_materials(p: &Problem<'_>, transient: bool) -> Result<(), Error> {
+    let procedure = if transient { "heat-transient" } else { "heat-steady" };
+    positive_material_property(p, procedure, "k", "conductivity k", |m| m.k)?;
+    if transient {
+        positive_material_property(p, procedure, "rho", "density rho", |m| m.rho)?;
+        positive_material_property(p, procedure, "cp", "specific heat cp", |m| m.cp)?;
+    }
+    Ok(())
+}
 
 /// The assembled steady system and what went into it.
 #[derive(Debug, Clone, PartialEq)]
@@ -162,6 +210,7 @@ pub async fn steady(
     if let Some(e) = checks::all(p).into_iter().next() {
         return Err(e);
     }
+    validate_materials(p, false)?;
     report(&mut progress, "assemble", 0.1, "building the conductivity matrix")?;
     let pat = pattern(p.mesh, 1);
     // The checks have already looked at every material, every Set and every Jacobian the
@@ -233,7 +282,13 @@ pub fn transient(
     if let Some(e) = checks::all(p).into_iter().next() {
         return Err(e);
     }
+    validate_materials(p, true)?;
     let (n_steps, dt) = time_grid(dt, t_end)?;
+    if !valid_theta(theta) {
+        return Err(Error::schema(format!("a transient Step needs theta in [0, 1], got {theta}"))
+            .at("theta")
+            .suggest("step.add with theta between 0 (explicit Euler) and 1 (backward Euler)"));
+    }
     report(&mut progress, "assemble", 0.1, "building the conductivity and capacity matrices")?;
     let pat = pattern(p.mesh, 1);
     let (sys, cap) = pool
@@ -253,9 +308,10 @@ pub fn transient(
     // prescribed values, which the amplitude scales linearly.
     let zeros = vec![0.0; a.n];
     let red = reduce(&a, &zeros, &rc);
-    // `C/Δt + θK` is positive definite for θ ≥ 0 once the temperature is held somewhere, and
-    // the checks have established that it is.
-    let mut factored = pool.install(|| Direct::factor(&red.k_ff)).expect("the reduced matrix is positive definite");
+    // Positive transport properties and theta make this positive definite for ordinary heat
+    // boundaries. A malformed extension or unsupported boundary must still be an Error rather
+    // than taking down the host Worker.
+    let mut factored = pool.install(|| Direct::factor(&red.k_ff))?;
 
     let g = |time: f64| amplitude.map_or(1.0, |amp| amp.at(time));
     let mut t = vec![initial; a.n];
@@ -307,4 +363,21 @@ pub fn history_extremes(h: &History) -> Vec<(f64, f64, f64)> {
             (t, lo, hi)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{finite_positive, valid_theta};
+
+    #[test]
+    fn transport_properties_and_theta_must_be_finite_and_in_range() {
+        assert!(finite_positive(f64::MIN_POSITIVE));
+        assert!(!finite_positive(0.0));
+        assert!(!finite_positive(f64::INFINITY));
+        assert!(!finite_positive(f64::NAN));
+        assert!(valid_theta(0.0));
+        assert!(valid_theta(1.0));
+        assert!(!valid_theta(-f64::MIN_POSITIVE));
+        assert!(!valid_theta(f64::NAN));
+    }
 }

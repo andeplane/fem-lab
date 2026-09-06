@@ -110,8 +110,8 @@ pub struct StepResult { pub fields: BTreeMap<String, post::Field>, pub scalars: 
                         pub modes: Option<Modes>, pub history: Option<History>, pub info: SolveInfo, pub checks: Vec<Warning> }
 // crates/engine/src/fem/checks.rs (plan A §7): each returns Err(Error) with code/cause/where/suggestion
 pub fn checks::run(p: &Problem<'_>) -> Result<(), Error>;                                   // J6.11; B maps Err → Warning for query.model
-// crates/engine/src/fem/assembly.rs (plan A §4): nnz for query.cost
-pub fn assembly::pattern(mesh: &Mesh, dofs_per_node: usize) -> Pattern;                   // Pattern.csr.nnz()
+// crates/engine/src/solve/mod.rs (plan A §5, amended by #122): bounded cost counting
+pub fn solve::cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostEstimate;
 // crates/engine/src/post (plan A §8)
 pub fn post::extremes(f: &Field, mesh: &Mesh) -> Vec<Extreme>;
 pub fn post::reactions_per_constraint(p: &Problem, r: &[f64]) -> Vec<(String, [f64; 3])>;
@@ -121,9 +121,10 @@ pub fn mesh::face_set_area(mesh: &Mesh, faces: &[Face]) -> f64;     // load.trac
 pub struct SolveOptions { .., pub on_progress: Option<&mut dyn FnMut(Progress) -> bool> }  // iteration progress + cooperative cancel
 ```
 
-`query.cost` is computed in B from `pattern(..).csr.nnz()` (bytes = nnz × 12 for CSR f64+u32,
-plus vectors) with `estimatedMs: None` until PLAN 2.9's calibration exists; there is no
-`cost_estimate` in plan A.
+`query.cost` calls the bounded estimator in A (#122): exact non-zero counts within a 16 MiB
+scratch cap, conservative bounds above it, and mandatory assembly storage including element
+slots. Feasibility is false above a fixed 1.5 GiB planning budget and unknown otherwise, since
+solver fill/workspace are excluded. See plan A §5 for the storage accounting.
 
 Until plan A lands there is no stub mesher or fake solver (that would be scaffolding for its own
 sake). Plan B lands with `mesh.set`, `solve.run`, `study.converge`, `query.mesh`, `query.result`,
@@ -377,7 +378,7 @@ never converts (ADR 0008 literally: units at the boundary).
 | `query.result` | `step?` (default last solved) | `ResultSummary { step, revision, stale, solver: {name, iterations?, residual?, timeMs}, fields, extremes: {field: {min: {value, at, node}, max}}, reactions: [{constraint, total: [F;3]}], appliedTotal: [F;3], balance: f64 }` | observe without pixels (ADR 0006); reaction balance is the first thing to check |
 | `query.probe` | `step?`, `field: Field`, `component?: u8`, `at: [Q<Length>;3]` | `ProbeResult { value, unit, element, nearestNode, interpolated: bool }` | value at a point |
 | `query.path` | `step?`, `field`, `component?`, `from: [Q;3]`, `to: [Q;3]`, `n: u32` | `PathResult { s: [..], values: [..], unit }` | line plots |
-| `query.cost` | `step` | `CostEstimate { dofs, nnz?, bytes, estimatedMs?, feasible, note }` | J4.7; computed here from A's `assembly::pattern(..).csr.nnz()`; `estimatedMs` is `None` until PLAN 2.9 calibration; `feasible` compares `bytes` with the wasm heap / `Gpu::limits()` |
+| `query.cost` | `step` | `CostEstimate { dofs, nnzLower, nnz, bytes, budgetBytes, feasible, note }` | J4.7; bounded counting (#122), `bytes` is an assembly lower bound; `feasible` is false above the planning budget, otherwise null; no host-memory guarantee |
 | `query.exportFormats` | – | `[ExportFormat { format, extension, mime, description, needs: ["mesh"\|"result"\|"geometry"\|"view"], available: bool, reason?: String }]` | the Export menu enumerates this (§7.10); `available` says whether the current Model can produce it (no mesh → no VTU) |
 | `query.export` | `spec: ExportSpec` (§7.10) | `ExportInfo { filename, mime, bytes: u64 }` (metadata only; the bytes cross as a typed array via the transport's `export` op) | "each export names the format, what it contains and its size before writing" (DESIGN-BRIEF §4.12) |
 | `query.objects` | `kinds?: Vec<ObjectKind>` | `[ObjectRef { ref: "body:beam", kind, name, summary: String }]` | the `@`-mention picker's index (§7.7); one call, every nameable thing in the Model plus Journal entries (`journal:12`) and Results (`result:static`) |
@@ -862,11 +863,14 @@ Decisions:
 - **Async and `&mut self`.** Verified to compile; the worker keeps a promise chain so at most one
   `dispatch`/`query` is in flight (a concurrent call would panic inside wasm-bindgen's borrow check).
 - **Cancel.** For CPU solves the wasm thread is busy and cannot observe a flag; `worker.terminate()`,
-  recreate the worker, then `replay_hashes(journal, skip_solves = true)` from the Journal the
-  transport fetched (`query.journal`) before the `solve.run`. Replaying rebuilds the Model *and* the
-  undo stack (a plain `import_file` would clear undo). What a cancel costs, stated in the UI note:
-  the redo stack and every earlier step's Result (Results are not in the ModelFile; they show as
-  "not solved"). For GPU solves the progress callback's `false` return is honoured at the next
+  recreate the worker, then `replay_hashes(journal, skip_solves = true)` from the transport's
+  acknowledged Journal shadow, including any redo tail. Undo back to the acknowledged active
+  revision after replay, preserving both undo and redo history. Undo/redo acknowledgements move
+  the active revision without becoming Journal entries; exports use the same acknowledged
+  dispatch path. Queued calls from the cancelled worker are rejected, and new calls wait for
+  recovery ([#110](https://github.com/andeplane/fem-lab/issues/110), building on #145).
+  Cancellation still discards every earlier step's Result (Results are not in the ModelFile;
+  they show as "not solved"). For GPU solves the progress callback's `false` return is honoured at the next
   await. Both paths are one `transport.cancel()`. With plan A's `on_progress` in `SolveOptions`
   (Reconciled table) the CPU path also becomes cooperative at 25-iteration granularity and the
   terminate path stays as the fallback for a hung solve.
@@ -914,7 +918,7 @@ femlab run <file.json> [--hashes] [--skip-solves] [--verify] [--as-script] [--js
     hash list (--hashes), or the Journal as a TypeScript script (--as-script). --verify replays and compares
     hash_after per entry; exit 3 on the first mismatch with its seq.
 femlab bench [--filter <substr>] [--json] [--markdown] [--cpu] [--threads N]
-    Runs every case in crates/engine/benches/cases/*.json: { name, journal: [...], checks: [{ query, path, expect, tol, rel }] }.
+    Runs every case in crates/femlab/benches/cases/*.json: { name, journal: [...], checks: [{ query, path, expect, tol, rel }] }.
     Exit 1 if any check fails. --markdown prints the status table BENCHMARKS.md links to.
 femlab export <file.json> --format vtu|msh|inp|stl|csv|script|journal|report [--step S] [--table T] --out <path>
     Replays (skip-solves unless --solve) and writes Engine::export(spec) to --out. The same exporters the app uses (§7.10);
@@ -1420,7 +1424,7 @@ their Commands, stores and tests immediately and their components when the desig
 | R9 | **Anthropic tool constraints**: names cannot contain `.` (`^[a-zA-Z0-9_-]{1,64}$`). | `toolNameFor` mapping with reverse lookup, asserted by the tool-list test; `run_script` + generated API reference as the primary mode (Anthropic/Cloudflare findings, note 05). Token cost is R20. |
 | R10 | **Schema drift** between Rust, JSON, TS, forms and tools. | Rust snapshot test + `codegen --check` + tool-list invariant test; three independent gates on one artefact. |
 | R11 | **Concurrent calls into the wasm `Engine`** panic ("recursive use of an object"). | The worker's promise queue; the transport never issues two calls at once; a test with a fake worker asserts ordering. |
-| R12 | **Cancelling a CPU solve** cannot interrupt wasm. | `terminate` + recreate + `replay(journal, skip_solves)`; the transport fetches the Journal before every `solve.run`; cancelled solve leaves the Journal as before the solve (the `solve.run` entry is appended only on `Ok`); earlier Results and the redo stack are lost and the UI says so. Plan A's `on_progress` in `SolveOptions` makes it cooperative later. |
+| R12 | **Cancelling a CPU solve** cannot interrupt wasm. | `terminate` + recreate + `replay(journal, skip_solves)` from the acknowledged shadow, then undo the redo tail back to the active revision. Cancelled and queued unacknowledged Commands stay outside the Journal; earlier Results are lost, while undo/redo history is preserved (#110). Plan A's `on_progress` in `SolveOptions` makes it cooperative later. |
 | R18 | **`showDirectoryPicker` cannot be automated** and needs a user gesture; handles need re-permission after reload. | `project.open { handle }` is the internal form; e2e uses an OPFS directory handle (same interface); reopen goes through a click that calls `requestPermission` first. |
 | R19 | **Clipboard writes need a user gesture** and `navigator.clipboard` is main-thread only. | `clipboard.copy` runs synchronously inside the ⌘C key handler; from a script/AI it returns `Unsupported` with the text in the error so the caller still gets it. |
 | R20 | **Tool count** is now ~70 (engine + host) ≈ 25–30 k tokens of definitions per turn. | Prompt caching on the tool prefix (tools render first and are stable); `run_script` first in the system rules; if evals show selection trouble, consolidate `view.*` into one `view` tool with an `action` field — a change in `toToolDefinitions`, not in the registry. |
