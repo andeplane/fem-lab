@@ -97,6 +97,12 @@ Result intact on rejection and ensure transient heat and modal analysis propagat
 without a panic. The modal case uses the first Bathe inverse iterate, whose coefficients
 scale as `rho²/E`: finite `rho=1e100 kg/m³` and `E=1e-200 Pa` exceed the f64 range.
 
+The standalone [faer platform discriminator](../tools/diagnose-faer-266/README.md) isolates
+#266 below FEM assembly: integer rank-one block products must match every entry exactly,
+and 3D Dirichlet grids of widths 5, 9, 13 must recover the constant solution 1 with maximum
+error and relative residual ≤1e-10. Seq, one-thread Rayon and four-thread Rayon run the same
+closed forms, with CPU capabilities recorded. This diagnostic complements D1's LE10 oracles.
+
 ## B. Beams and locking (phase 1–2)
 
 | # | Case | Reference | Tolerance | Proves | Status |
