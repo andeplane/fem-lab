@@ -338,8 +338,9 @@ textarea:focus {
 }
 
 /* Keep the complete desktop action set in the 46 px row. These tighter values preserve the
-   text labels while giving the flexible model and command fields the remaining room. */
-@media (min-width: 1180px) and (max-width: 1599px) {
+   text labels while giving the flexible model and command fields the remaining room.
+   Linux needs 1616 px at the wide settings; keep this allocation until 1700 px. */
+@media (min-width: 1180px) and (max-width: 1699px) {
   .topbar {
     gap: 4px;
     padding-inline: 8px;
@@ -2368,7 +2369,7 @@ input.model-name:focus {
 .model-title { display: flex; flex: 0 1 196px; align-items: center; gap: 6px; min-width: 60px; max-width: 196px; overflow: hidden; }
 .topbar input.model-name { flex: 1 1 auto; width: auto; min-width: 0; max-width: 190px; padding: 3px 0; border: 0; background: transparent; color: var(--text-high); }
 .unsaved-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #d9a441; }
-@media (min-width: 1180px) and (max-width: 1599px) {
+@media (min-width: 1180px) and (max-width: 1699px) {
   .model-title { flex-basis: 140px; max-width: 140px; }
 }
 @media (min-width: 1180px) and (max-width: 1299px) {
