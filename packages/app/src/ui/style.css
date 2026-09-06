@@ -144,7 +144,12 @@ textarea:focus {
 }
 .workspace {
   display: grid;
-  grid-template-columns: 274px minmax(520px, 1fr) 308px;
+  /* Splitters preview these variables while a gesture is in flight. Each side is capped
+     against the viewer's minimum so a wide panel cannot create page overflow at 1180 px. */
+  --tree-used: min(var(--tree-width, 274px), max(180px, calc(100% - 520px - var(--properties-width, 308px))));
+  --properties-used: min(var(--properties-width, 308px), max(240px, calc(100% - 520px - var(--tree-width, 274px))));
+  grid-template-columns: minmax(180px, var(--tree-used)) minmax(520px, 1fr) minmax(240px, var(--properties-used));
+  position: relative;
   min-height: 0;
   min-width: 0;
 }
@@ -605,9 +610,50 @@ textarea:focus {
 /* ── viewer ────────────────────────────────────────────────────────────────────────────── */
 .centre {
   display: grid;
-  grid-template-rows: minmax(460px, 1fr) 252px;
+  --bottom-used: min(var(--bottom-height, 252px), max(184px, calc(100% - 460px)));
+  grid-template-rows: minmax(460px, 1fr) var(--bottom-used);
+  position: relative;
   min-height: 0;
   min-width: 0;
+}
+
+/* A transparent hit target keeps the visible divider quiet while making the resize affordance
+   keyboard reachable. The active state is exposed by the cursor and focus ring. */
+.resize-handle {
+  position: absolute;
+  z-index: 8;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  touch-action: none;
+}
+.resize-handle.x {
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  margin-left: -5px;
+  cursor: col-resize;
+}
+.resize-handle.y {
+  left: 0;
+  right: 0;
+  height: 10px;
+  margin-top: -5px;
+  cursor: row-resize;
+}
+.resize-handle.tree {
+  left: var(--tree-used, 274px);
+}
+.resize-handle.properties {
+  right: var(--properties-used, 308px);
+}
+.resize-handle.bottom {
+  top: calc(100% - var(--bottom-used, 252px));
+}
+.resize-handle:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -1px;
+  background: #58b7d633;
 }
 .viewer {
   position: relative;
@@ -2115,6 +2161,20 @@ input.model-name:focus {
   z-index: 40;
   box-shadow: 0 0 40px #000000cc;
 }
+.resize-handle.assistant-resize.fixed {
+  position: fixed;
+  top: 0;
+  right: var(--assistant-width, 392px);
+  bottom: 0;
+  left: auto;
+  margin-left: 0;
+}
+.shell ~ .resize-handle.assistant-resize.fixed {
+  top: 46px;
+}
+.shell:has(.banner) ~ .resize-handle.assistant-resize.fixed {
+  top: 78px;
+}
 .shell ~ .assistant {
   top: 46px;
 }
@@ -2123,7 +2183,7 @@ input.model-name:focus {
 }
 @media (min-width: 1494px) {
   #app:has(> .assistant:not([hidden])) .workspace {
-    margin-right: 392px;
+    margin-right: var(--assistant-width, 392px);
   }
 }
 /* The start screen has no `.workspace` to carry the reservation, and the drawer would otherwise
@@ -2163,10 +2223,13 @@ input.model-name:focus {
     display: none;
   }
   .workspace {
-    grid-template-columns: 210px minmax(360px, 1fr) 260px;
+    --tree-used: min(var(--tree-width, 210px), max(180px, calc(100% - 360px - var(--properties-width, 260px))));
+    --properties-used: min(var(--properties-width, 260px), max(240px, calc(100% - 360px - var(--tree-width, 210px))));
+    grid-template-columns: minmax(180px, var(--tree-used)) minmax(360px, 1fr) minmax(240px, var(--properties-used));
   }
   .centre {
-    grid-template-rows: minmax(320px, 1fr) 220px;
+    --bottom-used: min(var(--bottom-height, 220px), max(184px, calc(100% - 320px)));
+    grid-template-rows: minmax(320px, 1fr) var(--bottom-used);
   }
   .results {
     grid-template-columns: 1fr;
@@ -2312,4 +2375,117 @@ input.model-name:focus {
 .sketch .seg.danger:hover {
   color: var(--red-text);
   border-color: var(--red-border);
+}
+/* Visually hidden text remains available to screen readers without changing the compact UI. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The viewer is the primary work surface on a phone or tablet. Keep the tree and Properties
+   reachable below it instead of forcing the desktop's three minimum-width columns to scroll. */
+@media (max-width: 1023px) {
+  .under-bar {
+    overflow: auto;
+  }
+  .resize-handle {
+    display: none;
+  }
+  .workspace {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+  .centre {
+    order: -1;
+    flex: none;
+    min-height: 520px;
+    grid-template-rows: minmax(320px, 1fr) 200px;
+  }
+  .panel.tree,
+  .panel.props {
+    flex: none;
+    min-width: 0;
+    border-right: 0;
+    border-left: 0;
+  }
+  .panel.tree {
+    order: 1;
+    min-height: 190px;
+    max-height: 280px;
+    border-top: 1px solid var(--border-panel);
+  }
+  .panel.props {
+    order: 2;
+    min-height: 260px;
+    border-top: 1px solid var(--border-panel);
+  }
+  .viewer {
+    min-width: 0;
+    min-height: 320px;
+  }
+  .bottom {
+    min-width: 0;
+  }
+  .tabs {
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .shell {
+    grid-template-rows: auto 1fr;
+  }
+  .topbar {
+    min-height: 46px;
+    height: auto;
+    padding: 6px 8px;
+    overflow-x: auto;
+  }
+  .centre {
+    min-height: 500px;
+    grid-template-rows: minmax(280px, 1fr) 190px;
+  }
+  .panel.tree {
+    max-height: 250px;
+  }
+  .overlay.wide {
+    padding: 8px;
+  }
+  .gallery-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .gallery-sub {
+    flex-basis: 100%;
+  }
+  .cards-grid {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 10px;
+  }
+  .export-row {
+    grid-template-columns: 18px 40px minmax(0, 1fr) auto;
+  }
+  .export-note,
+  .export-cmd {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }
