@@ -126,6 +126,11 @@ impl Engine {
             indices.extend(s.triangles.iter().flatten().copied());
             tri_set.extend(s.tri_face.iter().map(|f| f.and_then(|i| s.set_of_face[i as usize]).unwrap_or(u32::MAX)));
             tri_body.extend(s.tri_elem.iter().map(|&e| built.mesh.block_of(e).0 as u32));
+            if !s.edges.is_empty() {
+                edges.extend(s.edges.iter().flatten().copied());
+                edge_set.extend(s.set_of_face.iter().map(|set| set.unwrap_or(u32::MAX)));
+                edge_body.extend(s.faces.iter().map(|face| built.mesh.block_of(face.elem).0 as u32));
+            }
             set_names = s.set_names;
             body_names = built.body_of_block.clone();
             "mesh"
