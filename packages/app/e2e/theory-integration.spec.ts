@@ -53,4 +53,16 @@ test('@cpu project replacements clear theory only after success', async ({ page 
   await openBenchmark();
   await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'fresh project' }));
   await expect(panel).toHaveCount(0);
+  await openBenchmark();
+  // #250 tracks the bundled Journal importer; rejection must preserve the active reference.
+  const exampleFailed = await page.evaluate(async () => {
+    try {
+      await window.fem.dispatch({ cmd: 'example.open', name: 'cantilever-hex20' });
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  expect(exampleFailed).toBe(true);
+  await expect(panel.locator('.theory-values')).toBeVisible();
 });
