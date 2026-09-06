@@ -103,6 +103,12 @@ export interface UiState {
   projects: ProjectMeta[];
   /** `query.project`: the open project and whether a write is in flight; `null` before one. */
   project: OpenProject | null;
+  /**
+   * `data-field` path → the value the running tutorial step expects there, which `SchemaForm`
+   * shows as that input's `placeholder` (issue #46). The tutorial module never reaches into
+   * `src/ui/**`; this field is the whole of the dependency, and it points one way.
+   */
+  formHints: Record<string, string> | null;
 }
 
 /** The design's states 4–7, as one word derived from what the store already holds. */
@@ -170,6 +176,7 @@ export const initialState: UiState = {
   // --- plan D ---
   projects: [],
   project: null,
+  formHints: null,
 };
 
 const MAX_CONSOLE = 500;

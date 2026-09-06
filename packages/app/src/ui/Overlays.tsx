@@ -269,7 +269,7 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         <span class="section-head">New project</span>
         <div class="new-project">
           <input class="mono new-name" aria-label="project name" data-cmd="project.new" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
-          <Cmd dispatch={dispatch} cmd="project.new" class="apply" args={{ name }} disabled={!s.ready} title="project.new">
+          <Cmd dispatch={dispatch} cmd="project.new" opens="model.new" class="apply" args={{ name }} disabled={!s.ready} title="project.new">
             New project
           </Cmd>
           <span class="faint">an empty Model, saved from the first Command</span>
