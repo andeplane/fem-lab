@@ -3562,7 +3562,7 @@ fn the_heat_commands_validate_their_names_sets_and_units() {
 
 // ------------------------------------------------------------------ phase 3: the 2D, axisymmetric and 3D Benchmarks
 //
-// Every case below also exists as a Journal with checks in `benches/cases`, which is what
+// Every case below also exists as a Journal with checks in `crates/femlab/benches/cases`, which is what
 // `femlab bench` runs; the tests here are the half a case file cannot hold — the mesh
 // sequences, the Richardson extrapolations and the two models that must agree with each other.
 

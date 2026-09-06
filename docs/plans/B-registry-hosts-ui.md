@@ -915,7 +915,7 @@ femlab run <file.json> [--hashes] [--skip-solves] [--verify] [--as-script] [--js
     hash list (--hashes), or the Journal as a TypeScript script (--as-script). --verify replays and compares
     hash_after per entry; exit 3 on the first mismatch with its seq.
 femlab bench [--filter <substr>] [--json] [--markdown] [--cpu] [--threads N]
-    Runs every case in crates/engine/benches/cases/*.json: { name, journal: [...], checks: [{ query, path, expect, tol, rel }] }.
+    Runs every case in crates/femlab/benches/cases/*.json: { name, journal: [...], checks: [{ query, path, expect, tol, rel }] }.
     Exit 1 if any check fails. --markdown prints the status table BENCHMARKS.md links to.
 femlab export <file.json> --format vtu|msh|inp|stl|csv|script|journal|report [--step S] [--table T] --out <path>
     Replays (skip-solves unless --solve) and writes Engine::export(spec) to --out. The same exporters the app uses (§7.10);
