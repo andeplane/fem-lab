@@ -3591,6 +3591,65 @@ fn the_observed_rate_recovers_a_planted_slope_and_richardson_the_limit() {
     assert!(richardson(&[1.0, 1.0, 1.0], &[3.0, 2.0, 1.0]).0.is_nan());
 }
 
+/// A: exact manufactured power laws, independent of the extrapolation equation/solver.
+#[test]
+fn richardson_recovers_unequal_refinements_and_is_invariant_to_units() {
+    let (limit, rate) = richardson(&[3.0, 2.0, 1.0], &[10.0, 5.0, 2.0]);
+    assert!((limit - 1.0).abs() < 1e-12 && (rate - 2.0).abs() < 1e-12);
+    for sizes in [[4.0, 2.0, 1.0], [7.0, 4.0, 1.0], [7.0, 2.0, 1.0]] {
+        for p in [0.5, 1.0, 2.0, 3.0, 4.0] {
+            for c in [-0.8, 0.8] {
+                for length_unit in [1e-100, 1.0, 1e100] {
+                    for quantity_unit in [1e-200, 1.0, 1e200] {
+                        let h = sizes.map(|h| h * length_unit);
+                        let q = sizes.map(|h| (1.25 + c * libm::pow(h, p)) * quantity_unit);
+                        let (limit, rate) = richardson(&h, &q);
+                        assert!((rate - p).abs() < 1e-9, "{h:?}, {q:?}: p={rate}, expected {p}");
+                        assert!((limit / quantity_unit - 1.25).abs() < 1e-8, "{h:?}: limit={limit}");
+                    }
+                }
+            }
+        }
+    }
+    // The extra coarse value is outside the asymptotic range and must be ignored.
+    let (limit, rate) = richardson(&[1.0, 100.0, 3.0, 2.0], &[2.0, -999.0, 10.0, 5.0]);
+    assert!((limit - 1.0).abs() < 1e-12 && (rate - 2.0).abs() < 1e-12);
+    // The mesh-size quotient overflows, although the power-law data and its rate do not.
+    let h = [1e200, 1e-200, 1e-300];
+    let q = h.map(|h| 1.25 + 0.8 * libm::pow(h, 0.001));
+    let (limit, rate) = richardson(&h, &q);
+    assert!((limit - 1.25).abs() < 1e-10 && (rate - 0.001).abs() < 1e-12);
+}
+
+#[test]
+fn richardson_declines_undefined_or_nonconvergent_power_laws() {
+    let cases: &[(&[f64], &[f64])] = &[
+        (&[3.0, 2.0], &[10.0, 5.0]),
+        (&[3.0, 2.0, 1.0], &[10.0, 5.0]),
+        (&[4.0, 2.0, 1.0], &[1.25, 1.5, 2.0]), // q = 1 + 1/h diverges
+        (&[4.0, 2.0, 1.0], &[3.0, 2.0, 1.0]),  // q = 1 + log2(h) has no finite limit
+        (&[4.0, 2.0, 1.0], &[1.0, 1.0, 1.0]),
+        (&[4.0, 2.0, 1.0], &[3.0, 1.0, 2.0]),
+        (&[4.0, 2.0, 1.0], &[3.0, 2.0, 2.0]),
+        (&[4.0, 2.0, 1.0], &[3.0, 3.0, 2.0]),
+        (&[3.0, 2.0, 0.0], &[10.0, 5.0, 2.0]),
+        (&[3.0, 2.0, -1.0], &[10.0, 5.0, 2.0]),
+        (&[3.0, 2.0, 2.0], &[10.0, 5.0, 2.0]),
+        (&[3.0, 3.0, 2.0], &[10.0, 5.0, 2.0]),
+        (&[f64::INFINITY, 2.0, 1.0], &[10.0, 5.0, 2.0]),
+        (&[f64::NAN, 2.0, 1.0], &[10.0, 5.0, 2.0]),
+        (&[3.0, 2.0, 1.0], &[f64::NAN, 5.0, 2.0]),
+        (&[3.0, 2.0, 1.0], &[10.0, f64::INFINITY, 2.0]),
+        (&[3.0, 2.0, 1.0], &[f64::MAX, -f64::MAX, -f64::MAX / 2.0]),
+        (&[3.0, 2.0, 1.0], &[f64::MAX, f64::MAX, -f64::MAX]),
+        (&[4.0, 2.0, 1.0], &[2.001e307, 1e307, 0.0]), // the limit overflows
+    ];
+    for &(h, q) in cases {
+        let (limit, rate) = richardson(h, q);
+        assert!(limit.is_nan() && rate.is_nan(), "{h:?}, {q:?}: ({limit}, {rate})");
+    }
+}
+
 /// A point can sit inside an element's bounding box and outside the element: on a tetrahedral
 /// mesh most of them do, and the probe must walk past those.
 #[test]
