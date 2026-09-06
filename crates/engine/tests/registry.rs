@@ -1224,6 +1224,51 @@ fn objects_and_idealisation_strings_for_2d() {
 }
 
 #[test]
+fn unmeshed_sheet_preview_preserves_transformed_hole_boundaries() {
+    let mut e = engine();
+    let commands: Vec<Command> = serde_json::from_str(include_str!("fixtures/sheet-preview.json")).unwrap();
+    let mut nop = |_: Progress| true;
+    for command in commands {
+        pollster::block_on(e.dispatch(command, &mut nop)).unwrap();
+    }
+    assert!(e.model().mesh.is_none());
+    let preview = e.geometry_surface().unwrap();
+    assert_eq!(preview.len(), 1);
+    assert_eq!(preview[0].body, "plate");
+    assert_eq!(preview[0].outlines.len(), 2);
+    let mut area = 0.0;
+    for (i, outline) in preview[0].outlines.iter().enumerate() {
+        assert_eq!(outline.pts.len(), 4);
+        assert_eq!(outline.tags.len(), 4);
+        let twice_area: f64 = (0..4)
+            .map(|j| {
+                let a = outline.pts[j];
+                let b = outline.pts[(j + 1) % 4];
+                a[0] * b[1] - b[0] * a[1]
+            })
+            .sum();
+        assert!((twice_area / 2.0 - [24.0, -6.0][i]).abs() < 1e-12);
+        area += twice_area / 2.0;
+    }
+    assert!((area - 18.0).abs() < 1e-12, "(4 − 1) m² times the 2 × 3 in-plane scaling");
+    let outer = &preview[0].outlines[0];
+    for (tag, start, end) in [
+        ("plate.left", [-1.0, 7.0], [5.0, 7.0]),
+        ("plate.bottom", [5.0, 7.0], [5.0, 11.0]),
+        ("plate.right", [5.0, 11.0], [-1.0, 11.0]),
+        ("plate.top", [-1.0, 11.0], [-1.0, 7.0]),
+    ] {
+        let edge = outer.tags.iter().position(|name| name == tag).unwrap();
+        for k in 0..2 {
+            assert!((outer.pts[edge][k] - start[k]).abs() < 1e-12);
+            assert!((outer.pts[(edge + 1) % 4][k] - end[k]).abs() < 1e-12);
+        }
+    }
+    assert!(preview[0].outlines[1].tags.iter().all(|tag| tag == "plate.hole"));
+    assert_eq!(e.revision(), 3, "preview is derived data, never a mesh Command");
+}
+
+#[test]
 fn imported_file_with_a_broken_shape_fails_at_query_time() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"n"}"#);
@@ -1322,7 +1367,7 @@ fn the_cantilever_meshes_and_every_auto_face_resolves() {
     // and a second read uses the cache
     assert_eq!(mesh_summary(&mut e).elements, 4);
     assert_eq!(e.mesh_surface().unwrap().triangles.len(), 2 * (1 + 1 + 4 * 4));
-    assert_eq!(e.geometry_surface().unwrap()[0].0, "beam");
+    assert_eq!(e.geometry_surface().unwrap()[0].body, "beam");
 }
 
 #[test]
@@ -2043,6 +2088,8 @@ fn a_triangle_section_cannot_be_swept_into_hexes() {
     let er = e.query(Query::Mesh {}).unwrap_err();
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("mesher.sweep")));
     assert!(er.cause.contains("quad4 or quad8 base mesh"), "{}", er.cause);
+    // Keep the explicit source under a distinct name; the mapped block owns its geometry.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"ring","to":"source"}"#);
     // the same section as one mapped block sweeps fine
     ok(
         &mut e,
@@ -2112,6 +2159,7 @@ fn solving_the_cantilever_reports_the_tip_deflection_and_balanced_reactions() {
     // the applied total is the 1 kN the traction asked for, and the root carries it back
     assert_eq!(r.applied_total[2].unit, "kN");
     assert!((r.applied_total[2].value + 1.0).abs() <= 1e-9);
+    assert_eq!(r.reaction_quantity, femlab_engine::units::ReactionQuantity::Force);
     assert_eq!(r.reactions.len(), 1);
     assert_eq!(r.reactions[0].constraint, "root");
     assert!((r.reactions[0].total[2].value - 1.0).abs() <= 1e-9);
@@ -2130,6 +2178,10 @@ fn solving_the_cantilever_reports_the_tip_deflection_and_balanced_reactions() {
     // query.model now says the Step is solved
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
     assert!(m.steps[0].solved);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"force":"kN","power":"kW"}}"#);
+    let shown = result(&mut e);
+    assert_eq!(shown.reactions, r.reactions);
+    assert_eq!(shown.applied_total, r.applied_total);
 }
 
 /// B1 again, through `solve.run { solver: 'cpu-pcg' }`: the iterative path is a Command away
@@ -3025,6 +3077,96 @@ fn a_steady_heat_step_conducts_a_linear_profile_and_exports_it() {
     }
 }
 
+/// E: exact thermal-resistance/flux balances, with stored SI power exposed in display units.
+#[test]
+fn thermal_reactions_keep_power_units_in_every_result_view() {
+    for nx in [2, 4] {
+        // Positive reaction means heat removed at the cold support. The convection case has
+        // Q = A*(T_inf-T_cold)/(L/k + 1/h); the flux case has Q = q*A.
+        for (load, removed) in [
+            (r#"{"cmd":"load.heatFlux","name":"in","on":"bar.xmax","q":"1000 W/m^2"}"#, 10.0),
+            (
+                r#"{"cmd":"load.convection","name":"in","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"100 degC"}"#,
+                0.01 * 100.0 / (1.0 / 45.0 + 1.0 / 50.0),
+            ),
+        ] {
+            let mut e = engine();
+            heat_bar(&mut e);
+            ok(
+                &mut e,
+                &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{{"nx":{nx},"ny":1,"nz":1}}}}}}"#),
+            );
+            ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+            ok(&mut e, load);
+            ok(
+                &mut e,
+                r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["cold"],"loads":["in"]}"#,
+            );
+            ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+            let original = result_of(&mut e, Some("heat"));
+            assert_eq!(original.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
+            assert!((original.reactions[0].total[0].value - removed).abs() < 1e-9);
+            assert_eq!(original.reactions[0].total[0].unit, "W");
+            let raw = e.field(Some("heat"), Field::Reaction).unwrap().clone();
+            assert!((raw.data.iter().step_by(3).sum::<f64>() - removed).abs() < 1e-9);
+            for (force, power, factor) in [("kN", "W", 1.0), ("N", "kW", 0.001)] {
+                ok(&mut e, &format!(r#"{{"cmd":"model.setUnits","units":{{"force":"{force}","power":"{power}"}}}}"#));
+                let r = result_of(&mut e, Some("heat"));
+                assert!(r.stale);
+                assert_eq!(r.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
+                assert!((r.reactions[0].total[0].value - factor * removed).abs() < 1e-9);
+                assert!(r.reactions[0].total.iter().chain(&r.applied_total).all(|v| v.unit == power));
+                assert!((r.applied_total[0].value - original.applied_total[0].value * factor).abs() < 1e-9);
+                // The four cold face nodes carry equal quarters of the exact removed power.
+                let extreme = r.extremes.iter().find(|x| x.field == "reaction" && x.component == 0).unwrap();
+                assert_eq!(extreme.max.unit, power);
+                assert!((extreme.max.value - factor * removed / 4.0).abs() < 1e-9);
+                // Changing display units marks the retained Result stale. Re-solving the same
+                // physics under the new units refreshes that Result; omitted-step queries below
+                // must then find this refreshed default and keep its thermal power dimension.
+                ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+                let refreshed = result_of(&mut e, Some("heat"));
+                assert!(!refreshed.stale);
+                assert_eq!(refreshed.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
+                assert!(refreshed.reactions[0].total.iter().chain(&refreshed.applied_total).all(|v| v.unit == power));
+                let probe = e
+                    .query(Query::Probe {
+                        step: None,
+                        field: Field::Reaction,
+                        component: Some(0),
+                        at: [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")],
+                    })
+                    .unwrap();
+                let probe = serde_json::to_value(probe).unwrap();
+                assert_eq!(probe["value"]["unit"], power);
+                assert!((probe["value"]["value"].as_f64().unwrap() - factor * removed / 4.0).abs() < 1e-9);
+                let path = e
+                    .query(Query::Path {
+                        step: None,
+                        field: Field::Reaction,
+                        component: Some(0),
+                        from: [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")],
+                        to: [Q::text("1 m"), Q::text("0 m"), Q::text("0 m")],
+                        n: 2,
+                    })
+                    .unwrap();
+                let path = serde_json::to_value(path).unwrap();
+                assert_eq!(path["unit"], power);
+                assert!((path["values"][0].as_f64().unwrap() - factor * removed / 4.0).abs() < 1e-9);
+                let md = report(&mut e, Some("heat"), Some(vec![ReportSection::Results])).markdown;
+                assert!(md.contains("| Constraint | Power | Unit |"), "{md}");
+                assert!(md.contains("max|Q|"), "{md}");
+                let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"heat"}"#).output;
+                let output = serde_json::to_value(output).unwrap();
+                assert!(output["text"].as_str().unwrap().contains("Name=\"ReactionPower_W\""));
+                assert_eq!(e.field(Some("heat"), Field::Reaction).unwrap(), &raw);
+            }
+            // #208 tracks the separate balance diagnostic sign/net-convection defect. These
+            // tests verify physical removed power, not the currently incorrect balance scalar.
+        }
+    }
+}
+
 /// Convection, flux and source loads reach the Model, report themselves, survive a Body rename,
 /// and hold a Step that has no fixed temperature at all.
 #[test]
@@ -3268,6 +3410,8 @@ fn a_transient_heat_step_reports_its_history_and_validates_its_amplitude() {
     ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
     let summary = result_of(&mut e, Some("warm"));
     // Rows at t = 0, 10 and 20 s: the initial state and every fifth of the ten steps.
+    assert_eq!(summary.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
+    assert!(summary.reactions.iter().flat_map(|r| &r.total).all(|v| v.unit == "W"));
     assert_eq!(summary.history.len(), 3);
     assert_eq!(summary.history[0].time.value, 0.0);
     assert_eq!(summary.history[2].time.value, 20.0);
@@ -4947,6 +5091,237 @@ fn automatic_hand_checks_require_the_steps_actual_supports_and_end_load() {
     }
 }
 
+/// A source-heated rod has T(x)=q*x*(L-x)/(2*k), with 0°C ends. Linear nodal
+/// interpolation at x=L/3 has the independent error q*h²/(9*k) on these meshes.
+#[test]
+fn convergence_studies_use_the_heat_operator_and_one_temperature_dof() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"left","on":"bar.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"900 W/m^3"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["left","right"],"loads":["source"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    let original_model = e.model_hash();
+    let original = e.field(Some("heat"), Field::Temperature).unwrap().data.clone();
+    for restore in [true, false] {
+        let r = study(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"study.converge","step":"heat","sizes":["0.5 m","0.25 m","0.125 m"],
+          "quantity":{{"kind":"probe","field":"temperature","at":["0.3333333333333333 m","0.05 m","0.05 m"]}},"restore":{restore}}}"#
+            ),
+        );
+        assert_eq!(r.unit, "degC");
+        for (i, row) in r.rows.iter().enumerate() {
+            let h = [0.5_f64, 0.25, 0.125][i];
+            let expected = 20.0 / 9.0 - 20.0 * h * h / 9.0;
+            assert!((row.value - expected).abs() < 1e-9, "{row:?}, expected {expected} degC");
+            assert_eq!(row.dofs, [12, 45, 225][i]);
+        }
+        assert!((r.extrapolated.unwrap() - 20.0 / 9.0).abs() < 1e-8);
+        assert!((r.observed_rate.unwrap() - 2.0).abs() < 1e-7);
+        if restore {
+            assert_eq!(e.model_hash(), original_model);
+            assert_eq!(e.field(Some("heat"), Field::Temperature).unwrap().data, original);
+        } else {
+            assert_eq!(e.mesh().unwrap().mesh.n_nodes(), 225);
+            assert!(!result_of(&mut e, Some("heat")).stale);
+            assert!(
+                (probe_at(&mut e, "heat", Field::Temperature, None, ["0.3333333333333333 m", "0.05 m", "0.05 m"])
+                    - r.rows[2].value)
+                    .abs()
+                    < 1e-9
+            );
+        }
+    }
+}
+
+/// Uniform heating T=10t K: q=rho*cp*10 and the same ramp at both ends. The
+/// time integration is exact for this linear function, independently of mesh and theta.
+#[test]
+fn convergence_studies_keep_transient_initial_time_and_amplitude_settings() {
+    for end in [2.0, 4.0] {
+        let mut e = engine();
+        heat_bar(&mut e);
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"temperature":"K"}}"#);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+        ok(&mut e, r#"{"cmd":"constraint.temperature","name":"left","on":"bar.xmin","value":"100 K"}"#);
+        ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":"100 K"}"#);
+        ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"36110000 W/m^3"}"#);
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["left","right"],"loads":["source"],
+            "dt":"0.25 s","tEnd":"{end} s","theta":0.5,"initial":"0 K","outputEvery":3,
+            "amplitude":{{"kind":"table","t":["0 s","10 s"],"value":[0.0,1.0]}}}}"#
+            ),
+        );
+        let r = study(
+            &mut e,
+            r#"{"cmd":"study.converge","step":"warm","sizes":["0.5 m","0.25 m","0.125 m"],
+            "quantity":{"kind":"probe","field":"temperature","at":["0.5 m","0.05 m","0.05 m"]},"restore":false}"#,
+        );
+        assert_eq!(r.unit, "K");
+        for row in &r.rows {
+            assert!((row.value - 10.0 * end).abs() < 1e-8, "{row:?}");
+        }
+        let summary = result_of(&mut e, Some("warm"));
+        assert_eq!(summary.history.last().unwrap().time.value, end);
+        assert_eq!(summary.history[1].time.value, 0.75);
+        assert_eq!(summary.history[0].max.value, 0.0);
+    }
+}
+
+#[test]
+fn convergence_studies_use_explicit_dynamics_for_a_falling_block() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"drop-study"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["0.1 m","0.1 m","0.1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"1 ms","dtFactor":0.8}"#,
+    );
+    let r = study(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"fall","sizes":["0.1 m","0.05 m","0.025 m"],
+        "quantity":{"kind":"probe","field":"displacement","component":2,"at":["0.05 m","0.05 m","0.05 m"]},"restore":false}"#,
+    );
+    let expected = -0.5 * 9.81 * 1e-6;
+    for row in &r.rows {
+        assert!((row.value - expected).abs() < 0.01 * expected.abs(), "{row:?}");
+    }
+    assert_eq!(result_of(&mut e, Some("fall")).solver, "cpu-explicit");
+}
+
+#[test]
+fn convergence_studies_reject_modal_and_chained_steps_without_mutation() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":12,"ny":1,"nz":1}},"order":2}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"bar.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["cold","hot"],"loads":[]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"chain","procedure":"static","after":"heat","constraints":["root"],"loads":[]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root"],"loads":[],"nModes":1}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"chain"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    // Euler–Bernoulli f1=β1²/(2πL²)*sqrt(EI/(rho*A)), β1=1.8751040687.
+    let frequency = result_of(&mut e, Some("modes")).frequencies[0].value;
+    let reference = 1.8751040687_f64.powi(2) / (2.0 * std::f64::consts::PI)
+        * (210e9_f64 * 0.1_f64.powi(2) / (12.0 * 7850.0)).sqrt();
+    assert!(rel(frequency, reference) < 0.02, "{frequency} Hz vs {reference} Hz");
+    let mode = e.field(Some("modes"), Field::Displacement).unwrap().data.clone();
+    let before = e.export_file();
+    let heat = e.field(Some("heat"), Field::Temperature).unwrap().data.clone();
+    let displacement = e.field(Some("chain"), Field::Displacement).unwrap().data.clone();
+    for (step, location) in [("modes", "step.procedure"), ("chain", "step.after")] {
+        let error = err(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"study.converge","step":"{step}","sizes":["0.1 m","0.05 m"],"quantity":{{"kind":"max","field":"displacement"}},"restore":false}}"#
+            ),
+        );
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(error.where_.as_deref(), Some(location));
+        assert!(error.cause.contains(step));
+        assert!(error.suggestion.unwrap().contains("solve.run"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), serde_json::to_value(&before).unwrap());
+        assert_eq!(e.field(Some("heat"), Field::Temperature).unwrap().data, heat);
+        assert_eq!(e.field(Some("chain"), Field::Displacement).unwrap().data, displacement);
+        assert_eq!(e.field(Some("modes"), Field::Displacement).unwrap().data, mode);
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"no-clock","procedure":"heat-transient","constraints":["cold","hot"],"loads":[],"tEnd":"1 s"}"#,
+    );
+    let before = e.export_file();
+    let missing = err(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"no-clock","sizes":["1 m","0.5 m"],"quantity":{"kind":"max","field":"temperature"}}"#,
+    );
+    assert_eq!((missing.code, missing.where_.as_deref()), (ErrorCode::Schema, Some("dt")));
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), serde_json::to_value(before).unwrap());
+}
+
+#[test]
+fn editable_definitions_preserve_every_public_object_variant() {
+    let cases: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("../../../tools/fixtures/editable-definitions.json")).unwrap();
+    for case in cases {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"base","size":["1 m","1 m","1 m"]}"#);
+        ok(&mut e, r#"{"cmd":"step.add","name":"prior","procedure":"heat-steady","constraints":[],"loads":[]}"#);
+        ok(&mut e, &case["command"].to_string());
+        let kind: ObjectKind = serde_json::from_value(case["kind"].clone()).unwrap();
+        for name in ["editable", "renamed", "copy"] {
+            if name == "renamed" {
+                ok(
+                    &mut e,
+                    &serde_json::json!({"cmd":"model.rename","kind":kind,"name":"editable","to":name}).to_string(),
+                );
+            }
+            if name == "copy" {
+                ok(
+                    &mut e,
+                    &serde_json::json!({"cmd":"model.duplicate","kind":kind,"name":"renamed","as":name}).to_string(),
+                );
+            }
+            let before = e.model().clone();
+            let revision = e.revision();
+            let QueryResult::Definition(def) = e.query(Query::Definition { kind, name: name.into() }).unwrap() else {
+                panic!("definition")
+            };
+            assert_eq!(e.revision(), revision, "a definition Query does not edit the Model");
+            ok(&mut e, &serde_json::to_string(&def.command).unwrap());
+            assert_eq!(e.model(), &before, "{} roundtrip of {name}", case["command"]);
+        }
+        let error = e.query(Query::Definition { kind, name: "missing".into() }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::NotFound);
+        assert!(error.suggestion.is_some());
+    }
+}
+
+#[test]
+fn definitions_refuse_internal_imported_shapes_without_erasing_face_tags() {
+    use femlab_geometry::Shape;
+    let named = Shape::Named { name: "original-face-owner".into(), shape: Box::new(Shape::Box { size: [1.0; 3] }) };
+    let box_ = Shape::Box { size: [2.0; 3] };
+    let shapes = vec![
+        named.clone(),
+        Shape::Union { shapes: vec![named.clone()] },
+        Shape::Intersect { shapes: vec![named.clone()] },
+        Shape::Subtract { from: Box::new(named.clone()), cut: vec![] },
+        Shape::Subtract { from: Box::new(box_), cut: vec![named.clone()] },
+        Shape::Transform { shape: Box::new(named), at: femlab_geometry::Affine3::translation([0.0; 3]) },
+    ];
+    for shape in shapes {
+        let mut e = engine();
+        let mut file = e.export_file();
+        file.model.bodies.push(femlab_engine::model::Body { name: "imported".into(), shape, material: None });
+        e.import_file(file).unwrap();
+        let before = e.model().clone();
+        let error = e.query(Query::Definition { kind: ObjectKind::Body, name: "imported".into() }).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert_eq!(error.where_.as_deref(), Some("shape"));
+        assert!(error.suggestion.is_some());
+        assert_eq!(e.model(), &before);
+    }
+}
+
 #[test]
 fn guarded_undo_checks_the_whole_history_at_execution() {
     let mut e = engine();
@@ -5242,6 +5617,346 @@ fn unknown_selector_bodies_list_the_mapped_body_and_preserve_the_journal() {
     }
 }
 
+/// Renaming is a geometry identity change, not a physical change: the independent
+/// uniaxial solution survives rename, undo/redo, remeshing and Journal replay.
+#[test]
+fn implicit_body_rename_preserves_the_exact_patch_and_replay() {
+    for swept in [false, true] {
+        for order in [1, 2] {
+            for n in [1, 2] {
+                let mut e = engine();
+                selector_patch(&mut e, order, swept);
+                selector_mesh(&mut e, n, order, swept);
+                let before = e.model_hash();
+                ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"panel"}"#);
+                let renamed = e.model_hash();
+                assert_eq!(e.model().implicit_body(), Some("panel"));
+                assert_eq!(e.model().material_of_body("panel"), Some("solid"));
+                assert_eq!(e.model().material_of_body("sheet"), None);
+                assert_eq!(e.model().names(ObjectKind::Body), ["panel"]);
+                ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+                assert_eq!(e.model_hash(), before);
+                ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+                assert_eq!(e.model_hash(), renamed);
+                let built = e.mesh().unwrap();
+                assert!(built.sets.contains_key("panel.left"));
+                assert!(!built.sets.contains_key("sheet.left"));
+                assert_eq!(built.sets["domain"].elems.len(), built.mesh.n_elems());
+                assert!((set_info(&mut e, "domain").measure.value - if swept { 6.0 } else { 2.0 }).abs() < 1e-9);
+                ok(&mut e, r#"{"cmd":"solve.run","step":"axial"}"#);
+                let u = e.field(Some("axial"), Field::Displacement).unwrap().clone();
+                let stress = e.field(Some("axial"), Field::Stress).unwrap().clone();
+                let mesh = &e.mesh().unwrap().mesh;
+                for node in 0..mesh.n_nodes() {
+                    for (component, &x) in mesh.node(node as u32).iter().take(mesh.dim).enumerate() {
+                        let strain = if component == 0 { 1e-4 } else { -2.5e-5 };
+                        assert!((u.data[node * u.comps + component] - strain * x).abs() < 1e-12);
+                    }
+                    for component in 0..stress.comps {
+                        let expected = if component == 0 { 20e6 } else { 0.0 };
+                        assert!((stress.data[node * stress.comps + component] - expected).abs() < 1e-3);
+                    }
+                }
+                assert!(result_of(&mut e, Some("axial")).balance < 1e-10);
+                let mut replay = engine();
+                pollster::block_on(replay.replay(&e.export_file().journal.entries, false, true)).unwrap();
+                assert_eq!(replay.model_hash(), e.model_hash());
+                assert_eq!(replay.field(Some("axial"), Field::Displacement).unwrap().data, u.data);
+            }
+        }
+    }
+}
+
+#[test]
+fn implicit_body_auto_references_and_removal_guards_are_atomic() {
+    for swept in [false, true] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"lifecycle"}"#);
+        selector_mesh(&mut e, 1, 1, swept);
+        let mut replacement = serde_json::to_value(&e.journal().entries.last().unwrap().cmd).unwrap();
+        if swept {
+            replacement["mesher"]["base"]["body"] = "replacement".into();
+        } else {
+            replacement["mesher"]["body"] = "replacement".into();
+        }
+        ok(&mut e, r#"{"cmd":"constraint.fix","name":"support","on":"sheet.left"}"#);
+        ok(&mut e, r#"{"cmd":"load.traction","name":"pull","on":"sheet.right","total":["1 N","0 N","0 N"]}"#);
+        ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"sheet.top","h":"2 W/m^2/K","tInf":"300 K"}"#);
+        ok(&mut e, r#"{"cmd":"load.heatFlux","name":"heat","on":"sheet.bottom","q":"3 W/m^2"}"#);
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"panel"}"#);
+        assert_eq!(e.model().constraint("support").unwrap().on, "panel.left");
+        for (name, face) in [("pull", "right"), ("film", "top"), ("heat", "bottom")] {
+            assert_eq!(e.model().load(name).unwrap().kind.set(), Some(format!("panel.{face}").as_str()));
+        }
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        for cmd in [
+            r#"{"cmd":"geometry.remove","name":"panel"}"#,
+            r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#,
+        ] {
+            let error = err(&mut e, cmd);
+            assert_eq!(error.code, ErrorCode::InUse);
+            for user in ["support", "pull", "film", "heat"] {
+                assert!(error.cause.contains(user));
+            }
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        }
+        assert_eq!(err(&mut e, &replacement.to_string()).code, ErrorCode::InUse);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        let error = err(&mut e, r#"{"cmd":"model.duplicate","kind":"body","name":"panel","as":"copy"}"#);
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.suggestion.unwrap().contains("mesh.set"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        ok(&mut e, r#"{"cmd":"constraint.remove","name":"support"}"#);
+        for name in ["pull", "film", "heat"] {
+            ok(&mut e, &format!(r#"{{"cmd":"load.remove","name":"{name}"}}"#));
+        }
+        ok(
+            &mut e,
+            r#"{"cmd":"geometry.nameFace","name":"edge","of":"panel","where":{"kind":"normal","normal":[-1,0,0]}}"#,
+        );
+        ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"panel"}}"#);
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        let error = err(&mut e, r#"{"cmd":"geometry.remove","name":"panel"}"#);
+        assert_eq!(error.code, ErrorCode::InUse);
+        assert!(error.cause.contains("edge") && error.cause.contains("whole"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        for name in ["edge", "whole"] {
+            ok(&mut e, &format!(r#"{{"cmd":"geometry.remove","name":"{name}"}}"#));
+        }
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"panel"}"#);
+        assert!(e.model().mesh.is_none());
+    }
+}
+
+#[test]
+fn implicit_body_replacement_and_removal_preserve_unrelated_geometry() {
+    for swept in [false, true] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"lifecycle"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"]}"#);
+        ok(&mut e, r#"{"cmd":"material.add","name":"solid","E":"200 GPa","nu":0.25}"#);
+        ok(&mut e, r#"{"cmd":"material.assign","material":"solid","bodies":["other"]}"#);
+        selector_mesh(&mut e, 1, 1, swept);
+        ok(&mut e, r#"{"cmd":"material.assign","material":"solid","bodies":["sheet"]}"#);
+        selector_mesh(&mut e, 2, 2, swept);
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"other","to":"unrelated"}"#);
+        assert_eq!(e.model().implicit_body(), Some("sheet"));
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"unrelated","to":"other"}"#);
+        assert_eq!(e.model().material_of_body("sheet"), Some("solid"));
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        for cmd in [
+            r#"{"cmd":"geometry.addBox","name":"sheet","size":["1 m","1 m","1 m"]}"#,
+            r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"other"}"#,
+            r#"{"cmd":"model.duplicate","kind":"body","name":"other","as":"sheet"}"#,
+        ] {
+            assert_eq!(err(&mut e, cmd).code, ErrorCode::NameTaken);
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        }
+        let before = e.model_hash();
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"sheet"}"#);
+        assert!(e.model().mesh.is_none());
+        assert!(e.model().mesher_material.is_none());
+        assert_eq!(e.model().material_of_body("other"), Some("solid"));
+        assert_eq!(e.model().bodies.len(), 1);
+        let removed = e.model_hash();
+        ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+        assert_eq!(e.model_hash(), before);
+        ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+        assert_eq!(e.model_hash(), removed);
+        ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+        assert!(e.model().mesher_material.is_none());
+        assert_eq!(e.model().material_of_body("other"), Some("solid"));
+        selector_mesh(&mut e, 1, 1, swept);
+        assert_eq!(e.model().material_of_body("sheet"), None);
+        ok(&mut e, r#"{"cmd":"material.assign","material":"solid","bodies":["sheet"]}"#);
+        // Replacing the owned name is removal plus creation, so assignment cannot leak.
+        let mut command = serde_json::to_value(&e.journal().entries[e.journal().entries.len() - 2].cmd).unwrap();
+        let mesher = &mut command["mesher"];
+        if swept {
+            mesher["base"]["body"] = "fresh".into();
+        } else {
+            mesher["body"] = "fresh".into();
+        }
+        ok(&mut e, &command.to_string());
+        assert_eq!(e.model().implicit_body(), Some("fresh"));
+        assert!(e.model().mesher_material.is_none());
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"other"}"#);
+        assert_eq!(e.model().implicit_body(), Some("fresh"));
+        let mut replay = engine();
+        pollster::block_on(replay.replay(&e.export_file().journal.entries, false, true)).unwrap();
+        assert_eq!(replay.model_hash(), e.model_hash());
+    }
+}
+
+#[test]
+fn implicit_body_mesh_names_cannot_shadow_explicit_geometry() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"names"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"sheet","size":["1 m","1 m","1 m"]}"#);
+    let mapped = serde_json::json!({"kind":"mapped","body":"sheet","blocks":[{"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]],"n":[1,1]}]});
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    for swept in [false, true] {
+        let mesher = if swept {
+            serde_json::json!({"kind":"sweep","base":mapped,"sweep":{"kind":"extrude","layers":1,"height":"1 m"}})
+        } else {
+            mapped.clone()
+        };
+        let error = err(&mut e, &serde_json::json!({"cmd":"mesh.set","mesher":mesher}).to_string());
+        assert_eq!(error.code, ErrorCode::NameTaken);
+        assert!(error.suggestion.unwrap().contains("mesh.set"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+    let mut invalid = mapped;
+    invalid["body"] = "".into();
+    assert_eq!(
+        err(&mut e, &serde_json::json!({"cmd":"mesh.set","mesher":invalid}).to_string()).code,
+        ErrorCode::Schema
+    );
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+}
+
+#[test]
+fn free_mesher_body_references_follow_rename_and_guard_removal() {
+    for swept in [false, true] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"free-reference"}"#);
+        if !swept {
+            ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+        }
+        ok(&mut e, PLATE);
+        let base = serde_json::json!({"kind":"free","of":"plate","size":"2 m"});
+        let mesher = if swept {
+            serde_json::json!({"kind":"sweep","base":base,"sweep":{"kind":"extrude","layers":1,"height":"1 m"}})
+        } else {
+            base
+        };
+        ok(&mut e, &serde_json::json!({"cmd":"mesh.set","mesher":mesher}).to_string());
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"plate","to":"panel"}"#);
+        assert_eq!(e.model().mesh.as_ref().unwrap().mesher.source_body(), Some("panel"));
+        if swept {
+            // Triangle-to-wedge sweeping remains unsupported, but its geometry reference
+            // must still follow rename instead of becoming a misleading not-found error.
+            let error = e.query(Query::Mesh {}).unwrap_err();
+            assert_eq!(error.code, ErrorCode::MeshFailed);
+            assert!(error.cause.contains("quad4 or quad8"));
+        } else {
+            assert!(e.mesh().unwrap().sets.contains_key("panel.xmin"));
+        }
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        let error = err(&mut e, r#"{"cmd":"geometry.remove","name":"panel"}"#);
+        assert_eq!(error.code, ErrorCode::InUse);
+        assert!(error.cause.contains("mesher geometry"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"panel"}"#);
+    }
+}
+
+#[test]
+fn implicit_body_cut_boundaries_keep_identity_and_return_structured_errors() {
+    for swept in [false, true] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"cuts"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["2 m","2 m","2 m"]}"#);
+        ok(
+            &mut e,
+            r#"{"cmd":"geometry.subtractBox","name":"hole","from":"other","size":["1 m","1 m","1 m"],"at":["0 m","0 m","0 m"]}"#,
+        );
+        selector_mesh(&mut e, 1, 1, swept);
+        let mut command = serde_json::to_value(&e.journal().entries.last().unwrap().cmd).unwrap();
+        if swept {
+            command["mesher"]["base"]["body"] = "hole".into();
+        } else {
+            command["mesher"]["body"] = "hole".into();
+        }
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        for cmd in [
+            command.to_string(),
+            r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"hole"}"#.into(),
+            r#"{"cmd":"geometry.subtractBox","name":"sheet","from":"other","size":["1 m","1 m","1 m"],"at":["0 m","0 m","0 m"]}"#.into(),
+        ] {
+            assert_eq!(err(&mut e, &cmd).code, ErrorCode::NameTaken);
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        }
+        let rename = err(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"hole"}"#);
+        assert!(rename.suggestion.unwrap().contains("model.rename"));
+        for cmd in [
+            r#"{"cmd":"geometry.subtractBox","name":"cut","from":"sheet","size":["1 m","1 m","1 m"],"at":["0 m","0 m","0 m"]}"#,
+            r#"{"cmd":"geometry.subtract","name":"cut","from":"sheet","shape":{"kind":"box","size":["1 m","1 m","1 m"]}}"#,
+        ] {
+            let error = err(&mut e, cmd);
+            assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::Unsupported, Some("from")));
+            assert!(error.suggestion.unwrap().contains("mesh.set"));
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn body_removal_reports_volumetric_heat_dependencies() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"1 W/m^3"}"#);
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let error = err(&mut e, r#"{"cmd":"geometry.remove","name":"bar"}"#);
+    assert_eq!(error.code, ErrorCode::InUse);
+    assert!(error.cause.contains("source"));
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+}
+
+/// Public Commands reproduce rigid free fall on both implicit mapped and swept Bodies,
+/// including the quad8/hex20 cases whose consistent gravity opposed the lumped inertia.
+#[test]
+fn explicit_gravity_on_mapped_and_swept_bodies_is_rigid_free_fall() {
+    for order in [1, 2] {
+        for n in [1, 2, 4] {
+            for swept in [false, true] {
+                let mut e = engine();
+                ok(&mut e, r#"{"cmd":"model.new","name":"gravity"}"#);
+                ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+                ok(&mut e, r#"{"cmd":"material.add","name":"mat","E":"1 MPa","nu":0.25,"rho":"2 kg/m^3"}"#);
+                let block = format!(
+                    r#"{{"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","0.1 m"],["0 m","0.1 m"]],"n":[{n},1],"tags":["bottom","right","top","left"]}}"#
+                );
+                let mesher = if swept {
+                    format!(
+                        r#"{{"kind":"sweep","base":{{"kind":"mapped","body":"bar","blocks":[{block}]}},"sweep":{{"kind":"extrude","layers":1,"height":"0.1 m"}}}}"#
+                    )
+                } else {
+                    ok(
+                        &mut e,
+                        r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"0.1 m"}}"#,
+                    );
+                    format!(r#"{{"kind":"mapped","body":"bar","blocks":[{block}]}}"#)
+                };
+                ok(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{mesher},"order":{order}}}"#));
+                ok(&mut e, r#"{"cmd":"material.assign","material":"mat","bodies":["bar"]}"#);
+                ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","-9.81 m/s^2","0 m/s^2"]}"#);
+                for end in [0.00006, 0.0007, 0.0013] {
+                    ok(
+                        &mut e,
+                        &format!(
+                            r#"{{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"{end} s","dtFactor":0.5}}"#
+                        ),
+                    );
+                    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+                    for v in e.field(None, Field::Displacement).unwrap().data.chunks_exact(3) {
+                        assert!(v[0].abs() < 1e-12 && v[2].abs() < 1e-12);
+                        assert!(
+                            (v[1] + 4.905 * end * end).abs() < 1e-12,
+                            "order{order} n{n} swept{swept} t{end}: {v:?}"
+                        );
+                    }
+                    let z = if swept { "0.05 m" } else { "0 m" };
+                    let got = probe_at(&mut e, "fall", Field::Displacement, Some(1), ["0.5 m", "0.05 m", z]);
+                    assert!((got + 4.905 * end * end).abs() < 1e-12);
+                }
+            }
+        }
+    }
+}
+
 const IMPLICIT_TEMPERATURE: &str =
     r#"{"cmd":"load.temperature","name":"heated","bodies":["sheet"],"value":"343.15 K","reference":"293.15 K"}"#;
 const IMPLICIT_SOURCE: &str = r#"{"cmd":"load.heatSource","name":"power","bodies":["sheet"],"q":"100 W/m^3"}"#;
@@ -5419,4 +6134,47 @@ fn implicit_body_thermal_loads_are_transactional_and_survive_undo_and_replay() {
         assert_implicit_expansion(&mut replay, "free", false);
         assert_implicit_source(&mut replay, 2, 2, swept);
     }
+}
+
+#[test]
+fn body_rename_and_duplicate_reject_cut_names_without_mutation() {
+    let mut e = engine();
+    for cmd in [
+        r#"{"cmd":"model.new","name":"cut identities"}"#,
+        r#"{"cmd":"geometry.addBox","name":"source","size":["1 m","1 m","1 m"]}"#,
+        r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"],"at":["2 m","0 m","0 m"]}"#,
+        r#"{"cmd":"geometry.subtractBox","name":"ownCut","from":"source","size":["0.2 m","0.2 m","2 m"],"at":["0.4 m","0.4 m","-0.5 m"]}"#,
+        r#"{"cmd":"geometry.subtractBox","name":"otherCut","from":"other","size":["0.2 m","0.2 m","2 m"],"at":["2.4 m","0.4 m","-0.5 m"]}"#,
+        r#"{"cmd":"geometry.nameFace","name":"top","of":"source","where":{"kind":"normal","normal":[0,0,1]}}"#,
+    ] {
+        ok(&mut e, cmd);
+    }
+    let surface = e.geometry_surface().unwrap();
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let model_query = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    for target in ["ownCut", "otherCut"] {
+        for (command, key) in [("model.rename", "to"), ("model.duplicate", "as")] {
+            let input = serde_json::json!({"cmd":command,"kind":"body","name":"source",key:target});
+            let error = err(&mut e, &input.to_string());
+            assert_eq!(error.code, ErrorCode::NameTaken);
+            assert_eq!(error.where_, Some(format!("body '{target}'")));
+            assert_eq!(e.geometry_surface().unwrap(), surface);
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+            assert_eq!(serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap(), model_query);
+        }
+    }
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"source","to":"renamed"}"#);
+    assert_eq!(e.model().cuts[0].from, "renamed");
+    ok(&mut e, r#"{"cmd":"model.duplicate","kind":"body","name":"renamed","as":"copy"}"#);
+    assert_eq!(e.model().bodies[2].name, "copy");
+    assert_eq!(e.model().cuts[2].name, "copy.ownCut");
+    assert_eq!(e.model().cuts[2].from, "copy");
+    let after = serde_json::to_value(e.export_file()).unwrap();
+    ok(&mut e, r#"{"cmd":"journal.undo","steps":2}"#);
+    assert_eq!(serde_json::to_value(e.model()).unwrap(), before["model"]);
+    ok(&mut e, r#"{"cmd":"journal.redo","steps":2}"#);
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), after);
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
+    assert_eq!(serde_json::to_value(replayed.export_file()).unwrap(), after);
 }

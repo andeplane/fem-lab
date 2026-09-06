@@ -13,7 +13,7 @@ byte for byte.
   schema, so it is exactly what the app's buttons dispatch — there is no second surface.
 - **every engine Query**: `query_model`, `query_mesh`, `query_set`, `query_result`, `query_probe`,
   `query_path`, `query_cost`, `query_journal`, `query_script`, `query_report`, `query_convert`,
-  `query_objects`, `query_capabilities`.
+  `query_objects`, `query_capabilities`, `query_materialLibrary`.
 - **`validate_script { code, timeoutMs? }`** — parse and type-check against the generated
   engine API and this host's registered argument schemas, without running code or changing
   the Model. Returns `{ ok, diagnostics }` with codes, causes, one-based source locations and hints.
@@ -68,21 +68,19 @@ whole Command/Query schema document).
 
 ## Install
 
-```
-npx femlab-mcp --project /path/to/your/work
-```
-
-From a checkout, build the engine and the server first:
+Build the engine and server from a checkout. This setup does not require a published npm
+package:
 
 ```
 npm ci
 node tools/build-wasm.mjs          # writes tools/wasm-node (gitignored)
 npm run build -w packages/mcp      # writes packages/mcp/dist/femlab-mcp.js
+node packages/mcp/dist/femlab-mcp.js --project /path/to/your/work
 ```
 
 `femlab mcp --project <dir>` runs the same server: the Rust CLI looks for
 `packages/mcp/dist/femlab-mcp.js` next to its own binary or in the checkout it was built in, or
-at `FEMLAB_MCP`, and prints the install line above if it finds none. Point `FEMLAB_WASM` at a
+at `FEMLAB_MCP`, and reports setup instructions if it finds none. Point `FEMLAB_WASM` at a
 folder holding `femlab_engine_wasm.js` if the engine lives somewhere unusual.
 
 ### Build and verify an npm artifact
@@ -106,20 +104,8 @@ and tagged platform releases remain tracked by [#27](https://github.com/andeplan
 
 ## Claude Code / Claude Desktop
 
-Add to `~/.claude.json` (Claude Code) or `claude_desktop_config.json` (Claude Desktop):
-
-```json
-{
-  "mcpServers": {
-    "femlab": {
-      "command": "npx",
-      "args": ["-y", "femlab-mcp", "--project", "/path/to/your/work"]
-    }
-  }
-}
-```
-
-From a checkout, point it at the built bundle instead:
+Point the editor's MCP configuration at the built bundle. For a configuration that accepts
+`mcpServers`, use:
 
 ```json
 {
@@ -135,7 +121,7 @@ From a checkout, point it at the built bundle instead:
 Claude Code also takes it in one line:
 
 ```
-claude mcp add femlab -- npx -y femlab-mcp --project /path/to/your/work
+claude mcp add femlab -- node /path/to/fem-lab/packages/mcp/dist/femlab-mcp.js --project /path/to/your/work
 ```
 
 ## A first session
