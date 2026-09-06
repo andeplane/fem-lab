@@ -1,0 +1,21 @@
+import { expect, test } from '@playwright/test';
+test('@cpu theory retains live reference and warns on edited model', async ({page},testInfo)=>{
+ const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('./');await page.waitForFunction(()=>typeof window.fem!=='undefined');
+ await page.evaluate(()=>window.fem.dispatch({cmd:'file.openExample',name:'cantilever'}));
+ await page.locator('.tab',{hasText:'results'}).click();
+ const panel=page.locator('.theory-panel');
+ await expect(panel.locator('.theory-values')).toBeVisible();
+ await expect(panel.locator('.katex')).not.toHaveCount(0);
+ await expect(panel.locator('.surface.pass')).toHaveCount(1);
+ await page.screenshot({path:testInfo.outputPath('theory-current.png')});
+ await page.evaluate(()=>window.fem.material.add({name:'steel',E:'200 GPa',nu:0.3}));
+ await expect(panel).toHaveClass(/stale/);
+ await expect(panel.locator('.surface.pass')).toHaveCount(0);
+ await page.evaluate(()=>window.fem.solve.run({step:'static'}));
+ await expect(panel).toContainText('modified example');
+ await expect(panel.locator('.surface.pass')).toHaveCount(0);
+ await page.evaluate(()=>window.fem.model.new({name:'unrelated'}));
+ await expect(panel).toHaveCount(0);
+ expect(errors).toEqual([]);
+});

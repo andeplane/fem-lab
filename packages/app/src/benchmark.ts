@@ -32,8 +32,8 @@ export interface BenchmarkComparison {
 /**
  * The explicit bridge from bundled examples to Result observables. `null` means the cited theory
  * and the Result's available observable are not the same quantity; the companion reason names the
- * mismatch. Adding an example without deciding here fails the fixture test. LE10 stays null until
- * #183 matches the published support condition.
+ * mismatch. Adding an example without deciding here fails the fixture test. LE10 uses the
+ * independently published full-face support reference corrected by #183.
  */
 export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> = {
   'bar-transient-heat': {
