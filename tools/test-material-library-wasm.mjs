@@ -11,7 +11,22 @@ const query = (name) => JSON.parse(engine.query(JSON.stringify({ query: "query.m
 
 const list = query();
 assert.equal(list.entries.length, 7);
-assert.equal(list.sources.length, 7);
+assert.deepEqual(
+  list.sources.map(({ id }) => id),
+  [
+    "jrc-handbook-3",
+    "jrc-bridge-worked-example",
+    "arcelormittal-s355",
+    "arcelormittal-s235j2w",
+    "nasa-6061",
+    "ineos-terluran-gp35",
+    "natureworks-4043d",
+    "swedish-wood-c24",
+  ],
+);
+const concrete = query("C30/37").entries[0];
+assert.equal(concrete.E.source, "jrc-bridge-worked-example");
+assert.deepEqual(concrete.E.value, { value: 33, unit: "GPa" });
 const aluminium = query("6061 T6").entries[0];
 assert.equal(aluminium.id, "6061-t6-sheet");
 assert.deepEqual(aluminium.E.value, { value: 68.3, unit: "GPa" });
