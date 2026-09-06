@@ -50,6 +50,7 @@ pub enum Query {
 
     /// A field value interpolated at a point (default: the last solved Step). Component
     /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
     #[serde(rename = "query.probe", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ProbeResult"))]
     Probe {
@@ -62,6 +63,7 @@ pub enum Query {
     },
 
     /// A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
     #[serde(rename = "query.path", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "PathResult"))]
     Path {

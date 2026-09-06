@@ -3465,6 +3465,7 @@ export interface EngineError {
     | "mesh.failed"
     | "model.no-material"
     | "model.ill-posed"
+    | "result.stale"
     | "constraint.conflict"
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
