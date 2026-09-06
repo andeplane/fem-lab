@@ -3720,3 +3720,55 @@ fn journal_guard_uses_full_history_even_for_filtered_queries() {
     ok(&mut e, &guarded);
     assert_eq!(e.revision(), 1);
 }
+
+/// Public Commands reproduce rigid free fall on both implicit mapped and swept Bodies,
+/// including the quad8/hex20 cases whose consistent gravity opposed the lumped inertia.
+#[test]
+fn explicit_gravity_on_mapped_and_swept_bodies_is_rigid_free_fall() {
+    for order in [1, 2] {
+        for n in [1, 2, 4] {
+            for swept in [false, true] {
+                let mut e = engine();
+                ok(&mut e, r#"{"cmd":"model.new","name":"gravity"}"#);
+                ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
+                ok(&mut e, r#"{"cmd":"material.add","name":"mat","E":"1 MPa","nu":0.25,"rho":"2 kg/m^3"}"#);
+                let block = format!(
+                    r#"{{"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","0.1 m"],["0 m","0.1 m"]],"n":[{n},1],"tags":["bottom","right","top","left"]}}"#
+                );
+                let mesher = if swept {
+                    format!(
+                        r#"{{"kind":"sweep","base":{{"kind":"mapped","body":"bar","blocks":[{block}]}},"sweep":{{"kind":"extrude","layers":1,"height":"0.1 m"}}}}"#
+                    )
+                } else {
+                    ok(
+                        &mut e,
+                        r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"0.1 m"}}"#,
+                    );
+                    format!(r#"{{"kind":"mapped","body":"bar","blocks":[{block}]}}"#)
+                };
+                ok(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{mesher},"order":{order}}}"#));
+                ok(&mut e, r#"{"cmd":"material.assign","material":"mat","bodies":["bar"]}"#);
+                ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","-9.81 m/s^2","0 m/s^2"]}"#);
+                for end in [0.00006, 0.0007, 0.0013] {
+                    ok(
+                        &mut e,
+                        &format!(
+                            r#"{{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"{end} s","dtFactor":0.5}}"#
+                        ),
+                    );
+                    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+                    for v in e.field(None, Field::Displacement).unwrap().data.chunks_exact(3) {
+                        assert!(v[0].abs() < 1e-12 && v[2].abs() < 1e-12);
+                        assert!(
+                            (v[1] + 4.905 * end * end).abs() < 1e-12,
+                            "order{order} n{n} swept{swept} t{end}: {v:?}"
+                        );
+                    }
+                    let z = if swept { "0.05 m" } else { "0 m" };
+                    let got = probe_at(&mut e, "fall", Field::Displacement, Some(1), ["0.5 m", "0.05 m", z]);
+                    assert!((got + 4.905 * end * end).abs() < 1e-12);
+                }
+            }
+        }
+    }
+}
