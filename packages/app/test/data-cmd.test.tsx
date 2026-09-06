@@ -112,6 +112,7 @@ describe('the shell', () => {
 
   it('leaves undo and copy to editable controls, including nested contenteditable text', async () => {
     const dispatch = vi.fn(async () => undefined);
+    const events: KeyboardEvent[] = [];
     const input = document.createElement('input');
     const textarea = document.createElement('textarea');
     const editor = document.createElement('div');
@@ -122,12 +123,14 @@ describe('the shell', () => {
     for (const target of [input, textarea, editor, child]) {
       for (const key of ['z', 'c']) {
         const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key, ctrlKey: true });
+        events.push(event);
         target.addEventListener('keydown', (e) => handleGlobalKey(e, dispatch, 1, {}), { once: true });
         target.dispatchEvent(event);
       }
     }
     await Promise.resolve();
     expect(dispatch).not.toHaveBeenCalled();
+    expect(events.every((event) => !event.defaultPrevented)).toBe(true);
   });
 
   it('recognizes a contenteditable false island inside an editor as non-editable', () => {
