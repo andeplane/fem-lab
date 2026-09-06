@@ -457,7 +457,7 @@ impl Engine {
             }
             Command::GeometryNameFace { name, of, where_ } => {
                 check_name(name)?;
-                self.model.body(of).ok_or_else(|| Error::not_found("body", of, &self.model.names(ObjectKind::Body)))?;
+                self.check_selector_body(of).map_err(|e| e.at("of"))?;
                 let pred = where_.to_si()?;
                 let set = NamedSet { name: name.clone(), source: SetSource::Face { of: of.clone(), where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
@@ -466,9 +466,7 @@ impl Engine {
                 check_name(name)?;
                 let pred = where_.to_si()?;
                 if let femlab_geometry::RegionPredicate::Body { name: b } = &pred {
-                    self.model
-                        .body(b)
-                        .ok_or_else(|| Error::not_found("body", b, &self.model.names(ObjectKind::Body)))?;
+                    self.check_selector_body(b).map_err(|e| e.at("where.name"))?;
                 }
                 let set = NamedSet { name: name.clone(), source: SetSource::Region { where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
@@ -743,6 +741,16 @@ impl Engine {
                 self.model
                     .step(name)
                     .ok_or_else(|| Error::not_found("step", name, &self.model.names(ObjectKind::Step)))?;
+                let users: Vec<&str> = self
+                    .model
+                    .steps
+                    .iter()
+                    .filter(|s| s.after.as_deref() == Some(name.as_str()))
+                    .map(|s| s.name.as_str())
+                    .collect();
+                if !users.is_empty() {
+                    return Err(in_use("step", name, &users, "steps"));
+                }
                 self.model.steps.retain(|s| s.name != *name);
                 Ok(Output::None)
             }
@@ -941,6 +949,21 @@ impl Engine {
             .suggest("use an auto face like 'beam.xmin' (see query.model) or geometry.nameFace"))
     }
 
+    /// Selectors may refer to explicit geometry or the Body defined by a mapped/swept mesher.
+    /// This validates identity only; the geometric predicate resolves against the actual Mesh.
+    fn check_selector_body(&self, body: &str) -> Result<(), Error> {
+        let mut known = self.model.names(ObjectKind::Body);
+        known.extend(self.model.implicit_body());
+        if known.contains(&body) {
+            Ok(())
+        } else {
+            Err(Error::not_found("body", body, &known).suggest(format!(
+                "query.model lists explicit and mesher-defined Bodies; known bodies: {}",
+                known.join(", ")
+            )))
+        }
+    }
+
     /// Every named Body exists, or `not-found` listing the ones that do.
     fn check_bodies(&self, bodies: &[String]) -> Result<(), Error> {
         for b in bodies {
@@ -1019,6 +1042,9 @@ impl Engine {
                         b.material = Some(to.into());
                     }
                 }
+                if m.mesher_material.as_deref() == Some(name) {
+                    m.mesher_material = Some(to.into());
+                }
             }
             ObjectKind::Set => {
                 for s in &mut m.sets {
@@ -1078,6 +1104,9 @@ impl Engine {
                 for s in &mut m.steps {
                     if s.name == name {
                         s.name = to.into();
+                    }
+                    if s.after.as_deref() == Some(name) {
+                        s.after = Some(to.into());
                     }
                 }
             }

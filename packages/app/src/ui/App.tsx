@@ -158,7 +158,7 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 function ProjectSaved({ s }: { s: UiState }) {
   const p = s.project;
   if (!p) return null;
-  const chip = p.autosave === false ? 'not saved — storage is off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const chip = p.autosave === false ? 'autosave off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   const tone = p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
   return (
     <span class={`saved-chip ${tone}`} title={`${p.name}: ${chip} — ${p.commands} Commands in this browser`}>

@@ -21,6 +21,75 @@ async function build(page: Page): Promise<void> {
 }
 
 test.describe('@cpu projects in this browser', () => {
+  test('explicit save writes the exact Journal with autosave off, reopens it, and rejects a failed write', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('femlab.autosave', 'off');
+      const state = window as typeof window & { failProjectJournalWrite?: boolean };
+      state.failProjectJournalWrite = false;
+      const put = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey): IDBRequest<IDBValidKey> {
+        if (state.failProjectJournalWrite === true && this.name === 'journals') {
+          this.transaction.abort();
+          throw new DOMException('injected project Journal failure', 'QuotaExceededError');
+        }
+        return key === undefined ? put.call(this, value) : put.call(this, value, key);
+      };
+    });
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'manual-save' }));
+    await build(page);
+    const before = await page.evaluate(async () => ({
+      model: await window.fem.query.model(),
+      journal: await window.fem.query.journal(),
+    }));
+    const dirty = page.getByRole('img', { name: 'Unsaved changes' });
+    await expect(dirty).toBeVisible();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(dirty).toBeHidden();
+    await expect(page.locator('.saved-chip')).toContainText('autosave off');
+    const receipt = await page.evaluate(() => window.fem.dispatch({ cmd: 'project.save' })) as unknown as {
+      id: string;
+      autosave: boolean;
+      journal: { entries: unknown[] };
+    };
+    expect(receipt.autosave).toBe(false);
+    expect(receipt.journal.entries).toEqual(before.journal.entries);
+
+    // This later edit is only in memory. Reopening after a reload must reproduce the payload
+    // captured by explicit Save, rather than the newest refresh that happened while storage was off.
+    await page.evaluate(() => window.fem.geometry.addBox({ name: 'unsaved', size: ['2 m', '20 mm', '20 mm'] }));
+    expect((await page.evaluate(() => window.fem.query.journal())).entries).toHaveLength(before.journal.entries.length + 1);
+    await expect(dirty).toBeVisible();
+    await page.reload();
+    await ready(page);
+    await page.evaluate((id) => window.fem.dispatch({ cmd: 'project.open', id }), receipt.id);
+    expect(await page.evaluate(() => window.fem.query.journal())).toEqual(before.journal);
+    expect(await modelHash(page)).toBe(before.model.hash);
+    await expect(dirty).toBeHidden();
+
+    await page.evaluate(() => window.fem.geometry.addBox({ name: 'write-must-fail', size: ['3 m', '30 mm', '30 mm'] }));
+    const failure = await page.evaluate(async () => {
+      (window as typeof window & { failProjectJournalWrite?: boolean }).failProjectJournalWrite = true;
+      try {
+        await window.fem.dispatch({ cmd: 'project.save' });
+        return null;
+      } catch (error) {
+        return { name: (error as Error).name, message: (error as Error).message };
+      }
+    });
+    await expect(dirty).toBeVisible();
+    expect(failure).toEqual({ name: 'QuotaExceededError', message: 'injected project Journal failure' });
+    await expect(page.locator('.error-card')).toContainText('injected project Journal failure');
+
+    // The failed two-store transaction leaves the previous explicit save openable byte-for-byte.
+    await page.reload();
+    await ready(page);
+    await page.evaluate((id) => window.fem.dispatch({ cmd: 'project.open', id }), receipt.id);
+    expect(await page.evaluate(() => window.fem.query.journal())).toEqual(before.journal);
+    expect(await modelHash(page)).toBe(before.model.hash);
+  });
+
   test('new → build → save → reload → Recent → open, on the same Model hash', async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));

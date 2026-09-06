@@ -103,7 +103,10 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       delete: vi.fn(async (id: string) => {
         if (open?.id === id) open = null;
       }),
-      save: vi.fn(async () => current()),
+      save: vi.fn(async () => {
+        const project = current();
+        return project === null ? null : { ...project, journal: MODEL_FILE.journal };
+      }),
       list: vi.fn(() => (open === null ? [] : [open])),
       current: vi.fn(current),
     },
