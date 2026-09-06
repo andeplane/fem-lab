@@ -253,7 +253,9 @@ describe('the deformation bar', () => {
   it('offers the scrub once the Result is a mode shape or has a history', () => {
     expect(mount({ result: modal, fieldKey: 'mode:2' }).root.querySelector('.deform-bar input.phase')).not.toBeNull();
     document.body.innerHTML = '';
-    expect(mount({ result: transient }).root.querySelector('.deform-bar input.phase')).not.toBeNull();
+    const catalogue = { step: 'heat', modelHash: 'h', stale: false, nodeCount: 1, field: 'temperature', components: 3, storedComponents: 1, retainedBytes: 48, frames: transient.history!.map((row, index) => ({ index, timeSi: row.time.value, time: row.time })) } as const;
+    const shown = { generation: 1, catalogue, frame: catalogue.frames[1]!, playing: false, speed: 1 };
+    expect(mount({ result: transient, transient: shown }).root.querySelector('.deform-bar [aria-label="retained transient frame"]')).not.toBeNull();
   });
 
   it('requests playback through the registry and reflects the acknowledged host state', () => {
@@ -270,9 +272,10 @@ describe('the deformation bar', () => {
     expect(root.querySelector('.deform-bar [data-cmd="view.animate"]')!.textContent).toBe('❚❚');
   });
 
-  it('tells the truth about a transient sweep: the Result keeps one field', () => {
+  it('offers actual retained-frame playback instead of a transient amplitude sweep', () => {
     const { root } = mount({ result: transient });
-    expect(root.querySelector<HTMLButtonElement>('.deform-bar [data-cmd="view.animate"]')!.title).toContain('the sweep is the amplitude');
+    expect(root.querySelector<HTMLButtonElement>('.deform-bar [data-cmd="view.playTransient"]')!.title).toBe('play retained transient frames');
+    expect(root.querySelector('.deform-bar [data-cmd="view.animate"]')).toBeNull();
   });
 
   it('previews phase movement and records only a completed gesture, not cancellation', () => {
