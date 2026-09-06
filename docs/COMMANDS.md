@@ -539,7 +539,7 @@ solid bodies; mixing them makes the Model ill-posed.
 
 ### model.setUnits
 
-Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage
+Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage
 stays SI and every input may still use any unit of the right dimension; this only
 changes how values are reported back.
 
@@ -1068,7 +1068,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
   "type": "string",
   "enum": [
     "displacement",
@@ -2475,6 +2475,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "null"
       ]
     },
+    "power": {
+      "description": "Thermal reaction and applied power display unit; defaults to W, independently of force.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "stress": {
       "type": [
         "string",
@@ -2778,7 +2785,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
   "type": "string",
   "enum": [
     "displacement",
