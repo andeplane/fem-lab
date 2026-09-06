@@ -35,11 +35,22 @@ were inspected at 1600 × 1000. A screenshot of one state does not verify the ot
 | Checks well-posedness, mesh quality, cost and assumptions | Source contains these sections, but Assistant verification is not shared into Checks. | [#96](https://github.com/andeplane/fem-lab/issues/96): verification survives tab changes, carries provenance and becomes stale when its Model changes. |
 | Palette searches Commands, accepts object references and natural-language parameters | Current palette performs text ranking and opens forms. | [#95](https://github.com/andeplane/fem-lab/issues/95): object routing and parameterized intent produce previewable registry operations; keyboard navigation verified. |
 | Assistant conversation survives collapsing the drawer | Unmount discards component conversation/draft state. | [#94](https://github.com/andeplane/fem-lab/issues/94): transcript, tokens, draft and in-flight turn survive collapse/reopen without occupying a hidden column. |
+| Streaming prose and composer suggestion/skill entry points | Text is buffered until a tool starts or the turn ends; designed suggestion chips and slash skill entry are absent. | [#138](https://github.com/andeplane/fem-lab/issues/138), [#139](https://github.com/andeplane/fem-lab/issues/139): text appears before completion; suggestions and skills route through the registry and preserve draft context. |
 | Assistant tools, files, mentions, rules and skills | Existing implementation and separate project/mention issues; tool cards report pending calls and resolved script errors as successful. | [#13](https://github.com/andeplane/fem-lab/issues/13), [#39](https://github.com/andeplane/fem-lab/issues/39), [#124](https://github.com/andeplane/fem-lab/issues/124); audit #90 for cost and downloads. |
 | Undo Assistant turn as one unit | Historical cards can remove later human edits or a different turn. | [#97](https://github.com/andeplane/fem-lab/issues/97): atomic provenance guard including interleaved human Commands, queued edits and Journal rewrites. |
 | Export groups and functioning supported formats | Export modal lists supported and unavailable formats; screenshot dimensions have a known host gap. | [#11](https://github.com/andeplane/fem-lab/issues/11): export actual bytes, verify selected dimensions, errors and round-trip where supported. Unsupported engine formats must remain explicit. |
 | Gallery thumbnails, reference values and theory beside Results | Blank gradient thumbnails and Command-count footer; no rendered theory panel. | [#30](https://github.com/andeplane/fem-lab/issues/30), [#109](https://github.com/andeplane/fem-lab/issues/109): real thumbnails, independently sourced values, typeset theory and actual Result comparisons with provenance. |
 | Full-screen report, rendered calculation note and PDF | Report toggle has no report component. Markdown export exists. | [#14](https://github.com/andeplane/fem-lab/issues/14): real report from current Result, designed paper layout, copy Markdown, print/PDF and pre-result explanation. |
+| Linear/quadratic tetrahedral mesh choices | The current MesherSpec has no tetrahedral mesher; the prototype's Tet4 state cannot be produced. | [#157](https://github.com/andeplane/fem-lab/issues/157) tracks the capability gap. #102 supplies teaching guidance for supported element families without claiming Tet4/Tet10 support. |
+
+## Reviewed deliveries
+
+- #99 / PR #105: reference top-bar mark merged after independent review and all CI checks.
+- #100 / PR #108: bundled IBM Plex Sans and Mono, Latin weights 400/500/600, merged after review and all CI checks. Chromium checks load all six faces; local hashed assets avoid external font requests, and size budgets pass.
+- #40 / PR #93 and #88 / PR #89: stable Assistant slot and right-side layout merged after review and all CI checks. Chromium verifies canvas backing size and repeated open/close at 1600, 1494, 1280, 1180 and 1100 px, including banner and solved states.
+
+These deliveries do not close the audit. The remaining matrix still needs implementation,
+review and integrated verification on merged main.
 
 ## Delivery and review
 
