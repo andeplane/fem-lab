@@ -6,6 +6,7 @@ import { render } from 'preact';
 import { describe, expect, it, vi } from 'vitest';
 import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, legendTicks, siUnitOf } from '../src/fields';
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
+import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
 import { Store, initialState, solveLabel, stageOf } from '../src/store';
 import { probeLine } from '../src/ui/App';
 import { PathPlot, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
@@ -165,7 +166,7 @@ describe('the Export dialog', () => {
 
 /** A viewer stub: the four calls `ResultsView` makes, recorded. */
 function fakeViewer() {
-  return { setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), autoScale: vi.fn(() => 120) };
+  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), autoScale: vi.fn(() => 120) };
 }
 
 function harness(result: ResultSummary | null = RESULT) {
@@ -276,5 +277,74 @@ describe('ResultsView', () => {
     await results.onAck({ output: { type: 'none' } });
     await results.onAck(undefined);
     expect(store.state.study).toEqual({ rows: [], unit: 'mm' });
+  });
+
+  // Issue #42: the shape a person sees must not depend on which chain got there first.
+  it('pushes the same exaggeration for every field, memoised path and forced path alike', async () => {
+    const { viewer, results } = harness();
+    await results.showField({ field: 'vonMises' });
+    const first = viewer.current.setDeformed.mock.calls.at(-1)![1];
+    await results.showField({ field: 'displacement', component: null });
+    expect(viewer.current.setDeformed.mock.calls.at(-1)![1]).toBe(first);
+    await results.showField({ field: 'vonMises' });
+    expect(viewer.current.setDeformed.mock.calls.at(-1)![1]).toBe(first);
+    expect(first).not.toBe(1);
+  });
+
+  it('recomputes an `auto` that had no Viewer to compute it with when one arrives', async () => {
+    const { store, viewer, results } = harness();
+    const arriving = viewer.current;
+    // The three.js chunk has not landed: `load` cannot read a scale off a Viewer that is not there.
+    viewer.current = null as never;
+    await results.onAck({ output: { type: 'solve' } });
+    expect(store.state.deformScale).toBe(1);
+    // It lands, and the host's un-forced refresh is all that follows.
+    viewer.current = arriving;
+    await results.refresh();
+    expect(store.state.deformScale).toBe(120);
+    expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(expect.any(Float32Array), 120);
+  });
+
+  it('waits for the surface before scaling: a placeholder bounding box would exaggerate wildly', async () => {
+    const { store, viewer, results } = harness();
+    // The Viewer is mounted but the host has not pushed a surface yet, so its box is the
+    // constructor's unit cube and `autoScale` would measure the model against that.
+    (viewer.current as { hasSurface: boolean }).hasSurface = false;
+    await results.onAck({ output: { type: 'solve' } });
+    expect(store.state.deformScale).toBe(1);
+    expect(viewer.current.setDeformed).not.toHaveBeenCalled();
+    (viewer.current as { hasSurface: boolean }).hasSurface = true;
+    await results.refresh();
+    expect(store.state.deformScale).toBe(120);
+  });
+
+  it('keeps a typed exaggeration across a field switch and a re-solve', async () => {
+    const { store, viewer, results } = harness();
+    await results.refresh();
+    results.setDeformScale(200);
+    await results.showField({ field: 'displacement', component: 2 });
+    expect(store.state.deformScale).toBe(200);
+    await results.onAck({ output: { type: 'solve' } });
+    expect(store.state.deformScale).toBe(200);
+    expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(expect.any(Float32Array), 200);
+  });
+});
+
+describe("the viewer's rounding and its stale-displacement guard", () => {
+  it('rounds down to a round 1/2/5·10^k, and gives up on nothing', () => {
+    expect([1311, 999, 640, 21, 7, 1, 0.037].map(nice)).toEqual([1000, 500, 500, 20, 5, 1, 0.02]);
+    expect(nice(0)).toBe(1);
+    expect(nice(-3)).toBe(1);
+    expect(niceTick(200)).toBe(10);
+    expect(niceTick(0)).toBe(1);
+  });
+
+  it('keeps a displacement that still spans the surface and drops one that no longer does', () => {
+    const positions = new Float32Array(9);
+    expect(fitsSurface(new Float32Array(9), positions)).toBe(true);
+    expect(fitsSurface(new Float32Array(12), positions)).toBe(true);
+    // A re-mesh or a new body: re-applying this would index past the end and write NaN.
+    expect(fitsSurface(new Float32Array(6), positions)).toBe(false);
+    expect(fitsSurface(null, positions)).toBe(false);
   });
 });
