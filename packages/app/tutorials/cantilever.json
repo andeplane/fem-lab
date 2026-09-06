@@ -71,7 +71,7 @@
       "title": "Check it against beam theory",
       "explain": "Before you trust a solver, know what answer to expect. This is a textbook cantilever, so the closed form gives the tip deflection directly — compare it with the Result once you press Solve.",
       "expect": null,
-      "theory": "Euler–Bernoulli beam theory: delta = P L^3 / (3 E I), with I = b h^3 / 12 for a rectangular section.\nL = 1 m, P = 1 kN, E = 210 GPa, b = h = 100 mm -> I = 8.333e-6 m^4\ndelta = 1000 * 1^3 / (3 * 2.1e11 * 8.333e-6) ~= 0.667 mm"
+      "theory": "Euler–Bernoulli beam theory: $\\delta = \\dfrac{P L^3}{3 E I}$, with $I = \\dfrac{b h^3}{12}$ for a rectangular section.\n$L = 1\\,\\mathrm{m}$, $P = 1\\,\\mathrm{kN}$, $E = 210\\,\\mathrm{GPa}$, $b = h = 100\\,\\mathrm{mm}$, so $I = 8.333\\times10^{-6}\\,\\mathrm{m^4}$.\n$$\\delta = \\frac{1000 \\times 1^3}{3 \\times 2.1\\times10^{11} \\times 8.333\\times10^{-6}} = 1.905\\times10^{-4}\\,\\mathrm{m} = 0.1905\\,\\mathrm{mm}$$\nThe solved Model gives $0.1901\\,\\mathrm{mm}$ — $0.2\\,\\%$ below, which is what a hex8 mesh with incompatible modes and four elements through the depth should give. The formula itself ignores shear deflection, so it is not the exact answer either; for a beam this slender ($L/h = 10$) that is worth about $0.3\\,\\%$."
     }
   ]
 }

@@ -1,0 +1,105 @@
+{
+  "id": "heat-conduction",
+  "title": "Heat conduction in a bar",
+  "minutes": 8,
+  "summary": "Hold the two ends of a steel bar at different temperatures, read the field, then let one face lose heat to the air and watch what a convection boundary does that a fixed temperature cannot.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "A heat analysis is built from the same Commands as a stress analysis — the Model does not know which one you will run until you add a Step. `model.new` starts an empty one.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "heat-bar" }
+    },
+    {
+      "title": "Show temperatures in degrees Celsius",
+      "explain": "`model.setUnits` takes a `temperature` entry as well as lengths and forces. The engine works in kelvin underneath; this only changes what the legend and the probe read out. Note that `degC` is an absolute temperature, not a temperature *difference* — the engine tracks the distinction, so `20 degC` and `20 K` are two different things.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "temperature": "degC" } }
+    },
+    {
+      "title": "Add the bar",
+      "explain": "A one-metre bar of 100 × 100 mm section. Conduction along it is a one-dimensional problem with a closed-form answer, which is exactly what you want the first time you run a solver you have not used before.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "bar" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "bar", "size": ["1 m", "100 mm", "100 mm"] }
+    },
+    {
+      "title": "Give the material a conductivity",
+      "explain": "Heat needs `k`, the thermal conductivity in W/(m·K) — Fourier's law is `q = −k ∇T`, so without `k` there is nothing to solve. `cp` (specific heat) and `rho` only matter once time enters, in a transient Step; `E` and `nu` only matter if you later ask for stress. Recording all of them now costs nothing.",
+      "expect": { "cmd": "material.add", "match": { "name": "steel" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "k": "45 W/(m K)", "cp": "460 J/(kg K)", "source": "EN 10025" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "As always, a Material only applies to a Body once `material.assign` links them.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["bar"] }
+    },
+    {
+      "title": "Mesh it",
+      "explain": "Conduction has one unknown per node instead of three, so a heat mesh is cheap. 100 mm elements give ten along the bar — plenty, because the exact answer here is linear and even a single linear element reproduces a linear field exactly.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "100 mm" } }
+    },
+    {
+      "title": "Hold the cold end",
+      "explain": "This is the whole idea of a boundary condition: the equation of conduction says how heat moves *inside* the bar, and says nothing about what the world outside does to it. A boundary condition is that missing information. `constraint.temperature` is the simplest one — a Dirichlet condition, \"this face is held at this temperature, whatever it takes\".",
+      "expect": { "cmd": "constraint.temperature", "match": { "name": "cold" } },
+      "highlight": "constraint.temperature",
+      "doIt": { "cmd": "constraint.temperature", "name": "cold", "on": "bar.xmin", "value": "0 degC" }
+    },
+    {
+      "title": "Hold the hot end",
+      "explain": "The other end at 100 °C. A steady heat problem with no prescribed temperature anywhere is singular: the field would only be defined up to an added constant, and the solve would refuse. One fixed temperature — or one convection face, which you add in a moment — is what makes it well posed.",
+      "expect": { "cmd": "constraint.temperature", "match": { "name": "hot" } },
+      "highlight": "constraint.temperature",
+      "doIt": { "cmd": "constraint.temperature", "name": "hot", "on": "bar.xmax", "value": "100 degC" }
+    },
+    {
+      "title": "Add a steady heat Step",
+      "explain": "`procedure: \"heat-steady\"` solves `∇·(k ∇T) + q = 0`: the state the bar settles into after a long time, with no memory of how it got there. `output: [\"temperature\"]` asks for the field to be kept.",
+      "expect": { "cmd": "step.add", "match": { "name": "conduct" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "conduct", "procedure": "heat-steady", "constraints": ["cold", "hot"], "loads": [], "output": ["temperature"] }
+    },
+    {
+      "title": "Solve, and read the field",
+      "explain": "Show the `temperature` field on the mesh. The contours are straight bands at right angles to the bar: the profile is exactly linear, T(x) = 100·x/L, so the middle is at 50 °C and the quarter point at 25 °C. Probe them and check. Reading a temperature field is reading a scalar — there is no direction and no deformed shape, only a value per node, and the legend's two ends are the whole story.",
+      "expect": { "cmd": "solve.run", "match": { "step": "conduct" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "conduct" }
+    },
+    {
+      "title": "Now let a face lose heat to the air",
+      "explain": "`load.convection` is Newton cooling: the face loses `h·(T − tInf)` watts per square metre to a fluid at `tInf`. Unlike a fixed temperature it does not dictate the face's temperature — it makes the face's temperature part of the answer. `h` is the one number in a thermal model you rarely know well: 5–25 W/(m²·K) for still air, hundreds for forced air, thousands for boiling. State the value you assumed.",
+      "expect": { "cmd": "load.convection" },
+      "highlight": "load.convection",
+      "doIt": { "cmd": "load.convection", "name": "air", "on": "bar.zmax", "h": "25 W/(m^2 K)", "tInf": "20 degC" }
+    },
+    {
+      "title": "Solve again with the air in the picture",
+      "explain": "A second Step with the same two ends held but now with the top face exposed. Solve it and compare with the first: the field is no longer linear and no longer one-dimensional, because heat now leaves sideways as well as along the bar.",
+      "expect": { "cmd": "step.add", "match": { "name": "cooled" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "cooled", "procedure": "heat-steady", "constraints": ["cold", "hot"], "loads": ["air"], "output": ["temperature"] }
+    },
+    {
+      "title": "Run it",
+      "explain": "Switch the Results panel between the two Steps. The change is small here because the bar is stubby and steel conducts well — the surface loses little compared with what the ends push through. Make the bar thin, or `h` large, and convection takes over completely; that is the fin problem, and the `heated-fin-convection` example is exactly it.",
+      "expect": { "cmd": "solve.run", "match": { "step": "cooled" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "cooled" }
+    },
+    {
+      "title": "The theory you just used",
+      "explain": "Two laws and two kinds of boundary. Everything else in steady conduction is bookkeeping.",
+      "expect": null,
+      "theory": "Fourier's law: the heat flux is proportional to the temperature gradient, $\\mathbf{q} = -k\\,\\nabla T$.\nSteady conduction is what you get when nothing accumulates: $\\nabla\\cdot(k\\,\\nabla T) + \\dot q = 0$.\n\nTwo boundary conditions matter here.\nDirichlet (`constraint.temperature`): $T = T_0$ on the face — the world holds it there.\nConvection (`load.convection`): $-k\\,\\dfrac{\\partial T}{\\partial n} = h\\,(T - T_\\infty)$ — the face's temperature is part of the answer.\nA face with no Command on it is insulated, $\\dfrac{\\partial T}{\\partial n} = 0$: zero flux is the natural boundary condition, so \"do nothing\" is a real, physical choice and not an omission.\n\nFor the bar with two held ends and no source, the answer is the straight line $T(x) = T_0 + (T_1 - T_0)\\dfrac{x}{L}$, which any element family reproduces to machine precision. That is why it is the first heat model to build: if it is not exact, something is wrong with the setup, not with the mesh."
+    }
+  ]
+}

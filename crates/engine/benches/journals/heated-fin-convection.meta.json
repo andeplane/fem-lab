@@ -1,0 +1,20 @@
+{
+  "title": "Heated fin (convection)",
+  "tag": "P1 · verify",
+  "tags": [
+    "thermal",
+    "heat-steady",
+    "convection"
+  ],
+  "difficulty": 2,
+  "sentence": "An aluminium fin held at its root temperature and cooled by air on all four long faces — steady conduction against the 1D fin formula.",
+  "expected": {
+    "quantity": "tip temperature",
+    "value": 37.41,
+    "unit": "degC",
+    "reference": "1D fin, adiabatic tip: 37.39 °C"
+  },
+  "theory": "A fin of perimeter $P$ and area $A$ losing heat at $h$ into air at $T_\\infty$ obeys $\\dfrac{T(x) - T_\\infty}{T_b - T_\\infty} = \\dfrac{\\cosh m(L-x)}{\\cosh mL}$ with $m = \\sqrt{\\dfrac{hP}{kA}}$, provided the cross-section is at one temperature. That holds when the Biot number $\\mathrm{Bi} = \\dfrac{h\\,t/2}{k}$ is small — here $2.4\\times10^{-4}$. With $m = 16.23\\,\\mathrm{m^{-1}}$ and $L = 150\\,\\mathrm{mm}$ the tip sits at $37.39\\,^\\circ\\mathrm{C}$.",
+  "tutorial": "heat-conduction",
+  "thumbnail": null
+}

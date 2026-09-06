@@ -1,6 +1,20 @@
 {
   "title": "Simply supported beam",
   "tag": "everyday",
-  "sentence": "A beam pinned at one end and rollered at the other, under a uniform downward pressure \u2014 the textbook counterpart to the cantilever.",
+  "tags": [
+    "static",
+    "beam",
+    "distributed-load"
+  ],
+  "difficulty": 1,
+  "sentence": "A beam pinned at one end and rollered at the other, under a uniform downward pressure — the textbook counterpart to the cantilever.",
+  "expected": {
+    "quantity": "peak von Mises",
+    "value": 0.7728,
+    "unit": "MPa",
+    "reference": "δ = 5wL⁴/384EI, M = wL²/8"
+  },
+  "theory": "The two classic results: $\\delta_{mid} = \\dfrac{5wL^4}{384EI}$ and $M_{max} = \\dfrac{wL^2}{8}$. The roller is what makes it statically determinate — pin both ends and the beam picks up axial force as it sags, which the closed form does not include.",
+  "tutorial": null,
   "thumbnail": null
 }

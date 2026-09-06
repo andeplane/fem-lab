@@ -104,5 +104,13 @@
       ]
     },
     "hashAfter": "88b4dfa4b972da6e81985de44a6d545cab66847e305f52b015fcab83efb744df"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "88b4dfa4b972da6e81985de44a6d545cab66847e305f52b015fcab83efb744df"
   }
 ]

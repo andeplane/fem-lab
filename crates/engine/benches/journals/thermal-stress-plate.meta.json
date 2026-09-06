@@ -1,0 +1,20 @@
+{
+  "title": "Thermal stress in a restrained plate",
+  "tag": "P1 · verify",
+  "tags": [
+    "thermal",
+    "chained",
+    "plane-strain"
+  ],
+  "difficulty": 3,
+  "sentence": "A heat Step conducts a linear temperature field through a plate, and a static Step named after it picks that field up as thermal stress.",
+  "expected": {
+    "quantity": "σₓₓ at mid-height",
+    "value": -150.0,
+    "unit": "MPa",
+    "reference": "σₓₓ = −EαΔT/(1−ν) = −150 MPa"
+  },
+  "theory": "A plate held against $x$ displacement but free in $y$ and heated by $\\Delta T$ carries $\\sigma_{xx} = -\\dfrac{E\\,\\alpha\\,\\Delta T}{1-\\nu}$ with $\\sigma_{yy} = 0$. `step.add { after }` is what chains the two: the static Step reads the heat Step's temperature field instead of a constant `load.temperature`, so the stress is linear in $y$ exactly as the temperature is.",
+  "tutorial": null,
+  "thumbnail": null
+}

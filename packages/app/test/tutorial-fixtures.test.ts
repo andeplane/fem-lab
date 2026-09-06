@@ -31,9 +31,21 @@ async function replay(commands: ({ cmd: string } & Record<string, unknown>)[]): 
 describe('tutorials/*.json', () => {
   const files = readdirSync(tutorialsDir).filter((f) => f.endsWith('.json'));
 
-  it('bundles at least the four built-ins the PLAN promises', () => {
-    expect(files.length).toBeGreaterThanOrEqual(4);
-    expect(TUTORIALS.map((t) => t.id).sort()).toEqual(['cantilever', 'plate-with-hole', 'read-a-result', 'thermal-bar'].sort());
+  it('bundles the four built-ins the PLAN promises plus one per procedure', () => {
+    expect(files.length).toBeGreaterThanOrEqual(9);
+    expect(TUTORIALS.map((t) => t.id).sort()).toEqual(
+      ['cantilever', 'heat-conduction', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'transient-heat'].sort(),
+    );
+    // every file in the folder is registered: adding one and forgetting the import fails here
+    expect(files.map((f) => path.basename(f, '.json')).sort()).toEqual(TUTORIALS.map((t) => t.id).sort());
+  });
+
+  // `read-a-result` builds nothing (it explains the Results and Checks panels), so it is the one
+  // tutorial with no closed form to end on.
+  it('every tutorial that builds a Model closes on a theory block', () => {
+    for (const t of TUTORIALS.filter((t) => t.steps.some((s) => s.doIt))) {
+      expect(t.steps.some((s) => typeof s.theory === 'string' && s.theory.length > 0), t.id).toBe(true);
+    }
   });
 
   it.each(files)('%s parses and has the shape of a Tutorial', (file) => {
@@ -50,21 +62,20 @@ describe('tutorials/*.json', () => {
       expect(step.expect === null || typeof step.expect?.cmd === 'string').toBe(true);
       if (step.doIt) expect(typeof step.doIt.cmd).toBe('string');
     }
-    // never solve.run: the solver is not guaranteed to be merged, so no fixture depends on it
-    for (const step of tutorial.steps) expect(step.doIt?.cmd).not.toBe('solve.run');
   });
 
   it.each(TUTORIALS.map((t): [string, Tutorial] => [t.id, t]))('%s: its doIt Commands replay through the wasm engine', async (_id, tutorial) => {
     const commands = tutorial.steps.filter((s) => s.doIt).map((s) => s.doIt!);
     await replay(commands); // rejects (and fails the test) if the sequence does not run
-  });
+    // mesh-convergence solves three meshes in one Command, so 5 s is not enough for this one
+  }, 30_000);
 });
 
 describe('benches/journals/*.json (the Examples gallery)', () => {
   const files = readdirSync(journalsDir).filter((f) => f.endsWith('.json') && !f.endsWith('.meta.json'));
 
-  it('has at least 16 example journals (the cantilever plus ~15 new ones)', () => {
-    expect(files.length).toBeGreaterThanOrEqual(16);
+  it('has at least 22 example journals (the cantilever plus ~21 new ones)', () => {
+    expect(files.length).toBeGreaterThanOrEqual(22);
   });
 
   it.each(files)('%s parses as a Journal (an array of {seq, cmd, hashAfter})', (file) => {
@@ -76,25 +87,36 @@ describe('benches/journals/*.json (the Examples gallery)', () => {
       expect(typeof e.cmd.cmd).toBe('string');
       expect(typeof e.hashAfter).toBe('string');
       expect(e.hashAfter.length).toBeGreaterThan(0);
-      expect(e.cmd.cmd).not.toBe('solve.run');
     }
+    // every example ends on a solve, so Open alone shows a Result and not a ready-to-solve Model
+    expect(entries.at(-1)?.cmd.cmd).toBe('solve.run');
   });
 
   it.each(files)('%s replays through the wasm engine to its committed hashes', async (file) => {
     const raw = readFileSync(path.join(journalsDir, file), 'utf8');
     const entries = JSON.parse(raw) as { seq: number; cmd: unknown; hashAfter: string }[];
     const engine = new wasm.Engine(1);
-    const hashes = JSON.parse(await engine.replay_hashes(raw, false, true)) as string[];
+    // skipSolves, like the CI hash lane: a solve entry's hash is the Model hash, so the
+    // comparison is unaffected by the Result, and the suite does not re-solve 22 models.
+    const hashes = JSON.parse(await engine.replay_hashes(raw, true, true)) as string[];
     expect(hashes).toEqual(entries.map((e) => e.hashAfter));
   });
 
-  it('every journal has a title, tag and sentence in its .meta.json sidecar', () => {
+  it('every journal has a title, tag, sentence, theory, difficulty and expected value in its .meta.json sidecar', () => {
     for (const file of files) {
       const name = path.basename(file, '.json');
       const meta = JSON.parse(readFileSync(path.join(journalsDir, `${name}.meta.json`), 'utf8')) as Record<string, unknown>;
       expect(typeof meta['title'], name).toBe('string');
       expect(typeof meta['tag'], name).toBe('string');
       expect(typeof meta['sentence'], name).toBe('string');
+      expect(typeof meta['theory'], name).toBe('string');
+      expect([1, 2, 3], name).toContain(meta['difficulty']);
+      expect(Array.isArray(meta['tags']), name).toBe(true);
+      // what the solved Result is checked against, and where the reference number came from
+      const expected = meta['expected'] as Record<string, unknown>;
+      expect(typeof expected['quantity'], name).toBe('string');
+      expect(typeof expected['unit'], name).toBe('string');
+      expect(typeof expected['reference'], name).toBe('string');
     }
   });
 });

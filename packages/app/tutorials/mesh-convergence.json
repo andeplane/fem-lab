@@ -1,0 +1,96 @@
+{
+  "id": "mesh-convergence",
+  "title": "Mesh convergence, done properly",
+  "minutes": 7,
+  "summary": "Run one Command that meshes, solves and reports the same quantity at three mesh sizes — then read the observed rate and the Richardson estimate, and learn when the number is allowed to be believed.",
+  "steps": [
+    {
+      "title": "Start from the cantilever",
+      "explain": "The model itself is beside the point; what matters is the discipline. The cantilever is the right vehicle because you already know the answer, so you can see whether the convergence machinery is telling the truth.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "mesh-convergence-cantilever" }
+    },
+    {
+      "title": "Units",
+      "explain": "Millimetres and kilonewtons.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "force": "kN", "stress": "MPa" } }
+    },
+    {
+      "title": "The beam",
+      "explain": "One metre, 100 × 100 mm section — the same beam as the `cantilever` example and tutorial.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "beam" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "100 mm", "100 mm"] }
+    },
+    {
+      "title": "Material",
+      "explain": "Steel.",
+      "expect": { "cmd": "material.add" },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material on the one Body.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] }
+    },
+    {
+      "title": "Set the coarsest mesh",
+      "explain": "50 mm elements: two across the section. This is the mesh the study starts from, and it is deliberately too coarse to trust — that is the point of what follows.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "50 mm" }, "order": 1 }
+    },
+    {
+      "title": "Fix the root",
+      "explain": "Clamped at one end.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "root" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" }
+    },
+    {
+      "title": "Load the tip",
+      "explain": "1 kN down at the free end.",
+      "expect": { "cmd": "load.traction", "match": { "name": "tip" } },
+      "highlight": "load.traction",
+      "doIt": { "cmd": "load.traction", "name": "tip", "on": "beam.xmax", "total": ["0 N", "0 N", "-1 kN"] }
+    },
+    {
+      "title": "One Step to study",
+      "explain": "An ordinary static Step. `study.converge` re-solves *this* Step at each mesh size, so everything about the model except the mesh is held fixed.",
+      "expect": { "cmd": "step.add", "match": { "name": "static" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["root"], "loads": ["tip"] }
+    },
+    {
+      "title": "Name the quantity of interest, then run the study",
+      "explain": "This is the step everyone gets wrong. `quantity` must be one number you can defend, at a place you chose on purpose. \"The maximum von Mises anywhere\" is not that: on a model with a re-entrant corner or a point load it converges to the singularity, rising without limit, and the study correctly reports divergence for a model that is perfectly usable. Here the quantity is the vertical displacement probed at the tip. `sizes` halve each time — three of them is the minimum from which a rate can be estimated at all.",
+      "expect": { "cmd": "study.converge" },
+      "highlight": "study.converge",
+      "doIt": { "cmd": "study.converge", "step": "static", "sizes": ["50 mm", "25 mm", "12.5 mm"], "quantity": { "kind": "probe", "field": "displacement", "component": 2, "at": ["1 m", "50 mm", "50 mm"] } }
+    },
+    {
+      "title": "Read the table",
+      "explain": "Three rows — size, degrees of freedom, value, time — and two summary numbers. The values are −0.18940, −0.19011 and −0.19044 mm: changes of 0.38 % then 0.17 %, so the answer is settling. The observed rate comes out near 1.1 and the Richardson estimate is −0.19073 mm, which is within 0.2 % of the beam-theory answer of −0.1905 mm. Note the cost column: the finest mesh has 35× the degrees of freedom of the coarsest and takes about 50× as long. Convergence is not free, which is why you find out how fine is fine enough rather than guessing high.",
+      "expect": null
+    },
+    {
+      "title": "Solve once more to leave a Result behind",
+      "explain": "`study.converge` restores the mesh settings it started from, so the Model is exactly where you left it and the study is a measurement, not a modification. Solve once at the mesh you have now decided on.",
+      "expect": { "cmd": "solve.run", "match": { "step": "static" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "static" }
+    },
+    {
+      "title": "Rate, Richardson, and when to stop",
+      "explain": "The arithmetic is three lines. Knowing what the answer means is the rest of this page.",
+      "expect": null,
+      "theory": "With a refinement ratio $r$ (use $r = 2$: halve the element size each time) and values $f_1$, $f_2$, $f_3$ from coarsest to finest, the **observed order of convergence** is\n$$p = \\frac{\\ln\\!\\left(\\dfrac{f_1 - f_2}{f_2 - f_3}\\right)}{\\ln r}$$\nand **Richardson extrapolation** estimates the value the mesh is heading for:\n$$f_\\infty \\approx f_3 + \\frac{f_3 - f_2}{r^p - 1}$$\nThe remaining discretisation error on the finest mesh is then about $\\left|f_\\infty - f_3\\right|$, and that — not the gap between the last two meshes — is what you report.\n\n**Read $p$, do not just collect it.** Theory says a displacement converges at $p = 2$ for linear elements and $p = 3$ for quadratic ones; a stress converges one order slower. This run reports $p \\approx 1.1$, well below the 2 it \"should\" be. That is information, not failure: the tip probe sits inside the Saint-Venant zone of the applied traction, where the local field is still changing with the mesh, so the sequence is not yet in the asymptotic range where the formula applies. Move the probe a section depth back from the load and $p$ climbs toward 2.\n\nOther things a surprising $p$ tells you:\n- $p$ near 0.5, or a value that will not settle: there is a singularity in the quantity — a re-entrant corner, a point load, a point constraint. Extrapolation is meaningless; change the quantity or model the fillet.\n- $p$ far above the theoretical order: the three values are not monotone, and you are extrapolating from noise. Look at the signs before trusting anything.\n- Values that move *away* from each other as the mesh refines: something other than the mesh changed between runs. `study.converge` exists precisely so it cannot.\n\n**When to stop.** When the change between the last two meshes is below the tolerance you need — 2 % is a common engineering bar, and 5 % is defensible if you say so — *and* the sequence is monotone, *and* $p$ is near what theory predicts for the quantity and element. Two out of three is not convergence, it is a coincidence. Report the value, the mesh it came from, the estimated remaining error, and the observed rate. A number without those four is not an answer."
+    }
+  ]
+}

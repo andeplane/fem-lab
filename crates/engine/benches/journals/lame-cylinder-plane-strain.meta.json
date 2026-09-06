@@ -1,11 +1,20 @@
 {
-  "title": "Lam\u00e9 thick cylinder",
+  "title": "Thick cylinder (Lamé)",
   "tag": "NAFEMS",
+  "tags": [
+    "static",
+    "plane-strain",
+    "pressure"
+  ],
+  "difficulty": 3,
   "sentence": "A thick-walled cylinder under internal pressure, modelled as a plane-strain quarter section.",
-  "reference": {
-    "label": "\u03c3\u03b8\u03b8(a), \u03c3rr(a)",
-    "value": "100 MPa, \u221260 MPa"
+  "expected": {
+    "quantity": "σ_rr at the bore",
+    "value": -59.65,
+    "unit": "MPa",
+    "reference": "Lamé: σ_rr(a) = −p = −60 MPa"
   },
-  "theory": "Lam\u00e9's closed-form solution for a thick cylinder under internal pressure gives the hoop and radial stress at the bore directly from a, b and p.",
+  "theory": "Lamé's solution for a cylinder of bore $a$ and outside $b$ under internal pressure $p$ is $\\sigma_{rr}(r) = \\dfrac{a^2 p}{b^2 - a^2}\\left(1 - \\dfrac{b^2}{r^2}\\right)$ and $\\sigma_{\\theta\\theta}(r) = \\dfrac{a^2 p}{b^2 - a^2}\\left(1 + \\dfrac{b^2}{r^2}\\right)$; at the bore $\\sigma_{rr} = -p$ exactly, which is the boundary condition the solve has to reproduce.",
+  "tutorial": null,
   "thumbnail": null
 }

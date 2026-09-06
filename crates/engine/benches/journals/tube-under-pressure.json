@@ -22,62 +22,66 @@
   {
     "seq": 2,
     "cmd": {
-      "cmd": "geometry.add",
-      "name": "tube",
-      "shape": {
-        "kind": "revolve",
-        "sketch": {
-          "outer": [
-            {
-              "kind": "line",
-              "to": [
-                "50.0 mm",
-                "0 mm"
-              ],
-              "tag": "bottom"
-            },
-            {
-              "kind": "line",
-              "to": [
-                "50.0 mm",
-                "200.0 mm"
-              ],
-              "tag": "outer"
-            },
-            {
-              "kind": "line",
-              "to": [
-                "45.0 mm",
-                "200.0 mm"
-              ],
-              "tag": "top"
-            },
-            {
-              "kind": "line",
-              "to": [
-                "45.0 mm",
-                "0 mm"
-              ],
-              "tag": "inner"
-            }
-          ]
-        },
-        "angle": 360.0,
-        "segments": 32
-      }
-    },
-    "hashAfter": "b73faaaa060b34459d92a14bab3e590c975d15df2b20e536412b444fbe6e3547"
-  },
-  {
-    "seq": 3,
-    "cmd": {
       "cmd": "material.add",
       "name": "steel",
       "E": "210 GPa",
       "nu": 0.3,
+      "rho": "7850 kg/m^3",
       "source": "EN 10025"
     },
-    "hashAfter": "aafc6fc2da6f1c6a14c80bc97b0ec8dbcd2eb20abc00705f4a66101e97dd40fe"
+    "hashAfter": "c0929e8494f96c8727f8a54b7d8f3d7eb51df55c718f7a8a65d0bc4ccab2126c"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "sweep",
+        "base": {
+          "kind": "mapped",
+          "body": "tube",
+          "blocks": [
+            {
+              "corners": [
+                [
+                  "45 mm",
+                  "0 mm"
+                ],
+                [
+                  "50 mm",
+                  "0 mm"
+                ],
+                [
+                  "50 mm",
+                  "200 mm"
+                ],
+                [
+                  "45 mm",
+                  "200 mm"
+                ]
+              ],
+              "n": [
+                3,
+                20
+              ],
+              "tags": [
+                "bottom",
+                "outer",
+                "top",
+                "inner"
+              ]
+            }
+          ]
+        },
+        "sweep": {
+          "kind": "revolve",
+          "segments": 32,
+          "angleDeg": 360.0
+        }
+      },
+      "order": 1
+    },
+    "hashAfter": "92a404a1ff3585055fc8632aaaad8ea48d777427008685719c443467f9c2f1f2"
   },
   {
     "seq": 4,
@@ -88,44 +92,29 @@
         "tube"
       ]
     },
-    "hashAfter": "d400fa42eca1d339799400a9d38bcb7bc6720631b483fe8d48671e2c3557fbe7"
+    "hashAfter": "eb6d951712bf58220e7345612d9b03eee1ee0f9c5fee3e8764eb30a31be31969"
   },
   {
     "seq": 5,
     "cmd": {
-      "cmd": "mesh.set",
-      "mesher": {
-        "kind": "lattice",
-        "size": "5 mm"
-      },
-      "order": 1
+      "cmd": "constraint.fix",
+      "name": "base",
+      "on": "tube.bottom"
     },
-    "hashAfter": "1027011ae015105f4dca52111c4986983f0dae470e78358811e2606f94cc5ed4"
+    "hashAfter": "284387b3dae530db9fa96f3a46352bc688a875bc502bdb0f5d525e3607dfffd1"
   },
   {
     "seq": 6,
-    "cmd": {
-      "cmd": "constraint.fix",
-      "name": "base",
-      "on": "tube.bottom",
-      "dofs": [
-        "uz"
-      ]
-    },
-    "hashAfter": "0c47ff48eb431bf1d7a16ffe03a855812575db74f2bae51862262f0ff9f0121a"
-  },
-  {
-    "seq": 7,
     "cmd": {
       "cmd": "load.pressure",
       "name": "internal",
       "on": "tube.inner",
       "value": "8 MPa"
     },
-    "hashAfter": "c947091cbceb57172b674f7580ef354021b83fcc492ba4b677093d626a81f82f"
+    "hashAfter": "f19eabba9cfb75478a9fb57c6ab831c5eaae2743b7e338504a0c04baa4ec1195"
   },
   {
-    "seq": 8,
+    "seq": 7,
     "cmd": {
       "cmd": "step.add",
       "name": "static",
@@ -137,6 +126,14 @@
         "internal"
       ]
     },
-    "hashAfter": "b176459eddb7aa45f50495f825998925b2f193b10abbaf586856d8c8f39895d6"
+    "hashAfter": "5be1a8ae76ce1d4bfd0677349b4fbd4fb39442fb78d263b40c7495289b814b49"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "5be1a8ae76ce1d4bfd0677349b4fbd4fb39442fb78d263b40c7495289b814b49"
   }
 ]

@@ -81,19 +81,6 @@
                   "40.0 mm"
                 ],
                 "to": [
-                  "35.0 mm",
-                  "40.0 mm"
-                ],
-                "ccw": true,
-                "tag": "hole"
-              },
-              {
-                "kind": "arc",
-                "center": [
-                  "50.0 mm",
-                  "40.0 mm"
-                ],
-                "to": [
                   "50.0 mm",
                   "25.0 mm"
                 ],
@@ -120,6 +107,19 @@
                   "40.0 mm"
                 ],
                 "to": [
+                  "50.0 mm",
+                  "55.0 mm"
+                ],
+                "ccw": true,
+                "tag": "hole"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "50.0 mm",
+                  "40.0 mm"
+                ],
+                "to": [
                   "35.0 mm",
                   "40.0 mm"
                 ],
@@ -131,7 +131,7 @@
         }
       }
     },
-    "hashAfter": "4ef15f6d5b695b26e09c6a546fae06ac8ee1d44fca9be8909c24ad159ee746ab"
+    "hashAfter": "8357559629a8ce6d32afd2d8d8b72f28aa6a3090f0af66287029af5c15fb3ed1"
   },
   {
     "seq": 4,
@@ -142,7 +142,7 @@
       "nu": 0.3,
       "source": "EN 10025"
     },
-    "hashAfter": "146bf112b0a88c6694759d49e96ed1abefa9a78688422e721b514a3c4f6dcb4d"
+    "hashAfter": "409c5e260b9024aba10bc8b56abb544b3d89216eeb9f514a4aadf56e7009b985"
   },
   {
     "seq": 5,
@@ -153,7 +153,7 @@
         "plate"
       ]
     },
-    "hashAfter": "ab184cb88a95f29d25ddf1c36de5176a3a617e9d45bf917e4a086d790054771b"
+    "hashAfter": "fac900e15a1339e8d494a4ebd851c16e908d60484a5d900d678a6b7f3e002229"
   },
   {
     "seq": 6,
@@ -179,7 +179,7 @@
       },
       "order": 2
     },
-    "hashAfter": "577daf7d733538e42bd9204fcbd74f559cf0fa17d757812c46a646557f4a868d"
+    "hashAfter": "5a0d35be300a3541334c5ca999c2c1083bcc978a046dfe871ac4bef67bc64863"
   },
   {
     "seq": 7,
@@ -188,7 +188,7 @@
       "name": "left",
       "on": "plate.xmin0"
     },
-    "hashAfter": "1e0521fea2a0b8460924ae59e83f551cc093bd12fc094fca5ca30c6ccb3096da"
+    "hashAfter": "5e0588a7503356ecf2c9ff5fa956a58105a8adcb474e7e07fbb2ab5a0182ac37"
   },
   {
     "seq": 8,
@@ -202,7 +202,7 @@
         "0 N"
       ]
     },
-    "hashAfter": "0549f581aed56a541aa901ef0f2b66ba8d7bbf6ecf20d414b2dc797331261483"
+    "hashAfter": "81ff2d55cd4da68833d2bc69f7363abb7a6f8d3311116e7714f24a1efd8764cb"
   },
   {
     "seq": 9,
@@ -217,6 +217,14 @@
         "pull"
       ]
     },
-    "hashAfter": "2178ad1007976fb803616179d0705a453638ead20e4fed44e20321e0a2486982"
+    "hashAfter": "c42409f886e93f8fc42533dd2ce81acef791ae88dd94d2f397f5be89a8f5e0f2"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "c42409f886e93f8fc42533dd2ce81acef791ae88dd94d2f397f5be89a8f5e0f2"
   }
 ]

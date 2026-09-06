@@ -1,11 +1,20 @@
 {
-  "title": "MacNeal\u2013Harder beam",
+  "title": "MacNeal–Harder straight beam",
   "tag": "NAFEMS",
-  "sentence": "A short cantilever meshed as six regular quad elements \u2014 the classic shear-locking sensitivity check.",
-  "reference": {
-    "label": "tip deflection",
-    "value": "0.1081 in (regular mesh)"
+  "tags": [
+    "static",
+    "plane-stress",
+    "shear-locking"
+  ],
+  "difficulty": 2,
+  "sentence": "A short cantilever meshed as six regular quad elements — the classic shear-locking sensitivity check.",
+  "expected": {
+    "quantity": "tip deflection",
+    "value": 0.10733,
+    "unit": "m",
+    "reference": "MacNeal & Harder (1985): 0.1081"
   },
-  "theory": "MacNeal & Harder (1985): a straight beam in shear-dominated bending, used to show that linear (quad4) elements lock while quadratic (quad8) elements stay within 1 %.",
+  "theory": "Six elements along a beam of aspect ratio 30 is deliberately too coarse: a fully integrated linear quad locks in shear and returns a fraction of $0.1081$. Passing this needs a formulation that removes the parasitic shear — incompatible modes, reduced integration with hourglass control, or quadratic elements.",
+  "tutorial": null,
   "thumbnail": null
 }

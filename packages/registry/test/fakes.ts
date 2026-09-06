@@ -6,6 +6,7 @@ import type { EngineTransport } from '../src/transport';
 export const ACK: Ack = { seq: 1, revision: 1, hash: 'h', warnings: [], output: { type: 'none' } };
 export const MODEL_FILE = { format: 'femlab/1', engineVersion: '0', model: { name: 'beam' }, journal: { entries: [] } } as unknown as ModelFile;
 export const PROJECT: ProjectInfo = { name: 'proj', files: [], agentsMd: 'AGENTS.md', skills: [] };
+export const SAVED = { name: 'beam', at: 1_700_000_000_000, commands: 9 };
 
 const kN = (value: number) => ({ value, unit: 'kN' });
 const mm = (value: number) => ({ value, unit: 'mm' });
@@ -48,6 +49,8 @@ export function fakeTransport(): EngineTransport {
 
 /** Every method records its call; `project.info()` is switched by `projectOpen`. */
 export function fakeHost(transport = fakeTransport(), projectOpen = false): HostContext {
+  // autosave is on by default, as in the app, and `file.autosave { on: false }` forgets the save
+  let autosaveOn = true;
   return {
     transport,
     view: {
@@ -72,7 +75,16 @@ export function fakeHost(transport = fakeTransport(), projectOpen = false): Host
     chat: { send: vi.fn(), insertMention: vi.fn(), clear: vi.fn() },
     skills: vi.fn(() => [{ name: 'beam-theory-check', description: 'Compare a cantilever with Euler–Bernoulli beam theory.', when: 'a beam', body: '# Steps', source: 'builtin' as const }]),
     clipboard: { writeText: vi.fn(async () => undefined) },
-    files: { pick: vi.fn(async () => JSON.stringify(MODEL_FILE)), download: vi.fn(), shareLink: vi.fn(async () => ({ url: 'https://x/#j' })) },
+    files: {
+      pick: vi.fn(async () => JSON.stringify(MODEL_FILE)),
+      download: vi.fn(),
+      shareLink: vi.fn(async () => ({ url: 'https://x/#j' })),
+      setAutosave: vi.fn((on: boolean) => {
+        autosaveOn = on;
+      }),
+      restore: vi.fn(async () => (autosaveOn ? SAVED : null)),
+      autosave: vi.fn(() => ({ enabled: autosaveOn, saved: autosaveOn ? SAVED : null })),
+    },
     project: {
       open: vi.fn(async () => undefined),
       close: vi.fn(),

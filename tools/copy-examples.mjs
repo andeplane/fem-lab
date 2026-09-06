@@ -22,7 +22,9 @@ const examples = readdirSync(from)
     const metaPath = path.join(from, `${name}.meta.json`);
     const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, "utf8")) : {};
     return { name, commands: entries.length, summary: meta.sentence ?? `${name}: ${entries.length} Commands`, ...meta };
-  });
+  })
+  // gallery order: easiest first, then alphabetical, so the first card is a model to start on
+  .sort((a, b) => (a.difficulty ?? 9) - (b.difficulty ?? 9) || a.name.localeCompare(b.name));
 
 writeFileSync(path.join(to, "index.json"), `${JSON.stringify({ examples }, null, 2)}\n`);
 console.log(`copied ${examples.length} example journal(s) to ${to}`);

@@ -171,5 +171,13 @@
       ]
     },
     "hashAfter": "9f958bec21d0fff35e529005f05702259394a9d7a448bf5bb4c60bb50f42cdbd"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "9f958bec21d0fff35e529005f05702259394a9d7a448bf5bb4c60bb50f42cdbd"
   }
 ]

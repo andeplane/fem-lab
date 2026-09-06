@@ -88,7 +88,7 @@
                   "0 mm",
                   "0 mm"
                 ],
-                "ccw": true
+                "ccw": false
               }
             ],
             "n": [
@@ -106,7 +106,7 @@
       },
       "order": 2
     },
-    "hashAfter": "31a85420cb13aa82a4ed9c180a476aae62ae167c0f6662578ff21258068f1037"
+    "hashAfter": "8c8606d635a4f29d10d91c995f7f4ea26a489b1780d13d800d55bd2fbbb09869"
   },
   {
     "seq": 5,
@@ -117,7 +117,7 @@
         "cylinder"
       ]
     },
-    "hashAfter": "7934c54b1bada62a48598cf53a7db7e407ba522b3380a6992d28f31658286a23"
+    "hashAfter": "9e9e890e81304d6bacd438490a9d0ad6a19c267ba0a93086d1a7e867f9d25c7f"
   },
   {
     "seq": 6,
@@ -127,7 +127,7 @@
       "on": "cylinder.xmin",
       "normal": "x"
     },
-    "hashAfter": "060d4483f0e41c48f5800107d63e236a14f6f38f9046ecd3e366fa1882dd3d52"
+    "hashAfter": "ec6aa83b22b6f99a4a67f049c7de81d328fdf38b012c50c20027539d4a4c95e6"
   },
   {
     "seq": 7,
@@ -137,7 +137,7 @@
       "on": "cylinder.ymin",
       "normal": "y"
     },
-    "hashAfter": "28eef82eccebccffbaeee747f22f3b12b73ecb737a712e15621e3e23d0cc6bdd"
+    "hashAfter": "10ec71c78e7b2a289e3ec61aec7b1ef9d3de37a7bd80690a4128c868337f040d"
   },
   {
     "seq": 8,
@@ -147,7 +147,7 @@
       "on": "cylinder.inner",
       "value": "60 MPa"
     },
-    "hashAfter": "77226229ae9554ec8233a4548047773c91ad852bef3a1cb93bc9158c0bff18b2"
+    "hashAfter": "7be76259d327fca07ce5c7cfb1c3b50e5279607b35160f1248bbeb595d5c8e05"
   },
   {
     "seq": 9,
@@ -163,6 +163,14 @@
         "internal"
       ]
     },
-    "hashAfter": "c14410d0737b2d1d516f8135a6ae64fc58a5d298e1c37070cf5e9a17234f06b0"
+    "hashAfter": "79fd5aed81af75e54b594bf9294488228dd7fb8a2367dc72a439d879985ebbd8"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "79fd5aed81af75e54b594bf9294488228dd7fb8a2367dc72a439d879985ebbd8"
   }
 ]
