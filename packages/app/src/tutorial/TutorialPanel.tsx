@@ -52,10 +52,11 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
   useRunnerTick(runner);
 
   const open = s.panels['tutorial'] === true;
-  const makeRunner = (tutorial: Parameters<typeof TutorialRunner.resume>[0], startAt?: number): TutorialRunner => {
-    const deps = { dispatch: (cmd: { cmd: string } & Record<string, unknown>) => registry.dispatch(cmd) };
-    return startAt === undefined ? TutorialRunner.resume(tutorial, deps) : new TutorialRunner(tutorial, deps, startAt);
-  };
+  // The app's own dispatch when the shell has provided it (it journals, refreshes the tree, the
+  // viewer and the results); the bare registry otherwise (tests mount this panel alone).
+  const deps = { dispatch: (cmd: { cmd: string } & Record<string, unknown>) => (store.dispatch ?? ((c) => registry.dispatch(c)))(cmd) };
+  const makeRunner = (tutorial: Parameters<typeof TutorialRunner.resume>[0], startAt?: number): TutorialRunner =>
+    startAt === undefined ? TutorialRunner.resume(tutorial, deps, s.journal?.entries ?? []) : new TutorialRunner(tutorial, deps, startAt);
 
   // Resume from the URL hash (Tour's "start the cantilever tutorial" sets it) or localStorage
   // the moment the panel opens, if nothing is running yet.
@@ -77,19 +78,34 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
 
   if (!open) return null;
 
-  const close = (): void => store.togglePanel('tutorial', false);
+  const close = (): void => {
+    if (runner) TutorialRunner.forget(runner.tutorial.id);
+    setRunner(null);
+    store.togglePanel('tutorial', false);
+  };
 
-  // "do it for me" bypasses the app's own dispatch wrapper (that lives in main.tsx, outside
-  // this module's ownership), so it refreshes just enough of the Store for the Journal watch
-  // above to fire: the Model tree and viewer catch up on the next Command either way.
+  // One "do it for me" at a time: the button is disabled until the Journal has been re-read,
+  // so a second click cannot issue the same Command again (issue #37). Through the app's own
+  // dispatch the Journal, tree, viewer and results all refresh; without it (a bare panel) the
+  // Store is refreshed here so the Journal watch above still fires.
+  const [busy, setBusy] = useState(false);
   const doIt = async (): Promise<void> => {
-    if (!runner) return;
-    await runner.doIt();
-    const [model, journal] = await Promise.all([
-      registry.query({ query: 'query.model' }) as Promise<ModelSummary>,
-      registry.query({ query: 'query.journal' }) as Promise<JournalDump>,
-    ]);
-    store.set({ model, journal, revision: model.revision });
+    if (!runner || busy) return;
+    setBusy(true);
+    try {
+      await runner.doIt();
+      if (!store.dispatch) {
+        const [model, journal] = await Promise.all([
+          registry.query({ query: 'query.model' }) as Promise<ModelSummary>,
+          registry.query({ query: 'query.journal' }) as Promise<JournalDump>,
+        ]);
+        store.set({ model, journal, revision: model.revision });
+      }
+    } catch {
+      // the Command's error is on the store already (main.tsx's dispatch) or in the console
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (!runner) {
@@ -126,7 +142,14 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
         </div>
         <p class="tutorial-explain">Every step is in the Journal. Pick another tutorial, or close this and keep building.</p>
         <div class="tutorial-actions">
-          <button type="button" class="tutorial-btn" onClick={() => setRunner(null)}>
+          <button
+            type="button"
+            class="tutorial-btn"
+            onClick={() => {
+              TutorialRunner.forget(runner.tutorial.id);
+              setRunner(null);
+            }}
+          >
             Choose another tutorial
           </button>
         </div>
@@ -151,8 +174,8 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
       {step.theory ? <pre class="tutorial-theory mono">{step.theory}</pre> : null}
       <div class="tutorial-actions">
         {step.doIt ? (
-          <button type="button" class="tutorial-btn primary" onClick={() => void doIt()}>
-            Do it for me
+          <button type="button" class="tutorial-btn primary" disabled={busy} onClick={() => void doIt()}>
+            {busy ? 'Doing it…' : 'Do it for me'}
           </button>
         ) : null}
         {step.expect === null ? (

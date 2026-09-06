@@ -201,6 +201,12 @@ export function panelsReducer(panels: Record<string, boolean>, panel: string, op
 }
 
 export class Store {
+  /**
+   * The app's wrapped `dispatch` (main.tsx): journals, refreshes the tree, the viewer and the
+   * results after a Command. Panels mounted outside the shell (the tutorial runner) go through
+   * it so "do it for me" behaves exactly like a click on the real control (issue #37, #12).
+   */
+  dispatch: ((cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>) | null = null;
   private listeners = new Set<() => void>();
 
   constructor(public state: UiState = initialState) {}

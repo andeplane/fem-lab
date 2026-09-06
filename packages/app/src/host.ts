@@ -62,7 +62,8 @@ export async function primeAutosave(): Promise<AutosaveState['saved']> {
  * after every journaled Command and has just re-read the Model and the Journal.
  */
 export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
-  if (!autosave.enabled()) return;
+  // Boot refreshes before any Command; an empty Journal is nothing to restore (issue #48).
+  if (!autosave.enabled() || journal.length === 0) return;
   autosave.note(name, journal as never);
   lastSaved = { name, at: Date.now(), commands: journal.length };
 }
