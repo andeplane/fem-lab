@@ -12,6 +12,10 @@ export interface Surface {
   triBody: Uint32Array;
   triFace: Uint32Array;
   faceNames: string[];
+  /** All face-Set memberships, CSR by original surface triangle; includes named predicate Sets. */
+  setNames?: string[];
+  triSetOffsets?: Uint32Array;
+  triSets?: Uint32Array;
   bodyNames: string[];
 }
 export interface FieldData {

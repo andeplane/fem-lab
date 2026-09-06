@@ -11,6 +11,7 @@ import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import type { WorkerTransport } from './worker-transport';
+import { treeGroups } from './ui/Tree';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -118,7 +119,12 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       },
     },
     selection: {
-      set: (s) => store.select(s),
+      set: (s) => {
+        store.select(s);
+        const ref = s.refs?.[0];
+        const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => `${candidate.kind}:${candidate.name}` === ref) : undefined;
+        if (item && !item.run) store.openForm(item.cmd, item.args);
+      },
       clear: () => store.set({ selection: EMPTY_SELECTION }),
       setPickTarget: (t) => store.set({ pickTarget: t }),
       get: (): Selection => store.state.selection,

@@ -31,6 +31,27 @@ fn strings(v: &[String]) -> JsValue {
     v.iter().map(|s| JsValue::from_str(s)).collect::<js_sys::Array>().into()
 }
 
+/** CSR face-Set memberships for surface triangles. A triangle may keep every overlapping alias. */
+fn face_memberships<T: PartialEq>(
+    tri_faces: &[Option<u32>],
+    faces: &[T],
+    sets: &[(&str, &[T])],
+) -> (Vec<u32>, Vec<u32>) {
+    let mut offsets = vec![0];
+    let mut members = Vec::new();
+    for face in tri_faces {
+        if let Some(face) = face.map(|index| &faces[index as usize]) {
+            for (index, (_, set_faces)) in sets.iter().enumerate() {
+                if set_faces.contains(face) {
+                    members.push(index as u32);
+                }
+            }
+        }
+        offsets.push(members.len() as u32);
+    }
+    (offsets, members)
+}
+
 /// One engine instance.
 #[wasm_bindgen]
 pub struct Engine {
@@ -111,8 +132,11 @@ impl Engine {
         let mut positions: Vec<f32> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut tri_set: Vec<u32> = Vec::new();
+        let mut tri_set_offsets: Vec<u32> = Vec::new();
+        let mut tri_sets: Vec<u32> = Vec::new();
         let mut tri_body: Vec<u32> = Vec::new();
         let mut set_names: Vec<String> = Vec::new();
+        let mut membership_names: Vec<String> = Vec::new();
         let mut body_names: Vec<String> = Vec::new();
         let source = if self.inner.model().mesh.is_some() {
             let built = self.inner.mesh().map_err(|e| throw(&e))?;
@@ -120,11 +144,17 @@ impl Engine {
             positions.extend(s.positions.iter().flat_map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]));
             indices.extend(s.triangles.iter().flatten().copied());
             tri_set.extend(s.tri_face.iter().map(|f| f.and_then(|i| s.set_of_face[i as usize]).unwrap_or(u32::MAX)));
+            membership_names = built.sets.keys().cloned().collect();
+            let memberships: Vec<(&str, &[_])> =
+                membership_names.iter().map(|name| (name.as_str(), built.sets[name].faces.as_slice())).collect();
+            (tri_set_offsets, tri_sets) = face_memberships(&s.tri_face, &s.faces, &memberships);
             tri_body.extend(s.tri_elem.iter().map(|&e| built.mesh.block_of(e).0 as u32));
             set_names = s.set_names;
             body_names = built.body_of_block.clone();
             "mesh"
         } else {
+            // CSR always has one more offset than triangles, including an empty surface.
+            tri_set_offsets.push(0);
             for (body, tri) in self.inner.geometry_surface().map_err(|e| throw(&e))? {
                 let offset = (positions.len() / 3) as u32;
                 positions.extend(tri.positions.iter().flat_map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]));
@@ -136,18 +166,24 @@ impl Engine {
                         set_names.len() - 1
                     });
                     tri_set.push(at as u32);
+                    tri_sets.push(at as u32);
+                    tri_set_offsets.push(tri_sets.len() as u32);
                     tri_body.push(body_names.len() as u32);
                 }
                 body_names.push(body);
             }
+            membership_names.clone_from(&set_names);
             "geometry"
         };
         let out = js_sys::Object::new();
         put(&out, "positions", js_sys::Float32Array::from(&positions[..]).into());
         put(&out, "indices", js_sys::Uint32Array::from(&indices[..]).into());
         put(&out, "triSet", js_sys::Uint32Array::from(&tri_set[..]).into());
+        put(&out, "triSetOffsets", js_sys::Uint32Array::from(&tri_set_offsets[..]).into());
+        put(&out, "triSets", js_sys::Uint32Array::from(&tri_sets[..]).into());
         put(&out, "triBody", js_sys::Uint32Array::from(&tri_body[..]).into());
         put(&out, "setNames", strings(&set_names));
+        put(&out, "membershipNames", strings(&membership_names));
         put(&out, "bodyNames", strings(&body_names));
         put(&out, "source", JsValue::from_str(source));
         Ok(out.into())
@@ -202,6 +238,35 @@ impl Engine {
         let entries: Vec<JournalEntry> = serde_json::from_str(&journal_json).map_err(schema_err)?;
         let hashes = self.inner.replay(&entries, skip_solves, verify).await.map_err(|e| throw(&e))?;
         serde_json::to_string(&hashes).map_err(schema_err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::face_memberships;
+
+    #[test]
+    fn surface_memberships_keep_overlapping_aliases_and_empty_triangles() {
+        // Faces 10 and 30 stand for faces on different Bodies. `span` deliberately includes
+        // both: the CSR does not assume one Body per Set or one Set per face.
+        let faces = [10, 20, 30];
+        let canonical = [10, 20];
+        let alias_a = [10];
+        let alias_b = [10];
+        let span = [10, 30];
+        let sets = [
+            ("canonical", canonical.as_slice()),
+            ("alias-a", alias_a.as_slice()),
+            ("alias-b", alias_b.as_slice()),
+            ("span", span.as_slice()),
+        ];
+        let (offsets, members) = face_memberships(&[Some(0), Some(1), None, Some(2)], &faces, &sets);
+        assert_eq!(offsets, [0, 4, 5, 5, 6]);
+        assert_eq!(members, [0, 1, 2, 3, 0, 3]);
+
+        let (empty_offsets, empty_members) = face_memberships(&[Some(0), None], &faces, &[]);
+        assert_eq!(empty_offsets, [0, 0, 0]);
+        assert!(empty_members.is_empty());
     }
 }
 

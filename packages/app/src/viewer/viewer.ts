@@ -177,6 +177,14 @@ export class Viewer {
     this.render();
   }
 
+  private matchesSet(surface: AppSurface, triangle: number, names: Set<string>): boolean {
+    const start = surface.triSetOffsets?.[triangle];
+    const end = surface.triSetOffsets?.[triangle + 1];
+    if (start === undefined || end === undefined || !surface.triSets || !surface.setNames) return false;
+    for (let i = start; i < end; i++) if (names.has(surface.setNames[surface.triSets[i]!] ?? '')) return true;
+    return false;
+  }
+
   resize(): void {
     const w = this.canvas.clientWidth || 640;
     const h = this.canvas.clientHeight || 480;
@@ -261,10 +269,11 @@ export class Viewer {
       const t = this.tri[i]!;
       const faceName = s.faceNames[s.triFace[t]!] ?? null;
       const bodyName = s.bodyNames[s.triBody[t]!] ?? null;
-      const selected = (bodyName !== null && this.selectedBodies.has(bodyName)) || (faceName !== null && this.selectedFaces.has(faceName));
+      const selected = (bodyName !== null && this.selectedBodies.has(bodyName)) || (faceName !== null && this.selectedFaces.has(faceName)) || this.matchesSet(s, t, this.selectedFaces);
       const hot =
         (faceName !== null && (faceName === this.hoverFace || this.highlightedFaces.has(faceName))) ||
-        (bodyName !== null && this.highlightedBodies.has(bodyName));
+        (bodyName !== null && this.highlightedBodies.has(bodyName)) ||
+        this.matchesSet(s, t, this.highlightedFaces);
       for (let k = 0; k < 3; k++) {
         const vertex = i * 3 + k;
         if (this.mode === 'results' && this.field) {

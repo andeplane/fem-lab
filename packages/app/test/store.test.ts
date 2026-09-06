@@ -23,6 +23,11 @@ describe('selectionReducer', () => {
   it('expands refs the way @selection does', () => {
     expect(selectionReducer(sel(), { bodies: ['beam'], faces: ['beam.top'], sets: ['s'] }).refs).toEqual(['body:beam', 'face:beam.top', 'set:s']);
   });
+
+  it('keeps semantic object refs separate from drawable selection names', () => {
+    expect(selectionReducer(sel(), { refs: ['material:steel', 'constraint:fix'] })).toEqual({ bodies: [], faces: [], sets: [], refs: ['material:steel', 'constraint:fix'] });
+    expect(selectionReducer({ bodies: [], faces: [], sets: [], refs: ['material:steel'] }, { bodies: ['beam'], mode: 'add' }).refs).toEqual(['material:steel', 'body:beam']);
+  });
 });
 
 describe('consoleReducer', () => {

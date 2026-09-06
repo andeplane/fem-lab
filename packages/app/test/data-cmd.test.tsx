@@ -1,7 +1,7 @@
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
-import { HOST_COMMANDS, Registry, type EngineSchema, type JournalDump, type ModelSummary, type ResultSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
 import { h, render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
@@ -36,6 +36,14 @@ const model = (): ModelSummary =>
     meshSettings: null,
     warnings: [{ code: 'W-1200', text: 'no mesh settings yet', where: null }],
   }) as unknown as ModelSummary;
+
+const objects = (): ObjectRef[] => [
+  { ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' },
+  { ref: 'material:steel', kind: 'material', name: 'steel', summary: 'steel' },
+  { ref: 'constraint:fix', kind: 'constraint', name: 'fix', summary: 'on beam.xmin' },
+  { ref: 'load:p', kind: 'load', name: 'p', summary: 'on beam.top' },
+  { ref: 'step:static', kind: 'step', name: 'static', summary: 'static' },
+] as ObjectRef[];
 
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
 
@@ -79,7 +87,7 @@ function mount(patch: Partial<Parameters<Store['set']>[0]> = {}, dispatch: Dispa
     host: makeHostContext(store, transport, viewer, host),
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, async () => undefined)],
   });
-  store.set({ ready: true, model: model(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
+  store.set({ ready: true, model: model(), objects: objects(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
@@ -241,19 +249,20 @@ describe('the shell', () => {
 
   it('resolves only explicit, live Journal targets to drawable Model names', () => {
     const current = model();
-    expect(journalTarget({ cmd: 'geometry.addBox', name: 'beam' }, current)).toEqual({ ref: 'body:beam', view: { bodies: ['beam'] } });
-    expect(journalTarget({ cmd: 'material.add', name: 'steel' }, current)).toEqual({ ref: 'material:steel', view: { bodies: ['beam'] } });
-    expect(journalTarget({ cmd: 'constraint.fix', name: 'fix', on: 'old.face' }, current)).toEqual({ ref: 'constraint:fix', view: { faces: ['beam.xmin'] } });
-    expect(journalTarget({ cmd: 'load.pressure', name: 'p', on: 'old.face' }, current)).toEqual({ ref: 'load:p', view: { faces: ['beam.top'] } });
-    expect(journalTarget({ cmd: 'model.rename', kind: 'body', name: 'old', to: 'beam' }, current)).toEqual({ ref: 'body:beam', view: { bodies: ['beam'] } });
+    const refs = objects();
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'beam' }, current, refs)).toEqual({ ref: 'body:beam', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'material.add', name: 'steel' }, current, refs)).toEqual({ ref: 'material:steel', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'constraint.fix', name: 'fix', on: 'old.face' }, current, refs)).toEqual({ ref: 'constraint:fix', highlight: { sets: ['beam.xmin'] } });
+    expect(journalTarget({ cmd: 'load.pressure', name: 'p', on: 'old.face' }, current, refs)).toEqual({ ref: 'load:p', highlight: { sets: ['beam.top'] } });
+    expect(journalTarget({ cmd: 'model.rename', kind: 'body', name: 'old', to: 'beam' }, current, refs)).toEqual({ ref: 'body:beam', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'step.add', name: 'static' }, current, refs)).toEqual({ ref: 'step:static', highlight: null });
 
-    expect(journalTarget({ cmd: 'geometry.addBox', name: 'deleted' }, current)).toBeNull();
-    expect(journalTarget({ cmd: 'geometry.remove', name: 'beam' }, current)).toBeNull();
-    expect(journalTarget({ cmd: 'step.add', name: 'static' }, current)).toBeNull();
-    expect(journalTarget({ cmd: 'solve.run', step: 'static' }, current)).toBeNull();
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'deleted' }, current, refs)).toBeNull();
+    expect(journalTarget({ cmd: 'geometry.remove', name: 'beam' }, current, refs)).toBeNull();
+    expect(journalTarget({ cmd: 'solve.run', step: 'static' }, current, refs)).toBeNull();
   });
 
-  it('selects and highlights a Journal target while keeping copy separate', () => {
+  it('selects and highlights a Journal target while keeping copy separate', async () => {
     const dispatch = vi.fn<Dispatch>(async () => undefined);
     const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m', '1 m'] }, { cmd: 'geometry.addBox', name: 'deleted', size: ['1 m', '1 m', '1 m'] });
     const { root, store } = mount({ tab: 'journal', journal: entries }, dispatch);
@@ -270,7 +279,7 @@ describe('the shell', () => {
     expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
 
     select.click();
-    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'selection.set', bodies: ['beam'] });
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'selection.set', refs: ['body:beam'] });
     row.querySelector<HTMLButtonElement>('.jcopy')!.click();
     expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
     expect(store.state.journal).toBe(entries);
@@ -279,6 +288,19 @@ describe('the shell', () => {
     expect(unavailable.dataset['targetRef']).toBeUndefined();
     expect(unavailable.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
     expect(root.querySelector<HTMLElement>('.jrow')!.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+
+    row.dispatchEvent(new MouseEvent('mouseenter'));
+    render(null, root);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+  });
+
+  it('keeps semantic object selection and Properties on the Journal object', async () => {
+    const { registry, store } = mount();
+    await registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    expect(store.state.selection.refs).toEqual(['material:steel']);
+    expect(store.state.selection.bodies).toEqual([]);
+    expect(store.state.form).toMatchObject({ cmd: 'material.add', values: { name: 'steel' } });
   });
 
   it('renders the start screen with its four paths before a Model exists', () => {

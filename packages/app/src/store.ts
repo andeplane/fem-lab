@@ -181,14 +181,12 @@ export function refsOf(s: Omit<Selection, 'refs'>): string[] {
   return [...s.bodies.map((n) => `body:${n}`), ...s.faces.map((n) => `face:${n}`), ...s.sets.map((n) => `set:${n}`)];
 }
 
-export function selectionReducer(cur: Selection, input: { bodies?: string[]; faces?: string[]; sets?: string[]; mode?: 'replace' | 'add' | 'remove' }): Selection {
+export function selectionReducer(cur: Selection, input: { refs?: string[]; bodies?: string[]; faces?: string[]; sets?: string[]; mode?: 'replace' | 'add' | 'remove' }): Selection {
   const mode = input.mode ?? 'replace';
-  const next = {
-    bodies: merge(mode, cur.bodies, input.bodies),
-    faces: merge(mode, cur.faces, input.faces),
-    sets: merge(mode, cur.sets, input.sets),
-  };
-  return { ...next, refs: refsOf(next) };
+  const supplied = [...(input.refs ?? []), ...refsOf({ bodies: input.bodies ?? [], faces: input.faces ?? [], sets: input.sets ?? [] })];
+  const refs = merge(mode, cur.refs, supplied);
+  const names = (kind: string) => refs.filter((ref) => ref.startsWith(`${kind}:`)).map((ref) => ref.slice(kind.length + 1));
+  return { bodies: names('body'), faces: names('face'), sets: names('set'), refs };
 }
 
 export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): ConsoleLine[] {
