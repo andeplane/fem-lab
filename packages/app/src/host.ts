@@ -152,6 +152,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     skills: () => [],
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
+      markSaved: (journal) => store.markSaved(journal),
       pick: () =>
         new Promise<string>((resolve, reject) => {
           const input = document.createElement('input');
@@ -274,7 +275,11 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         // The gallery has done its job; leaving it up hides the Model it just opened.
         store.togglePanel('examples', false);
         await refresh();
+        const opened = store.state.journal;
         if (solved) await results?.onAck(solved);
+        // An example is an explicit open. Use the normalized Journal that refresh just read
+        // from the engine, and establish the baseline only after the whole open succeeded.
+        if (opened) store.markSaved(opened);
         return { name, commands: entries.length };
       },
     },
