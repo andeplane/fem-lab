@@ -2,7 +2,7 @@
 //!
 //! This is the seam between the registry and the numerics. Everything above it speaks names,
 //! Sets and `Quantity`; everything below it speaks SI `f64` on a Mesh (plan A §6, plan B §2.1).
-//! Results are kept per Step with their Result-validity fingerprint (ADR 0015), so an edit does not throw
+//! Results are kept per Step with their Result-validity fingerprint (ADR 0017), so an edit does not throw
 //! them away — it makes them *stale*, which `query.result` says out loud.
 
 use femlab_geometry::Mesh;

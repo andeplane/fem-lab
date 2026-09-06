@@ -13,7 +13,7 @@ pub fn model_hash(model: &Model) -> String {
 
 /// Identity used only to decide whether a cached Result still matches its inputs. The display
 /// name cannot affect a solve; every other Model field remains part of this conservative key.
-/// The full Model hash above remains unchanged for Journal replay and exported files (ADR 0015).
+/// The full Model hash above remains unchanged for Journal replay and exported files (ADR 0017).
 pub(crate) fn result_hash(model: &Model) -> String {
     let mut inputs = model.clone();
     inputs.name.clear();
