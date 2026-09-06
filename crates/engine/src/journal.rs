@@ -23,6 +23,11 @@ pub struct Journal {
 }
 
 impl Journal {
+    /// Complete-history fingerprint, including the Commands and each intermediate Model hash.
+    pub fn hash(&self) -> String {
+        crate::hash::sha256_hex(&serde_json::to_vec(&self.entries).unwrap_or_default())
+    }
+
     pub fn append(&mut self, cmd: Command, hash_after: String) -> &JournalEntry {
         let seq = self.entries.len() as u32;
         self.entries.push(JournalEntry { seq, cmd, hash_after });
@@ -208,7 +213,7 @@ mod tests {
         let cmds = vec![
             Command::ModelNew { name: "a b".into(), description: Some("with \"quotes\": and colons".into()) },
             box_cmd(),
-            Command::JournalUndo { steps: None },
+            Command::JournalUndo { steps: None, expected_journal: None },
             Command::MaterialAdd {
                 name: "steel".into(),
                 e: Q::text("210 GPa"),
@@ -247,7 +252,10 @@ mod tests {
             let back = parse_line(&line).expect("round trip");
             assert_eq!(back, c, "{line}");
         }
-        assert_eq!(command_line(&Command::JournalUndo { steps: None }), "await fem.journal.undo();");
+        assert_eq!(
+            command_line(&Command::JournalUndo { steps: None, expected_journal: None }),
+            "await fem.journal.undo();"
+        );
         assert_eq!(
             command_line(&Command::ModelDuplicate {
                 kind: crate::command::ObjectKind::Body,
