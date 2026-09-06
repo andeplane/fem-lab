@@ -110,8 +110,8 @@ pub struct StepResult { pub fields: BTreeMap<String, post::Field>, pub scalars: 
                         pub modes: Option<Modes>, pub history: Option<History>, pub info: SolveInfo, pub checks: Vec<Warning> }
 // crates/engine/src/fem/checks.rs (plan A §7): each returns Err(Error) with code/cause/where/suggestion
 pub fn checks::run(p: &Problem<'_>) -> Result<(), Error>;                                   // J6.11; B maps Err → Warning for query.model
-// crates/engine/src/fem/assembly.rs (plan A §4): nnz for query.cost
-pub fn assembly::pattern(mesh: &Mesh, dofs_per_node: usize) -> Pattern;                   // Pattern.csr.nnz()
+// crates/engine/src/solve/mod.rs (plan A §5, amended by #122): bounded cost counting
+pub fn solve::cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostEstimate;
 // crates/engine/src/post (plan A §8)
 pub fn post::extremes(f: &Field, mesh: &Mesh) -> Vec<Extreme>;
 pub fn post::reactions_per_constraint(p: &Problem, r: &[f64]) -> Vec<(String, [f64; 3])>;
@@ -121,9 +121,10 @@ pub fn mesh::face_set_area(mesh: &Mesh, faces: &[Face]) -> f64;     // load.trac
 pub struct SolveOptions { .., pub on_progress: Option<&mut dyn FnMut(Progress) -> bool> }  // iteration progress + cooperative cancel
 ```
 
-`query.cost` is computed in B from `pattern(..).csr.nnz()` (bytes = nnz × 12 for CSR f64+u32,
-plus vectors) with `estimatedMs: None` until PLAN 2.9's calibration exists; there is no
-`cost_estimate` in plan A.
+`query.cost` calls the bounded estimator in A (#122): exact non-zero counts within a 16 MiB
+scratch cap, conservative bounds above it, and mandatory assembly storage including element
+slots. Feasibility is false above a fixed 1.5 GiB planning budget and unknown otherwise, since
+solver fill/workspace are excluded. See plan A §5 for the storage accounting.
 
 Until plan A lands there is no stub mesher or fake solver (that would be scaffolding for its own
 sake). Plan B lands with `mesh.set`, `solve.run`, `study.converge`, `query.mesh`, `query.result`,
@@ -377,7 +378,7 @@ never converts (ADR 0008 literally: units at the boundary).
 | `query.result` | `step?` (default last solved) | `ResultSummary { step, revision, stale, solver: {name, iterations?, residual?, timeMs}, fields, extremes: {field: {min: {value, at, node}, max}}, reactions: [{constraint, total: [F;3]}], appliedTotal: [F;3], balance: f64 }` | observe without pixels (ADR 0006); reaction balance is the first thing to check |
 | `query.probe` | `step?`, `field: Field`, `component?: u8`, `at: [Q<Length>;3]` | `ProbeResult { value, unit, element, nearestNode, interpolated: bool }` | value at a point |
 | `query.path` | `step?`, `field`, `component?`, `from: [Q;3]`, `to: [Q;3]`, `n: u32` | `PathResult { s: [..], values: [..], unit }` | line plots |
-| `query.cost` | `step` | `CostEstimate { dofs, nnz?, bytes, estimatedMs?, feasible, note }` | J4.7; computed here from A's `assembly::pattern(..).csr.nnz()`; `estimatedMs` is `None` until PLAN 2.9 calibration; `feasible` compares `bytes` with the wasm heap / `Gpu::limits()` |
+| `query.cost` | `step` | `CostEstimate { dofs, nnzLower, nnz, bytes, budgetBytes, feasible, note }` | J4.7; bounded counting (#122), `bytes` is an assembly lower bound; `feasible` is false above the planning budget, otherwise null; no host-memory guarantee |
 | `query.exportFormats` | – | `[ExportFormat { format, extension, mime, description, needs: ["mesh"\|"result"\|"geometry"\|"view"], available: bool, reason?: String }]` | the Export menu enumerates this (§7.10); `available` says whether the current Model can produce it (no mesh → no VTU) |
 | `query.export` | `spec: ExportSpec` (§7.10) | `ExportInfo { filename, mime, bytes: u64 }` (metadata only; the bytes cross as a typed array via the transport's `export` op) | "each export names the format, what it contains and its size before writing" (DESIGN-BRIEF §4.12) |
 | `query.objects` | `kinds?: Vec<ObjectKind>` | `[ObjectRef { ref: "body:beam", kind, name, summary: String }]` | the `@`-mention picker's index (§7.7); one call, every nameable thing in the Model plus Journal entries (`journal:12`) and Results (`result:static`) |
@@ -555,7 +556,9 @@ pub struct ModelFile { pub format: String /* "femlab/1" */, pub engine_version: 
   `dispatch` each entry in order (which also rebuilds the undo stack); per-entry `hash_after` is
   recomputed and compared, and the first mismatch is reported with its `seq` (this is how the
   native-vs-wasm CI job localises a divergence). With `skip_solves`, `solve.run`/`study.converge`
-  entries are appended to the Journal unchanged (so `hash_after` still lines up) without running.
+  calculations are omitted while every entry retains its undo snapshot and recomputed hash.
+  A `study.converge` with `restore: false` still applies its final mesh settings, so skipping
+  numerical work preserves the same Model and Journal as normal replay (#145).
 - **Script export** (`Journal::as_script`, exposed as `query.script`): one line per entry,
   `await fem.geometry.addBox({ name: "beam", size: ["1 m", "100 mm", "100 mm"] });` with the `cmd`
   key removed. The formatter walks the `serde_json::Value` (never a regex over text, which a string
@@ -999,6 +1002,13 @@ HTML element with a CSS gradient and min/max in display units from `query.result
 
 ### 7.3 Panels and controls as data
 
+> **Superseded in part by plan D** (`docs/plans/D-projects-and-start.md`, issues #40 and #41).
+> The top bar's "model name + unsaved flag" is now the **project** name with a saved chip, and it
+> gains **Projects** (`panel.toggle { panel: 'projects' }`), **Save** (`project.save`) and
+> **Save as file** (`file.save`). The Assistant drawer is mounted outside `.workspace`, so it
+> exists on the start screen. `file.restore` and `query.autosave` are deleted; Recent projects
+> replaces them.
+
 `src/panels.ts` declares `PANELS: { id, title, side, defaultOpen }[]` and
 `CONTROLS: { id, label, cmd: string, args?: unknown, panel: PanelId, kind: 'button'|'toggle'|'form' }[]`.
 Components render from these tables; every rendered control carries `data-cmd`. The vitest
@@ -1161,7 +1171,14 @@ built-in has `name`, `description` ≥ 40 chars and a body; `query.skills` == me
 `skill.invoke` unknown → `NotFound` listing names; a Playwright step types `/beam` and asserts
 the menu shows the built-in.
 
-### 7.9 Project folder (`src/project.ts`, `packages/registry/src/project-paths.ts`)
+### 7.9 Project folder (`src/ai/project.ts`, `packages/registry/src/project-paths.ts`)
+
+> **Renamed by plan D.** A *project* is now one saved Model in this browser (issue #41), so the
+> disk-side Commands here are `folder.open | folder.close | folder.refresh` and the Query is
+> `query.folder`; `HostContext.project` is `HostContext.folder` and `ProjectInfo` is `FolderInfo`.
+> The handle store is `src/db.ts`'s `handles` object store — one module owns the `femlab`
+> database, which is what fixes the two-modules-at-version-1 collision described there. Read the
+> Commands below as `folder.*`.
 
 Chromium's File System Access API (ADR 0014; `showDirectoryPicker` needs a user gesture and is
 Window-only, so `project.open { picker: true }` runs on the main thread from a click). The handle

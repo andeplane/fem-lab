@@ -447,11 +447,14 @@ dyn-compatible and `element_for` could not return `&'static dyn Element`. The sa
 for every Extension Point trait (`MaterialLaw`, `Element`, later `Mesher`/`Procedure`): no
 generic methods, flat slices, so a TS/wasm plugin adapter can implement them.
 
-Kernel of `Iso::stiffness` (per Gauss point): `J = Σ x_a ⊗ dN_a/dξ`, `det J ≤ 1e-14·V_ref` →
+Kernel of `Iso::stiffness` (per Gauss point): `J = Σ x_a ⊗ dN_a/dξ`,
+`det(J / max|J_ij|) ≤ 1e-14` over the active spatial dimensions →
 `Error { code: Inverted, where_: element }`; `∇N = J⁻ᵀ dN/dξ`; `B` (6×n_dof, or
 3/4×n_dof in 2D); weight `w det J` times thickness (plane stress), 1 (plane strain), `2π r`
 (axisymmetric); `K_e += Bᵀ C B w`. The law is called once per element with all Gauss points
 as a batch (`n = n_gp`), which is what makes the batched ABI pay off.
+The scale-relative validity criterion replaces the original absolute SI cutoff under
+[#130](https://github.com/andeplane/fem-lab/issues/130); physical integration weights are unchanged.
 
 **Incompatible modes** (`Formulation::IncompatibleModes`, hex8 and quad4 only): bubble
 functions `P_k(ξ) = 1 − ξ_k²`, k = 1..dim, each multiplying every displacement component →
@@ -599,15 +602,22 @@ pub struct GpuCg { ctx: gpu::CgContext, scale: Vec<f64> /* D^-½ */ }
 pub async fn solve(k: &Csr, b: &[f64], opts: &SolveOptions, gpu: Option<&Gpu>, progress: OnProgress<'_>) -> Result<(Vec<f64>, SolveInfo), Error>;
 
 /// B's query.cost (J4.7): from the pattern alone, before any assembly.
-pub struct CostEstimate { pub dofs: usize, pub nnz: usize, pub bytes: u64, pub feasible: bool, pub note: String }
+pub struct CostEstimate { pub dofs: u64, pub nnz: u64, pub nnz_lower: u64, pub bytes: u64, pub budget_bytes: u64, pub feasible: Option<bool>, pub note: String }
 pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostEstimate;
 ```
 
-`cost_estimate` builds the `Pattern` (cheap, O(nnz)) and reports `nnz·12` bytes for the CSR
-plus, for `CpuDirect`, the symbolic factor's nnz from `SymbolicLlt` (exact, no numerics);
-`feasible` is `bytes < 1.5 GiB` on wasm32 and `true` natively; `note` says which solver `Auto`
-would pick. `time_ms` in `SolveInfo` is filled by B's `dispatch` from `Host::now_ms`, never
-by A (the engine has no clock).
+`cost_estimate` counts node couplings with adjacency and one marker array, capped at 16 MiB
+of scratch. Above that cap it returns conservative clique bounds in linear time, without
+materialising a `Pattern`, matrix values or element slots (#122). `nnzLower..nnz` bounds the
+matrix entries; equal endpoints mean exact. `bytes` is mandatory assembly storage **only**:
+two CSRs, element slots, element-slot offsets and one RHS. It excludes the resident mesh/model,
+local element buffers, reduction, solver vectors, direct-factor fill/workspace and time history.
+The fixed `budgetBytes = 1.5 GiB` is a planning budget on all hosts, not a free-memory probe.
+`feasible` is false when this lower bound exceeds the budget, otherwise null (unknown); a
+lower bound fitting never establishes feasibility. `note` names the CPU solver `Auto` would
+pick without device information. Heat Steps count one DOF per node. The query still meshes
+when necessary; the scratch cap applies to estimation after meshing. `time_ms` in `SolveInfo`
+is filled by B's `dispatch` from `Host::now_ms`, never by A (the engine has no clock).
 
 `Auto`: `CpuDirect` when `n ≤ 200_000` (`100_000` on wasm32, Q2) or no GPU and
 `n ≤ 400_000`; else `GpuPcg` when a device is present; else `CpuPcg`. The thresholds are

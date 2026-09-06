@@ -768,10 +768,11 @@ pub enum Command {
         where_: RegionPredicate,
     },
 
-    /// Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads,
-    /// named selectors or free-mesher geometry references that still use a Body; remove or
-    /// retarget those first. Removing a mapped or swept mapped Body clears its mesher and
-    /// material association, preserving unrelated explicit geometry and Materials.
+    /// Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
+    /// (including temperature and volumetric heat sources), named selectors or free-mesher
+    /// geometry references that still use a Body; remove or retarget those first. Removing
+    /// a mapped or swept mapped Body clears its mesher and material association, preserving
+    /// unrelated explicit geometry and Materials.
     #[serde(rename = "geometry.remove", rename_all = "camelCase")]
     GeometryRemove { name: String },
 
@@ -829,6 +830,8 @@ pub enum Command {
     /// stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
     /// id and the Body index as cell data. Name a `step` to add that Step's result fields as
     /// point data — displacement, reaction, stress and von Mises — so ParaView colours by them.
+    /// Result fields require the Model state they were solved on; `result.stale` means run
+    /// `solve.run` on that Step again before exporting it with the current Mesh.
     /// `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
     #[serde(rename = "mesh.export", rename_all = "camelCase")]
     MeshExport {
@@ -893,6 +896,11 @@ pub enum Command {
 
     /// A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
     /// producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
+    /// Disjoint Bodies compose independently, each using its own reference. Overlapping
+    /// assignments must produce exactly the same increment; otherwise `solve.run` returns
+    /// `model.ill-posed` naming both Loads and the Body. Equal increments are not added.
+    /// When continuing a heat Step, its nodal temperatures replace `value`; these per-Body
+    /// references still apply, with 293.15 K on Bodies without a temperature Load.
     #[serde(rename = "load.temperature", rename_all = "camelCase")]
     LoadTemperature {
         name: String,
@@ -945,6 +953,8 @@ pub enum Command {
         n_modes: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shift: Option<f64>,
+        /// Maximum heat-transient time increment. A uniform increment no larger than dt is
+        /// chosen to finish exactly at tEnd; the Result reports the increment actually used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt: Option<Q<Time>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -953,6 +963,8 @@ pub enum Command {
         theta: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_every: Option<u32>,
+        /// Maximum fraction of the explicit critical time step (usually 0.9). The increment
+        /// may be reduced uniformly to finish exactly at tEnd.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt_factor: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -962,7 +974,8 @@ pub enum Command {
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
-    /// stay in the Model and can be reused by other Steps.
+    /// stay in the Model and can be reused by other Steps. Fails with `in-use` while another
+    /// Step names it in `after`; re-issue that dependent Step without the reference first.
     #[serde(rename = "step.remove", rename_all = "camelCase")]
     StepRemove { name: String },
 
@@ -973,7 +986,9 @@ pub enum Command {
 
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
     /// element quality) and refuses with a suggested fix. Returns extremes and reactions;
-    /// always check that reactions balance the applied loads before trusting a stress.
+    /// always check that reactions balance the applied loads before trusting a stress. A Step
+    /// with `after` requires its predecessor's Result to match the current Model state;
+    /// after an edit, solve the predecessor again before continuing the chain.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,

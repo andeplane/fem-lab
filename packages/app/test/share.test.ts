@@ -1,5 +1,6 @@
-// The share link and the autosave (PLAN.md 5.8). Both are pure enough to test without a browser:
-// the fragment is bytes in and Commands out, and the autosave writes to an injected `JournalStore`.
+// The share link (PLAN.md 5.8): pure enough to test without a browser, bytes in and Commands out.
+// The background save that used to live in the other half of `share.ts` is now `projects.ts`,
+// and `test/projects.test.ts` covers it against the real IndexedDB.
 import { describe, expect, it, vi } from 'vitest';
 import { deflateRawSync } from 'node:zlib';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -8,17 +9,7 @@ import { HOST_COMMANDS } from '@femlab/registry';
 import { appHostCommands } from '../src/host';
 import { Store } from '../src/store';
 import type { WorkerTransport } from '../src/worker-transport';
-import {
-  MAX_FRAGMENT,
-  MAX_JOURNAL_BYTES,
-  applyShared,
-  makeAutosave,
-  memoryStore,
-  openShared,
-  readShareFragment,
-  shareUrl,
-  type ShareCommand,
-} from '../src/share';
+import { MAX_FRAGMENT, MAX_JOURNAL_BYTES, applyShared, openShared, readShareFragment, shareUrl, type ShareCommand } from '../src/share';
 
 const CMDS: ShareCommand[] = [
   { cmd: 'model.new', name: 'beam' },
@@ -241,110 +232,5 @@ describe('share link', () => {
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-});
-
-describe('autosave', () => {
-  /** A fake clock: the debounce fires when the test says so, not when the wall clock says so. */
-  function fakeTimers() {
-    let pending: (() => void) | null = null;
-    return {
-      setTimer: (fn: () => void) => {
-        pending = fn;
-        return 1;
-      },
-      clearTimer: () => {
-        pending = null;
-      },
-      tick: () => {
-        const fn = pending;
-        pending = null;
-        fn?.();
-      },
-      armed: () => pending !== null,
-    };
-  }
-
-  const journal = (n: number) => Array.from({ length: n }, (_, i) => ({ cmd: { cmd: 'model.new', name: `m${i}` } }));
-
-  it('writes the Journal once per burst, not once per Command', async () => {
-    const store = memoryStore();
-    const write = vi.spyOn(store, 'write');
-    const timers = fakeTimers();
-    const a = makeAutosave({ store, ...timers });
-
-    a.note('beam', journal(1));
-    a.note('beam', journal(2));
-    a.note('beam', journal(3));
-    expect(write).not.toHaveBeenCalled(); // still inside the debounce
-    timers.tick();
-    await a.flush();
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(await a.read()).toMatchObject({ name: 'beam', cmds: expect.any(Array) });
-    expect((await a.read())?.cmds).toHaveLength(3); // the newest state, not the first
-  });
-
-  it('flush writes a pending burst immediately, and is safe with nothing pending', async () => {
-    const store = memoryStore();
-    const timers = fakeTimers();
-    const a = makeAutosave({ store, ...timers });
-    await a.flush(); // nothing armed
-    expect(await a.read()).toBeNull();
-    a.note('beam', journal(2));
-    await a.flush();
-    expect((await a.read())?.cmds).toHaveLength(2);
-    expect(timers.armed()).toBe(false);
-  });
-
-  it('is on by default, can be turned off, and turning it off drops what was pending', async () => {
-    const store = memoryStore();
-    const timers = fakeTimers();
-    const a = makeAutosave({ store, ...timers });
-    expect(a.enabled()).toBe(true);
-
-    a.note('beam', journal(1));
-    a.setEnabled(false);
-    expect(a.enabled()).toBe(false);
-    await a.flush();
-    expect(await a.read()).toBeNull();
-
-    a.note('beam', journal(1)); // ignored while off
-    timers.tick();
-    await a.flush();
-    expect(await a.read()).toBeNull();
-
-    a.setEnabled(true);
-    a.setEnabled(true); // idempotent, and does not arm a timer on its own
-    expect(timers.armed()).toBe(false);
-    a.note('beam', journal(4));
-    await a.flush();
-    expect((await a.read())?.cmds).toHaveLength(4);
-
-    await a.clear();
-    expect(await a.read()).toBeNull();
-  });
-
-  it('starts off when the browser remembered that choice', () => {
-    expect(makeAutosave({ store: memoryStore(), initiallyOn: false }).enabled()).toBe(false);
-  });
-
-  it('reports a failed write instead of taking the model down with it', async () => {
-    const store = memoryStore();
-    store.write = () => Promise.reject(new Error('QuotaExceededError'));
-    const onError = vi.fn();
-    const timers = fakeTimers();
-    const a = makeAutosave({ store, onError, ...timers });
-    a.note('beam', journal(1));
-    await a.flush(); // must not reject
-    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'QuotaExceededError' }));
-  });
-
-  it('uses a real timer by default, so the app needs no wiring', async () => {
-    const store = memoryStore();
-    const a = makeAutosave({ store, delayMs: 1 });
-    a.note('beam', journal(1));
-    await new Promise((r) => setTimeout(r, 10));
-    await a.flush();
-    expect(await a.read()).not.toBeNull();
   });
 });
