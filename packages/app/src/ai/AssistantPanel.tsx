@@ -58,12 +58,63 @@ type Item =
   | { kind: 'verify'; rows: VerifyRow[] }
   | { kind: 'skill'; name: string; note: string }
   | { kind: 'tool'; call: ToolCall }
-  | { kind: 'diff'; entries: JournalEntry[]; steps: number }
+  | { kind: 'diff'; entries: JournalEntry[]; steps: number; journal: string | null }
   | { kind: 'files'; files: string[] }
   | { kind: 'bad'; text: string };
 
 const WROTE = new Set(['file.write', 'file.save', 'file.export']);
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+
+/**
+ * The `@` picker's groups, in the order issue #39 asks for, with `context` (the selection and the
+ * view, the two things that are not Model objects) pinned above them. A long Journal must not push
+ * the bodies off the screen, so each group shows at most `PER_GROUP` and says how many it kept back.
+ */
+const KIND_LABEL: Record<string, string> = {
+  context: 'context',
+  body: 'bodies',
+  face: 'faces',
+  set: 'sets',
+  material: 'materials',
+  constraint: 'constraints',
+  load: 'loads',
+  step: 'steps',
+  result: 'results',
+  journal: 'journal',
+  file: 'files',
+};
+const KIND_ORDER = Object.keys(KIND_LABEL);
+const PER_GROUP = 8;
+
+/** One row of either popover: what it says, and the Command it names when it is picked. */
+interface Row {
+  key: string;
+  kind: string;
+  name: string;
+  meta: string;
+  cmd: string;
+  run: () => void;
+}
+
+/** The rows grouped and capped, and the same rows flat in render order for the arrow keys. */
+export function groupRows(rows: Row[]): { groups: { kind: string; label: string; rows: Row[]; more: number }[]; flat: Row[] } {
+  const groups = KIND_ORDER.map((kind) => ({ kind, label: KIND_LABEL[kind]!, all: rows.filter((r) => r.kind === kind) }))
+    .concat([...new Set(rows.map((r) => r.kind))].filter((k) => !KIND_ORDER.includes(k)).map((kind) => ({ kind, label: kind, all: rows.filter((r) => r.kind === kind) })))
+    .filter((g) => g.all.length > 0)
+    .map((g) => ({ kind: g.kind, label: g.label, rows: g.all.slice(0, PER_GROUP), more: Math.max(0, g.all.length - PER_GROUP) }));
+  return { groups, flat: groups.flatMap((g) => g.rows) };
+}
+
+/**
+ * The `@` the caret is sitting behind, if any: the token being typed and where its `@` is. A bare
+ * `@` matches (`q` is `''`, which is the whole of #39's first half) and so does an `@` after a word,
+ * which the old `draft.startsWith('@')` never did.
+ */
+export function mentionAt(draft: string, caret: number): { from: number; q: string } | null {
+  const before = draft.slice(0, Math.max(0, Math.min(caret, draft.length)));
+  const hit = /(?:^|\s)@([^\s@]*)$/.exec(before);
+  return hit === null ? null : { from: before.length - hit[1]!.length - 1, q: hit[1]! };
+}
 
 function useStore(store: Store): UiState {
   const [state, setState] = useState(store.state);
@@ -72,7 +123,7 @@ function useStore(store: Store): UiState {
 }
 
 /** Every clickable in the drawer: one Command name, one `data-cmd`, errors shown not thrown. */
-function Cmd({ cmd, run, children, ...rest }: { cmd: string; run: () => void | Promise<unknown>; children: ComponentChildren; class?: string; title?: string; disabled?: boolean; pressed?: boolean }) {
+function Cmd({ cmd, run, children, ...rest }: { cmd: string; run: () => void | Promise<unknown>; children: ComponentChildren; class?: string; title?: string; disabled?: boolean; pressed?: boolean; selected?: boolean }) {
   return (
     <button
       type="button"
@@ -81,6 +132,7 @@ function Cmd({ cmd, run, children, ...rest }: { cmd: string; run: () => void | P
       title={rest.title ?? cmd}
       disabled={rest.disabled ?? false}
       {...(rest.pressed === undefined ? {} : { 'aria-pressed': rest.pressed })}
+      {...(rest.selected === undefined ? {} : { 'aria-selected': rest.selected })}
       onClick={() => void Promise.resolve(run()).catch(() => undefined)}
     >
       {children}
@@ -120,6 +172,10 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState('');
   const [draft, setDraft] = useState('');
+  const [caret, setCaret] = useState(0);
+  /** The keyboard cursor in whichever popover is open, and the `@` the person dismissed with Esc. */
+  const [active, setActive] = useState(0);
+  const [dismissed, setDismissed] = useState<string | null>(null);
   const [tokens, setTokens] = useState<string[]>([]);
   const [images, setImages] = useState<ImageBlock[]>([]);
   const [index, setIndex] = useState<IndexEntry[]>([]);
@@ -146,7 +202,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     let handle: DirHandle;
     try {
       // The host Command owns this when the app wires it; until then the panel opens it itself.
-      await dispatch({ cmd: 'project.open', picker: true });
+      await dispatch({ cmd: 'folder.open', picker: true });
       return;
     } catch {
       handle = await pickFolder();
@@ -157,6 +213,13 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const insert = (ref: string) => {
     setTokens((cur) => (cur.includes(ref) ? cur : [...cur, ref]));
     store.togglePanel('assistant.mentions', false);
+    // The token is a chip now, so the half-typed `@bo` that summoned the picker has to go with it —
+    // otherwise it is sent to the model as an orphan word.
+    const at = mentionAt(draft, caret);
+    if (at) {
+      setDraft(draft.slice(0, at.from) + draft.slice(caret));
+      setCaret(at.from);
+    }
   };
 
   const attach = async (blob: Blob) => {
@@ -210,7 +273,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             prose = '';
             const wrote = event.turn.calls.filter((c) => c.ok && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
-            if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps });
+            if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
             setTurn(event.turn);
           }
         }
@@ -250,10 +313,39 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     };
   });
 
-  const query = draft.startsWith('@') ? draft.slice(1) : '';
-  const shown = index.filter((e) => !query || e.ref.toLowerCase().includes(query.toLowerCase()));
+  const at = mentionAt(draft, caret);
+  const query = at?.q ?? '';
+  // Open on the `@` the caret is behind, or because the `@` button asked; Esc closes the first
+  // without touching the draft, and typing another letter brings it back.
+  const mentionsOpen = (at !== null && dismissed !== `${at.from}:${at.q}`) || openPanel('mentions');
+  const attachView = async (): Promise<void> => {
+    const view = await screenshotBlock(registry);
+    setImages((cur) => [...cur, view]);
+  };
+  const mentionRows: Row[] = mentionsOpen
+    ? [
+        ...(ui.selection.refs.length > 0 && query === ''
+          ? [{ key: '@selection', kind: 'context', name: 'selection', meta: ui.selection.refs.join(' '), cmd: 'chat.insertMention', run: () => ui.selection.refs.forEach((r) => insert(r)) }]
+          : []),
+        ...(query === '' ? [{ key: '@view', kind: 'context', name: 'view', meta: 'attach the current view as an image', cmd: 'query.screenshot', run: () => void attachView() }] : []),
+        ...index
+          .filter((e) => !query || e.ref.toLowerCase().includes(query.toLowerCase()))
+          .map((e) => ({ key: e.ref, kind: e.kind, name: e.name, meta: e.summary, cmd: 'chat.insertMention', run: () => insert(e.ref) })),
+      ]
+    : [];
   const slash = /^\/(\S*)$/.exec(draft);
-  const skillMenu = slash ? skills.filter((s) => s.name.startsWith(slash[1]!)) : [];
+  const slashKey = slash ? `/${slash[1]!}` : null;
+  const skillRows: Row[] = (slash && dismissed !== slashKey ? skills.filter((s) => s.name.startsWith(slash[1]!)) : []).map((s) => ({
+    key: s.name,
+    kind: s.source,
+    name: s.name,
+    meta: s.description,
+    cmd: 'skill.invoke',
+    run: () => setDraft(`/${s.name} `),
+  }));
+  // Only one is ever open, so one cursor serves both.
+  const menu = groupRows(mentionRows.length > 0 ? mentionRows : skillRows);
+  const cursor = menu.flat.length === 0 ? 0 : Math.min(active, menu.flat.length - 1);
 
   const compose = () => [...tokens.map((t) => `@${t}`), draft].join(' ').trim();
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
@@ -285,7 +377,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             <span class="paths">/{folder.name}</span>
           </Cmd>
         ) : (
-          <Cmd cmd="project.open" class="agents" title="Open a project folder" run={openFolder}>
+          <Cmd cmd="folder.open" class="agents" title="Open a folder on disk" run={openFolder}>
             <span class="mono">＋</span>
             <span class="file">open a project folder</span>
             <span class="count">for AGENTS.md, skills and files</span>
@@ -318,36 +410,31 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         ) : null}
       </div>
 
-      <div class="composer">
-        {openPanel('mentions') || query ? (
-          <div class="popover">
-            <div class="hint">@{query} — reference anything in the Model, the Journal or the project folder</div>
-            <div class="list">
-              {shown.slice(0, 40).map((entry) => (
-                <Cmd key={entry.ref} cmd="chat.insertMention" title={entry.summary} run={() => insert(entry.ref)}>
-                  <span class="kind">{entry.kind}</span>
-                  <span class="name">{entry.name}</span>
-                  <span class="meta">{entry.summary}</span>
-                </Cmd>
-              ))}
-            </div>
+      {/* A flex item of the drawer, not a box floating over it: it takes its height from the
+          transcript above, so it cannot cover the skills row or the composer at any drawer size
+          and needs no offsets. The transcript shifts up when it opens — that is the trade. */}
+      {menu.flat.length > 0 ? (
+        <div class="popover">
+          <div class="hint">{mentionRows.length > 0 ? `@${query} — reference anything in the Model, the Journal or the project folder` : `/${slash![1]} — a skill is loaded into the turn it is used in`}</div>
+          <div class="list">
+            {menu.groups.map((group) => (
+              <div class="group" key={group.kind}>
+                <div class="group-label">{group.label}</div>
+                {group.rows.map((row) => (
+                  <Cmd key={row.key} cmd={row.cmd} title={row.meta} selected={menu.flat[cursor] === row} run={row.run}>
+                    <span class="kind">{row.kind}</span>
+                    <span class="name">{row.name}</span>
+                    <span class="meta">{row.meta}</span>
+                  </Cmd>
+                ))}
+                {group.more > 0 ? <div class="more">+{group.more} more — keep typing to narrow it</div> : null}
+              </div>
+            ))}
           </div>
-        ) : null}
-        {skillMenu.length > 0 ? (
-          <div class="popover">
-            <div class="hint">/{slash![1]} — a skill is loaded into the turn it is used in</div>
-            <div class="list">
-              {skillMenu.map((s) => (
-                <Cmd key={s.name} cmd="skill.invoke" title={s.description} run={() => setDraft(`/${s.name} `)}>
-                  <span class="kind">{s.source}</span>
-                  <span class="name">{s.name}</span>
-                  <span class="meta">{s.description}</span>
-                </Cmd>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        </div>
+      ) : null}
 
+      <div class="composer">
         {images.length > 0 ? (
           <div class="images">
             {images.map((img, i) => (
@@ -377,8 +464,35 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
               placeholder={items.length === 0 ? 'Describe the model, or ask for a check…' : 'Reply, or ask for the next step…'}
               value={draft}
               onFocus={refreshIndex}
-              onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
+              onInput={(e) => {
+                const box = e.target as HTMLTextAreaElement;
+                setDraft(box.value);
+                setCaret(box.selectionStart ?? box.value.length);
+                setActive(0);
+                setDismissed(null);
+              }}
+              onKeyUp={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+              onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
               onKeyDown={(e) => {
+                // The open picker owns the arrows, ↵ and Esc; the composer only gets them back
+                // when nothing is open, which is why this sits above the Enter-sends branch.
+                if (menu.flat.length > 0) {
+                  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const step = e.key === 'ArrowDown' ? 1 : menu.flat.length - 1;
+                    return void setActive((cursor + step) % menu.flat.length);
+                  }
+                  if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault();
+                    return void menu.flat[cursor]!.run();
+                  }
+                  if (e.key === 'Escape') {
+                    // Closes, and only closes: the draft is the person's, not the picker's.
+                    e.preventDefault();
+                    store.togglePanel('assistant.mentions', false);
+                    return void setDismissed(at ? `${at.from}:${at.q}` : slashKey);
+                  }
+                }
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   void send(compose());
@@ -517,6 +631,8 @@ function flushProse(text: string, add: (item: Item) => void): void {
 }
 
 function Item({ item, registry, dispatch }: { item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
+  const [undoState, setUndoState] = useState<'ready' | 'pending' | 'done' | 'failed'>('ready');
+  const [undoError, setUndoError] = useState('');
   if (item.kind === 'user') {
     return (
       <div class="bubble">
@@ -577,10 +693,21 @@ function Item({ item, registry, dispatch }: { item: Item; registry: Registry; di
     <div class="card diff">
       <div class="head">
         <span>Journal diff · this turn</span>
-        <Cmd cmd="journal.undo" class="undo" title="Take the whole turn back" run={() => undoTurn(registry, item.steps)}>
-          Undo turn
+        <Cmd cmd="journal.undo" class="undo" title="Take the whole turn back" disabled={undoState !== 'ready' || item.steps === 0} run={async () => {
+          setUndoState('pending');
+          try {
+            await undoTurn(registry, item.steps, item.journal);
+            setUndoState('done');
+          } catch (e) {
+            setUndoState('failed');
+            setUndoError(e instanceof FemError ? e.cause : String(e));
+          }
+        }}>
+          {undoState === 'done' ? 'Turn undone' : undoState === 'pending' ? 'Undoing…' : 'Undo turn'}
         </Cmd>
       </div>
+      {undoError ? <div class="bad-line">{undoError} — inspect the Journal before undoing later changes.</div> : null}
+      {item.journal === null ? <div class="mark">{item.entries.some((entry) => entry.cmd.cmd === 'model.new') ? 'This turn created or reset the Model; the engine cannot undo that boundary.' : 'A complete turn boundary could not be verified. Undo individual Commands in the Journal.'}</div> : null}
       <div class="lines">
         <div class="mark">— turn start —</div>
         {item.entries.map((entry) => (

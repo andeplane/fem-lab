@@ -28,8 +28,11 @@ function fakeProvider(rounds: Script): { provider: Provider; seen: ChatRequest[]
 }
 
 const JOURNALS: JournalDump[] = [
-  { entries: [{ seq: 4, cmd: { cmd: 'model.new' } as never, hashAfter: 'a' }], revision: 5, canUndo: true, canRedo: false },
-  { entries: [{ seq: 5, cmd: { cmd: 'geometry.addBox' } as never, hashAfter: 'b' }, { seq: 6, cmd: { cmd: 'material.add' } as never, hashAfter: 'c' }], revision: 7, canUndo: true, canRedo: false },
+  { hash: 'before', entries: [{ seq: 0, cmd: { cmd: 'model.new' } as never, hashAfter: 'a' }], revision: 1, canUndo: false, canRedo: false },
+  { hash: 'after', entries: [
+    { seq: 0, cmd: { cmd: 'model.new' } as never, hashAfter: 'a' },
+    { seq: 1, cmd: { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '0.1 m', '0.2 m'] } as never, hashAfter: 'b' },
+  ], revision: 2, canUndo: true, canRedo: false },
 ];
 
 function fixture(opts: { failBox?: boolean; journals?: JournalDump[] } = {}) {
@@ -44,7 +47,7 @@ function fixture(opts: { failBox?: boolean; journals?: JournalDump[] } = {}) {
   transport.dispatch = (async (cmd: { cmd: string }) => {
     dispatched.push(cmd);
     if (opts.failBox && cmd.cmd === 'geometry.addBox') throw new FemError('schema', 'size must be three lengths', 'size', 'pass size as ["1 m", "1 m", "1 m"]');
-    return { seq: 1, revision: 2, hash: 'h', warnings: [], output: { type: 'none' } };
+    return { seq: 1, revision: 2, hash: 'b', warnings: [], output: { type: 'none' } };
   }) as never;
   const registry = new Registry({ schema: schema as unknown as EngineSchema, host: fakeHost(transport) });
   return { registry, dispatched };
@@ -103,17 +106,92 @@ describe('the agent loop', () => {
     const { registry } = fixture();
     const { provider } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);
     const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
-    expect(turn.diff.map((e) => e.seq)).toEqual([5, 6]);
-    expect(turn.undoSteps).toBe(2);
+    expect(turn.diff.map((e) => e.seq)).toEqual([1]);
+    expect(turn.undoSteps).toBe(1);
+    expect(turn.undoJournal).toEqual(JOURNALS[1]!.hash);
     expect(turn.usage).toEqual({ input: 300, output: 30, cacheRead: 40 });
     expect(turn.cost).toBeCloseTo((300 * 5 + 30 * 25 + 4 * 5) / 1e6, 9);
   });
 
   it('undoes the whole turn with one journal.undo, and does nothing when it changed nothing', async () => {
     const { registry, dispatched } = fixture();
-    await undoTurn(registry, 2);
-    await undoTurn(registry, 0);
-    expect(dispatched).toEqual([{ cmd: 'journal.undo', steps: 2 }]);
+    await undoTurn(registry, 1, JOURNALS[1]!.hash);
+    await undoTurn(registry, 0, null);
+    expect(dispatched).toEqual([{ cmd: 'journal.undo', steps: 1, expectedJournal: JOURNALS[1]!.hash }]);
+  });
+
+  it.each([
+    { name: 'mesh_set', input: { mesher: { kind: 'lattice', size: '25 mm' }, order: null }, command: { cmd: 'mesh.set', mesher: { kind: 'lattice', size: '25 mm' } } },
+    { name: 'solve_run', input: { step: 'static', solver: null }, command: { cmd: 'solve.run', step: 'static' } },
+    { name: 'study_converge', input: { step: 'static', sizes: ['50 mm', '25 mm', '12.5 mm'], quantity: { kind: 'max', field: 'displacement' }, restore: null }, command: { cmd: 'study.converge', step: 'static', sizes: ['50 mm', '25 mm', '12.5 mm'], quantity: { kind: 'max', field: 'displacement' } } },
+  ])('matches canonical Journal entries when $name omits null/default arguments', async ({ name, input, command }) => {
+    const after = structuredClone(JOURNALS[1]!);
+    after.entries[1]!.cmd = command as never;
+    const { registry } = fixture({ journals: [JOURNALS[0]!, after] });
+    const { provider } = fakeProvider([[{ type: 'tool_use', id: 'default', name, input }], FINAL_ROUND]);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    expect(turn.diff).toEqual([after.entries[1]!]);
+    expect(turn.undoSteps).toBe(1);
+  });
+
+  it('does not label a partial undo of a newly created Model as Undo turn', async () => {
+    const after = structuredClone(JOURNALS[0]!);
+    after.entries[0]!.cmd = { cmd: 'model.new', name: 'new' } as never;
+    after.entries[0]!.hashAfter = 'b';
+    const { registry } = fixture({ journals: [{ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }, after] });
+    vi.spyOn(registry, 'dispatch').mockResolvedValue({ seq: 0, revision: 1, hash: 'b' });
+    const { provider } = fakeProvider([[{ type: 'tool_use', id: 'new', name: 'model_new', input: { name: 'new' } }], FINAL_ROUND]);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    expect(turn.diff).toHaveLength(1);
+    expect(turn.undoJournal).toBeNull();
+    expect(turn.undoSteps).toBe(0);
+  });
+
+  it('excludes interleaved human edits from the diff and refuses to batch-undo them', async () => {
+    const after = structuredClone(JOURNALS[1]!);
+    after.entries.push({ seq: 2, cmd: { cmd: 'model.setUnits', units: { length: 'mm', force: 'N', stress: 'MPa' } } as never, hashAfter: 'human' });
+    after.revision++;
+    const { registry, dispatched } = fixture({ journals: [JOURNALS[0]!, after] });
+    const { provider } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    expect(turn.diff.map((entry) => entry.cmd.cmd)).toEqual(['geometry.addBox']);
+    expect(turn.undoJournal).toBeNull();
+    await undoTurn(registry, turn.undoSteps, turn.undoJournal);
+    expect(dispatched.map((cmd) => cmd.cmd)).toEqual(['geometry.addBox']);
+  });
+
+  it('keeps two engine Commands as one guarded undo unit', async () => {
+    const after = structuredClone(JOURNALS[1]!);
+    after.entries.push({ seq: 2, cmd: { cmd: 'geometry.addBox', name: 'second', size: ['1 m', '1 m', '1 m'] }, hashAfter: 'c' });
+    after.revision++;
+    const { registry } = fixture({ journals: [JOURNALS[0]!, after] });
+    let seq = 0;
+    vi.spyOn(registry, 'dispatch').mockImplementation(async () => ({ seq: ++seq, hash: seq === 1 ? 'b' : 'c' }));
+    const { provider } = fakeProvider([[...TOOL_ROUND, { type: 'tool_use', id: 'second', name: 'geometry_addBox', input: { name: 'second', size: ['1 m', '1 m', '1 m'] } }], FINAL_ROUND]);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    expect(turn.diff.map((entry) => entry.seq)).toEqual([1, 2]);
+    expect(turn.undoSteps).toBe(2);
+    expect(turn.undoJournal).toBe(after.hash);
+  });
+
+  it('does not offer turn undo after an earlier Journal entry was rewritten', async () => {
+    const after = structuredClone(JOURNALS[1]!);
+    after.entries[0]!.cmd = { cmd: 'model.new', name: 'different model' } as never;
+    const { registry } = fixture({ journals: [JOURNALS[0]!, after] });
+    const { provider } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    expect(turn.undoJournal).toBeNull();
+    expect(turn.undoSteps).toBe(0);
+  });
+
+  it('attributes nested script Commands from the script host receipts', async () => {
+    const { registry } = fixture();
+    vi.spyOn(registry, 'dispatch').mockResolvedValue({ result: null, console: [], journalEntries: [JOURNALS[1]!.entries[1]!] });
+    const { provider } = fakeProvider([[{ type: 'tool_use', id: 'script', name: 'run_script', input: { code: 'build()' } }], FINAL_ROUND]);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'test', system: '', tools: [], messages: [] })));
+    expect(turn.diff).toEqual([JOURNALS[1]!.entries[1]!]);
+    expect(turn.undoSteps).toBe(1);
+    expect(turn.undoJournal).toEqual(JOURNALS[1]!.hash);
   });
 
   it('routes run_script to script.run and reports a tool the registry does not have', async () => {

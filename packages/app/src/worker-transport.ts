@@ -43,6 +43,8 @@ export class WorkerTransport implements EngineTransport {
   private revision = 0;
   /** Set while `cancel()` is tearing the worker down, so in-flight calls reject as `cancelled`. */
   private cancelling = false;
+  /** Set while a crash is being recovered from, so the replay's own calls are not recovered. */
+  private restarting = false;
   /**
    * One sink for every progress message. Calls are serialised, so at most one Command can be
    * reporting at a time and the app needs no per-call plumbing to drive `Solving n %`.
@@ -110,14 +112,37 @@ export class WorkerTransport implements EngineTransport {
    */
   async cancel(): Promise<void> {
     this.cancelling = true;
-    this.worker.terminate();
     for (const [, p] of this.pending) p.reject(new FemError('cancelled', 'the running Command was cancelled', null, 'the Model is back at the last completed Command'));
+    this.cancelling = false;
+    await this.restart();
+  }
+
+  /** Kill the Worker, start a new one and replay the Journal up to the acknowledged revision. */
+  private async restart(): Promise<void> {
+    this.worker.terminate();
     this.pending.clear();
     this.tail = Promise.resolve();
     this.worker = this.wire(this.spawn());
-    this.cancelling = false;
     await this.call('create', this.opts);
     await this.call('replay', { entries: this.shadow.slice(0, this.revision), ...this.opts });
+  }
+
+  /**
+   * A Rust panic in wasm leaves the Engine's borrow flag set, so the Command that panicked and
+   * every Command after it fail with `recursive use of an object`: the Worker is dead and only
+   * a restart brings it back. The failing Command gets one structured error, the Commands after
+   * it get a working engine at the last acknowledged revision (issue #54).
+   */
+  private async recover(e: unknown): Promise<never> {
+    const message = e instanceof FemError ? e.cause : e instanceof Error ? e.message : String(e);
+    if (this.restarting || !/recursive use of an object|unreachable/.test(message)) throw e;
+    this.restarting = true;
+    try {
+      await this.restart();
+    } finally {
+      this.restarting = false;
+    }
+    throw new FemError('internal', `the engine restarted after a crash: ${message}`, 'engine.worker', 'the Model is back at the last completed Command; change that Command before running it again');
   }
 
   private wire(worker: Worker): Worker {
@@ -150,7 +175,7 @@ export class WorkerTransport implements EngineTransport {
         this.worker.postMessage({ id, op, payload } satisfies AppReq);
       });
     // Queue, but never let one caller's rejection break the chain for the next.
-    const next = this.tail.then(run, run);
+    const next = this.tail.then(run, run).catch((e: unknown) => this.recover(e));
     this.tail = next.catch(() => undefined);
     return next;
   }

@@ -906,6 +906,7 @@
             "format": "double"
           },
           "dt": {
+            "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Q_time"
@@ -941,6 +942,7 @@
             "minimum": 0
           },
           "dtFactor": {
+            "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
             "type": [
               "number",
               "null"
@@ -1094,7 +1096,7 @@
         ]
       },
       {
-        "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal.",
+        "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal. If `expectedJournal` is\nsupplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise\nnothing is undone. Use this guard for a saved turn boundary while other callers can edit.",
         "type": "object",
         "properties": {
           "steps": {
@@ -1104,6 +1106,12 @@
             ],
             "format": "uint32",
             "minimum": 0
+          },
+          "expectedJournal": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "cmd": {
             "type": "string",
@@ -4320,6 +4328,10 @@
         "description": "`query.journal` response.",
         "type": "object",
         "properties": {
+          "hash": {
+            "description": "Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.",
+            "type": "string"
+          },
           "entries": {
             "type": "array",
             "items": {
@@ -4339,6 +4351,7 @@
           }
         },
         "required": [
+          "hash",
           "entries",
           "revision",
           "canUndo",
@@ -5271,6 +5284,7 @@
                 "format": "double"
               },
               "dt": {
+                "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/Q_time"
@@ -5306,6 +5320,7 @@
                 "minimum": 0
               },
               "dtFactor": {
+                "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
                 "type": [
                   "number",
                   "null"
@@ -5459,7 +5474,7 @@
             ]
           },
           {
-            "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal.",
+            "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal. If `expectedJournal` is\nsupplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise\nnothing is undone. Use this guard for a saved turn boundary while other callers can edit.",
             "type": "object",
             "properties": {
               "steps": {
@@ -5469,6 +5484,12 @@
                 ],
                 "format": "uint32",
                 "minimum": 0
+              },
+              "expectedJournal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "cmd": {
                 "type": "string",
@@ -10557,6 +10578,7 @@
                 "format": "double"
               },
               "dt": {
+                "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/Q_time"
@@ -10592,6 +10614,7 @@
                 "minimum": 0
               },
               "dtFactor": {
+                "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
                 "type": [
                   "number",
                   "null"
@@ -10745,7 +10768,7 @@
             ]
           },
           {
-            "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal.",
+            "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal. If `expectedJournal` is\nsupplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise\nnothing is undone. Use this guard for a saved turn boundary while other callers can edit.",
             "type": "object",
             "properties": {
               "steps": {
@@ -10755,6 +10778,12 @@
                 ],
                 "format": "uint32",
                 "minimum": 0
+              },
+              "expectedJournal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "cmd": {
                 "type": "string",
