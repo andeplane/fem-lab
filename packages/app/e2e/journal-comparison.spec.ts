@@ -188,3 +188,48 @@ test('@cpu project Save establishes its receipt baseline and rejects a late impo
   await expect(page.locator('[aria-label="Unsaved changes"]')).toHaveCount(0);
   await expect(page.locator('.comparison-label')).toContainText('Since last explicit save/open');
 });
+
+
+for (const replacement of ['file.open', 'model.new'] as const) {
+  test(`@cpu a late Save cannot replace the baseline after ${replacement}`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await ready(page); await installReplyGate(page);
+    const opened = await page.evaluate(async () => {
+      await window.fem.model.new({ name: 'opened B' });
+      const transport = (window.fem.registry as unknown as { transport: EngineTransport }).transport;
+      return JSON.stringify(await transport.exportFile());
+    });
+    await page.evaluate(async () => {
+      await window.fem.model.new({ name: 'saved A' });
+      await window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '1 m', '1 m'] });
+      const gate = (window as unknown as { comparisonGate: ReplyGate }).comparisonGate;
+      gate.op = 'exportFile'; gate.pending = window.fem.dispatch({ cmd: 'file.save' });
+    });
+    await page.waitForFunction(() => (window as unknown as { comparisonGate: ReplyGate }).comparisonGate.held === 1);
+    if (replacement === 'file.open') {
+      await page.evaluate(async json => {
+        await window.fem.dispatch({ cmd: 'file.open', json });
+        await window.fem.dispatch({ cmd: 'file.compare', json });
+      }, opened);
+    } else {
+      await page.evaluate(() => window.fem.model.new({ name: 'new B' }));
+    }
+    const download = page.waitForEvent('download');
+    await page.evaluate(async () => {
+      const gate = (window as unknown as { comparisonGate: ReplyGate }).comparisonGate;
+      gate.release(); await gate.pending;
+    });
+    await download;
+    const comparison = await page.evaluate(() => window.fem.registry.query({ query: 'query.journalComparison' }));
+    if (replacement === 'file.open') {
+      expect(comparison).toMatchObject({ sharedEntries: 1, added: [], removed: [] });
+      await expect(page.locator('.comparison-label')).toContainText('Compared file');
+      await expect(page.locator('[aria-label="Unsaved changes"]')).toHaveCount(0);
+    } else {
+      expect(comparison).toBeNull();
+      await expect(page.locator('[aria-label="Unsaved changes"]')).toBeVisible();
+    }
+    expect(errors).toEqual([]);
+  });
+}

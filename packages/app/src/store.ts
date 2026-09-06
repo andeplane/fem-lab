@@ -243,6 +243,7 @@ export class Store {
    */
   dispatch: ((cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>) | null = null;
   private comparisonRequest = 0;
+  private documentIdentity = {};
   private journalDiffQuery: ((base: Journal) => Promise<JournalDiff>) | null = null;
   private listeners = new Set<() => void>();
 
@@ -325,6 +326,26 @@ export class Store {
   togglePanel(panel: string, open?: boolean): void {
     if ((TABS as string[]).includes(panel)) return this.set({ tab: panel as Tab });
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
+  }
+
+  /** Capture before I/O; ordinary edits keep this identity, replacing the Model does not. */
+  beginSave(): (journal: { entries: JournalDump['entries'] }) => void {
+    const identity = this.documentIdentity;
+    return journal => {
+      if (identity === this.documentIdentity) this.markSaved(journal);
+    };
+  }
+
+  /** A successful explicit open owns a new document and its normalized saved baseline. */
+  markOpened(journal: { entries: JournalDump['entries'] }): void {
+    this.documentIdentity = {};
+    this.markSaved(journal);
+  }
+
+  /** A successful new Model has no saved baseline and invalidates older save completions. */
+  newDocument(): void {
+    this.documentIdentity = {};
+    this.set({ savedJournal: null, savedBaseline: null, journalComparison: null, comparisonSource: null, comparisonBaseline: null });
   }
 
   markSaved(journal: { entries: JournalDump['entries'] }): void {

@@ -178,3 +178,18 @@ it('opens a browser project against its captured Journal without marking a later
   expect(store.state.savedJournal).toBe('previous failed-open baseline');
   vi.unstubAllGlobals();
 });
+
+
+it('a new Model has no saved baseline and rejects completions captured for the old document', () => {
+  const store = new Store();
+  store.markSaved({ entries });
+  const complete = store.beginSave();
+  store.newDocument();
+  complete({ entries });
+  expect(store.state.savedBaseline).toBeNull();
+  expect(store.state.savedJournal).toBeNull();
+  expect(store.state.comparisonSource).toBeNull();
+  const fresh = store.beginSave();
+  fresh({ entries });
+  expect(store.state.savedBaseline).toEqual(entries);
+});

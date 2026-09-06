@@ -142,7 +142,9 @@ export interface HostContext {
     /** Open a file picker and return the chosen file's text. */
     pick(): Promise<string>;
     download(name: string, mime: string, data: string | Uint8Array): void;
-    /** Establish the explicit save/open baseline from that operation's exact normalized Journal. */
+    /** Capture the current document before async I/O; completion affects only that document. */
+    beginSave(): (journal: ModelFile['journal']) => void;
+    /** Establish a successful explicit open's normalized baseline and invalidate older save completions. */
     markSaved(journal: ModelFile['journal']): void;
     shareLink(file: ModelFile): Promise<{ url: string }>;
     /** Turn the background save into the open project on or off. The choice sticks in this browser. */
@@ -359,10 +361,11 @@ export const HOST_COMMANDS: HostDef[] = [
     if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
     return importText(ctx, await ctx.files.pick());
   }),
-  def('file.save', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. `name` defaults to `<model name>.femlab.json`.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
+  def('file.save', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. `name` defaults to `<model name>.femlab.json`. A late save completion never changes the saved baseline of a replacement Model.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
+    const completeSave = ctx.files.beginSave();
     const file = await ctx.transport.exportFile();
     const receipt = await deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', JSON.stringify(file, null, 2));
-    ctx.files.markSaved(file.journal);
+    completeSave(file.journal);
     return receipt;
   }),
   def('file.export', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG, the Journal as a TypeScript script or as a `femlab/1` file. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({ spec: z.looseObject({ format: z.string() }), name: z.string().optional(), to: Destination }), async ({ spec, name, to }, ctx) => {
@@ -396,10 +399,11 @@ export const HOST_COMMANDS: HostDef[] = [
     'Delete a saved project and its Journal from this browser for good. There is no undo and nothing was ever uploaded anywhere, so use file.save first if the model might be wanted again. Not a tool: deleting a person\u2019s work is theirs to do.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.delete(id), false),
   def('project.save',
-    'Write the open project\'s current Journal now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the project and the exact normalized Journal that was written, or `null` when there is none yet. Use file.save to write a `femlab/1` file instead.',
+    'Write the open project\'s current Journal now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the project and the exact normalized Journal that was written, or `null` when there is none yet. A late completion never changes the saved baseline of a replacement Model. Use file.save to write a `femlab/1` file instead.',
     none, async (_, ctx) => {
+      const completeSave = ctx.files.beginSave();
       const saved = await ctx.projects.save();
-      if (saved) ctx.files.markSaved(saved.journal);
+      if (saved) completeSave(saved.journal);
       return saved;
     }),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),

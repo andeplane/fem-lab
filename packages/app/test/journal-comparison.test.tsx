@@ -4,7 +4,7 @@ import { HOST_COMMANDS, HOST_QUERIES, Registry, type EngineSchema, type JournalD
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, appHostQueries, makeHostContext } from '../src/host';
 import type { HostCaps } from '../src/capabilities';
-import { Store } from '../src/store';
+import { Store, unsaved } from '../src/store';
 import { Bottom } from '../src/ui/Bottom';
 import type { WorkerTransport } from '../src/worker-transport';
 
@@ -31,7 +31,7 @@ function setup() {
     hostQueries: [...HOST_QUERIES, ...appHostQueries(store)],
   });
   const compare = (entry = first) => registry.dispatch({ cmd: 'file.compare', json: JSON.stringify({ ...file, journal: { entries: [entry] } }) });
-  return { store, file, query, ctx, registry, compare };
+  return { store, file, query, ctx, registry, compare, transport };
 }
 
 it.each([[0, 1, 2], [10, 20, 99]])('marks only the causal added occurrence with seq labels %j', (...labels) => {
@@ -188,4 +188,68 @@ it('fences an imported reply when project.save establishes its exact receipt bas
   expect(s.store.state.journalComparison).toBeNull();
   expect(await s.registry.query({ query: 'query.journalComparison' })).toEqual(diff());
   expect(s.store.state.comparisonSource).toBe('saved');
+});
+
+
+it.each(['file.save', 'project.save'])('a late %s receipt cannot replace the opened document or its imported comparison', async cmd => {
+  const s = setup();
+  const write = deferred<void>();
+  const receipt = deferred<Awaited<ReturnType<typeof s.ctx.projects.save>>>();
+  s.ctx.folder.writeText = vi.fn(() => write.promise);
+  s.ctx.projects.save = vi.fn(() => receipt.promise);
+  const saving = s.registry.dispatch(cmd === 'file.save' ? { cmd, to: 'folder' } : { cmd });
+  await vi.waitFor(() => expect(cmd === 'file.save' ? s.ctx.folder.writeText : s.ctx.projects.save).toHaveBeenCalledOnce());
+  const opened: JournalEntry = { seq: 0, cmd: { cmd: 'model.new', name: 'opened B' }, hashAfter: 'b' };
+  s.transport.importFile.mockResolvedValueOnce({ journal: { entries: [opened] } });
+  await s.registry.dispatch({ cmd: 'file.open', json: JSON.stringify({ ...s.file, journal: { entries: [opened] } }) });
+  s.store.set({ journal: { entries: [opened], revision: 1, hash: 'b', canUndo: true, canRedo: false } });
+  expect(unsaved(s.store.state)).toBe(false);
+  const imported: JournalEntry = { ...opened, cmd: { cmd: 'model.new', name: 'colleague' } };
+  const compared = diff('colleague', 'b', [opened]);
+  s.query.mockResolvedValueOnce(compared);
+  await s.compare(imported);
+  if (cmd === 'file.save') write.resolve();
+  else receipt.resolve({ id: 'A', name: 'A', at: 1, createdAt: 0, commands: 1, hash: 'a', thumbnail: null,
+    saving: false, autosave: true, journal: { entries: [first] } });
+  await saving;
+  expect(s.store.state.savedBaseline).toEqual([opened]);
+  expect(unsaved(s.store.state)).toBe(false);
+  expect(s.store.state.comparisonSource).toBe('imported');
+  expect(s.store.state.comparisonBaseline).toEqual([imported]);
+  expect(s.store.state.journalComparison).toEqual(compared);
+});
+
+it.each(['file.save', 'project.save'])('same-document edits and comparison selection preserve the captured %s receipt', async cmd => {
+  const s = setup();
+  const write = deferred<void>();
+  const receipt = deferred<Awaited<ReturnType<typeof s.ctx.projects.save>>>();
+  s.ctx.folder.writeText = vi.fn(() => write.promise);
+  s.ctx.projects.save = vi.fn(() => receipt.promise);
+  const saving = s.registry.dispatch(cmd === 'file.save' ? { cmd, to: 'folder' } : { cmd });
+  await vi.waitFor(() => expect(cmd === 'file.save' ? s.ctx.folder.writeText : s.ctx.projects.save).toHaveBeenCalledOnce());
+  s.store.set({ journal: { entries: [first, second], revision: 2, hash: 'b', canUndo: true, canRedo: false } });
+  s.query.mockResolvedValueOnce(diff('colleague', 'b', [first, second]));
+  await s.compare(second);
+  if (cmd === 'file.save') write.resolve();
+  else receipt.resolve({ id: 'A', name: 'A', at: 1, createdAt: 0, commands: 1, hash: 'a', thumbnail: null,
+    saving: false, autosave: true, journal: { entries: [first] } });
+  await saving;
+  expect(s.store.state.savedBaseline).toEqual([first]);
+  expect(unsaved(s.store.state)).toBe(true);
+  expect(s.store.state.comparisonSource).toBeNull();
+  expect(s.store.state.comparisonBaseline).toBeNull();
+});
+
+it('a failed open leaves a pending save valid for the existing document', async () => {
+  const s = setup();
+  const write = deferred<void>();
+  s.ctx.folder.writeText = vi.fn(() => write.promise);
+  const saving = s.registry.dispatch({ cmd: 'file.save', to: 'folder' });
+  await vi.waitFor(() => expect(s.ctx.folder.writeText).toHaveBeenCalledOnce());
+  s.transport.importFile.mockRejectedValueOnce(new Error('bad file'));
+  await expect(s.registry.dispatch({ cmd: 'file.open', json: JSON.stringify(s.file) })).rejects.toThrow('bad file');
+  write.resolve();
+  await saving;
+  expect(s.store.state.savedBaseline).toEqual([first]);
+  expect(unsaved(s.store.state)).toBe(false);
 });

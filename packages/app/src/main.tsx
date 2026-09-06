@@ -113,6 +113,7 @@ async function boot(): Promise<void> {
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
       const ack = await registry.dispatch(cmd);
+      if (cmd.cmd === 'model.new') store.newDocument();
       store.log('command', cmd.cmd);
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, and `file.open` / `example.open` replace the engine Model and

@@ -90,14 +90,17 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     // Capture normalized replay output before Result restoration yields to another edit.
     const opened = await transport.exportFile();
     if (solved) await results?.onAck(solved);
-    store.markSaved(opened.journal);
+    store.markOpened(opened.journal);
   };
   const own = makeProjects({
     // A browser with IndexedDB blocked (private mode, or a headless harness) keeps working:
     // projects are then per-session, the start screen says so, and file.save is still there.
     store: typeof indexedDB === 'undefined' ? memoryProjects() : indexedDbProjects(indexedDB),
     replay,
-    reset: async (name) => void (await transport.dispatch({ cmd: 'model.new', name } as never)),
+    reset: async (name) => {
+      await transport.dispatch({ cmd: 'model.new', name } as never);
+      store.newDocument();
+    },
     thumbnail: () => thumbnailOf(viewer),
     initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
     onError: (e) => console.warn('the project save failed', e),
@@ -192,7 +195,8 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     skills: () => [],
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
-      markSaved: (journal) => store.markSaved(journal),
+      beginSave: () => store.beginSave(),
+      markSaved: (journal) => store.markOpened(journal),
       pick: () =>
         new Promise<string>((resolve, reject) => {
           const input = document.createElement('input');
@@ -309,13 +313,13 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         if (solved) await results?.onAck(solved);
         // An example is an explicit open. Use the normalized Journal that refresh just read
         // from the engine, and establish the baseline only after the whole open succeeded.
-        if (opened) store.markSaved(opened);
+        if (opened) store.markOpened(opened);
         return { name, commands: entries.length };
       },
     },
     {
       name: 'file.compare',
-      description: 'Select a saved femlab/1 file as the Journal comparison baseline without opening it or changing the current Model. Returns ordered added and removed Command entries; the imported file is never replayed. The imported baseline remains selected until the next successful explicit save/open.',
+      description: 'Select a saved femlab/1 file as the Journal comparison baseline without opening it or changing the current Model. Returns ordered added and removed Command entries; the imported file is never replayed. The imported baseline remains selected until the next successful explicit save/open or new Model.',
       schema: z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) })]),
       tool: true,
       run: async (input) => {
@@ -355,7 +359,7 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
 export function appHostQueries(store: Store): HostDef[] {
   return [{
     name: 'query.journalComparison',
-    description: 'Compare the current Journal with the selected imported file, or with the last successful explicit save/open when no imported comparison is selected. Returns ordered added and removed entries, or null when no baseline exists or a newer request/state supersedes this query. file.compare selects an imported baseline; a successful explicit save/open resets it to the saved baseline. Autosave does not select a baseline.',
+    description: 'Compare the current Journal with the selected imported file, or with the last successful explicit save/open when no imported comparison is selected. Returns ordered added and removed entries, or null when no baseline exists or a newer request/state supersedes this query. file.compare selects an imported baseline; a successful explicit save/open resets it to the saved baseline, and a new Model clears it. Autosave does not select a baseline.',
     schema: z.object({}),
     tool: true,
     run: () => store.refreshJournalComparison(),
