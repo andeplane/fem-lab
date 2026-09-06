@@ -150,6 +150,26 @@ reference monomial, including unit-measure normalization, through degree 3 (tri3
 adds degree 2/3 in 2D/3D, and axisymmetric `r` adds degree 2. Compile-time collapsed
 Gauss tables are positive and cover these factors; stiffness/recovery retains its own rule.
 
+### Richardson rate and limit with unequal refinements (#121)
+
+The manufactured sequence `q(h) = 1.25 + C h^p` has the independent exact limit `1.25`
+and rate `p`. Engine tests cover `p = 0.5, 1, 2, 3, 4`, both signs of `C`, equal ratios
+(`[4,2,1]`) and unequal ratios in both directions (`[7,4,1]`, `[7,2,1]`). Length and
+quantity unit factors span `1e-100`–`1e100` and `1e-200`–`1e200`, respectively: the rate
+must stay within `1e-9` and the rescaled limit within `1e-8` of the closed forms. The
+reported regression `q = 1 + h²` on `[3,2,1]` recovers `(limit, rate) = (1,2)` within
+`1e-12`; reordering or adding a coarse point outside the power-law range has no effect.
+An extreme spacing case (`[1e200,1e-200,1e-300]`, `p=0.001`) also checks that mesh-size
+quotient overflow cannot invalidate finite data.
+
+The generalized equation uses both log refinement ratios `a=log(h1/h2)` and
+`b=log(h2/h3)`: `Δq12/Δq23 = (exp(ap)-1)/(1-exp(-bp))`. Its positive-rate solution
+exists uniquely only when the difference ratio exceeds `a/b`. Logarithms, `expm1` and a
+bracketed solve avoid forming overflowing difference products or size powers. Diverging,
+logarithmic, constant and oscillating sequences, invalid triples and unrepresentable
+limits have no estimate; `study.converge` reports its existing unavailable fields.
+
+
 ## B. Beams and locking (phase 1–2)
 
 | # | Case | Reference | Tolerance | Proves | Status |
@@ -540,6 +560,35 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+### Transformed Sheet free meshing (#230)
+
+A 2×2 m square with a centered 1×1 m square hole, scaled (2,3), rotated 90°
+about z and translated (5,7) m, has area 18 m² and bounds [−1,5]×[7,11] m.
+`transformed_sheets_mesh_in_world_space_with_oriented_hole_boundaries` checks that
+area, positive signed triangle Jacobians, empty hole, exact named boundary lines,
+world-size area bounds and local refinement in world coordinates. Both tri3 and
+tri6 run at sizes 0.8, 0.4 and 0.2 m; quadratic midpoints retain the edge ordering.
+The engine regression runs the shared tagged polygon at 1, 0.5 and 0.25 m, checks
+outer lengths (6,4,6,4) m and hole perimeter 10 m, with each tag qualified once.
+
+`transformed_curved_holes_resample_as_world_element_size_decreases` scales a
+10×10 m square with a unit-radius circular hole into a 20×30 m rectangle with
+an elliptical hole of radii 2 and 3 m. At world sizes 2, 1 and 0.5 m its area
+converges from above to 600−6π m². The error is bounded by 0.4π·size m², and
+every quadratic boundary node stays within the normalized chord bound. Sampling
+uses local tolerance 0.1·size/max(scale_x,scale_y), which bounds world error after
+rotation and nonuniform scaling. This is mesh-dependent sampling, independent of
+the fixed display preview. Unsupported nested/out-of-plane transforms remain
+explicit errors, with engine command rejection preserving Model and Journal.
+
+### Transformed Sheet arithmetic guard (#230, #274)
+
+Finite scale and translation inputs that overflow world coordinates return structured errors
+before triangulation. A never-panic property exercises multiplication and addition overflow,
+linear/quadratic meshing and shared Solid evaluation. Registry checks verify rejected geometry
+leaves the Model and Journal unchanged. Existing transformed-hole area, boundary, refinement
+and convergence oracles continue to check ordinary geometry.
 
 ## Unmeshed Sheet preview (#154)
 
