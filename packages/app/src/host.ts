@@ -68,7 +68,15 @@ export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
   lastSaved = { name, at: Date.now(), commands: journal.length };
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+export function makeHostContext(
+  store: Store,
+  transport: WorkerTransport,
+  viewer: ViewerRef,
+  host: HostCaps,
+  scripts?: ScriptHost,
+  results?: ResultsView,
+  printPage: () => void = () => window.print(),
+): HostContext {
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -123,6 +131,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       get: (): Selection => store.state.selection,
     },
     panels: { toggle: (panel, open) => store.togglePanel(panel, open) },
+    report: { print: printPage },
     script: {
       // A script's Commands are the AI's, not the person's: the Journal's `who` column says so.
       run: async (code, timeoutMs) => {
