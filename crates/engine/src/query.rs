@@ -164,6 +164,9 @@ pub struct MaterialRow {
     pub nu: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rho: Option<Valued>,
+    /// Current yield strength in the Model's display stress unit, when specified.
+    #[serde(rename = "yield", default, skip_serializing_if = "Option::is_none")]
+    pub yield_: Option<Valued>,
     pub assigned_to: Vec<String>,
 }
 

@@ -3400,6 +3400,17 @@
               }
             ]
           },
+          "yield": {
+            "description": "Current yield strength in the Model's display stress unit, when specified.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "assignedTo": {
             "type": "array",
             "items": {

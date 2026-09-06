@@ -84,9 +84,8 @@ export interface UiState {
   /** display = SI x this, for the one dimension the camera needs: length. */
   lengthFactor: number;
   /**
-   * The smallest `yield` any Material in the Journal names, in SI pascals, or `null` when
-   * none does. `query.model` does not carry it (MaterialRow has E, nu and rho), so it is read
-   * back off the Journal's own `material.add` lines — the Journal is the Model (ADR 0003).
+   * The smallest yield in the current `query.model` material rows, converted from their
+   * display units to SI pascals, or `null` when no Material specifies a positive yield.
    * The smallest is the conservative one when several Materials disagree.
    */
   yieldStress: number | null;

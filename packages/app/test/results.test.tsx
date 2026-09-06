@@ -208,6 +208,32 @@ function harness(result: ResultSummary | null = RESULT) {
 }
 
 describe('ResultsView', () => {
+  it('uses current material yields in display units, independent of historical Journal entries', async () => {
+    const { store, results, transport } = harness();
+    transport.query.mockImplementation(async (q) => {
+      if (q.query !== 'query.convert') return RESULT;
+      const { quantity, to } = q as unknown as { quantity: { value: number; unit: string }; to: string };
+      return { value: to === 'Pa' ? quantity.value * (quantity.unit === 'MPa' ? 1e6 : 1) : 1000, unit: to } as never;
+    });
+    store.set({
+      journal: { revision: 2, entries: [{ cmd: { cmd: 'material.add', yield: '1 Pa' } }] } as never,
+      model: { units: { length: 'mm' }, materials: [
+        { name: 'renamed-steel', yield: { value: 355, unit: 'MPa' } },
+        { name: 'other', yield: { value: 400e6, unit: 'Pa' } },
+        { name: 'no-yield' },
+      ] } as never,
+    });
+    await results.refresh(true);
+    expect(store.state.yieldStress).toBe(355e6);
+    // Editing/removing material state takes effect even while old commands remain in history.
+    store.set({ model: { ...store.state.model, materials: [{ name: 'other', yield: { value: 400e6, unit: 'Pa' } }] } as never });
+    await results.refresh(true);
+    expect(store.state.yieldStress).toBe(400e6);
+    store.set({ model: { ...store.state.model, materials: [{ name: 'no-yield' }] } as never });
+    await results.refresh(true);
+    expect(store.state.yieldStress).toBeNull();
+  });
+
   it('loads the contoured scalar in display units and the displacement in SI', async () => {
     const { store, viewer, results } = harness();
     await results.refresh();

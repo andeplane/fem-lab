@@ -315,6 +315,22 @@ fn transactional_dispatch_and_structured_errors() {
 }
 
 #[test]
+fn model_query_reports_current_yield_in_display_units() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"yield"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"stress":"MPa"}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"yield":"0.355 GPa"}"#);
+    let row = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert_eq!(row["materials"][0]["yield"], serde_json::json!({"value":355.0,"unit":"MPa"}));
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"yield":"400 MPa"}"#);
+    let row = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert_eq!(row["materials"][0]["yield"]["value"], 400.0);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    let row = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert!(row["materials"][0].get("yield").is_none());
+}
+
+#[test]
 fn upsert_edits_in_place_and_reports_replaced() {
     let mut e = engine();
     cantilever(&mut e);
