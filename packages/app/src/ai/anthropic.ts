@@ -10,7 +10,7 @@ export const ANTHROPIC_DEFAULT = ANTHROPIC_MODELS[0]!;
 /** Only the two members we call, so a fake is two functions rather than a mock of the SDK. */
 export interface AnthropicLike {
   messages: {
-    stream(params: Anthropic.MessageStreamParams): AsyncIterable<Anthropic.MessageStreamEvent> & {
+    stream(params: Anthropic.MessageStreamParams, options?: { signal?: AbortSignal }): AsyncIterable<Anthropic.MessageStreamEvent> & {
       finalMessage(): Promise<Anthropic.Message>;
     };
   };
@@ -57,17 +57,36 @@ export function anthropicProvider(apiKey: string, make: (key: string) => Anthrop
           tools: req.tools as Anthropic.Tool[],
           messages: toMessageParams(req.messages),
           ...thinkingFor(req.model),
-        });
+        }, { signal: req.signal });
+        const preparing = new Map<number, { id: string; name: string; arguments: string }>();
         for await (const event of stream) {
+          if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+            const call = { id: event.content_block.id, name: event.content_block.name, arguments: '' };
+            preparing.set(event.index, call);
+            yield { type: 'tool_progress', ...call };
+          }
+          if (event.type === 'content_block_delta' && event.delta.type === 'input_json_delta') {
+            const call = preparing.get(event.index);
+            if (call) {
+              call.arguments += event.delta.partial_json;
+              yield { type: 'tool_progress', ...call };
+            }
+          }
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield { type: 'text_delta', text: event.delta.text };
         }
         const final = await stream.finalMessage();
+        if (final.stop_reason === 'max_tokens') {
+          yield { type: 'usage', usage: usageOf(final.usage) };
+          yield { type: 'error', message: 'Anthropic response incomplete: max_tokens' };
+          return;
+        }
         for (const block of final.content) {
           if (block.type === 'tool_use') yield { type: 'tool_use', id: block.id, name: block.name, input: block.input };
         }
         yield { type: 'usage', usage: usageOf(final.usage) };
         yield { type: 'done', stopReason: final.stop_reason ?? 'end_turn' };
       } catch (e) {
+        if (req.signal?.aborted) return;
         yield { type: 'error', message: e instanceof Error ? e.message : String(e) };
       }
     },

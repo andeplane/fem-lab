@@ -85,6 +85,25 @@ npm run build -w packages/mcp      # writes packages/mcp/dist/femlab-mcp.js
 at `FEMLAB_MCP`, and prints the install line above if it finds none. Point `FEMLAB_WASM` at a
 folder holding `femlab_engine_wasm.js` if the engine lives somewhere unusual.
 
+### Build and verify an npm artifact
+
+Node 22 or newer is required. After the checkout build above, run:
+
+```sh
+npm pack -w packages/mcp
+npm run test:package -w packages/mcp
+```
+
+The packing hook rebuilds the host and copies the generated Node engine into `dist/wasm-node`,
+including a CommonJS package boundary for wasm-bindgen's Node output. The private registry is
+bundled at build time and is not an installation dependency. Worker entry points remain in the
+artifact. Packing fails if the Node WASM engine has not been built.
+
+The package smoke test installs the real tarball into a fresh temporary directory, starts its
+stdio server, lists tools, makes engine calls and executes a worker script. It also checks that
+the installed WASM bytes match the build. No checkout engine override is supplied. Publication
+and tagged platform releases remain tracked by [#27](https://github.com/andeplane/fem-lab/issues/27).
+
 ## Claude Code / Claude Desktop
 
 Add to `~/.claude.json` (Claude Code) or `claude_desktop_config.json` (Claude Desktop):

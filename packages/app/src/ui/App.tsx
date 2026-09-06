@@ -205,7 +205,7 @@ function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.lastError) {
     return (
-      <div class="banner error" role="alert">
+      <div class="banner error" role="alert" aria-live="assertive" aria-atomic="true">
         <span class="mono code">{s.lastError.code}</span>
         <span>{s.lastError.cause}</span>
         {s.lastError.suggestion ? <span class="suggestion">{s.lastError.suggestion}</span> : null}
@@ -248,9 +248,9 @@ function SolvingCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.solving === null) return null;
   const percent = Math.round((s.progress?.fraction ?? 0) * 100);
   return (
-    <div class="solving-card" role="status">
+    <div class="solving-card" role="status" aria-live="polite" aria-atomic="true">
       <div class="solving-head">
-        <span class="spinner" />
+        <span class="spinner" aria-hidden="true" />
         <b>Solving · {s.solving}</b>
         <Cmd dispatch={dispatch} cmd="solve.cancel" class="tbutton outline">
           Cancel
@@ -274,7 +274,7 @@ function ErrorCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const fix = e.suggestion && /^[a-z]+\.[a-zA-Z]+$/.test(e.suggestion.trim()) ? e.suggestion.trim() : null;
   const text = `${e.code}: ${e.cause}${e.where ? ` (at ${e.where})` : ''}`;
   return (
-    <div class="error-card" role="alert">
+    <div class="error-card" role="alert" aria-live="assertive" aria-atomic="true">
       <div class="error-head">
         <span class="mono code">{e.code}</span>
         <b>{e.cause}</b>
