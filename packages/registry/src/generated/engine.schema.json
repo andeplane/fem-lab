@@ -815,6 +815,36 @@
         ]
       },
       {
+        "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "string"
+          },
+          "emissivity": {
+            "type": "number",
+            "format": "double"
+          },
+          "tInf": {
+            "$ref": "#/$defs/Q_temperature"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "load.radiation"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "on",
+          "emissivity",
+          "tInf"
+        ]
+      },
+      {
         "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
         "type": "object",
         "properties": {
@@ -860,7 +890,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
         "type": "object",
         "properties": {
           "name": {
@@ -975,6 +1005,23 @@
               }
             ]
           },
+          "nonlinearTolerance": {
+            "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
           "cmd": {
             "type": "string",
             "const": "step.add"
@@ -1026,7 +1073,7 @@
         ]
       },
       {
-        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
+        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
         "type": "object",
         "properties": {
           "step": {
@@ -1068,7 +1115,7 @@
         ]
       },
       {
-        "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false. Uses the Step's actual procedure: static and steady heat\nmeasure equilibrium fields; transient heat and explicit dynamics measure the final\nfield at the configured tEnd with the Step's time settings unchanged. Modal Steps are\nunsupported because a mode amplitude is not a mesh-independent quantity; compare\nfrequencies with solve.run/query.result instead. Steps with after are unsupported:\nsolve their dependencies and target at each mesh explicitly.",
+        "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nmay have unequal refinement ratios. Three distinct positive sizes are needed for a\nfinite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate\nare unavailable. Restores the previous mesh settings afterwards unless `restore` is false.\nUses the Step's actual procedure: static and steady heat measure equilibrium fields;\ntransient heat and explicit dynamics measure the final field at the configured tEnd\nwith the Step's time settings unchanged. Modal Steps are unsupported because a mode\namplitude is not a mesh-independent quantity; compare frequencies with\nsolve.run/query.result instead. Steps with after are unsupported: solve their\ndependencies and target at each mesh explicitly.",
         "type": "object",
         "properties": {
           "step": {
@@ -2047,7 +2094,7 @@
             ]
           },
           {
-            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.\nSheet translation, rotation about z and positive in-plane scaling are applied before\nmeshing. Size and refine boxes use world coordinates; curved boundaries are sampled\nto one tenth of size in world space. Nested or out-of-plane transforms are unsupported.",
             "type": "object",
             "properties": {
               "of": {
@@ -2786,7 +2833,7 @@
         "x-returns": "SetInfo"
       },
       {
-        "description": "Summary of a Step's Result: solver info, extremes of every field with their location,\nreactions per constraint and the applied totals, and whether the Result is stale\n(the Model changed after it was solved). Check the reaction balance first.",
+        "description": "Summary of a Step's Result: solver info, extremes of every field with their location,\nreactions per constraint, applied totals, solver-used omitted material assumptions, and\nwhether the Result is stale (the Model changed after it was solved). Check the reaction\nbalance and assumptions first.",
         "type": "object",
         "properties": {
           "step": {
@@ -4966,6 +5013,36 @@
             ]
           },
           {
+            "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.radiation"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "emissivity",
+              "tInf"
+            ]
+          },
+          {
             "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
@@ -5011,7 +5088,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
             "type": "object",
             "properties": {
               "name": {
@@ -5126,6 +5203,23 @@
                   }
                 ]
               },
+              "nonlinearTolerance": {
+                "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
               "cmd": {
                 "type": "string",
                 "const": "step.add"
@@ -5177,7 +5271,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
             "type": "object",
             "properties": {
               "step": {
@@ -5219,7 +5313,7 @@
             ]
           },
           {
-            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false. Uses the Step's actual procedure: static and steady heat\nmeasure equilibrium fields; transient heat and explicit dynamics measure the final\nfield at the configured tEnd with the Step's time settings unchanged. Modal Steps are\nunsupported because a mode amplitude is not a mesh-independent quantity; compare\nfrequencies with solve.run/query.result instead. Steps with after are unsupported:\nsolve their dependencies and target at each mesh explicitly.",
+            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nmay have unequal refinement ratios. Three distinct positive sizes are needed for a\nfinite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate\nare unavailable. Restores the previous mesh settings afterwards unless `restore` is false.\nUses the Step's actual procedure: static and steady heat measure equilibrium fields;\ntransient heat and explicit dynamics measure the final field at the configured tEnd\nwith the Step's time settings unchanged. Modal Steps are unsupported because a mode\namplitude is not a mesh-independent quantity; compare frequencies with\nsolve.run/query.result instead. Steps with after are unsupported: solve their\ndependencies and target at each mesh explicitly.",
             "type": "object",
             "properties": {
               "step": {
@@ -6137,7 +6231,7 @@
             ]
           },
           {
-            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.\nSheet translation, rotation about z and positive in-plane scaling are applied before\nmeshing. Size and refine boxes use world coordinates; curved boundaries are sampled\nto one tenth of size in world space. Nested or out-of-plane transforms are unsupported.",
             "type": "object",
             "properties": {
               "of": {
@@ -7001,6 +7095,13 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "assumptions": {
+            "description": "Optional material properties the successful procedure actually read as zero because the\nMaterial omitted them. Empty when every solver-used property was explicit.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ResultAssumption"
+            }
+          },
           "frequencies": {
             "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
             "type": "array",
@@ -7107,6 +7208,53 @@
         "required": [
           "constraint",
           "total"
+        ]
+      },
+      "ResultAssumption": {
+        "description": "One solver-used material assumption captured at solve time.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "property": {
+            "$ref": "#/$defs/AssumedMaterialProperty"
+          },
+          "value": {
+            "$ref": "#/$defs/Valued"
+          },
+          "source": {
+            "description": "The Material provenance at solve time; null when the Material named none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "body",
+          "material",
+          "property",
+          "value",
+          "cause"
+        ]
+      },
+      "AssumedMaterialProperty": {
+        "description": "An omitted optional material property that a successful solve read as its resolved zero.\nThe value is kept in SI with the Result, so later unit, name and material edits cannot\nrewrite the assumption under an already-computed answer.",
+        "type": "string",
+        "enum": [
+          "rho",
+          "alpha"
         ]
       },
       "HistoryRow": {
@@ -8204,6 +8352,13 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "assumptions": {
+            "description": "Optional material properties the successful procedure actually read as zero because the\nMaterial omitted them. Empty when every solver-used property was explicit.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ResultAssumption"
+            }
+          },
           "frequencies": {
             "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
             "type": "array",
@@ -8327,6 +8482,53 @@
         "required": [
           "constraint",
           "total"
+        ]
+      },
+      "ResultAssumption": {
+        "description": "One solver-used material assumption captured at solve time.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "property": {
+            "$ref": "#/$defs/AssumedMaterialProperty"
+          },
+          "value": {
+            "$ref": "#/$defs/Valued"
+          },
+          "source": {
+            "description": "The Material provenance at solve time; null when the Material named none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "body",
+          "material",
+          "property",
+          "value",
+          "cause"
+        ]
+      },
+      "AssumedMaterialProperty": {
+        "description": "An omitted optional material property that a successful solve read as its resolved zero.\nThe value is kept in SI with the Result, so later unit, name and material edits cannot\nrewrite the assumption under an already-computed answer.",
+        "type": "string",
+        "enum": [
+          "rho",
+          "alpha"
         ]
       },
       "HistoryRow": {
@@ -8502,6 +8704,7 @@
           "constraint.rigid-modes",
           "solve.not-positive-definite",
           "solve.stalled",
+          "solve.diverged",
           "solve.too-large",
           "gpu.shader",
           "gpu.too-large",
@@ -9828,6 +10031,32 @@
               "on": {
                 "type": "string"
               },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "t_inf": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "radiation"
+              }
+            },
+            "required": [
+              "kind",
+              "on",
+              "emissivity",
+              "t_inf"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "string"
+              },
               "q": {
                 "type": "number",
                 "format": "double"
@@ -9970,6 +10199,21 @@
               "null"
             ],
             "format": "double"
+          },
+          "nonlinearTolerance": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
           }
         },
         "required": [
@@ -11325,6 +11569,36 @@
             ]
           },
           {
+            "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.radiation"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "emissivity",
+              "tInf"
+            ]
+          },
+          {
             "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
@@ -11370,7 +11644,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
             "type": "object",
             "properties": {
               "name": {
@@ -11485,6 +11759,23 @@
                   }
                 ]
               },
+              "nonlinearTolerance": {
+                "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
               "cmd": {
                 "type": "string",
                 "const": "step.add"
@@ -11536,7 +11827,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
             "type": "object",
             "properties": {
               "step": {
@@ -11578,7 +11869,7 @@
             ]
           },
           {
-            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false. Uses the Step's actual procedure: static and steady heat\nmeasure equilibrium fields; transient heat and explicit dynamics measure the final\nfield at the configured tEnd with the Step's time settings unchanged. Modal Steps are\nunsupported because a mode amplitude is not a mesh-independent quantity; compare\nfrequencies with solve.run/query.result instead. Steps with after are unsupported:\nsolve their dependencies and target at each mesh explicitly.",
+            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nmay have unequal refinement ratios. Three distinct positive sizes are needed for a\nfinite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate\nare unavailable. Restores the previous mesh settings afterwards unless `restore` is false.\nUses the Step's actual procedure: static and steady heat measure equilibrium fields;\ntransient heat and explicit dynamics measure the final field at the configured tEnd\nwith the Step's time settings unchanged. Modal Steps are unsupported because a mode\namplitude is not a mesh-independent quantity; compare frequencies with\nsolve.run/query.result instead. Steps with after are unsupported: solve their\ndependencies and target at each mesh explicitly.",
             "type": "object",
             "properties": {
               "step": {
@@ -12496,7 +12787,7 @@
             ]
           },
           {
-            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.\nSheet translation, rotation about z and positive in-plane scaling are applied before\nmeshing. Size and refine boxes use world coordinates; curved boundaries are sampled\nto one tenth of size in world space. Nested or out-of-plane transforms are unsupported.",
             "type": "object",
             "properties": {
               "of": {

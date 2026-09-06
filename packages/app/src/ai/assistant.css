@@ -214,6 +214,28 @@
   text-wrap: pretty;
   word-break: break-all;
 }
+.assistant .card .result-assumptions {
+  padding: 7px 9px;
+  border-top: 1px solid var(--border-divider);
+  font-size: 11px;
+  color: var(--text-low);
+}
+.assistant .card .result-assumptions .label {
+  margin-bottom: 5px;
+  color: var(--text-high);
+  font-weight: 600;
+}
+.assistant .card .result-assumption + .result-assumption {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-divider);
+}
+.assistant .card .result-assumption code {
+  color: var(--cyan-text);
+}
+.assistant .card .result-assumption .source {
+  color: var(--text-dim);
+}
 .assistant .card.bad {
   border-color: var(--red-border);
 }
