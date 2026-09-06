@@ -78,7 +78,7 @@ export function forkProject(): void {
   projects?.fork();
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, refresh: () => Promise<void>, scripts?: ScriptHost, results?: ResultsView): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
@@ -258,7 +258,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       writeText: soon('the folder on disk', 'use file.save for now'),
       writeBytes: soon('the folder on disk', 'use file.save for now'),
     },
-    examples: { fetch: fetchExample },
+    examples: { open: (name) => openExample(name, store, transport, refresh, results) },
     ai: {
       setKey: (key) => (key === null ? localStorage.removeItem('femlab.ai.key') : localStorage.setItem('femlab.ai.key', key)),
       setModel: (model) => localStorage.setItem('femlab.ai.model', model),
@@ -267,14 +267,40 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
   };
 }
 
+/** Replay bundled Journals through the engine and publish a baseline only after a complete open. */
+export async function openExample(name: string, store: Store, transport: WorkerTransport, refresh: () => Promise<void>, results?: ResultsView) {
+  const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
+  // An example that ends on solve.run opens solved, and a solved Model is shown as one:
+  // the last solve's Ack goes where the Solve button's would (results tab, contours).
+  let solved: unknown = null;
+  try {
+    for (const e of entries) {
+      const ack = await transport.dispatch(e.cmd as never);
+      if (String(e.cmd.cmd).startsWith('solve.') || e.cmd.cmd === 'study.converge') solved = ack;
+    }
+  } finally {
+    // A rejected later Command can leave a partial Journal. Show that state, but never
+    // replace the preceding saved baseline unless the entire open finishes successfully.
+    await refresh();
+  }
+  // The gallery has done its job; leaving it up hides the Model it just opened.
+  store.togglePanel('examples', false);
+  const opened = store.state.journal;
+  if (solved) await results?.onAck(solved);
+  // An example is an explicit open. Use the normalized Journal that refresh just read
+  // from the engine, and establish the baseline only after the whole open succeeded.
+  if (opened) store.markSaved(opened);
+  return { name, commands: entries.length };
+}
+
 /**
  * Three Commands the design's shell needs that `@femlab/registry` does not declare: the display
- * mode segmented control, opening a bundled example that is a Journal rather than a saved
- * `femlab/1` file, and putting a Command into the Properties form without running it (every
+ * mode segmented control, the legacy example-open alias, and putting a Command into the
+ * Properties form without running it (every
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: WorkerTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+export function appHostCommands(store: Store, _transport: WorkerTransport, viewer: ViewerRef, _refresh: () => Promise<void>, _results?: ResultsView): HostDef[] {
   return [
     {
       name: 'view.setMode',
@@ -299,28 +325,12 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
     },
     {
       name: 'file.openExample',
-      description: "Open a bundled example by name (see the Examples panel). Its Journal is dispatched Command by Command onto the current Model, so you end up with the example's own Journal rather than an opaque file. Use query.model afterwards to see what it built.",
+      description: "Open a bundled example by name (see the Examples panel). Alias of example.open: replay its Journal, refresh the Model and Results, and establish the saved baseline only after a complete open.",
       schema: z.object({ name: z.string() }),
       tool: true,
-      run: async (input) => {
+      run: async (input, ctx) => {
         const { name } = input as { name: string };
-        const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
-        // An example that ends on solve.run opens solved, and a solved Model is shown as one:
-        // the last solve's Ack goes where the Solve button's would (results tab, contours).
-        let solved: unknown = null;
-        for (const e of entries) {
-          const ack = await transport.dispatch(e.cmd as never);
-          if (String(e.cmd.cmd).startsWith('solve.') || e.cmd.cmd === 'study.converge') solved = ack;
-        }
-        // The gallery has done its job; leaving it up hides the Model it just opened.
-        store.togglePanel('examples', false);
-        await refresh();
-        const opened = store.state.journal;
-        if (solved) await results?.onAck(solved);
-        // An example is an explicit open. Use the normalized Journal that refresh just read
-        // from the engine, and establish the baseline only after the whole open succeeded.
-        if (opened) store.markSaved(opened);
-        return { name, commands: entries.length };
+        return ctx.examples.open(name);
       },
     },
   ] as HostDef[];

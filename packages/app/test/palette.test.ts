@@ -13,7 +13,7 @@ import type { WorkerTransport } from '../src/worker-transport';
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
 const registry = new Registry({
   schema: schema as unknown as EngineSchema,
-  host: makeHostContext(new Store(), transport, { current: null }, readHostCaps({ navigator: { userAgent: 'Chrome/1' } })),
+  host: makeHostContext(new Store(), transport, { current: null }, readHostCaps({ navigator: { userAgent: 'Chrome/1' } }), async () => undefined),
   hostCommands: [...HOST_COMMANDS, ...appHostCommands(new Store(), transport, { current: null }, async () => undefined)],
 });
 const commands: CommandDef[] = registry.list().commands;

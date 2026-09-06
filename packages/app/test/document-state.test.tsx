@@ -1,6 +1,6 @@
 import { render } from 'preact';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { appHostCommands } from '../src/host';
+import { appHostCommands, openExample } from '../src/host';
 import { Store, journalIdentity, unsaved } from '../src/store';
 import { ModelName } from '../src/ui/ModelName';
 import type { WorkerTransport } from '../src/worker-transport';
@@ -74,14 +74,15 @@ it('establishes an exact saved baseline only after a bundled example opens compl
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => JSON.stringify([{ cmd: first.cmd }, { cmd: second.cmd }]) })));
   const open = appHostCommands(store, transport, { current: null }, refresh).find((def) => def.name === 'file.openExample')!;
 
-  await open.run({ name: 'example' }, {} as never);
+  const ctx = { examples: { open: (name: string) => openExample(name, store, transport, refresh) } } as never;
+  await open.run({ name: 'example' }, ctx);
   expect(dispatch).toHaveBeenCalledTimes(2);
   expect(store.state.savedJournal).toBe(journalIdentity([first, second]));
 
   store.set({ savedJournal: 'still previous' });
   dispatch.mockResolvedValueOnce({ output: { type: 'none' } });
   dispatch.mockRejectedValueOnce(new Error('second command failed'));
-  await expect(open.run({ name: 'broken' }, {} as never)).rejects.toThrow('second command failed');
+  await expect(open.run({ name: 'broken' }, ctx)).rejects.toThrow('second command failed');
   expect(store.state.savedJournal).toBe('still previous');
 });
 
@@ -100,7 +101,7 @@ it('does not include an edit made while an opened example restores its Result', 
   })));
   const open = appHostCommands(store, transport, { current: null }, refresh, { onAck } as never).find((def) => def.name === 'file.openExample')!;
 
-  const pending = open.run({ name: 'solved-example' }, {} as never);
+  const pending = open.run({ name: 'solved-example' }, { examples: { open: (name: string) => openExample(name, store, transport, refresh, { onAck } as never) } } as never);
   await vi.waitFor(() => expect(onAck).toHaveBeenCalledOnce());
   store.set({ journal: { entries: edited, revision: 2, hash: 'edited', canUndo: true, canRedo: false } });
   finishResult();

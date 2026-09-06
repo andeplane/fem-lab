@@ -52,7 +52,7 @@ function mount(
   const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
   const registry = new Registry({
     schema: schema as unknown as EngineSchema,
-    host: makeHostContext(store, transport, viewer, host),
+    host: makeHostContext(store, transport, viewer, host, async () => undefined),
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, async () => undefined)],
   });
   store.set({ ready: true, model: model(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
@@ -229,7 +229,7 @@ describe('the shell', () => {
     const store = new Store();
     const viewer = { current: null };
     const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
-    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: makeHostContext(store, transport, viewer, host), hostCommands: HOST_COMMANDS });
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: makeHostContext(store, transport, viewer, host, async () => undefined), hostCommands: HOST_COMMANDS });
     store.set({ panels: { assistant: true } });
     const root = document.createElement('div');
     document.body.append(root);

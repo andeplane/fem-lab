@@ -57,7 +57,7 @@ async function boot(): Promise<void> {
   );
 
   const results = new ResultsView(store, transport, viewer);
-  const ctx = makeHostContext(store, transport, viewer, host, scripts, results);
+  const ctx = makeHostContext(store, transport, viewer, host, () => refresh(), scripts, results);
   // One sink is enough: the transport runs one Command at a time, so `Solving n %` can only
   // ever be about the Command the person is waiting for.
   transport.onProgress((p) => store.set({ progress: { phase: p.phase, fraction: p.fraction ?? 0 } }));
