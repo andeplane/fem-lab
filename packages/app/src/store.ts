@@ -5,12 +5,12 @@ import type { Capabilities, Journal, JournalDiff, JournalDump, ModelSummary, Obj
 import type { HostCaps } from './capabilities';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
-import { TABS, type Tab } from './tabs';
+import { TABS, type Tab } from './ui/tabs';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
-export { TABS, type Tab } from './tabs';
+export { TABS, type Tab } from './ui/tabs';
 
 /** Content identity, independent of JSON object-key order and view-only state. */
 export function journalIdentity(entries: JournalDump['entries']): string {
