@@ -69,6 +69,10 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
 - **Property tests** (fast-check / proptest) for invariants: replay determinism, undo
   inverses, symmetric PSD stiffness for any admissible element, `parse∘format` identity for
   units.
+- **Geometry input validation is tested with a never-panics proptest**: random sketches go
+  through `Sketch::check` and the free mesher, and any `Err` is a pass while a panic is a
+  failure. The triangulator panics on degenerate and crossing input, so nothing reaches it
+  unchecked.
 - **Software adapters are for correctness, never for timing.**
 - **Coverage mechanics that bite.** `cargo llvm-cov` does not merge generic or async
   instantiations across test binaries, so a crate's integration tests live in ONE
