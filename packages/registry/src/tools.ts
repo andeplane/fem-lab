@@ -13,7 +13,7 @@ export const TOOL_NAME = /^[a-zA-Z0-9_-]{1,128}$/;
 export const RUN_SCRIPT = 'run_script';
 
 export function toolNameFor(cmd: string): string {
-  return cmd === 'script.run' ? RUN_SCRIPT : cmd.replace(/\./g, '_');
+  return cmd === 'script.run' ? RUN_SCRIPT : cmd === 'query.validateScript' ? 'validate_script' : cmd.replace(/\./g, '_');
 }
 
 /** Reverse lookup in the registry, not string replacement (a name could contain `_`). */

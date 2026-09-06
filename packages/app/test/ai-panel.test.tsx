@@ -6,16 +6,24 @@ import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as anthropic from '../src/ai/anthropic';
 import schema from '../../registry/src/generated/engine.schema.json';
-import { fakeHost, fakeTransport } from '../../registry/test/fakes';
+import { fakeTransport } from '../../registry/test/fakes';
 import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
 import { parseVerification } from '../src/ai/context';
 import { Store } from '../src/store';
+import { makeHostContext } from '../src/host';
+import { readHostCaps } from '../src/capabilities';
+import type { WorkerTransport } from '../src/worker-transport';
+import type { ChatRequest } from '../src/ai/provider';
+import { BUILTIN_SKILLS } from '../src/ai/skills';
+import * as project from '../src/ai/project';
+import { fakeDir } from './project-fake';
 
 async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
-  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : {})) as never;
-  const registry = new Registry({ schema: schema as unknown as EngineSchema, host: fakeHost(transport), hostCommands: HOST_COMMANDS });
+  transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
   const store = new Store();
+  const host = makeHostContext(store, transport as WorkerTransport, { current: null }, readHostCaps({}));
+  const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: HOST_COMMANDS });
   store.set({ ready: true, ...patch });
   const root = document.createElement('div');
   document.body.append(root);
@@ -216,6 +224,99 @@ describe('the assistant drawer', () => {
     expect(box.value).toBe('about @b');
     await type(root, 'about @be');
     expect(root.querySelector('.popover')).not.toBeNull();
+  });
+
+  it('loads the same built-in through the production host, slash picker and sent turn', async () => {
+    localStorage.setItem('femlab.ai.key', 'test-key');
+    const requests: ChatRequest[] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(request) {
+        requests.push({ ...request, messages: structuredClone(request.messages) });
+        yield { type: 'text_delta', text: 'Skill received.' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry } = await mount();
+      const builtin = BUILTIN_SKILLS.find((s) => s.name === 'beam-theory-check')!;
+      // Before the drawer can send anything, this same production host already resolves skills.
+      expect(await registry.query({ query: 'query.skills' })).toContainEqual({ name: builtin.name, description: builtin.description, when: builtin.when, source: builtin.source });
+      expect(await registry.dispatch({ cmd: 'skill.invoke', name: builtin.name, args: 'check the beam' })).toEqual({ name: builtin.name, body: builtin.body, source: 'builtin', args: 'check the beam' });
+      await type(root, '/beam');
+      root.querySelector<HTMLButtonElement>('.popover [data-cmd="skill.invoke"]')!.click();
+      await tick();
+      expect(root.querySelector('textarea')!.value).toBe('/beam-theory-check ');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await vi.waitFor(() => expect(root.textContent).toContain('Skill received.'));
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.messages[0]!.content).toEqual([{ type: 'text', text: `Skill ${builtin.name}:\n${builtin.body}\n\n` }]);
+      expect(root.textContent).not.toContain('not-found');
+    } finally { provider.mockRestore(); }
+  });
+
+  it('shares project overrides, refreshed content and close with the host and every skill menu', async () => {
+    const skill = (name: string, body: string) => `---\nname: ${name}\ndescription: A project check.\n---\n\n${body}`;
+    const files: Record<string, string> = {
+      'AGENTS.md': 'Use the project rules.',
+      'skills/beam-theory-check/SKILL.md': skill('beam-theory-check', 'First project instructions.'),
+      'skills/project-check/SKILL.md': skill('project-check', 'A project-only skill.'),
+    };
+    const picker = vi.spyOn(project, 'pickFolder').mockResolvedValue(fakeDir(files));
+    try {
+      const browserProject = { id: 'saved-beam', name: 'Saved beam', at: 20, createdAt: 10, commands: 3, hash: 'saved-hash', thumbnail: null, saving: false, autosave: true };
+      const { root, registry, store } = await mount({ project: browserProject });
+      root.querySelector<HTMLButtonElement>('[data-cmd="folder.open"]')!.click();
+      await vi.waitFor(() => expect(root.textContent).toContain('project-check'));
+      expect(store.state.project).toBe(browserProject);
+      expect(picker).toHaveBeenCalledTimes(1);
+      // Full project I/O is #13: opening skills must not change file.save's download default.
+      expect(await registry.query({ query: 'query.folder' })).toBeNull();
+      const invoke = (name: string) => registry.dispatch({ cmd: 'skill.invoke', name });
+      expect(await invoke('beam-theory-check')).toMatchObject({ source: 'project', body: 'First project instructions.' });
+      await type(root, '/project');
+      expect(root.querySelector('.popover')!.textContent).toContain('project-check');
+      // Refresh changes the same ProjectFolder object and does not depend on AGENTS.md's mtime.
+      const folder = store.state.folder;
+      files['skills/beam-theory-check/SKILL.md'] = skill('beam-theory-check', 'Updated project instructions.');
+      delete files['skills/project-check/SKILL.md'];
+      files['skills/new-check/SKILL.md'] = skill('new-check', 'New skill instructions.');
+      await registry.dispatch({ cmd: 'folder.refresh' });
+      await tick();
+      expect(store.state.folder).toBe(folder);
+      expect(store.state.project).toBe(browserProject);
+      expect(await invoke('beam-theory-check')).toMatchObject({ source: 'project', body: 'Updated project instructions.' });
+      expect(root.querySelector('.chips')!.textContent).toContain('new-check');
+      expect(root.querySelector('.chips')!.textContent).not.toContain('project-check');
+      await type(root, '/new');
+      expect(root.querySelector('.popover')!.textContent).toContain('new-check');
+      await expect(invoke('project-check')).rejects.toMatchObject({ code: 'not-found' });
+      const { buildTurn } = await import('../src/ai/context');
+      const turn = await buildTurn({ text: '/beam-theory-check inspect', registry, skills: store.state.skills });
+      expect(turn.message.content).toEqual([{ type: 'text', text: 'Skill beam-theory-check:\nUpdated project instructions.\n\ninspect' }]);
+
+      const catalog = store.state.skills;
+      const read = vi.spyOn(folder!, 'readText').mockRejectedValueOnce(new Error('folder permission lost'));
+      await expect(registry.dispatch({ cmd: 'folder.refresh' })).rejects.toThrow('folder permission lost');
+      read.mockRestore();
+      expect(store.state.skills).toBe(catalog);
+      expect(await invoke('beam-theory-check')).toMatchObject({ body: 'Updated project instructions.' });
+      let release!: () => void;
+      const inFlight = vi.spyOn(folder!, 'refresh').mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+      const pending = registry.dispatch({ cmd: 'folder.refresh' });
+      await registry.dispatch({ cmd: 'folder.close' });
+      release();
+      await pending;
+      inFlight.mockRestore();
+      await tick();
+      expect(root.textContent).toContain('open a project folder');
+      expect(root.querySelector('.chips')!.textContent).not.toContain('new-check');
+      expect(store.state.skills).toEqual(BUILTIN_SKILLS);
+      expect(store.state.project).toBe(browserProject);
+      expect(await invoke('beam-theory-check')).toMatchObject({ source: 'builtin', body: BUILTIN_SKILLS.find((s) => s.name === 'beam-theory-check')!.body });
+      await expect(registry.dispatch({ cmd: 'folder.refresh' })).rejects.toMatchObject({ code: 'file.not-found', where: 'folder' });
+    } finally { picker.mockRestore(); }
+
   });
 
   it('hands chat.send from a script to the same code the Send button runs', async () => {
