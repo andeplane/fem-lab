@@ -4,6 +4,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::imported::MAX_TRIANGLES;
 use crate::sketch::Sketch;
 use crate::GeomError;
 
@@ -137,6 +138,21 @@ pub enum Shape {
     Transform { shape: Box<Shape>, at: Affine3 },
     /// A named sub-shape: its faces are tagged `<name>.<tag>`.
     Named { name: String, shape: Box<Shape> },
+    /// A triangle mesh read from a file (`geometry.import`), welded into a solid by the
+    /// geometry kernel. Its faces are patches of triangles that meet more smoothly than
+    /// `feature_angle`, tagged `face0`, `face1`, … largest area first.
+    Mesh {
+        /// Vertex positions in metres.
+        positions: Vec<[f64; 3]>,
+        /// Triangles as vertex indices, counter-clockwise seen from outside.
+        triangles: Vec<[u32; 3]>,
+        /// Dihedral angle in degrees above which an edge splits two face patches; 30 by default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        feature_angle: Option<f64>,
+        /// Collapse mesh features smaller than this many metres before use.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplify_below: Option<f64>,
+    },
 }
 
 impl Shape {
@@ -235,6 +251,54 @@ impl Shape {
                 }
                 shape.validate()
             }
+            Shape::Mesh { positions, triangles, feature_angle, simplify_below } => {
+                if triangles.len() < 4 {
+                    return Err(GeomError(format!(
+                        "an imported mesh needs at least 4 triangles to bound a solid, got {}",
+                        triangles.len()
+                    )));
+                }
+                if triangles.len() > MAX_TRIANGLES {
+                    return Err(GeomError(format!(
+                        "an imported mesh is limited to {MAX_TRIANGLES} triangles, got {}; decimate it first",
+                        triangles.len()
+                    )));
+                }
+                for (i, p) in positions.iter().enumerate() {
+                    if p.iter().any(|c| !c.is_finite()) {
+                        return Err(GeomError(format!("vertex {i} has a non-finite coordinate: {p:?}")));
+                    }
+                }
+                for (i, t) in triangles.iter().enumerate() {
+                    for v in t {
+                        if *v as usize >= positions.len() {
+                            return Err(GeomError(format!(
+                                "triangle {i} refers to vertex {v}, but the mesh has {} vertices",
+                                positions.len()
+                            )));
+                        }
+                    }
+                    let n = crate::solid::tri_normal(
+                        positions[t[0] as usize],
+                        positions[t[1] as usize],
+                        positions[t[2] as usize],
+                    );
+                    if n == [0.0; 3] || n.iter().any(|c| !c.is_finite()) {
+                        return Err(GeomError(format!("triangle {i} has zero or non-finite area")));
+                    }
+                }
+                if let Some(a) = feature_angle {
+                    if !(*a > 0.0 && *a < 180.0) {
+                        return Err(GeomError(format!("featureAngle must be in (0, 180) degrees, got {a}")));
+                    }
+                }
+                if let Some(s) = simplify_below {
+                    if !(*s >= 0.0 && s.is_finite()) {
+                        return Err(GeomError(format!("simplifyBelow must be zero or positive, got {s}")));
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
@@ -286,6 +350,11 @@ impl Shape {
             }
             Shape::Transform { shape, at } => shape.contains(at.inverse(p))?,
             Shape::Named { shape, .. } => shape.contains(p)?,
+            // An imported mesh has no analytic form; `Solid` ray-casts the evaluated
+            // manifold instead, which is the only place the answer exists.
+            Shape::Mesh { .. } => {
+                return Err(GeomError("an imported mesh is only contained-tested as an evaluated Solid".into()))
+            }
         })
     }
 }

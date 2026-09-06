@@ -14,6 +14,7 @@ use manifold_rust::linalg::{Vec2, Vec3};
 use manifold_rust::manifold::Manifold;
 use manifold_rust::types::{MeshGL64, OpType, Polygons};
 
+use crate::imported::{face_patches, to_manifold, MeshIndex, DEFAULT_FEATURE_ANGLE};
 use crate::shape::{Affine3, Shape, DEFAULT_SEGMENTS};
 use crate::sketch::{Loop, Sketch};
 use crate::GeomError;
@@ -45,6 +46,9 @@ pub struct Solid {
     tri: TriMesh,
     /// For 2D sheets: the sampled boundary loops (outer ccw, holes cw) with edge tags.
     outline: Vec<Loop>,
+    genus: i32,
+    /// The evaluated manifold, for the containment a shape tree cannot answer analytically.
+    index: MeshIndex,
 }
 
 /// The tagged triangles of one primitive leaf, in world coordinates.
@@ -131,7 +135,7 @@ fn v3(p: [f64; 3]) -> Vec3 {
     Vec3::new(p[0], p[1], p[2])
 }
 
-fn tri_normal(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
+pub(crate) fn tri_normal(a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> [f64; 3] {
     let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
     let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
@@ -247,7 +251,7 @@ fn tag_leaf(
     m: &Manifold,
     prefix: &str,
     leaves: &mut Leaves,
-    classify: &dyn Fn([f64; 3], [f64; 3]) -> String,
+    classify: &dyn Fn(usize, [f64; 3], [f64; 3]) -> String,
 ) -> Vec<u32> {
     let gl = m.get_mesh_gl64(-1);
     // a primitive is exactly one run
@@ -259,7 +263,7 @@ fn tag_leaf(
         let v = gl.get_tri_verts(t);
         leaf.tris.push([pos[v[0] as usize], pos[v[1] as usize], pos[v[2] as usize]]);
         leaf.normals.push(n);
-        leaf.tags.push(join(prefix, &classify(cen, n)));
+        leaf.tags.push(join(prefix, &classify(t, cen, n)));
     }
     leaves.insert(id, leaf);
     vec![id]
@@ -281,31 +285,31 @@ fn eval(shape: &Shape, prefix: &str, leaves: &mut Leaves) -> Result<(Manifold, V
     let (m, ids) = match shape {
         Shape::Box { size } => {
             let m = Manifold::cube(v3(*size), false);
-            let ids = tag_leaf(&m, prefix, leaves, &|_, n| box_tag(n));
+            let ids = tag_leaf(&m, prefix, leaves, &|_, _, n| box_tag(n));
             (m, ids)
         }
         Shape::Cylinder { radius, height, segments } => {
             let m = Manifold::cylinder(*height, *radius, *radius, segments.unwrap_or(DEFAULT_SEGMENTS) as i32);
-            let ids = tag_leaf(&m, prefix, leaves, &|_, n| cylinder_tag(n));
+            let ids = tag_leaf(&m, prefix, leaves, &|_, _, n| cylinder_tag(n));
             (m, ids)
         }
         Shape::Sphere { radius, segments } => {
             let m = Manifold::sphere(*radius, segments.unwrap_or(DEFAULT_SEGMENTS) as i32);
-            let ids = tag_leaf(&m, prefix, leaves, &|_, _| "surface".to_string());
+            let ids = tag_leaf(&m, prefix, leaves, &|_, _, _| "surface".to_string());
             (m, ids)
         }
         Shape::Sheet { .. } => return Err(GeomError("a 2D sheet cannot be evaluated as a solid".into())),
         Shape::Extrude { sketch, height } => {
             let loops = sketch.loops(sketch_chord_tol(sketch, DEFAULT_SEGMENTS))?;
             let m = Manifold::extrude(&polygons(&loops), *height, 0, 0.0, Vec2::new(1.0, 1.0));
-            let ids = tag_leaf(&m, prefix, leaves, &|c, n| extrude_tag(&loops, c, n));
+            let ids = tag_leaf(&m, prefix, leaves, &|_, c, n| extrude_tag(&loops, c, n));
             (m, ids)
         }
         Shape::Revolve { sketch, angle, segments } => {
             let segs = segments.unwrap_or(DEFAULT_SEGMENTS);
             let loops = sketch.loops(sketch_chord_tol(sketch, segs))?;
             let m = Manifold::revolve(&polygons(&loops), segs as i32, *angle);
-            let ids = tag_leaf(&m, prefix, leaves, &|c, n| revolve_tag(&loops, *angle, c, n));
+            let ids = tag_leaf(&m, prefix, leaves, &|_, c, n| revolve_tag(&loops, *angle, c, n));
             (m, ids)
         }
         Shape::Union { shapes } => {
@@ -334,6 +338,12 @@ fn eval(shape: &Shape, prefix: &str, leaves: &mut Leaves) -> Result<(Manifold, V
             (apply_affine(&m, at), ids)
         }
         Shape::Named { name, shape } => eval(shape, name, leaves)?,
+        Shape::Mesh { positions, triangles, feature_angle, simplify_below } => {
+            let m = to_manifold(positions, triangles, *simplify_below)?;
+            let tags = face_patches(&m.get_mesh_gl64(-1), feature_angle.unwrap_or(DEFAULT_FEATURE_ANGLE));
+            let ids = tag_leaf(&m, prefix, leaves, &|t, _, _| tags[t].clone());
+            (m, ids)
+        }
     };
     Ok((m, ids))
 }
@@ -391,6 +401,8 @@ impl Solid {
             bbox: ([bb.min.x, bb.min.y, bb.min.z], [bb.max.x, bb.max.y, bb.max.z]),
             tri: TriMesh { positions: pos, triangles, tags: tri_tags, tag_names },
             outline: vec![],
+            genus: m.genus(),
+            index: MeshIndex::new(m),
         })
     }
 
@@ -418,6 +430,8 @@ impl Solid {
             bbox: (lo, hi),
             tri: TriMesh::default(),
             outline: loops,
+            genus: 0,
+            index: MeshIndex::new(Manifold::new()),
         })
     }
 
@@ -458,9 +472,15 @@ impl Solid {
             v
         }
     }
-    /// Analytic containment via the shape tree.
+    /// Topological genus: 0 for a ball or a box, 1 for a torus, one per through-hole. A
+    /// sheet reports 0.
+    pub fn genus(&self) -> i32 {
+        self.genus
+    }
+    /// Containment, analytic on the shape tree (curved primitives are exact circles there).
+    /// An imported mesh has no analytic form and is ray-cast against the evaluated manifold.
     pub fn contains(&self, p: [f64; 3]) -> bool {
-        self.shape.contains(p).unwrap_or(false)
+        self.shape.contains(p).unwrap_or_else(|_| self.index.contains(p))
     }
     /// Centroid of the triangle mesh (3D) or of the outline (2D).
     pub fn centroid(&self) -> [f64; 3] {
