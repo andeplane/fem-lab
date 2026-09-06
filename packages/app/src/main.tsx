@@ -63,7 +63,7 @@ async function boot(): Promise<void> {
     schedule: (callback, ms) => setTimeout(callback, ms),
     cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   });
-  const ctx = makeHostContext(store, transport, viewer, host, scripts, results, undefined, () => refresh());
+  const ctx = makeHostContext(store, transport, viewer, host, scripts, results, undefined, undefined, undefined, () => refresh());
   // One sink is enough: the transport runs one Command at a time, so `Solving n %` can only
   // ever be about the Command the person is waiting for.
   transport.onProgress((p) => store.set({ progress: { phase: p.phase, fraction: p.fraction ?? 0 } }));
@@ -89,10 +89,10 @@ async function boot(): Promise<void> {
     store.set({ autosaves: autosaveHistory() });
     noteProject(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? [], (model as { hash: string | null }).hash);
   };
-  const registry = new Registry({
+  const registry: Registry = new Registry({
     schema: schema as unknown as EngineSchema,
     host: ctx,
-    hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results)],
+    hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results, () => registry)],
   });
 
   /**

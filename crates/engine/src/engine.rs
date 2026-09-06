@@ -52,6 +52,12 @@ pub struct GeometrySurface {
     pub outlines: Vec<femlab_geometry::sketch::Loop>,
 }
 
+/// Full solve identity stays name-sensitive; validity excludes only the display name (ADR 0017).
+pub(crate) struct ResultHashes {
+    pub model: String,
+    pub validity: String,
+}
+
 /// The engine.
 pub struct Engine {
     pub(crate) model: Model,
@@ -66,9 +72,9 @@ pub struct Engine {
     pub(crate) solids: BTreeMap<String, Solid>,
     /// The derived Mesh with its resolved Sets; cleared by every Command, rebuilt on demand.
     pub(crate) mesh: Option<crate::mesh::BuiltMesh>,
-    /// One Result per Step with the Model hash it was solved at. An edit does not throw a
-    /// Result away — it makes it stale, and `query.result` says so (plan B §2.1).
-    pub(crate) results: BTreeMap<String, (String, crate::procedure::StepResult)>,
+    /// One Result per Step with the Model hash and Journal line it was solved at. An edit does
+    /// not throw a Result away — it makes it stale, and `query.result` says so (plan B §2.1).
+    pub(crate) results: BTreeMap<String, (ResultHashes, u32, crate::procedure::StepResult)>,
     /// The last `study.converge` report per Step, so `query.report` can append the table. Not
     /// part of the Model and never hashed: a study is a measurement, not a definition.
     pub(crate) studies: BTreeMap<String, crate::query::StudyReport>,

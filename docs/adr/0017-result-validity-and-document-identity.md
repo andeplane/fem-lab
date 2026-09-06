@@ -12,10 +12,13 @@ saved-file hashes.
 
 Keep the full Model and Journal hashes unchanged. Introduce a separate, internal
 Result-validity fingerprint: hash the same Model parameters with only `name` replaced by
-an empty string. Store that fingerprint when solving or completing a convergence study,
+an empty string. Store that fingerprint alongside the original full Model hash when solving or completing a convergence study,
 and compare it when reporting whether a cached Result is stale or accepting a predecessor
 Result for a chained Step. Other fields remain in
-this conservative fingerprint; this change does not introduce a general classification of
+this conservative fingerprint. Frame catalogues and sampled fields expose the immutable full
+Model hash from the solve while their stale checks use the validity fingerprint; a rename
+therefore preserves frame identity without falsely marking the Result stale. This change
+does not introduce a general classification of
 all metadata or alter numerical inputs.
 
 `model.setName` remains a regular, transactional, journaled and undoable engine Command.
