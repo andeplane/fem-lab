@@ -11,6 +11,10 @@ import {
 import {
   FemError,
   HOST_COMMANDS,
+  HOST_QUERIES,
+  type ScriptValidator,
+  RUN_SCRIPT,
+  type ScriptResult,
   Registry,
   assertInside,
   toToolDefinitions,
@@ -20,12 +24,14 @@ import {
   type HostContext,
   type HostDef,
 } from '@femlab/registry';
-import { mkdir, realpath, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import engineSchema from '../../registry/src/generated/engine.schema.json' with { type: 'json' };
 import type { EngineHandle } from './engine';
-import { runScript } from './script';
+import { runScript, type ScriptDeps } from './script';
+import { nodeScriptValidator } from './script-validation';
 
 export const SCHEMA = engineSchema as unknown as EngineSchema;
 export const SERVER_NAME = 'femlab';
@@ -37,6 +43,8 @@ export type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 export interface ServerDeps {
   engine: EngineHandle;
+  script?: ScriptDeps;
+  validator?: Pick<ScriptValidator, 'validate'>;
   /** Absolute path of the folder `export.file` may write into; without one it refuses. */
   project?: string | undefined;
 }
@@ -54,23 +62,40 @@ export const RESOURCES = [
   { uri: 'femlab://schema', name: 'schema', description: 'The engine schema document: every Command, Query and response.', mimeType: 'application/json' },
 ];
 
-/**
- * A path inside the project folder, with the directories it needs.
- *
- * `assertInside` refuses `..`, absolute paths and drive letters; the realpath comparison
- * afterwards refuses the one thing a string check cannot see, a symlink that leaves the folder.
- */
+/** A scoped path; resolve existing parents before creating any missing directories. */
 export async function resolveInProject(root: string | undefined, p: string): Promise<string> {
   if (root === undefined) {
     throw new FemError('file.scope', 'this server has no project folder', `path '${p}'`, 'start it with --project <dir>');
   }
-  const full = path.join(root, ...assertInside(p));
-  await mkdir(path.dirname(full), { recursive: true });
-  const [realRoot, realDir] = await Promise.all([realpath(root), realpath(path.dirname(full))]);
-  if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) {
-    throw new FemError('file.scope', 'that path leaves the project folder through a link', `path '${p}'`, 'write inside the project folder');
+  const parts = assertInside(p);
+  const realRoot = await realpath(root);
+  let dir = realRoot;
+  for (const part of parts.slice(0, -1)) {
+    const next = path.join(dir, part);
+    const entry = await lstat(next).catch(missingPath);
+    if (entry === undefined) {
+      // Every existing ancestor has already been resolved and checked.
+      await mkdir(next, { recursive: true });
+    }
+    // Another export may have created this directory while we awaited mkdir. Resolve
+    // and check the actual entry in either case, including a concurrently inserted link.
+    dir = await realpath(next);
+    if (dir !== realRoot && !dir.startsWith(realRoot + path.sep)) throw linkError(p);
   }
+  const full = path.join(dir, parts[parts.length - 1]!);
+  // lstat also detects dangling links; do not follow even an in-project leaf link.
+  const leaf = await lstat(full).catch(missingPath);
+  if (leaf?.isSymbolicLink()) throw linkError(p);
   return full;
+}
+
+function missingPath(error: NodeJS.ErrnoException): undefined {
+  if (error.code !== 'ENOENT') throw error;
+  return undefined;
+}
+
+function linkError(p: string): FemError {
+  return new FemError('file.scope', 'that path follows a link outside the allowed export target', `path '${p}'`, 'write to a regular file inside the project folder');
 }
 
 /** The text of one export, from the engine or from the Journal. */
@@ -88,13 +113,14 @@ function exportFileCommand(deps: ServerDeps): HostDef {
   return {
     name: 'export.file',
     description:
-      'Write one export into the project folder: the mesh (vtu, msh, inp, stl), the Markdown calculation note (report), the Journal as a TypeScript script, or the femlab/1 model file. `path` is relative to the folder the server was started with; paths that leave it are refused. Returns the path written and its size.',
+      'Write one export into the project folder: the mesh (vtu, msh, inp, stl), the Markdown calculation note (report), the Journal as a TypeScript script, or the femlab/1 model file. `path` is relative to the folder the server was started with; paths that leave it and final-component symbolic links are refused. Returns the path written and its size.',
     schema: z.object({ format: z.enum(EXPORT_FORMATS), path: z.string(), step: z.string().optional() }),
     tool: true,
     run: async ({ format, path: rel, step }) => {
       const text = await exportText(deps.engine, format, step);
       const full = await resolveInProject(deps.project, rel);
-      await writeFile(full, text);
+      // O_NOFOLLOW also refuses a leaf link substituted after the lstat check.
+      await writeFile(full, text, { flag: constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW });
       return { path: rel, bytes: Buffer.byteLength(text) };
     },
   } as HostDef;
@@ -107,20 +133,26 @@ function exportFileCommand(deps: ServerDeps): HostDef {
  */
 export function createRegistry(deps: ServerDeps): Registry {
   let registry: Registry;
+  const validator = deps.validator ?? nodeScriptValidator();
   const host = {
     transport: deps.engine as unknown as EngineTransport,
     script: {
+      validate: (code: string, timeoutMs?: number) => validator.validate(code, timeoutMs),
       run: (code: string, timeoutMs?: number) =>
         runScript(
           code,
           (cmd) => registry.dispatch(cmd),
           (q) => registry.query(q),
           timeoutMs,
+          deps.script,
         ),
     },
   } as unknown as HostContext;
-  const script = HOST_COMMANDS.filter((d) => d.name === 'script.run');
-  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, exportFileCommand(deps)], hostQueries: [] });
+  const script = HOST_COMMANDS.filter((d) => d.name === 'script.run').map((d) => ({
+    ...d,
+    description: 'First parse and type-check against the generated fem API with a separate 10000 ms validation deadline; invalid source returns diagnostics without executing. Then run TypeScript against the asynchronous fem API in an isolated QuickJS runtime. Only registry Commands/Queries, console and setTimeout/clearTimeout are available; no Node globals, imports, filesystem or network APIs. File exports use export.file and its host project policy. timeoutMs is greater than 0 and at most 30000 (default 30000), including startup. Timeout terminates the script and refuses further Commands; already admitted Commands may finish and are not rolled back. Nested script.run is refused. Returns { result, console, error? }; Commands enter the Journal like any other.',
+  }));
+  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });
   return registry;
 }
 
@@ -166,7 +198,7 @@ export function createServer(deps: ServerDeps): { server: Server; registry: Regi
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     try {
       const value = await callTool(registry, req.params.name, req.params.arguments ?? {});
-      return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+      return { ...(req.params.name === RUN_SCRIPT && (value as ScriptResult)?.error ? { isError: true } : {}), content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
     } catch (e) {
       return { isError: true, content: [{ type: 'text' as const, text: errorText(e) }] };
     }
