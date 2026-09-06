@@ -25,7 +25,7 @@ function registryWith(answers: Record<string, unknown> = {}, projectOpen = false
     throw new Error(`no fake for ${q.query}`);
   }) as never;
   const host = fakeHost(transport, projectOpen);
-  host.project.info = (() => (projectOpen ? { name: 'proj', files, agentsMd: 'AGENTS.md', skills: [] } : null)) as never;
+  host.folder.info = (() => (projectOpen ? { name: 'proj', files, agentsMd: 'AGENTS.md', skills: [] } : null)) as never;
   return new Registry({ schema: schema as unknown as EngineSchema, host });
 }
 
@@ -39,7 +39,7 @@ describe('the system prompt', () => {
     const text = apiReference(registryWith());
     expect(text).toContain('geometry.addBox(');
     expect(text).toContain('query.model() —');
-    expect(text).toMatch(/journal\.undo\(steps\?\)/);
+    expect(text).toMatch(/journal\.undo\(steps\?, expectedJournal\?\)/);
     expect(text).not.toContain('cmd,');
   });
 
@@ -109,6 +109,26 @@ describe('mention resolution', () => {
     const withFiles = await objectIndex(registryWith({}, true, [{ path: 'AGENTS.md', size: 9, kind: 'agents' }]));
     expect(withFiles.map((e) => e.ref)).toEqual(['body:beam', 'file:AGENTS.md']);
     expect(withFiles[1]!.summary).toBe('9 B · agents');
+  });
+
+  // Issue #39: `@face:beam.top` and `@result:static` resolve, so the picker has to list them —
+  // `query.objects` does not carry either, and until it does the host reads them off the Model.
+  it('adds the auto faces of every body and the Result of every solved Step', async () => {
+    const model = {
+      bodies: [{ name: 'beam', faces: ['beam.top', 'beam.xmin'] }],
+      steps: [
+        { name: 'static', procedure: 'linear-static', solved: true },
+        { name: 'modes', procedure: 'modal', solved: false },
+      ],
+    };
+    const entries = await objectIndex(registryWith({ 'query.model': model }));
+    expect(entries.map((e) => e.ref)).toEqual(['body:beam', 'face:beam.top', 'face:beam.xmin', 'result:static']);
+    expect(entries[1]!.summary).toBe('face of beam');
+    expect(entries[3]!.summary).toBe('linear-static Result');
+    // Whatever the engine already listed wins: no reference is offered twice.
+    const already = await objectIndex(registryWith({ 'query.model': model, 'query.objects': { objects: [{ ref: 'face:beam.top', kind: 'face', name: 'beam.top', summary: 'from the engine' }] } }));
+    expect(already.filter((e) => e.ref === 'face:beam.top')).toHaveLength(1);
+    expect(already[0]!.summary).toBe('from the engine');
   });
 });
 

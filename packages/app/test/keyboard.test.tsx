@@ -64,10 +64,11 @@ describe('camera keyboard shortcuts', () => {
     const { dispatch, root } = await mount();
     const input = document.createElement('input');
     const textarea = document.createElement('textarea');
+    const select = document.createElement('select');
     const editable = document.createElement('div');
     editable.contentEditable = 'true';
-    root.append(input, textarea, editable);
-    for (const target of [input, textarea, editable]) expect(press(target, 'Digit2').defaultPrevented).toBe(false);
+    root.append(input, textarea, select, editable);
+    for (const target of [input, textarea, select, editable]) expect(press(target, 'Digit2').defaultPrevented).toBe(false);
     expect(dispatch).not.toHaveBeenCalled();
   });
 

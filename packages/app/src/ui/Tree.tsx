@@ -35,9 +35,49 @@ export interface TreeGroup {
   badge: string;
   badgeClass: string;
   note: string;
-  /** What `+ add …` opens; `null` for read-only groups. */
-  add: { what: string; cmd: string } | null;
+  /** What `+ add …` opens; `null` for read-only groups. A `menu` makes the chip open a choice
+   *  first — Geometry's ten shapes — instead of going straight to one Command. */
+  add: { what: string; cmd: string; menu?: AddChoice[] } | null;
   items: TreeItem[];
+}
+export interface AddChoice {
+  label: string;
+  glyph: string;
+  cmd: string;
+  args: Record<string, unknown>;
+  hint: string;
+}
+
+/** A glyph per shape kind, with `◇` for a kind the engine gains after this was written. */
+const SHAPE_GLYPH: Record<string, string> = {
+  box: '▭',
+  cylinder: '⬭',
+  sphere: '◯',
+  sheet: '▱',
+  extrude: '⬒',
+  revolve: '◑',
+  union: '⬬',
+  subtract: '⊖',
+  intersect: '⊗',
+  transform: '⇲',
+};
+
+/**
+ * The Geometry chip's menu: every kind `ShapeSpec` declares, so a kind the engine gains appears
+ * here without an edit. `box` keeps its own dedicated Command — the tutorials, the examples and
+ * `build.spec.ts` all speak `geometry.addBox` — and everything else opens `geometry.add` with the
+ * kind already picked. The cut is `geometry.subtract`, which is a different Command, not a shape.
+ */
+export function shapeMenu(shapes: { kind: string; hint: string }[]): AddChoice[] {
+  return [
+    ...shapes.map((s) => ({
+      label: s.kind,
+      glyph: SHAPE_GLYPH[s.kind] ?? '◇',
+      hint: s.hint,
+      ...(s.kind === 'box' ? { cmd: 'geometry.addBox', args: {} } : { cmd: 'geometry.add', args: { shape: { kind: s.kind } } }),
+    })),
+    { label: 'cut', glyph: '∖', cmd: 'geometry.subtract', args: {}, hint: 'Cut a shape out of an existing Body.' },
+  ];
 }
 
 /** Which group an engine warning belongs to, so the badges say where the problem is. */
@@ -96,7 +136,7 @@ export function resultItems(s: UiState): TreeItem[] {
   });
 }
 
-export function treeGroups(s: UiState): TreeGroup[] {
+export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] = []): TreeGroup[] {
   const m = s.model;
   const counts = new Map<string, number>();
   for (const w of m?.warnings ?? []) {
@@ -119,7 +159,7 @@ export function treeGroups(s: UiState): TreeGroup[] {
     group(
       'Geometry',
       'Boxes, cylinders and extruded polygons, joined with booleans. Every Model starts with one.',
-      { what: 'body', cmd: 'geometry.addBox' },
+      { what: 'body', cmd: 'geometry.addBox', ...(shapes.length > 0 ? { menu: shapeMenu(shapes) } : {}) },
       [
         ...(m?.bodies ?? []).map((b) => ({
           cmd: 'geometry.addBox',
@@ -278,9 +318,10 @@ function Menu({ item, dispatch, close }: { item: TreeItem; dispatch: Dispatch; c
   );
 }
 
-export function ModelTree({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: Dispatch; shapes?: { kind: string; hint: string }[] }) {
   const [menu, setMenu] = useState<string | null>(null);
-  const groups = treeGroups(s);
+  const [adding, setAdding] = useState<string | null>(null);
+  const groups = treeGroups(s, shapes);
   const stepNames = (s.model?.steps ?? []).map((x) => x.name);
   const selected = s.form ? String(s.form.values['name'] ?? '') : '';
   return (
@@ -344,13 +385,50 @@ export function ModelTree({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
                 {menu === `${item.kind}:${item.name}` ? <Menu item={item} dispatch={dispatch} close={() => setMenu(null)} /> : null}
               </div>
             ))}
-            {group.items.length === 0 ? (
-              <div class="empty">
-                <div class="empty-note">{group.note}</div>
-                {group.add ? (
-                  <Cmd dispatch={dispatch} cmd="form.open" class="chip-add" args={{ command: group.add.cmd }} title={`fill in ${group.add.cmd}`}>
-                    + add {group.add.what}
-                  </Cmd>
+            {group.items.length === 0 ? <div class="empty-note">{group.note}</div> : null}
+            {/* Outside the empty branch: a group that already has one thing in it is exactly where
+                a person goes to add the second (issue #43). */}
+            {group.add ? (
+              <div
+                class="add-row"
+                onKeyDown={(e) => {
+                  // A menu closes on Escape and hands focus back to what opened it (issue #211).
+                  // One handler on the row: keydown bubbles from the chip and every item alike.
+                  if (e.key !== 'Escape' || adding !== group.label) return;
+                  e.stopPropagation();
+                  setAdding(null);
+                  (e.currentTarget as HTMLElement).querySelector<HTMLElement>('.chip-add')?.focus();
+                }}
+              >
+                <Cmd
+                  dispatch={dispatch}
+                  cmd="form.open"
+                  class="chip-add"
+                  args={{ command: group.add.cmd }}
+                  pressed={adding === group.label}
+                  title={group.add.menu ? `choose what to add to ${group.label}` : `fill in ${group.add.cmd}`}
+                  {...(group.add.menu ? { onRun: () => setAdding(adding === group.label ? null : group.label) } : {})}
+                >
+                  + add {group.add.what}
+                  {group.add.menu ? ' …' : ''}
+                </Cmd>
+                {group.add.menu && adding === group.label ? (
+                  <div class="menu add-menu">
+                    {group.add.menu.map((choice) => (
+                      <Cmd
+                        key={choice.label}
+                        dispatch={dispatch}
+                        cmd="form.open"
+                        class="menu-item"
+                        args={{ command: choice.cmd, args: choice.args }}
+                        title={choice.hint}
+                        onRun={() => (setAdding(null), void dispatch({ cmd: 'form.open', command: choice.cmd, args: choice.args }).catch(() => undefined))}
+                      >
+                        <span class="mono glyph low">{choice.glyph}</span>
+                        <span>{choice.label}</span>
+                      </Cmd>
+                    ))}
+                  </div>
                 ) : null}
               </div>
             ) : null}
