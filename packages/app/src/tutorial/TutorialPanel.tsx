@@ -72,8 +72,11 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
   // The app's own dispatch when the shell has provided it (it journals, refreshes the tree, the
   // viewer and the results); the bare registry otherwise (tests mount this panel alone).
   const deps = { dispatch: (cmd: { cmd: string } & Record<string, unknown>) => (store.dispatch ?? ((c) => registry.dispatch(c)))(cmd) };
+  // Picking a tutorial from the list starts it *here*, so the baseline is the Journal's current
+  // length: whatever is already in the Model cannot satisfy a step of the tutorial about to
+  // begin (issue #87). Resuming derives its own baseline from the entries that proved the step.
   const makeRunner = (tutorial: Parameters<typeof TutorialRunner.resume>[0], startAt?: number): TutorialRunner =>
-    startAt === undefined ? TutorialRunner.resume(tutorial, deps, s.journal?.entries ?? []) : new TutorialRunner(tutorial, deps, startAt);
+    startAt === undefined ? TutorialRunner.resume(tutorial, deps, s.journal?.entries ?? []) : new TutorialRunner(tutorial, deps, startAt, s.journal?.entries.length ?? 0);
 
   // Resume from the URL hash (Tour's "start the cantilever tutorial" sets it) or localStorage
   // the moment the panel opens, if nothing is running yet.

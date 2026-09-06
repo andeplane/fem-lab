@@ -29,6 +29,29 @@ function fakeRegistry(): Registry & { dispatch: ReturnType<typeof vi.fn>; query:
   return { dispatch, query } as unknown as Registry & { dispatch: typeof dispatch; query: typeof query };
 }
 
+/**
+ * What `main.tsx` puts on `store.dispatch`: run the Command, then put the new Journal on the
+ * Store — the panel watches the Store, never the registry, so this is the whole of `refresh`
+ * that the tutorial can see (issue #12). `hold` lets a test stop the dispatch mid-flight and
+ * check that "Do it for me" is disabled while it is in the air.
+ */
+function storeDispatch(store: Store, hold?: () => Promise<void>) {
+  const calls: { cmd: string }[] = [];
+  const dispatch = async (cmd: { cmd: string } & Record<string, unknown>): Promise<unknown> => {
+    calls.push(cmd);
+    if (hold) await hold();
+    const entries = [...(store.state.journal?.entries ?? []), { seq: store.state.journal?.entries.length ?? 0, cmd, hashAfter: 'h' } as never];
+    store.set({ journal: { entries, revision: entries.length, canUndo: true, canRedo: false } as never });
+    return { seq: entries.length - 1 };
+  };
+  store.dispatch = dispatch;
+  return calls;
+}
+
+/** Put a Journal on the Store the way a refresh would, with no dispatch involved. */
+const journalOf = (store: Store, cmds: ({ cmd: string } & Record<string, unknown>)[]): void =>
+  store.set({ journal: { entries: cmds.map((cmd, seq) => ({ seq, cmd, hashAfter: `h${seq}` })), revision: cmds.length, canUndo: true, canRedo: false } as never });
+
 let root: HTMLElement;
 
 beforeEach(() => {
@@ -95,6 +118,69 @@ describe('TutorialPanel', () => {
     await click(cantilever);
     await waitFor(() => target.hasAttribute('data-tutorial-target'), 'the target to be highlighted');
     target.remove();
+  });
+
+  it('goes through the app\'s own dispatch when the Store carries one, and advances on its Journal', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    const registry = fakeRegistry();
+    const calls = storeDispatch(store);
+    render(<TutorialPanel registry={registry} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
+    await click(await waitFor(() => root.querySelector('.tutorial-btn.primary'), '"Do it for me"'));
+    await waitForText(progress, 'step 2 of');
+    expect(calls.map((c) => c.cmd)).toEqual(['model.new']);
+    expect(registry.dispatch).not.toHaveBeenCalled(); // issue #12: never the bare registry
+    expect(registry.query).not.toHaveBeenCalled(); // the app's dispatch already refreshed
+  });
+
+  it('disables "Do it for me" while the Command is in the air, and re-enables it after', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    let release = (): void => undefined;
+    storeDispatch(store, () => new Promise<void>((r) => (release = r)));
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
+    const doIt = (): HTMLButtonElement | null => root.querySelector<HTMLButtonElement>('.tutorial-btn.primary');
+    await click(await waitFor(doIt, '"Do it for me"'));
+    await waitFor(() => doIt()?.disabled === true, 'the button to be disabled while pending');
+    release();
+    await waitForText(progress, 'step 2 of');
+    await waitFor(() => doIt()?.disabled === false, 'the button to be enabled again');
+  });
+
+  it('advances a step whose Command is already in the Journal, without dispatching it', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    const calls = storeDispatch(store);
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Cantilever beam')), 'the cantilever tutorial'));
+    await waitForText(progress, 'step 1 of');
+    // The person ran the first three Commands themselves; one Journal read walks all three.
+    journalOf(store, [{ cmd: 'model.new', name: 'cantilever' }, { cmd: 'model.setUnits' }, { cmd: 'geometry.addBox', name: 'beam' }]);
+    await waitForText(progress, 'step 4 of');
+    expect(calls).toEqual([]);
+  });
+
+  // Issue #87 A, through the real panel: `model.new` rewrites the Journal shorter, and the
+  // step the tutorial is on has to stay reachable afterwards.
+  it('keeps advancing after a mid-tutorial model.new truncates the Journal', async () => {
+    const store = new Store();
+    store.togglePanel('tutorial', true);
+    storeDispatch(store);
+    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    await afterEffects();
+    await click(await waitFor(() => [...root.querySelectorAll('.tutorial-pick')].find((p) => p.textContent?.includes('Cantilever beam')), 'the cantilever tutorial'));
+    journalOf(store, [{ cmd: 'model.new', name: 'cantilever' }, { cmd: 'model.setUnits' }, { cmd: 'geometry.addBox', name: 'beam' }]);
+    await waitForText(progress, 'step 4 of');
+    // A second `model.new` resets the Journal to one entry, re-using seq 0.
+    journalOf(store, [{ cmd: 'model.new', name: 'again' }]);
+    await waitForText(progress, 'step 4 of'); // nothing satisfies it yet, and nothing stalls
+    journalOf(store, [{ cmd: 'model.new', name: 'again' }, { cmd: 'material.add', name: 'steel' }]);
+    await waitForText(progress, 'step 5 of');
   });
 
   it('Skip moves past a step without the Command ever appearing', async () => {
