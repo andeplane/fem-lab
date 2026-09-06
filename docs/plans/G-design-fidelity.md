@@ -88,12 +88,12 @@ layout and member idealisations) must not be presented as implemented reference 
 - #172 / PR #195 (`4a173c1`) passed review after semantic selection, transient highlight
   cleanup, overlapping Set aliases and a linear membership index replaced the quadratic scan.
   Current-head CI and its #135 dependency remain pending.
-- #109 / PR #199 (`37b7d0d`) resolves stale/altered-example green claims and supplies explicit
+- #109 / PR #199 (`2837794`) resolves stale/altered-example green claims and supplies explicit
   reasons for five unavailable comparisons. The thin-wall tube estimate is informational.
-  Review still requires query.probe to target the displayed Result Step explicitly.
-- #95 / PR #213 (`eee7e7d`) supplies previewable parameterized intent. Review found that
-  historical Journal arguments break live-object editing after rename; reuse the current
-  definition path from #141 / PR #214 before merging. #207 / PR #215 (`1e40911`) passed
+  The probe now targets the displayed Result Step explicitly; final review passed.
+- #95 / PR #213 (`c9c928d`) supplies previewable parameterized intent. Live-object editing
+  now uses the current definition path from #141 / PR #214, with renamed-object Chromium
+  verification. Final review passed. #207 / PR #215 (`a68c8f5`) passed
   review for pre-model Properties and retained Assistant state, pending its #213 dependency.
 - #101 / PR #134 was rebased to preserve the merged Assistant behavior; the resolution passed
   review and requires fresh CI. #92 / PR #140 likewise retains both camera and Assistant tests.
@@ -122,12 +122,27 @@ gallery presentation (#30), and the integrated workflow checks, are still open r
   tests and Chromium draft/remesh cases pass. Current-head CI remains pending.
 - #217 / PR #219 (`6d5b07f`) fixes a traced service-worker first-load race that failed PR #158
   browser CI. Review and local headerless Chromium pass; do not treat a blind rerun as a fix.
-- #174 / PR #220 is under independent review. Findings include pointer-start focus/Escape,
-  a resize handle detached from the CSS-clamped bottom divider, and a handle class that
-  duplicates the Assistant selector. The owning coordinator is correcting these.
-- #173 / PR #227 adds the Script editor and passes its Chromium interaction cases. Review
-  requires the new live-Journal/draft view toggle to dispatch a real typed host Command.
-- #30 is assigned for real viewer-generated gallery thumbnails, filters and reference cards.
+- #174 / PR #220 (`2837901`) passed final review and seven independent Chromium checks
+  after focus/Escape, CSS-clamped divider alignment, selector and no-motion drag corrections.
+- #173 / PR #227 (`cf4e59a`) passed final review after its live-Journal/draft view toggle
+  gained the typed script.setEditing host Command. Five Chromium editor cases pass.
+- #30 / PR #238 (`d6b6852`) passed source and all-22-thumbnail review. Real viewer PNGs,
+  filters and reference cards pass five Chromium cases; CI and merge remain pending.
+- #97 / PR #136 merged at `dd5e4dd` after review and all seven CI checks. Turn undo checks
+  provenance before removing Commands, including interleaved edits.
+- #209 / PR #233 (`ff5c502`) passed review and GPU-inclusive 100% coverage (25,202 regions,
+  1,331 functions, 11,328 lines). Real Step dragging and dependency rejection pass Chromium;
+  its #134 dependency and current-head CI remain pending.
+- #11 / PR #236 (`331d45f`) implements PNG dimensions and modal phase parameters. Review
+  found stale export dimensions after viewport resize and phase-commit rejection/race bugs;
+  corrections are in progress. Passing initial tests do not clear these blockers.
+- #123 / PR #237 (`8949b8b`) implements Model naming and explicit save/open identity.
+  Review found the gallery-open baseline missing and an interaction with #103 top-bar sizing.
+  Corrections are in progress. Integration with #114 must compare cached Results against
+  result_hash, preserving rename-then-chained-solve validity.
+- #9 / plan PR #248 (`fb86dd8`) passed plan review. Existing full History vectors will be
+  reused; children #243–#246 cover typed frame/time reads, memory, host parity and playback.
+  The plan is not evidence of implemented transient playback and does not close #9.
 
 The current local checkout on `fix/156-ai-tool-schemas` predates the merged Assistant placement
 fix. Its bottom-left drawer is not evidence that PR #89 changed main incorrectly; final
