@@ -1,6 +1,6 @@
 // CodeMirror is the Script tab's only heavy UI dependency. Bottom.tsx imports this component
 // through `lazy()`, so none of the editor packages join the landing bundle.
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { HighlightStyle, bracketMatching, syntaxHighlighting } from '@codemirror/language';
 import { EditorState } from '@codemirror/state';
 import { EditorView, drawSelection, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view';
@@ -45,7 +45,7 @@ export default function ScriptEditor({ value, onChange }: ScriptEditorProps) {
           highlightActiveLine(),
           javascript({ typescript: true }),
           syntaxHighlighting(femLabHighlight),
-          keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
+          keymap.of([...defaultKeymap, ...historyKeymap]),
           EditorView.contentAttributes.of({ 'data-cmd': 'script.setSource', 'aria-label': 'TypeScript editor', class: 'script-edit', spellcheck: 'false' }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) change.current(update.state.doc.toString());
