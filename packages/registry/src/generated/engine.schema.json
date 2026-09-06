@@ -998,7 +998,7 @@
         ]
       },
       {
-        "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+        "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
         "type": "object",
         "properties": {
           "order": {
@@ -5363,7 +5363,7 @@
             ]
           },
           {
-            "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+            "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
             "type": "object",
             "properties": {
               "order": {
@@ -10649,7 +10649,7 @@
             ]
           },
           {
-            "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+            "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
             "type": "object",
             "properties": {
               "order": {
