@@ -2554,6 +2554,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.convert](#queries-query-convert)
 - [query.cost](#queries-query-cost)
 - [query.definition](#queries-query-definition)
+- [query.frame](#queries-query-frame)
+- [query.frames](#queries-query-frames)
 - [query.journal](#queries-query-journal)
 - [query.materialLibrary](#queries-query-materialLibrary)
 - [query.mesh](#queries-query-mesh)
@@ -2627,6 +2629,43 @@ Returns: `ObjectDefinition`.
 | kind | yes | <code>{"$ref":"#/$defs/ObjectKind"}</code> |  |
 | name | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.definition"}</code> |  |
+
+<a id="queries-query-frame"></a>
+
+### query.frame
+
+One retained transient primary field. Supply exactly one of zero-based retained index
+or sample (retained index / physical time with exact or nearest selection). Time
+selection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation
+policy as sampled probe/path. Values are SI,
+component-fastest, with three components per node, matching final FieldData: a 2D
+displacement has zero z; temperature occupies x with zero y/z. Defaults to the retained
+primary field. Derived fields were not retained and are refused. Refuses result.stale.
+
+Returns: `FrameResult`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| step | no | <code>{"type":["string","null"]}</code> |  |
+| index | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
+| sample | no | <code>{"anyOf":[{"$ref":"#/$defs/FrameSample"},{"type":"null"}]}</code> |  |
+| field | no | <code>{"anyOf":[{"$ref":"#/$defs/Field"},{"type":"null"}]}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.frame"}</code> |  |
+
+<a id="queries-query-frames"></a>
+
+### query.frames
+
+Catalogue of retained transient primary-field frames (default: last solved Step).
+Index 0 is the initial state; indices count retained frames, not integration steps.
+Metadata remains available for stale Results. No nodal values are copied by this Query.
+
+Returns: `FramesResult`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| step | no | <code>{"type":["string","null"]}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.frames"}</code> |  |
 
 <a id="queries-query-journal"></a>
 
@@ -2705,6 +2744,7 @@ Returns: `ObjectList`.
 ### query.path
 
 A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+Optional sample selects a retained primary-field frame; omitted means the final field.
 Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
 
 Returns: `PathResult`.
@@ -2714,6 +2754,7 @@ Returns: `PathResult`.
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | field | yes | <code>{"$ref":"#/$defs/Field"}</code> |  |
 | component | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
+| sample | no | <code>{"anyOf":[{"$ref":"#/$defs/FrameSample"},{"type":"null"}]}</code> |  |
 | from | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
 | to | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
 | n | yes | <code>{"type":"integer","format":"uint32","minimum":0}</code> |  |
@@ -2725,6 +2766,7 @@ Returns: `PathResult`.
 
 A field value interpolated at a point (default: the last solved Step). Component
 indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+Optional sample selects a retained primary-field frame; omitted means the final field.
 Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
 
 Returns: `ProbeResult`.
@@ -2734,6 +2776,7 @@ Returns: `ProbeResult`.
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | field | yes | <code>{"$ref":"#/$defs/Field"}</code> |  |
 | component | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
+| sample | no | <code>{"anyOf":[{"$ref":"#/$defs/FrameSample"},{"type":"null"}]}</code> |  |
 | at | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.probe"}</code> |  |
 
@@ -2827,6 +2870,57 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>FrameSample</summary>
+
+```json
+{
+  "description": "How to select retained output; there is no temporal interpolation or extrapolation.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "const": "frame"
+        }
+      },
+      "required": [
+        "kind",
+        "index"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "time": {
+          "$ref": "#/$defs/Q_time"
+        },
+        "sampling": {
+          "$ref": "#/$defs/TimeSampling"
+        },
+        "kind": {
+          "type": "string",
+          "const": "time"
+        }
+      },
+      "required": [
+        "kind",
+        "time",
+        "sampling"
+      ]
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>ObjectKind</summary>
 
 ```json
@@ -2854,6 +2948,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "length"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_time</summary>
+
+```json
+{
+  "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "time"
 }
 ```
 
@@ -2945,6 +3052,22 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "string",
       "const": "journal"
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>TimeSampling</summary>
+
+```json
+{
+  "description": "Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.\nNearest explicitly selects a retained time; equal-distance ties (within the same relative\nroundoff bound on the distances) choose the earlier frame.\nBoth reject times outside the retained interval (except endpoint conversion roundoff).",
+  "type": "string",
+  "enum": [
+    "exact",
+    "nearest"
   ]
 }
 ```

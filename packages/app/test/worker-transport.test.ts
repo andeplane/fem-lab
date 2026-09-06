@@ -90,6 +90,27 @@ describe('WorkerTransport', () => {
     expect(s.bodyNames[s.edgeBody![0]!]).toBe('b');
   });
 
+  it('transfers frame staging at f64 precision and returns the generated JSON shape', async () => {
+    const exact = 1 + 2 ** -40; // f32 would round this to 1.
+    const metadata = { sample: { step: 'warm', modelHash: 'h', frame: { index: 1, timeSi: 0.1, time: { value: 100, unit: 'ms' } } }, field: 'temperature', components: 3, nodeCount: 1, unit: 'K' };
+    const detached: ArrayBuffer[] = [];
+    const { transport, workers } = make((req, reply) => {
+      const values = new Float64Array([exact, 0, 0]);
+      const buffer = values.buffer;
+      detached.push(buffer);
+      const raw = structuredClone([buffer], { transfer: [buffer] });
+      reply({ id: req.id, ok: true, value: metadata, buffers: [{ name: 'values', dtype: 'f64', length: 3 }] }, raw);
+    });
+    const query = { query: 'query.frame', index: 1 } as const;
+    const first = await transport.query(query) as { values: number[] };
+    expect(first).toEqual({ ...metadata, values: [exact, 0, 0] });
+    expect(Array.isArray(first.values)).toBe(true);
+    first.values[0] = -100;
+    expect(await transport.query(query)).toEqual({ ...metadata, values: [exact, 0, 0] });
+    expect(detached.map(buffer => buffer.byteLength)).toEqual([0, 0]);
+    expect(workers[0]!.sent.map(req => req.payload)).toEqual([query, query]);
+  });
+
   it('rejects with the engine\'s structured error, not a string', async () => {
     const { transport } = make((req, reply) => reply({ id: req.id, ok: false, error: { code: 'name.taken', cause: "a body is already called 'beam'", where: 'name', suggestion: 'pick another name' } }));
     await expect(transport.query({ query: 'query.model' })).rejects.toBeInstanceOf(FemError);

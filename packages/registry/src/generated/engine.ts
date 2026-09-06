@@ -1447,8 +1447,20 @@ export type Query =
     }
   | {
       step?: string | null;
+      query: "query.frames";
+    }
+  | {
+      step?: string | null;
+      index?: number | null;
+      sample?: FrameSample | null;
+      field?: Field | null;
+      query: "query.frame";
+    }
+  | {
+      step?: string | null;
       field: Field;
       component?: number | null;
+      sample?: FrameSample | null;
       /**
        * @minItems 3
        * @maxItems 3
@@ -1484,6 +1496,7 @@ export type Query =
       step?: string | null;
       field: Field;
       component?: number | null;
+      sample?: FrameSample | null;
       /**
        * @minItems 3
        * @maxItems 3
@@ -1578,6 +1591,34 @@ export type Query =
       query: "query.capabilities";
     };
 /**
+ * How to select retained output; there is no temporal interpolation or extrapolation.
+ */
+export type FrameSample =
+  | {
+      index: number;
+      kind: "frame";
+    }
+  | {
+      /**
+       * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
+       */
+      time:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      sampling: TimeSampling;
+      kind: "time";
+    };
+/**
+ * Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.
+ * Nearest explicitly selects a retained time; equal-distance ties (within the same relative
+ * roundoff bound on the distances) choose the earlier frame.
+ * Both reject times outside the retained interval (except endpoint conversion roundoff).
+ */
+export type TimeSampling = "exact" | "nearest";
+/**
  * A number with a unit, as text or as parts.
  */
 export type Quantity =
@@ -1600,6 +1641,8 @@ export type QueryResult =
   | MeshSummary
   | SetInfo
   | ResultSummary
+  | FramesResult
+  | FrameResult
   | ProbeResult
   | PathResult
   | CostEstimate
@@ -3374,9 +3417,62 @@ export interface HistoryRow {
   max: Valued;
 }
 /**
+ * `query.frames` response; stored components describe the unpadded History storage.
+ */
+export interface FramesResult {
+  step: string;
+  modelHash: string;
+  stale: boolean;
+  nodeCount: number;
+  field: Field;
+  /**
+   * Public field layout, matching final FieldData (three components, zero-padded).
+   */
+  components: number;
+  storedComponents: number;
+  /**
+   * Logical bytes of retained f64 times and unpadded primary values; excludes allocator
+   * overhead, spare capacity, final derived fields and temporary Query response copies.
+   */
+  retainedBytes: number;
+  frames: FrameStamp[];
+}
+/**
+ * One retained frame's zero-based index and time in seconds and Model display units.
+ */
+export interface FrameStamp {
+  index: number;
+  timeSi: number;
+  time: Valued;
+}
+/**
+ * `query.frame` response: SI values in the existing component-fastest FieldData layout.
+ */
+export interface FrameResult {
+  sample: ResolvedFrame;
+  field: Field;
+  components: number;
+  nodeCount: number;
+  /**
+   * SI unit for values: K for temperature, m for displacement, never a display unit.
+   */
+  unit: string;
+  values: number[];
+}
+/**
+ * Result identity and the actual resolved sample. The solved Model hash is not a solve-instance
+ * counter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.
+ */
+export interface ResolvedFrame {
+  step: string;
+  modelHash: string;
+  frame: FrameStamp;
+}
+/**
  * `query.probe` response.
  */
 export interface ProbeResult {
+  sample?: ResolvedFrame | null;
   value: Valued;
   element: number;
   interpolated: boolean;
@@ -3385,6 +3481,7 @@ export interface ProbeResult {
  * `query.path` response.
  */
 export interface PathResult {
+  sample?: ResolvedFrame | null;
   s: number[];
   values: (number | null)[];
   unit: string;
