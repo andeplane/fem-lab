@@ -98,12 +98,36 @@ Light theme: not designed in this round (brief item 9 — pending).
 One screen; state is `stage` × `built` (how much of the Model exists, 0–9). The review strip at
 the bottom jumps between them; in production these arise naturally.
 
-### 0 · Start / empty
-Full-screen `#0a0b0e`, centred: logo (16 px orange rotated square + "FEM Lab"), one-line pitch,
-three 248 px cards: **Ask the Assistant** (border `#3e2f18`, cue yellow), **Open an example**,
-**Start from geometry**. Under them, a mono capability line: `● WebGPU available · ● 8 worker
-threads · ● meshers load on demand (1.2 MB) · no install · no server · nothing leaves the tab`.
-Must render before heavy bundles load.
+### 0 · Start / projects (issue #41)
+Full-screen `#0a0b0e`, one centred column 880 px wide, left-aligned inside it. Reading order is
+the order a person wants: **say what you want in words** first, and as a real input rather than a
+card that toggles a panel.
+
+1. Logo (16 px orange rotated square + "FEM Lab") and the one-line pitch.
+2. **The assistant composer**: one wide field, 56 px, placeholder *"Describe the part — a 1 m
+   steel cantilever, 50×100 mm, 10 kN at the tip…"*, and an orange **Send**. Enter or the button
+   dispatches `panel.toggle { panel: 'assistant', open: true }` and then `chat.send { text }`.
+   With no API key the drawer still opens, on its Settings panel where the key goes, and the
+   typed line stays in the composer. Under it one faint line: *"the Assistant builds it as
+   visible Commands; you can take over at any step"*.
+3. **NEW PROJECT**: a name field (default `model`) and one primary button → `project.new { name }`.
+4. **RECENT PROJECTS**: up to six cards from `query.projects`, newest first — a 16:9 thumbnail
+   (or a grid placeholder), the name in mono 12, and `41 Commands · edited 4 minutes ago` in
+   faint mono. The card is `project.open { id }`; on hover two small controls, `project.rename`
+   (an inline field) and `project.delete` (which asks once). A seventh-and-older row is a
+   "show all (N)" disclosure, not a second screen. Nothing saved yet → one sentence: *"Projects
+   you start are kept in this browser. Nothing is uploaded."*
+5. Three 248 px cards: **Open a file** (`file.open { picker: true }`), **Examples**
+   (`panel.toggle { panel: 'examples' }`), **Tutorials** (`panel.toggle { panel: 'tutorial' }`).
+6. The mono capability line, which now also says where a project lives: `● local GPU · 8 threads
+   · WebGPU available · projects saved in this browser · no server · nothing leaves the tab`.
+
+Must render before heavy bundles load; the Recent list is read from IndexedDB before the wasm.
+The same component is the **Projects** overlay from the top bar, which is how a person gets from
+a workspace back to the list.
+
+The **Assistant drawer** is a fixed 392 px panel outside the workspace, so it opens over this
+screen too and survives the flip into the workspace (issue #40).
 
 ### 1 · From scratch (build stages 0→8)
 Viewer shows only the ground grid + triad, centred hint "No geometry yet …". Every tree group is
@@ -140,12 +164,18 @@ step · E-3140 inverted elements. Solve is disabled (bg `#191b21`, text `#555b64
 ## Components
 
 ### Top bar (46 px, `#101218`)
-Logo block with right border · model name (mono 12.5 high) + 6 px yellow dot when unsaved ·
+Logo block with right border · **project name**, an inline-editable mono 12.5 field
+(`project.rename` on blur or Enter) · **saved chip**: `saved · 12:04` with a green dot,
+`saving…` yellow while a write is in flight, or `not saved — storage is off` when
+`file.autosave { on: false }`. There is no "unsaved" dot: the Journal is written into the open
+project after every Command, so there is no unsaved state, and a dot that lies is worse than no
+dot. Then ·
 command-palette field (max 330 px, 28 px, bg `#0a0b0e`, border `#262a33`, placeholder
 "Search commands or ask in plain words", `⌘K` key chip) · right cluster: units segmented
 (mono 11, active `#22262e`/high) · undo/redo 26 px glyph buttons · engine chip (5 px green dot +
 mono 10.5 "local GPU · 8 threads", border `#23262e`) · **Solve** button (28 px, 600, states above)
-· text buttons Examples / Export / Report (12 px low, hover bg `#181b21`) · **Assistant** toggle
+· text buttons Projects / Examples / Open / **Save** (`project.save`) / **Save as file**
+(`file.save`) / Export / Report (12 px low, hover bg `#181b21`) · **Assistant** toggle
 (28 px, outline; active: border `#56391c`, text `#f0824b`).
 
 ### Model tree (274 px)
@@ -184,16 +214,20 @@ Rule: one Apply = one Command batch; sliders emit on release.
 - Under it: **selection chip** (max-width 100%−20 px, truncating): `@reentrant_corner` mono cyan ·
   meta faint · `⌘C` key chip (turns green "copied") · "name by rule" link.
 - Right: **legend** 168 px (top 56, bottom 58, scrolls if short): field name + unit, "ULS 6.10b ·
-  deformed ×120", 16×132 px gradient bar, six mono ticks (top tick orange), divider, peak vs
+  exaggerated ×120" (or "true scale" at ×1), 16×132 px gradient bar, six mono ticks (top tick orange), divider, peak vs
   `f_cd C30/37 17.0`, three colour-map swatches (12 px, active outlined high).
-- Bottom-right: **deformation bar**: ▶/❚❚ (mode/transient animation), "deformation", range
-  0–400 step 10 (accent orange), mono `×120`, "true scale", "screenshot".
+- Bottom-right: **deformation bar**: ▶/❚❚ (mode/transient animation), "exaggeration", range
+  0–max(400, the drawn scale) in a hundred steps (accent orange), mono `×120`, "true scale"
+  (pressed at ×1), "screenshot".
 - Bottom-left: probe readout (mono 11 low) — `σ_vM 12.40 MPa · node 1342 · x 0 y 412 z 1388 mm`
   in Results; face name + coordinates otherwise.
 - Overlays: solving card, stale banner, error card, "No geometry yet" hint (all above).
 Viewer canvas: z-up, ground grid `GridHelper(4000, 40, #232730, #171a20)` at z = −2, hemisphere +
 two directional lights, geometry flat grey (0.58) with quad edges `#272b33`; mesh mode grey 0.46
-with edges `#5b6472`; results vertex-coloured, edges hidden. Glyphs: constraint pins = 4-sided
+with edges `#5b6472`; results vertex-coloured, edges hidden — except while the shape is drawn
+exaggerated, where the edges (built from the undeformed positions and never moved) are kept as a
+ghost outline `#4a5260` so the departure from the real body is visible; `view.toggle
+{ layer: 'edges' }` still turns them off. Glyphs: constraint pins = 4-sided
 cones cyan under base; loads = orange cylinder+cone arrows on bearing_top; gravity single arrow.
 Clip plane along y at 520 mm. Must hold 60 fps while solving (engine in a Worker).
 
@@ -207,7 +241,9 @@ download .ts.
 - **Script**: line numbers + TypeScript (mono 11.5, lh 1.75), imports/blank faint, checks green,
   export cyan, the edited line orange. Right rail 214 px: **▶ Run script**, console output
   green, note "The Journal, typed. Edit a line and rerun and the Model replays from there."
-- **Results**: two columns. Left: Extremes table (field · min · max · location; peak orange),
+- **Results**: a header across both columns saying a Result exists and what made it — "Result ·
+  step static · linear-static · cpu-direct · 12 ms · solved at rev 10 · drawn exaggerated ×1000",
+  in warn tones when it is stale — then two columns. Left: Extremes table (field · min · max · location; peak orange),
   "CODE CHECK · NS-EN 1992-1-1, NA NORWAY" rows (✓/!/✕ · name · utilisation · clause). Right:
   Reactions table (kN, Fx Fy Fz per constraint, Σ, Σ applied) + pass surface
   "✓ Σ reactions = −Σ loads · 0.0000 %"; "MESH CONVERGENCE · u_z" mini bars (100/50/25 mm, last
@@ -303,6 +339,8 @@ Solve completion: stage → results, built → 9, select first Result, Results t
 ## Vocabulary (from brief §14)
 Model, Geometry, Body, Face, Set, Mesh, Element, Material, Constraint (never "BC"), Load, Step,
 Result, Command, Journal, Script, Solver, Plugin, Benchmark. Fix not Encastre, Pressure not DLOAD.
+**Project** = one saved Model in this browser (issue #41 overrides the brief's avoid list);
+**folder** = a directory on disk, over the File System Access API.
 
 ## Assets
 No raster assets. Fonts: IBM Plex Sans 400/500/600, IBM Plex Mono 400/500/600 (Google Fonts;

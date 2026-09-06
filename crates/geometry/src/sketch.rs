@@ -41,6 +41,30 @@ impl Segment {
     }
 }
 
+/// A sketch problem a mesher cannot recover from, located in the sketch: `where_` is a path
+/// like `outer[2]` or `holes[0][3]`, and `suggestion` is the edit that fixes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SketchError {
+    pub where_: String,
+    pub cause: String,
+    pub suggestion: String,
+}
+
+impl From<SketchError> for GeomError {
+    fn from(e: SketchError) -> GeomError {
+        GeomError(format!("{} (at {})", e.cause, e.where_))
+    }
+}
+
+/// `outer`, `holes[0]`, `holes[1]`, ...: the path of loop `i` of a sketch.
+fn loop_path(i: usize) -> String {
+    if i == 0 {
+        "outer".to_string()
+    } else {
+        format!("holes[{}]", i - 1)
+    }
+}
+
 /// A closed outer loop and zero or more hole loops.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -127,6 +151,22 @@ pub fn point_segment_distance(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let t = if l2 == 0.0 { 0.0 } else { ((ap[0] * ab[0] + ap[1] * ab[1]) / l2).clamp(0.0, 1.0) };
     let c = [a[0] + t * ab[0], a[1] + t * ab[1]];
     libm::hypot(p[0] - c[0], p[1] - c[1])
+}
+
+fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+    libm::hypot(a[0] - b[0], a[1] - b[1])
+}
+
+fn cross(o: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+}
+
+/// Do `a1a2` and `b1b2` meet at a point interior to both? Touching and collinear overlap are
+/// not crossings: neighbouring edges of a sampled loop share an end point by construction.
+fn properly_cross(a1: [f64; 2], a2: [f64; 2], b1: [f64; 2], b2: [f64; 2]) -> bool {
+    let (d1, d2) = (cross(b1, b2, a1), cross(b1, b2, a2));
+    let (d3, d4) = (cross(a1, a2, b1), cross(a1, a2, b2));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
 }
 
 fn ang(v: [f64; 2]) -> f64 {
@@ -229,7 +269,158 @@ fn exact_signed_area(segs: &[Segment]) -> Result<f64, GeomError> {
 /// Chord tolerance used when a sketch is sampled only for point containment.
 pub const CONTAINS_TOL_FRACTION: f64 = 1e-4;
 
+/// Two corner points of one loop closer than `near`: a zero-length segment, a full-circle arc,
+/// or a loop that comes back to a point it has already been at.
+fn repeated_point(segs: &[Segment], near: f64, at: &str) -> Result<(), SketchError> {
+    let n = segs.len();
+    for b in 0..n {
+        for a in 0..b {
+            if dist(segs[a].to(), segs[b].to()) > near {
+                continue;
+            }
+            let p = segs[b].to();
+            // Cyclically adjacent corners leave exactly one segment between them, and that
+            // segment is the degenerate one.
+            let between = if b == a + 1 {
+                Some(b)
+            } else if a == 0 && b == n - 1 {
+                Some(0)
+            } else {
+                None
+            };
+            let (cause, suggestion) = match between.map(|d| (d, &segs[d])) {
+                Some((d, Segment::Arc { .. })) => (
+                    format!(
+                        "the {at} loop ends segment {b} at ({}, {}) and segment {d} is an arc from that point back to it: a full circle",
+                        p[0], p[1]
+                    ),
+                    "split the full-circle arc into two arcs, each ending at the opposite point of the circle".to_string(),
+                ),
+                Some((d, Segment::Line { .. })) => (
+                    format!("segment {d} of the {at} loop has zero length: it starts and ends at ({}, {})", p[0], p[1]),
+                    format!("remove segment {d}, or give it an end point of its own"),
+                ),
+                None => (
+                    format!(
+                        "the {at} loop returns to ({}, {}) at segment {b}, a point segment {a} already ends at",
+                        p[0], p[1]
+                    ),
+                    format!("give segment {b} an end point of its own, or split the loop into two loops"),
+                ),
+            };
+            return Err(SketchError { where_: format!("{at}[{b}]"), cause, suggestion });
+        }
+    }
+    Ok(())
+}
+
+/// No two edges of the discretised sketch may meet away from their end points: crossing input
+/// segments are exactly what `weka` panics on, whether they belong to one loop or to two.
+fn crossing_edges(loops: &[Loop]) -> Result<(), SketchError> {
+    // ponytail: O(N²) over every discretised edge of the sketch. A sweep line only pays for
+    // itself past a few thousand edges, and a sketch that big is not hand-written.
+    let edge = |l: &Loop, j: usize| (l.pts[j], l.pts[(j + 1) % l.pts.len()]);
+    for (x, lx) in loops.iter().enumerate() {
+        for (y, ly) in loops.iter().enumerate().take(x + 1) {
+            for j in 0..lx.pts.len() {
+                // Within one loop, neighbouring edges share an end point by construction.
+                for k in if x == y { j + 2 } else { 0 }..ly.pts.len() {
+                    if x == y && j == 0 && k == ly.pts.len() - 1 {
+                        continue;
+                    }
+                    let ((a1, a2), (b1, b2)) = (edge(lx, j), edge(ly, k));
+                    if !properly_cross(a1, a2, b1, b2) {
+                        continue;
+                    }
+                    let (sj, sk) = (lx.seg_of_edge[j], ly.seg_of_edge[k]);
+                    let (ax, ay) = (loop_path(x), loop_path(y));
+                    return Err(if x == y {
+                        SketchError {
+                            where_: format!("{ax}[{sk}]"),
+                            cause: format!("the {ax} loop crosses itself: segment {sj} and segment {sk} meet away from their end points"),
+                            suggestion: format!("give segment {sk} a path that does not cross segment {sj}"),
+                        }
+                    } else {
+                        SketchError {
+                            where_: format!("{ax}[{sj}]"),
+                            cause: format!("segment {sj} of the {ax} loop crosses segment {sk} of the {ay} loop"),
+                            suggestion: format!(
+                                "move the {ax} loop clear of the {ay} loop; loops may touch but never cross"
+                            ),
+                        }
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Sketch {
+    /// Reject the sketches a triangulator cannot be handed, with the loop and segment they are
+    /// at: a coordinate that is not finite, a point a loop visits twice (a zero-length segment,
+    /// or an arc that starts where it ends, which is a full circle), a loop with fewer than
+    /// three distinct points, edges that cross (within one loop or between two), and a hole
+    /// outside the outer loop.
+    ///
+    /// `weka` panics on crossing or degenerate input segments instead of returning an error, so
+    /// every mesher calls this first (issues #5, #54).
+    pub fn check(&self) -> Result<(), SketchError> {
+        let loops: Vec<&Vec<Segment>> = std::iter::once(&self.outer).chain(self.holes.iter()).collect();
+        // One tolerance for the whole sketch, from the extent of its corner points.
+        let mut lo = [f64::INFINITY; 2];
+        let mut hi = [f64::NEG_INFINITY; 2];
+        for (i, segs) in loops.iter().enumerate() {
+            for (k, s) in segs.iter().enumerate() {
+                let center = match s {
+                    Segment::Arc { center, .. } => *center,
+                    Segment::Line { .. } => [0.0, 0.0],
+                };
+                if !(s.to().iter().chain(center.iter()).all(|c| c.is_finite())) {
+                    return Err(SketchError {
+                        where_: format!("{}[{k}]", loop_path(i)),
+                        cause: format!(
+                            "segment {k} of the {} loop has a coordinate that is not a finite number",
+                            loop_path(i)
+                        ),
+                        suggestion: "geometry.add with finite coordinates on every segment".into(),
+                    });
+                }
+                for a in 0..2 {
+                    lo[a] = lo[a].min(s.to()[a]);
+                    hi[a] = hi[a].max(s.to()[a]);
+                }
+            }
+        }
+        let diag = libm::hypot(hi[0] - lo[0], hi[1] - lo[1]).max(1e-300);
+        let near = 1e-9 * diag;
+        let tol = CONTAINS_TOL_FRACTION * diag;
+
+        let mut sampled = Vec::with_capacity(loops.len());
+        for (i, segs) in loops.iter().enumerate() {
+            let at = loop_path(i);
+            repeated_point(segs, near, &at)?;
+            let l = sample_loop(segs, tol, "").map_err(|e| SketchError {
+                where_: at.clone(),
+                cause: format!("{} (the {at} loop)", e.0),
+                suggestion: "geometry.add with a closed loop of at least three distinct points".into(),
+            })?;
+            sampled.push(l);
+        }
+        crossing_edges(&sampled)?;
+        // A hole may touch the outer loop, but no part of it may lie outside.
+        for (i, h) in sampled[1..].iter().enumerate() {
+            if let Some(p) = h.pts.iter().find(|&&p| !sampled[0].contains(p) && sampled[0].nearest_edge(p).1 > tol) {
+                return Err(SketchError {
+                    where_: format!("holes[{i}]"),
+                    cause: format!("hole {i} reaches ({}, {}), which is outside the outer loop", p[0], p[1]),
+                    suggestion: "geometry.add with every hole inside the outer loop".into(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), GeomError> {
         let a = exact_signed_area(self.outer_checked()?)?;
         if a.abs() < 1e-30 {
