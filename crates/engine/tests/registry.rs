@@ -1640,6 +1640,23 @@ fn the_free_mesher_validates_its_body_its_size_and_its_boxes() {
     let er = e.query(Query::Mesh {}).unwrap_err();
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("mesher.size")));
     assert!(er.cause.contains("produced no triangle"), "{}", er.cause);
+    // the plate-with-hole sketch that panicked weka: the hole's fourth arc ends where its first
+    // one does, so the loop closes with a full circle. It fails at the segment, not at the size.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+          {"kind":"line","to":["100 mm","0 mm"],"tag":"xmax0"},{"kind":"line","to":["100 mm","80 mm"],"tag":"ymax"},
+          {"kind":"line","to":["0 mm","80 mm"],"tag":"xmin0"},{"kind":"line","to":["0 mm","0 mm"],"tag":"ymin"}],
+          "holes":[[{"kind":"arc","center":["50 mm","40 mm"],"to":["35 mm","40 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["50 mm","25 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["65 mm","40 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["35 mm","40 mm"],"ccw":true,"tag":"hole"}]]}}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"5 mm"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(er.cause.contains("a full circle"), "{}", er.cause);
+    assert!(er.suggestion.unwrap().contains("split the full-circle arc into two arcs"));
 }
 
 #[test]

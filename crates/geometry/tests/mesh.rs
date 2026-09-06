@@ -1340,6 +1340,10 @@ fn the_free_mesher_refuses_a_bad_size_or_a_bad_sketch() {
     assert!(free(&s, 1.0, false, &[bad]).unwrap_err().0.contains("refine box 0 has size -1"));
     let one = Sketch { outer: vec![Segment::Line { to: [1.0, 0.0], tag: None }], holes: vec![] };
     assert!(free(&one, 1.0, false, &[]).unwrap_err().0.contains("two segments"));
+    // an element size so coarse that the two arcs of a circle sample to one chord each
+    let circle = Sketch { outer: Sketch::circle([0.0, 0.0], 1.0, "rim"), holes: vec![] };
+    circle.check().unwrap();
+    assert!(free(&circle, 100.0, false, &[]).unwrap_err().0.contains("three distinct points"));
     // a hole that covers the whole outer loop carves everything: no triangle, and the refine
     // pass has nothing to refine, so weka's own failure comes back as a GeomError
     let mut all_hole = Sketch::rect(4.0, 4.0);
@@ -1347,4 +1351,137 @@ fn the_free_mesher_refuses_a_bad_size_or_a_bad_sketch() {
     assert!(free(&all_hole, 1.0, false, &[]).unwrap_err().0.contains("produced no triangle"));
     let box_ = RefineBox { min: [0.0, 0.0], max: [4.0, 4.0], size: 0.5 };
     assert!(free(&all_hole, 1.0, false, &[box_]).unwrap_err().0.contains("3 input points"));
+}
+
+// ---- sketch validation: no degenerate or crossing input ever reaches weka (issues #5, #54) ----
+
+fn line(to: [f64; 2]) -> Segment {
+    Segment::Line { to, tag: None }
+}
+
+/// The plate-with-hole tutorial sketch that panicked weka: the hole's fourth arc ends where its
+/// first one does, so the loop closes with a full circle laid over the other three arcs.
+fn full_circle_hole() -> Sketch {
+    let c = [50.0, 40.0];
+    let arc = |to: [f64; 2]| Segment::Arc { center: c, to, ccw: true, tag: Some("hole".into()) };
+    Sketch {
+        outer: Sketch::rect(100.0, 80.0).outer,
+        holes: vec![vec![arc([35.0, 40.0]), arc([50.0, 25.0]), arc([65.0, 40.0]), arc([35.0, 40.0])]],
+    }
+}
+
+#[test]
+fn the_full_circle_arc_that_panicked_weka_is_now_a_located_error() {
+    let s = full_circle_hole();
+    let e = s.check().unwrap_err();
+    assert_eq!(e.where_, "holes[0][3]");
+    assert!(e.cause.contains("a full circle"), "{}", e.cause);
+    assert!(e.suggestion.contains("split the full-circle arc into two arcs"), "{}", e.suggestion);
+    // the mesher refuses it instead of panicking, and says where
+    let g = free(&s, 5.0, true, &[]).unwrap_err().0;
+    assert!(g.contains("holes[0][3]") && g.contains("full circle"), "{g}");
+    // the same hole written as the two arcs a full circle needs meshes fine
+    let good =
+        Sketch { outer: Sketch::rect(100.0, 80.0).outer, holes: vec![Sketch::circle([50.0, 40.0], 15.0, "hole")] };
+    good.check().unwrap();
+    assert!(free(&good, 5.0, false, &[]).unwrap().n_elems() > 0);
+}
+
+#[test]
+fn a_degenerate_or_crossing_sketch_names_its_loop_and_segment() {
+    // a zero-length line: segment 2 repeats the corner segment 1 ends at (issue #5)
+    let mut zero = Sketch::rect(4.0, 4.0);
+    zero.outer.insert(2, line([4.0, 4.0]));
+    let e = zero.check().unwrap_err();
+    assert_eq!(e.where_, "outer[2]");
+    assert!(e.cause.contains("segment 2 of the outer loop has zero length"), "{}", e.cause);
+    assert!(e.suggestion.contains("remove segment 2"), "{}", e.suggestion);
+    assert!(free(&zero, 1.0, false, &[]).unwrap_err().0.contains("zero length"));
+
+    // a loop that comes back to a corner it already visited, with segments in between
+    let eight = Sketch {
+        outer: vec![line([2.0, 0.0]), line([2.0, 2.0]), line([0.0, 2.0]), line([2.0, 0.0]), line([0.0, 0.0])],
+        holes: vec![],
+    };
+    let e = eight.check().unwrap_err();
+    assert_eq!(e.where_, "outer[3]");
+    assert!(e.cause.contains("returns to (2, 0) at segment 3"), "{}", e.cause);
+    assert!(e.suggestion.contains("split the loop"), "{}", e.suggestion);
+
+    // a bow tie: edge 1 and edge 3 cross at (1, 1), and no corner repeats
+    let bow =
+        Sketch { outer: vec![line([2.0, 0.0]), line([0.0, 2.0]), line([2.0, 2.0]), line([0.0, 0.0])], holes: vec![] };
+    let e = bow.check().unwrap_err();
+    assert_eq!(e.where_, "outer[3]");
+    assert!(e.cause.contains("crosses itself: segment 1 and segment 3"), "{}", e.cause);
+    assert!(e.suggestion.contains("does not cross segment 1"), "{}", e.suggestion);
+
+    // a hole that straddles the outer boundary crosses it
+    let mut straddle = Sketch::rect(4.0, 4.0);
+    straddle.holes.push(vec![line([5.0, 1.0]), line([5.0, 3.0]), line([3.0, 3.0]), line([3.0, 1.0])]);
+    let e = straddle.check().unwrap_err();
+    assert_eq!(e.where_, "holes[0][0]");
+    assert!(e.cause.contains("of the holes[0] loop crosses segment"), "{}", e.cause);
+    assert!(e.suggestion.contains("never cross"), "{}", e.suggestion);
+
+    // a hole nowhere near the outer loop is outside it
+    let mut away = Sketch::rect(4.0, 4.0);
+    away.holes.push(vec![line([11.0, 10.0]), line([11.0, 11.0]), line([10.0, 11.0]), line([10.0, 10.0])]);
+    let e = away.check().unwrap_err();
+    assert_eq!(e.where_, "holes[0]");
+    assert!(e.cause.contains("outside the outer loop"), "{}", e.cause);
+    assert!(e.suggestion.contains("inside the outer loop"), "{}", e.suggestion);
+
+    // a coordinate that is not a number
+    let nan = Sketch { outer: vec![line([1.0, 0.0]), line([f64::NAN, 1.0]), line([0.0, 0.0])], holes: vec![] };
+    let e = nan.check().unwrap_err();
+    assert_eq!(e.where_, "outer[1]");
+    assert!(e.cause.contains("not a finite number"), "{}", e.cause);
+    assert!(e.suggestion.contains("finite coordinates"), "{}", e.suggestion);
+
+    // loops too short to bound an area, located at the loop
+    let two = Sketch { outer: vec![line([1.0, 0.0]), line([0.0, 0.0])], holes: vec![] };
+    let e = two.check().unwrap_err();
+    assert_eq!(e.where_, "outer");
+    assert!(e.cause.contains("three distinct points (the outer loop)"), "{}", e.cause);
+    let mut short_hole = Sketch::rect(4.0, 4.0);
+    short_hole.holes.push(vec![line([1.0, 1.0])]);
+    assert_eq!(short_hole.check().unwrap_err().where_, "holes[0]");
+
+    // a sketch a mesher can use passes, and so does a hole that only touches the outer loop
+    Sketch::rect(4.0, 4.0).check().unwrap();
+    plate_with_hole(1.0).check().unwrap();
+    let mut touching = Sketch::rect(4.0, 4.0);
+    touching.holes.push(vec![line([3.0, 0.0]), line([3.0, 1.0]), line([1.0, 1.0]), line([1.0, 0.0])]);
+    touching.check().unwrap();
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+    /// Whatever the segments say, the free mesher returns: `weka` panics on degenerate and
+    /// crossing input, so `Sketch::check` has to catch every such sketch first (issue #5).
+    /// Any `Err` is a pass here; a panic is the failure.
+    #[test]
+    fn a_random_sketch_never_panics_the_free_mesher(
+        outer in prop::collection::vec(any_segment(), 0..6),
+        holes in prop::collection::vec(prop::collection::vec(any_segment(), 0..5), 0..3),
+    ) {
+        let s = Sketch { outer, holes };
+        // The property is that these three calls return at all. Any `Err` is a pass.
+        let _ = s.check();
+        let _ = free(&s, 1.0, false, &[]);
+        let _ = free(&s, 0.7, true, &[RefineBox { min: [-1.0, -1.0], max: [1.0, 1.0], size: 0.4 }]);
+    }
+}
+
+fn any_segment() -> impl Strategy<Value = Segment> {
+    prop_oneof![
+        (-4.0f64..4.0, -4.0f64..4.0).prop_map(|(x, y)| Segment::Line { to: [x, y], tag: None }),
+        // quarter-turn end points, so the sampler gets past `arc_radius` often enough for the
+        // loops to be sampled at all, and coincident points come up often enough to matter
+        (-4.0f64..4.0, -4.0f64..4.0, 0.2f64..4.0, 0usize..4, any::<bool>()).prop_map(|(cx, cy, r, q, ccw)| {
+            let d = [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]][q];
+            Segment::Arc { center: [cx, cy], to: [cx + r * d[0], cy + r * d[1]], ccw, tag: None }
+        }),
+    ]
 }
