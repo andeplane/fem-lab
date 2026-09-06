@@ -296,10 +296,10 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       description: 'Replace the unsent Assistant draft with explicit text and open the drawer. Use this to insert a skill name for the person to complete with arguments; it does not invoke the skill or send a message.',
       schema: z.object({ text: z.string() }),
       tool: true,
-      run: async (input) => {
+      run: (input, ctx) => {
         const { text } = input as { text: string };
         store.togglePanel('assistant', true);
-        (await import('./ai')).chatBridge.setDraft(text);
+        ctx.chat.setDraft(text);
       },
     },
     {

@@ -67,6 +67,7 @@ function harness(patch: Partial<UiState> = {}): Harness {
   host.selection.get = () => store.state.selection;
   host.chat.send = (text) => chatBridge.send(text);
   host.chat.insertMention = (ref) => chatBridge.insertMention(ref);
+  host.chat.setDraft = (text) => chatBridge.setDraft(text);
   host.chat.clear = () => chatBridge.clear();
   host.ai.setKey = (key, provider = 'anthropic') => {
     const slot = provider === 'openai' ? 'femlab.ai.key.openai' : 'femlab.ai.key';
