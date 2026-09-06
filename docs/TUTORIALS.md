@@ -6,6 +6,12 @@ The runner watches `query.journal` and advances a step when the Command it is wa
 appears — whether the person clicked it, typed it in a script, or asked the Assistant — so a
 tutorial teaches the app rather than a scripted click-path.
 
+Progress is an **index into the Journal**, not a `seq`: the engine hands out `seq` again
+whenever it rewrites the Journal (`model.new`, `journal.undo`, `file.restore`), so a watermark
+kept across a rewrite stranded the step for good (#87). The index is seeded from the Journal's
+length when the tutorial starts, which is also what stops a Model you already built from
+satisfying the steps of a tutorial you are only now beginning.
+
 ## The built-ins
 
 | Tutorial | Min | Builds | Closing theory |
@@ -54,6 +60,10 @@ A step:
 }
 ```
 
+- **`fields`** overrides the values the card lists and the form offers as placeholders. Omit
+  it. They are derived from `doIt` minus `cmd`, so the card can never disagree with the button
+  beside it, and the nine bundled files need no edit; set it only when the derived list reads
+  badly (a Command with a dozen arguments where three are the point).
 - **`expect: null`** makes a read-only step: Next always advances it. Use it for the closing
   theory and for steps that ask the reader to look at something rather than do something.
 - **`theory`** is a KaTeX-ready block, `$…$` inline and `$$…$$` display, on the closing step. It
@@ -62,6 +72,37 @@ A step:
   it now is, so every tutorial that builds a Model ends by solving it and reading the answer.
 - **Omit `doIt`** on a read-only step. Omit `highlight` when no single control emits the
   Command.
+
+## What `highlight` resolves to
+
+A step does not only name its Command — it points at the control that runs it, spotlights that
+control and puts the card beside it. `src/tutorial/target.ts` walks these rungs in order and
+takes the first that is on screen:
+
+1. **`.props [data-field="<key>"]`**, one per key of the step's values — but only while the
+   Properties form is already open on the step's own Command. This is the "now fill it in" rung,
+   and it is the *only* one allowed to point inside the Properties panel.
+2. **`[data-cmd="<highlight>"]`** — a control that dispatches the Command itself: Solve, the
+   units segmented, the start screen's cards, a tree row that re-runs its Command.
+3. **`[data-opens="<highlight>"]`** — a control that fills the form with it. `Cmd` writes this
+   attribute whenever it dispatches `form.open` with a `command`, which covers the tree's
+   `+ add …` chips, every tree row and the blocker banner's fix links in one place.
+4. **the raw string**, for a `highlight` that is a CSS selector rather than a Command id
+   (`[title="panel.toggle results"]`). A selector that does not parse is a miss, not an error.
+5. **`.palette-field`** — the ⌘K field, with the card reading "nothing on screen runs
+   `material.assign` yet — press ⌘K, type it and press ↵".
+
+Rungs 2–5 skip `aside.props` deliberately: the form's **Revert** button is `form.open` with the
+very Command the step is about, so without that skip the spotlight would land on Revert.
+
+Nine of the twenty `highlight` values across the bundled tutorials take rung 5 today —
+`material.assign`, `load.traction`, `constraint.temperature`, `constraint.symmetry`,
+`load.temperature`, `load.convection`, `study.converge`, `model.setIdealisation` and
+`geometry.add`. That is honest rather than a gap to paper over: it teaches the palette, which
+runs every Command whether or not it has a button. Issue #43 gives most of them a control.
+
+A read-only step that names no `highlight` points at nothing at all, and the card stays docked:
+it is asking the reader to look, not to press.
 
 ## The rules a new tutorial has to keep
 

@@ -17,7 +17,7 @@ use crate::fem::problem::{Constraint, Problem};
 use crate::mesh::{scale_mesher, BuiltMesh};
 use crate::model::{ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
-use crate::post::Extremum;
+use crate::post::{Extremum, FieldData};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{Extreme, HistoryRow, Output, ReactionRow, ResultSummary, StudyReport, StudyRow, Valued};
 use crate::solve::SolveOptions;
@@ -51,6 +51,15 @@ pub fn field_name(field: Field) -> String {
 /// Set's own integrated area, and its "10 kN on this Set of nodes" by the node count, so what
 /// is assembled sums back to what was asked for.
 pub fn build_problem<'a>(model: &Model, built: &'a BuiltMesh, step: &Step) -> Result<Problem<'a>, Error> {
+    build_problem_with_temperature(model, built, step, None)
+}
+
+fn build_problem_with_temperature<'a>(
+    model: &Model,
+    built: &'a BuiltMesh,
+    step: &Step,
+    previous: Option<&FieldData>,
+) -> Result<Problem<'a>, Error> {
     let heat = matches!(step.procedure, Procedure::HeatSteady | Procedure::HeatTransient);
     let materials: Vec<Material> = model
         .materials
@@ -128,16 +137,8 @@ pub fn build_problem<'a>(model: &Model, built: &'a BuiltMesh, step: &Step) -> Re
                 loads.push(Load::NodalForce { nodes: on.clone(), f: total.map(|x| x / n) });
             }
             LoadKind::Gravity { g } => loads.push(Load::Gravity { g: *g }),
-            LoadKind::Temperature { bodies, value, reference } => {
-                let mut nodal = vec![*reference; built.mesh.n_nodes()];
-                let heated = built.body_of_block.iter().enumerate().filter(|(_, body)| bodies.contains(body));
-                for (b, _) in heated {
-                    for &node in &built.mesh.blocks[b].conn {
-                        nodal[node as usize] = *value;
-                    }
-                }
-                p.temperature = Some((nodal, *reference));
-            }
+            // Composed once below, including references for an inherited heat field.
+            LoadKind::Temperature { .. } => {}
             LoadKind::Convection { on, h, t_inf } => {
                 heat_loads.push(HeatLoad::Convection { faces: on.clone(), h: *h, t_inf: *t_inf });
             }
@@ -149,7 +150,55 @@ pub fn build_problem<'a>(model: &Model, built: &'a BuiltMesh, step: &Step) -> Re
     }
     p.loads = loads;
     p.heat_loads = heat_loads;
+    p.temperature = thermal_field(model, built, step, previous)?;
     Ok(p)
+}
+
+/// Compose temperature increments, so each Body can use its own absolute reference. A
+/// temperature is a field, not an additive force: equal assignments overlap, unequal ones
+/// are ill-posed. Repeated connectivity must never add the same increment more than once.
+fn thermal_field(
+    model: &Model,
+    built: &BuiltMesh,
+    step: &Step,
+    previous: Option<&FieldData>,
+) -> Result<Option<(Vec<f64>, f64)>, Error> {
+    let mut assigned: Option<Vec<Option<(f64, &str)>>> = None;
+    for name in &step.loads {
+        let load = model.load(name).expect("step.add validated the Load names");
+        if let LoadKind::Temperature { bodies, value, reference } = &load.kind {
+            let nodal = assigned.get_or_insert_with(|| vec![None; built.mesh.n_nodes()]);
+            for (b, body) in built.body_of_block.iter().enumerate().filter(|(_, body)| bodies.contains(body)) {
+                for &node in &built.mesh.blocks[b].conn {
+                    let node = node as usize;
+                    let delta = previous.map_or(*value, |t| t.data[node * t.comps]) - reference;
+                    if let Some((old, owner)) = nodal[node] {
+                        if old != delta {
+                            return Err(Error::new(ErrorCode::ModelIllPosed,
+                                format!("temperature loads '{owner}' and '{name}' assign different increments to body '{body}' at node {node}"))
+                                .at(format!("step '{}'", step.name))
+                                .suggest("load.temperature: use one temperature increment per overlapping Body"));
+                        }
+                    }
+                    nodal[node] = Some((delta, name));
+                }
+            }
+        }
+    }
+    // A prior heat Step heats every node; unassigned Bodies retain the default 293.15 K
+    // reference. Without a heat Result, unassigned Bodies have zero thermal strain.
+    if assigned.is_none() && previous.is_none() {
+        return Ok(None);
+    }
+    let nodal = (0..built.mesh.n_nodes())
+        .map(|node| {
+            assigned
+                .as_ref()
+                .and_then(|a| a[node])
+                .map_or_else(|| previous.map_or(0.0, |t| t.data[node * t.comps] - 293.15), |(delta, _)| delta)
+        })
+        .collect();
+    Ok(Some((nodal, 0.0)))
 }
 
 /// The wire name of a procedure, from serde's rename.
@@ -228,26 +277,39 @@ impl Engine {
             ..SolveOptions::default()
         };
         let proc_step = procedure_step(&step, opts)?;
-        // A chained Step reads the Result of the Step it names; without one it cannot run.
+        // A chained Step reads the Result of the Step it names; without a current one it
+        // cannot run. The hash check also catches edits whose Mesh happens to keep the same
+        // node count, which a field-length check cannot distinguish from a compatible Result.
         let prev = match &step.after {
-            Some(name) => Some(self.results.get(name).map(|(_, r)| r.clone()).ok_or_else(|| {
-                Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
+            Some(name) => {
+                let current_hash = self.model_hash();
+                let (hash, result) = self.results.get(name).ok_or_else(|| {
+                    Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
+                        .at(format!("step '{}'", step.name))
+                        .suggest(format!("solve.run on step '{name}' first"))
+                })?;
+                if hash != &current_hash {
+                    return Err(Error::new(
+                        ErrorCode::ResultStale,
+                        format!("step '{name}' has a Result that does not match the current Model state"),
+                    )
                     .at(format!("step '{}'", step.name))
-                    .suggest(format!("solve.run on step '{name}' first"))
-            })?),
+                    .suggest(format!("solve.run on step '{name}' again")));
+                }
+                Some(result.clone())
+            }
             None => None,
         };
         self.mesh()?;
         let started = self.host.now_ms();
         let mut result = {
             let built = self.mesh.as_ref().expect("built above");
-            let mut p = build_problem(&self.model, built, &step)?;
-            // Thermal → structural: the previous Step's temperature becomes this one's field,
-            // keeping the reference a `load.temperature` in this Step set (plan A §6).
-            if let Some(t) = prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)) {
-                let t_ref = p.temperature.as_ref().map_or(293.15, |(_, r)| *r);
-                p.temperature = Some((t.component(0), t_ref));
-            }
+            let p = build_problem_with_temperature(
+                &self.model,
+                built,
+                &step,
+                prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)),
+            )?;
             procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
         };
         result.solver.time_ms = self.host.now_ms() - started;
@@ -283,23 +345,7 @@ impl Engine {
             .step(step_name)
             .ok_or_else(|| Error::not_found("step", step_name, &self.model.names(ObjectKind::Step)))?
             .clone();
-        let settings = self.model.mesh.clone().ok_or_else(|| {
-            Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
-                .suggest("mesh.set { mesher: { kind: \"lattice\", size: \"25 mm\" } }")
-        })?;
-        if sizes.len() < 2 {
-            return Err(
-                Error::schema(format!("a convergence study needs at least two sizes, got {}", sizes.len())).at("sizes")
-            );
-        }
-        let mut h = Vec::with_capacity(sizes.len());
-        for (i, q) in sizes.iter().enumerate() {
-            let s = q.si().map_err(|e| e.at(format!("sizes[{i}]")))?;
-            if !(s.is_finite() && s > 0.0) {
-                return Err(Error::schema(format!("size {s} must be finite and positive")).at(format!("sizes[{i}]")));
-            }
-            h.push(s);
-        }
+        let (settings, h) = self.study_mesh(sizes)?;
         let mut progress = on_progress;
         let mut rows = Vec::with_capacity(h.len());
         let mut values = Vec::with_capacity(h.len());
@@ -358,6 +404,28 @@ impl Engine {
         Ok(Output::Study { report })
     }
 
+    /// Mesh inputs shared by a running study and replay that omits its numerical work.
+    pub(crate) fn study_mesh(&self, sizes: &[Q<Length>]) -> Result<(MeshSettings, Vec<f64>), Error> {
+        let settings = self.model.mesh.clone().ok_or_else(|| {
+            Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
+                .suggest("mesh.set { mesher: { kind: \"lattice\", size: \"25 mm\" } }")
+        })?;
+        if sizes.len() < 2 {
+            return Err(
+                Error::schema(format!("a convergence study needs at least two sizes, got {}", sizes.len())).at("sizes")
+            );
+        }
+        let mut h = Vec::with_capacity(sizes.len());
+        for (i, q) in sizes.iter().enumerate() {
+            let s = q.si().map_err(|e| e.at(format!("sizes[{i}]")))?;
+            if !(s.is_finite() && s > 0.0) {
+                return Err(Error::schema(format!("size {s} must be finite and positive")).at(format!("sizes[{i}]")));
+            }
+            h.push(s);
+        }
+        Ok((settings, h))
+    }
+
     /// One [`QuantityOfInterest`] read off a Result, in the Model's display units.
     fn quantity_of(&self, res: &StepResult, mesh: &Mesh, q: &QuantityOfInterest) -> Result<(f64, String), Error> {
         let (field, component) = match q {
@@ -411,6 +479,21 @@ impl Engine {
             Error::not_found("result", step.unwrap_or(name), &known).suggest("solve.run on that Step first")
         })?;
         Ok((name, hash, res))
+    }
+
+    /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
+    /// changed coordinates or connectivity; the Model hash covers every mesh input.
+    pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
+        let (name, hash, result) = self.stored(step)?;
+        if *hash != self.model_hash() {
+            return Err(Error::new(
+                ErrorCode::ResultStale,
+                format!("step '{name}' has a Result that does not match the current Model state"),
+            )
+            .at(format!("step '{name}'"))
+            .suggest(format!("solve.run on step '{name}' again")));
+        }
+        Ok(result)
     }
 
     /// One Result field by its wire name, which is what a host passes through: a `Field`
