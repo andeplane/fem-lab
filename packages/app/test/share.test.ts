@@ -400,6 +400,19 @@ describe('autosave', () => {
     expect(transport.dispatch).toHaveBeenCalled();
   });
 
+  it('restores an older Journal when undo returns to its content', async () => {
+    const a = makeAutosave({ store: memoryStore(), ...fakeTimers(), now: () => 100 });
+    const { registry } = autosaveRegistry(a);
+    a.note('a', journal(1));
+    await a.flush();
+    a.note('b', journal(2));
+    await a.flush();
+    a.note('a', journal(1));
+    const shown = a.history()[0]!;
+    await a.flush();
+    await expect(registry.dispatch({ cmd: 'file.restore', id: shown.id })).resolves.toMatchObject({ name: 'a' });
+  });
+
   it('merges revisions from two already-open sessions', async () => {
     const store = memoryStore();
     const a = makeAutosave({ store, now: () => 100 });
@@ -412,6 +425,22 @@ describe('autosave', () => {
     await b.flush();
     const { registry } = autosaveRegistry(b);
     await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toMatchObject({ revisions: [{ name: 'b' }, { name: 'a' }] });
+  });
+
+  it('keeps same-clock revisions distinct and restores either through the Registry', async () => {
+    const store = memoryStore();
+    const a = makeAutosave({ store, now: () => 100 });
+    const b = makeAutosave({ store, now: () => 100 });
+    await a.readAll();
+    await b.readAll();
+    a.note('a', journal(1));
+    await a.flush();
+    b.note('b', journal(2));
+    await b.flush();
+    const { registry } = autosaveRegistry(b);
+    const rows = (await registry.query({ query: 'query.autosaveHistory' }) as { revisions: { id: string; name: string }[] }).revisions;
+    expect(new Set(rows.map((row) => row.id)).size).toBe(2);
+    for (const row of rows) await expect(registry.dispatch({ cmd: 'file.restore', id: row.id })).resolves.toMatchObject({ name: row.name });
   });
 
   it('keeps a failed revision visible and retryable after a quota error', async () => {

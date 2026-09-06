@@ -351,7 +351,11 @@ export interface AutosaveOptions {
   onError?: (e: unknown) => void;
   /** Injected clock for deterministic revision names and storage tests. */
   now?: () => number;
+  /** Injected stable id source for deterministic tests; defaults to a UUID when available. */
+  id?: () => string;
 }
+
+let autosaveInstanceId = 0;
 
 /**
  * Writes the Journal to `store` after every Command, debounced. A failed write is reported and
@@ -365,6 +369,7 @@ export function makeAutosave({
   initiallyOn = true,
   onError,
   now = () => Date.now(),
+  id,
 }: AutosaveOptions): Autosave {
   let on = initiallyOn;
   let timer: unknown = null;
@@ -372,6 +377,7 @@ export function makeAutosave({
   let revisions: Saved[] = [];
   let hydrated: Promise<void> | null = null;
   let nextId = 0;
+  const instanceId = autosaveInstanceId++;
   let writing: Promise<void> = Promise.resolve();
 
   const normalize = (saved: Saved[]): Saved[] =>
@@ -425,9 +431,9 @@ export function makeAutosave({
     note(name, journal) {
       if (!on) return;
       const at = now();
-      const candidate = { id: `${at}-${nextId++}`, name, at, cmds: journal.map((e) => e.cmd) };
-      const current = pending[0] ?? revisions[0];
-      const revision = current && same(current, candidate) ? { ...candidate, id: current.id } : candidate;
+      const candidate = { id: id?.() ?? globalThis.crypto?.randomUUID?.() ?? `${at}-${instanceId}-${nextId++}`, name, at, cmds: journal.map((e) => e.cmd) };
+      const current = [...pending, ...revisions].find((revision) => same(revision, candidate));
+      const revision = current ? { ...candidate, id: current.id } : candidate;
       if (pending[0] && same(pending[0], revision)) pending[0] = revision;
       else pending = [revision, ...pending].slice(0, MAX_AUTOSAVES);
       if (timer === null) timer = setTimer(write, delayMs);

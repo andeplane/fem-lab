@@ -5,6 +5,22 @@ async function ready(page: Page): Promise<void> {
   await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
+async function storedAutosaves(page: Page): Promise<{ name: string; id?: string }[]> {
+  return page.evaluate(() => new Promise<{ name: string; id?: string }[]>((resolve, reject) => {
+    const open = indexedDB.open('femlab', 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const request = db.transaction('autosave', 'readonly').objectStore('autosave').get('last');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        resolve(Array.isArray(request.result) ? request.result : request.result ? [request.result] : []);
+        db.close();
+      };
+    };
+  }));
+}
+
 test.describe('@cpu autosave Journal revisions', () => {
   test('lists same-prefix revisions and reopens selected saved results state', async ({ page }) => {
     await page.addInitScript(() => {
@@ -52,5 +68,29 @@ test.describe('@cpu autosave Journal revisions', () => {
     await page.evaluate((id) => window.fem.dispatch({ cmd: 'file.restore', id }), solvedRevision.id);
     await expect.poll(async () => (await page.evaluate(() => window.fem.query.journal())).entries.length).toBe(solvedRevision.commands);
     await expect.poll(async () => Boolean(await page.evaluate(() => window.fem.query.result()))).toBe(true);
+  });
+
+  test('atomically merges concurrent autosaves from two browser tabs', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase('femlab');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    }));
+    await page.reload();
+    await ready(page);
+    const peer = await page.context().newPage();
+    await peer.goto('./');
+    await ready(peer);
+    await Promise.all([
+      page.evaluate(() => window.fem.model.new({ name: 'tab-a' })),
+      peer.evaluate(() => window.fem.model.new({ name: 'tab-b' })),
+    ]);
+    await expect.poll(async () => (await storedAutosaves(page)).filter((revision) => revision.name === 'tab-a' || revision.name === 'tab-b').length).toBe(2);
+    const saved = (await storedAutosaves(page)).filter((revision) => revision.name === 'tab-a' || revision.name === 'tab-b');
+    expect(saved.map((revision) => revision.name).sort()).toEqual(['tab-a', 'tab-b']);
+    expect(new Set(saved.map((revision) => revision.id)).size).toBe(2);
+    await peer.close();
   });
 });
