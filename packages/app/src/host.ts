@@ -315,7 +315,7 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         }
         const importedJournal = file.journal as Journal;
         const diff = (await transport.query({ query: 'query.journalDiff', base: importedJournal })) as JournalDiff;
-        if (current()) store.set({ journalComparison: diff, comparisonSource: 'imported', comparisonBaseline: structuredClone(importedJournal.entries) });
+        if (current(diff)) store.set({ journalComparison: diff, comparisonSource: 'imported', comparisonBaseline: structuredClone(importedJournal.entries) });
         return diff;
       },
     },

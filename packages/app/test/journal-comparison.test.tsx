@@ -97,6 +97,7 @@ it('queries the saved baseline freshly and reports no baseline before save or im
   expect(await s.registry.query({ query: 'query.journalComparison' })).toBeNull();
   expect(s.query).not.toHaveBeenCalled();
   s.store.markSaved({ entries: [first] });
+  s.store.set({ journal: { entries: [first, second], revision: 2, hash: 'b', canUndo: true, canRedo: false } });
   const current = diff('a', 'b', [second]); s.query.mockResolvedValueOnce(current);
   expect(await s.registry.query({ query: 'query.journalComparison' })).toEqual(current);
   expect(s.store.state.comparisonSource).toBe('saved');
@@ -139,4 +140,33 @@ it('discards an old-current reply even before another comparison query starts', 
   expect(s.store.state.journalComparison).toBeNull();
   expect(s.store.state.comparisonSource).toBe('imported');
   expect(s.store.state.comparisonBaseline).toEqual([first]);
+});
+
+it('does not draw a live-engine diff against a Store Journal that has not hydrated yet', async () => {
+  const s = setup(); await s.compare();
+  // A Command has completed in the engine, but query.model/query.journal hydration is pending.
+  // No Store reference or comparison request changes while the live Query returns the new hash.
+  const newer = diff('a', 'b', [second]); s.query.mockResolvedValueOnce(newer);
+  expect(await s.registry.query({ query: 'query.journalComparison' })).toBeNull();
+  expect(s.store.state.journal?.hash).toBe('a');
+  expect(s.store.state.journalComparison?.currentHash).toBe('a');
+  s.store.set({ journal: { entries: [first, second], revision: 2, hash: 'b', canUndo: true, canRedo: false } });
+  s.query.mockResolvedValueOnce(newer);
+  expect(await s.registry.query({ query: 'query.journalComparison' })).toEqual(newer);
+  expect(s.store.state.journalComparison?.currentHash).toBe('b');
+});
+
+
+it('does not select an imported comparison until its live-engine hash matches displayed rows', async () => {
+  const s = setup(); s.store.markSaved({ entries: [first] });
+  const newer = diff('colleague', 'b', [second]); s.query.mockResolvedValueOnce(newer);
+  await s.compare(second);
+  expect(s.store.state.comparisonSource).toBeNull();
+  expect(s.store.state.comparisonBaseline).toBeNull();
+  expect(s.store.state.journalComparison).toBeNull();
+  s.store.set({ journal: { entries: [first, second], revision: 2, hash: 'b', canUndo: true, canRedo: false } });
+  s.query.mockResolvedValueOnce(newer); await s.compare(second);
+  expect(s.store.state.comparisonSource).toBe('imported');
+  expect(s.store.state.comparisonBaseline).toEqual([second]);
+  expect(s.store.state.journalComparison).toEqual(newer);
 });

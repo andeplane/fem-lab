@@ -257,12 +257,14 @@ export class Store {
   }
 
   /** A reply may draw only while its request, current Journal and baseline selection still match. */
-  beginJournalComparison(): () => boolean {
+  beginJournalComparison(): (diff?: JournalDiff) => boolean {
     const request = ++this.comparisonRequest;
     const { journal, savedBaseline, comparisonBaseline, comparisonSource } = this.state;
-    return () => request === this.comparisonRequest && journal === this.state.journal
+    return diff => request === this.comparisonRequest && journal === this.state.journal
       && savedBaseline === this.state.savedBaseline && comparisonBaseline === this.state.comparisonBaseline
-      && comparisonSource === this.state.comparisonSource;
+      && comparisonSource === this.state.comparisonSource
+      // The live engine may advance before the displayed Journal finishes hydration.
+      && (diff === undefined || diff.currentHash === journal?.hash);
   }
 
   async refreshJournalComparison(): Promise<JournalDiff | null> {
@@ -272,7 +274,7 @@ export class Store {
     if (!entries || !this.journalDiffQuery) return null;
     try {
       const diff = await this.journalDiffQuery({ entries });
-      if (!current()) return null;
+      if (!current(diff)) return null;
       this.set({ journalComparison: diff, comparisonSource: source });
       return diff;
     } catch (error) {

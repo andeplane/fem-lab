@@ -129,3 +129,32 @@ test('@cpu a late imported comparison cannot replace a newer explicit Save', asy
   await expect(page.locator('.comparison-label')).toContainText('Since last explicit save/open');
   await expect(page.locator('.comparison-added')).toHaveCount(0);
 });
+
+test('@cpu a live-engine comparison waits for the displayed Journal to hydrate', async ({ page }) => {
+  await ready(page); await installReplyGate(page);
+  await page.evaluate(async () => {
+    await window.fem.model.new({ name: 'hydrated snapshot' });
+    await window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '1 m', '1 m'] });
+  });
+  const download = page.waitForEvent('download');
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'file.save' })); await download;
+  await page.evaluate(() => {
+    const gate = (window as unknown as { comparisonGate: ReplyGate }).comparisonGate;
+    gate.op = 'query.model'; gate.pending = window.fem.model.setName({ name: 'ahead of hydration' });
+  });
+  await page.waitForFunction(() => (window as unknown as { comparisonGate: ReplyGate }).comparisonGate.held === 1);
+  // The real Worker has recorded the edit, while the app's model/Journal refresh is held.
+  expect(await page.evaluate(() => window.fem.query.journal())).toMatchObject({ entries: [
+    { cmd: { cmd: 'model.new' } }, { cmd: { cmd: 'geometry.addBox' } },
+    { cmd: { cmd: 'model.setName', name: 'ahead of hydration' } },
+  ] });
+  expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.journalComparison' }))).toBeNull();
+  await expect(page.locator('.comparison-added')).toHaveCount(0);
+  await page.evaluate(async () => {
+    const gate = (window as unknown as { comparisonGate: ReplyGate }).comparisonGate;
+    gate.release(); await gate.pending;
+  });
+  expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.journalComparison' })))
+    .toMatchObject({ sharedEntries: 2, added: [{ cmd: { cmd: 'model.setName', name: 'ahead of hydration' } }] });
+  expect(await page.locator('.comparison-added .no').allTextContents()).toEqual(['2']);
+});

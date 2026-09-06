@@ -35,7 +35,7 @@ it('compares an imported file through journalDiff without importing or changing 
   const current = entries[0]!;
   const imported = { ...current, cmd: { cmd: 'model.new' as const, name: 'imported' } };
   const store = new Store({ ...new Store().state, journal: { entries: [current], revision: 1, hash: 'active', canUndo: true, canRedo: false } });
-  const query = vi.fn(async () => ({ baseHash: 'base', currentHash: 'current', sharedEntries: 0, removed: [imported], added: [current] }));
+  const query = vi.fn(async () => ({ baseHash: 'base', currentHash: 'active', sharedEntries: 0, removed: [imported], added: [current] }));
   const importFile = vi.fn();
   const transport = { query, importFile } as unknown as WorkerTransport;
   const compare = appHostCommands(store, transport, { current: null }, async () => undefined).find((def) => def.name === 'file.compare')!;
