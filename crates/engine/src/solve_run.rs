@@ -630,7 +630,10 @@ impl Engine {
     }
 
     /// The stored Result of a Step, or `not-found` naming the Steps that have one.
-    pub(crate) fn stored<'e>(&'e self, step: Option<&str>) -> Result<(&'e str, &'e String, u32, &'e StepResult), Error> {
+    pub(crate) fn stored<'e>(
+        &'e self,
+        step: Option<&str>,
+    ) -> Result<(&'e str, &'e String, u32, &'e StepResult), Error> {
         let record = self.result_record(step, None)?;
         Ok((&record.step, &record.input_hash, record.revision, &record.result))
     }
