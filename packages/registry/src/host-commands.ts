@@ -44,6 +44,7 @@ export const PickTarget = z.enum(['face', 'body', 'off']);
 /** Resizable shell panels. Their sizes are view state and never enter the Journal. */
 export const PanelTarget = z.enum(['tree', 'properties', 'bottom', 'assistant']);
 export const ScreenshotOptions = z.object({ width: int.optional(), height: int.optional(), legend: z.boolean().optional(), title: z.string().optional() });
+export type AiProvider = 'anthropic' | 'openai';
 export const CopyWhat = z.union([
   z.object({ kind: z.literal('selection') }),
   z.object({ kind: z.literal('mention'), ref: z.string() }),
@@ -137,7 +138,7 @@ export interface HostContext {
     stop(): void;
     setSource(code: string, append?: boolean): void;
   };
-  chat: { send(text: string): void; insertMention(ref: string): void; clear(): void };
+  chat: { send(text: string): void; insertMention(ref: string): void; setDraft(text: string): void | Promise<void>; clear(): void };
   skills(): Skill[];
   clipboard: { writeText(text: string): Promise<void> };
   files: {
@@ -173,7 +174,7 @@ export interface HostContext {
     writeBytes(path: string, bytes: Uint8Array): Promise<void>;
   };
   examples: { fetch(name: string): Promise<string> };
-  ai: { setKey(key: string | null): void; setModel(model: string): void };
+  ai: { setKey(key: string | null, provider: AiProvider): void; setModel(model: string): void };
   env: { webgpu: boolean; crossOriginIsolated: boolean; threads: number; userAgent: string; engine: 'local' | 'remote' };
 }
 
@@ -397,7 +398,7 @@ export const HOST_COMMANDS: HostDef[] = [
     none, (_, ctx) => ctx.projects.save()),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
-  def('ai.setKey', 'Store the Anthropic API key for the AI assistant in this browser only (localStorage), or `null` to forget it. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable() }), ({ key }, ctx) => ctx.ai.setKey(key), false),
+  def('ai.setKey', 'Store an AI provider key in this browser only (localStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
   def('ai.setModel', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
 ];
 

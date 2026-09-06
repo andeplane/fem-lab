@@ -13,7 +13,7 @@ export interface KeyInfo {
   source: KeySource;
 }
 
-/** Anthropic keeps `femlab.ai.key`, the slot the `ai.setKey` host Command already writes. */
+/** Provider-specific slots used by the `ai.setKey` host Command. */
 export const KEY_SLOT: Record<ProviderId, string> = { anthropic: 'femlab.ai.key', openai: 'femlab.ai.key.openai' };
 export const MODEL_SLOT = 'femlab.ai.model';
 
