@@ -127,7 +127,8 @@ gallery presentation (#30), and the integrated workflow checks, are still open r
   quadrature for all four supported idealisations; 100% GPU-inclusive coverage, exact-area
   tests and Chromium draft/remesh cases pass. Current-head CI remains pending.
 - #217 / PR #219 (`6d5b07f`) fixes a traced service-worker first-load race that failed PR #158
-  browser CI. Review and local headerless Chromium pass; do not treat a blind rerun as a fix.
+  browser CI. Merged at `7f8ac6b` after review, all seven jobs and every executed step passed.
+  #158 is integrating the fix with current main and requires fresh verification.
 - #174 / PR #220 (`2837901`) passed final review and seven independent Chromium checks
   after focus/Escape, CSS-clamped divider alignment, selector and no-motion drag corrections.
 - #173 / PR #227 (`cf4e59a`) passed final review after its live-Journal/draft view toggle
