@@ -161,44 +161,88 @@
       "cmd": "mesh.set",
       "mesher": {
         "kind": "lattice",
-        "size": "4 mm"
+        "size": "6 mm"
       },
       "order": 1
     },
-    "hashAfter": "3298152756e4a6855499f7c16b4931da79ffaf6100226a5820730f59d48a7790"
+    "hashAfter": "7c9b9a6636da4d261b4f6fdf9fd24d365734e215012534dbad05db330bbcf8da"
   },
   {
     "seq": 6,
     "cmd": {
-      "cmd": "constraint.fix",
-      "name": "bore",
-      "on": "flange.bottom"
+      "cmd": "geometry.nameFace",
+      "name": "seat",
+      "of": "flange",
+      "where": {
+        "kind": "plane",
+        "normal": [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        "offset": "0 mm"
+      }
     },
-    "hashAfter": "5efb32a56c6cf47a25c1ff326724bc5f57ea27f423682217f4b97e25ad5a10b4"
+    "hashAfter": "855770bada7126804e3adf97d5fd6a235fdae1dcf553f4b2c4d6f2049e2b0637"
   },
   {
     "seq": 7,
     "cmd": {
-      "cmd": "load.pressure",
-      "name": "seat",
-      "on": "flange.top",
-      "value": "5 MPa"
+      "cmd": "geometry.nameFace",
+      "name": "crown",
+      "of": "flange",
+      "where": {
+        "kind": "plane",
+        "normal": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "offset": "20 mm"
+      }
     },
-    "hashAfter": "2e953264b1ea9a0f469bd3c075b6c76bcbe5d5220c5a80aa7e8a4d383bb94f7d"
+    "hashAfter": "22557dc97bb730435daaa77bee71e47745e52189734d7b74de1eafdc25ea5b16"
   },
   {
     "seq": 8,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "seated",
+      "on": "seat"
+    },
+    "hashAfter": "cccf3c3dfc8c8738034e92bf3c3144018911edbef65b42132dfa198dbbcd6382"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "preload",
+      "on": "crown",
+      "value": "5 MPa"
+    },
+    "hashAfter": "48937865117eb1136bc7503e45cdba9a9ff649f382822ddd997bf99ecd76be68"
+  },
+  {
+    "seq": 10,
     "cmd": {
       "cmd": "step.add",
       "name": "static",
       "procedure": "static",
       "constraints": [
-        "bore"
+        "seated"
       ],
       "loads": [
-        "seat"
+        "preload"
       ]
     },
-    "hashAfter": "8802e9afa5a7f9dfb44fd066c92a1ca37f905df6f20f2cd46561aaac7c598d7d"
+    "hashAfter": "ab4bfa3b8024e7f22f919f2ca910b643ddc3b13b4f65e5e61c389399a8c8ec53"
+  },
+  {
+    "seq": 11,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "ab4bfa3b8024e7f22f919f2ca910b643ddc3b13b4f65e5e61c389399a8c8ec53"
   }
 ]

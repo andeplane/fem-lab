@@ -61,11 +61,11 @@
       "cmd": "mesh.set",
       "mesher": {
         "kind": "lattice",
-        "size": "25 mm"
+        "size": "50 mm"
       },
       "order": 1
     },
-    "hashAfter": "6b25081e7687f1a77f38e63cf65b6945720404fc12d66772e34e6c51efa75feb"
+    "hashAfter": "ab5e6e6e6048c3bf11ad89e2c67b6fe27a941124024170dfd72730e8537bffbe"
   },
   {
     "seq": 6,
@@ -79,7 +79,7 @@
         "uz"
       ]
     },
-    "hashAfter": "e935b81f4a33bbb231bba0b9bf560163389b0dc920c9ed3efdbb9560f9fe1be7"
+    "hashAfter": "f4aeb3bcfcef800160c3032ad36a5010ec30bd271e231bd3ed034d5a702e99a1"
   },
   {
     "seq": 7,
@@ -92,7 +92,7 @@
         "uz"
       ]
     },
-    "hashAfter": "bda54df8a98906126075f7fb4a5bb78ffd92673082795259f8df88938f3a0cd7"
+    "hashAfter": "a52cac25e5b027e1a8eb8f19f5c15d5da6b3560223758d41d74414cf1f0b272e"
   },
   {
     "seq": 8,
@@ -102,7 +102,7 @@
       "on": "beam.zmax",
       "value": "-0.02 MPa"
     },
-    "hashAfter": "aa6c560fd268a6371e5e4a3d7131a3c7989d70ffca1d282231a48cbdc0e5b3b6"
+    "hashAfter": "38c4527f9665a007d8349ae1163596a2158e36ae6a266de04fd85fbcb3b36b23"
   },
   {
     "seq": 9,
@@ -118,6 +118,14 @@
         "udl"
       ]
     },
-    "hashAfter": "e16c2bd0974338e0470279c517314879f163fabfa38c21852897866d7fc844a8"
+    "hashAfter": "5683d49258387d2698790a558a57c905c8d772bc06bb5225563e412f2ea6e42e"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "5683d49258387d2698790a558a57c905c8d772bc06bb5225563e412f2ea6e42e"
   }
 ]

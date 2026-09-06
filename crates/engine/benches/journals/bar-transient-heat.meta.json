@@ -1,0 +1,20 @@
+{
+  "title": "Transient heat in a bar (NAFEMS T3)",
+  "tag": "NAFEMS",
+  "tags": [
+    "thermal",
+    "heat-transient",
+    "history"
+  ],
+  "difficulty": 3,
+  "sentence": "A bar driven by a sinusoidal surface temperature and held at zero at the other end — the θ-method marching in time.",
+  "expected": {
+    "quantity": "T 20 mm inside the driven face at t = 32 s",
+    "value": 36.79,
+    "unit": "K",
+    "reference": "NAFEMS T3: 36.60 °C"
+  },
+  "theory": "Transient conduction $\\rho c_p \\dot T = \\nabla\\cdot(k\\nabla T)$ is marched by the $\\theta$-method: $\\left(\\mathbf{C} + \\theta\\,\\Delta t\\,\\mathbf{K}\\right)\\mathbf{T}^{n+1} = \\left(\\mathbf{C} - (1-\\theta)\\,\\Delta t\\,\\mathbf{K}\\right)\\mathbf{T}^{n} + \\Delta t\\,\\mathbf{f}$. $\\theta = 0.5$ is Crank–Nicolson, second-order accurate and unconditionally stable; $\\theta = 1$ is backward Euler, first-order but free of the oscillation Crank–Nicolson can show at a step change. The Step runs in kelvin above the initial state, which is the same problem: linear conduction is invariant under a shift of the whole field.",
+  "tutorial": "transient-heat",
+  "thumbnail": null
+}

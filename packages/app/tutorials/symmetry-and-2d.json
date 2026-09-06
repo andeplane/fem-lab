@@ -1,0 +1,114 @@
+{
+  "id": "symmetry-and-2d",
+  "title": "Symmetry and 2D idealisations",
+  "minutes": 9,
+  "summary": "Model a quarter of a plate with a hole instead of all of it: what plane stress assumes, what a symmetry constraint really says, and how to check the answer against the stress concentration factor everybody quotes.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "The part is a wide steel plate in tension with a circular hole through it. Modelled honestly it is a 3D solid with four planes of symmetry; modelled well it is a quarter of a 2D sheet. This tutorial is about earning that reduction rather than assuming it.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "kirsch-quarter-plate" }
+    },
+    {
+      "title": "Units",
+      "explain": "Metres and megapascals. The plate is written 20 m wide with a 1 m hole so the hole is genuinely small compared with the plate — Kirsch's formula is for an *infinite* plate, and the check only works if the model resembles one.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "m", "force": "N", "stress": "MPa" } }
+    },
+    {
+      "title": "The first idealisation: plane stress",
+      "explain": "`model.setIdealisation` is the decision to solve a 2D problem instead of a 3D one, and it is a modelling assumption you own. **Plane stress** says the out-of-plane stress is zero — right for a thin sheet free to contract through its thickness. **Plane strain** says the out-of-plane *strain* is zero — right for a long body restrained along its axis: a dam, a tunnel, a slice of a long pipe. They are different problems and can give noticeably different answers; picking one because the mesh happens to be flat is how people get 10 % wrong for free. `thickness` is the sheet thickness the reported forces are per.",
+      "expect": { "cmd": "model.setIdealisation" },
+      "highlight": "model.setIdealisation",
+      "doIt": { "cmd": "model.setIdealisation", "idealisation": { "kind": "planeStress", "thickness": "1 m" } }
+    },
+    {
+      "title": "Material",
+      "explain": "Steel. Note there is no `rho`: a static solve without gravity never asks for it.",
+      "expect": { "cmd": "material.add" },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3 }
+    },
+    {
+      "title": "The mesh *is* the geometry here",
+      "explain": "Two mapped blocks, each with one edge lying on the hole as a true arc, meeting along the 45° diagonal. The mapped mesher needs no `geometry.add` at all: the blocks are the body, and each edge tag becomes a face Set — `plate.xmin`, `plate.ymin`, `plate.xmax`, `plate.hole`. `grading: [1.25, 1]` puts the small elements where the stress changes fastest, at the hole. At `order: 2` the mid-side nodes sit on the real circle, so the hole is represented to second order and not as a 32-sided polygon.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": {
+          "kind": "mapped",
+          "body": "plate",
+          "blocks": [
+            {
+              "corners": [["1 m", "0 m"], ["20 m", "0 m"], ["20 m", "20 m"], ["0.7071067811865476 m", "0.7071067811865476 m"]],
+              "edges": [{ "kind": "line" }, { "kind": "line" }, { "kind": "line" }, { "kind": "arc", "center": ["0 m", "0 m"], "ccw": false }],
+              "n": [32, 32],
+              "grading": [1.25, 1.0],
+              "tags": ["ymin", "xmax", null, "hole"]
+            },
+            {
+              "corners": [["0.7071067811865476 m", "0.7071067811865476 m"], ["20 m", "20 m"], ["0 m", "20 m"], ["0 m", "1 m"]],
+              "edges": [{ "kind": "line" }, { "kind": "line" }, { "kind": "line" }, { "kind": "arc", "center": ["0 m", "0 m"], "ccw": false }],
+              "n": [32, 32],
+              "grading": [1.25, 1.0],
+              "tags": [null, "ymax", "xmin", "hole"]
+            }
+          ]
+        },
+        "order": 2
+      }
+    },
+    {
+      "title": "Assign the material",
+      "explain": "The mapped mesher named the Body `plate`; assign to it as usual.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["plate"] }
+    },
+    {
+      "title": "The first symmetry plane",
+      "explain": "`constraint.symmetry` is not \"fixed\". It says one thing: nothing crosses this plane. The displacement normal to it is zero and the shear traction on it vanishes; everything tangential is free. That is exactly the condition the missing three quarters of the plate would have imposed, which is why cutting them away costs nothing — provided the geometry, the material *and the loading* are all symmetric about the plane. Break any one of those and the trick is invalid.",
+      "expect": { "cmd": "constraint.symmetry", "match": { "name": "symx" } },
+      "highlight": "constraint.symmetry",
+      "doIt": { "cmd": "constraint.symmetry", "name": "symx", "on": "plate.xmin", "normal": "x" }
+    },
+    {
+      "title": "The second one",
+      "explain": "Two symmetry planes reduce the model to a quarter — a quarter of the elements for the same resolution, or four times the resolution for the same cost. They also pin the body against rigid-body motion: the two normal restraints between them remove both translations and the in-plane rotation, so no extra \"soft spring\" is needed.",
+      "expect": { "cmd": "constraint.symmetry", "match": { "name": "symy" } },
+      "highlight": "constraint.symmetry",
+      "doIt": { "cmd": "constraint.symmetry", "name": "symy", "on": "plate.ymin", "normal": "y" }
+    },
+    {
+      "title": "Pull on the far edge",
+      "explain": "A negative pressure is tension: `-100 MPa` on `plate.xmax` pulls outward. That is the nominal stress σ the concentration factor is measured against. The far edge is 20 hole-radii away, so what happens at the hole has decayed to nothing there — Saint-Venant's principle at work, and the reason the load's exact distribution does not matter.",
+      "expect": { "cmd": "load.pressure", "match": { "name": "tension" } },
+      "highlight": "load.pressure",
+      "doIt": { "cmd": "load.pressure", "name": "tension", "on": "plate.xmax", "value": "-100 MPa" }
+    },
+    {
+      "title": "The Step",
+      "explain": "An ordinary static Step with both symmetry constraints and the one load.",
+      "expect": { "cmd": "step.add", "match": { "name": "static" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["symx", "symy"], "loads": ["tension"] }
+    },
+    {
+      "title": "Solve, then probe the hole",
+      "explain": "Probe σxx at (0, 1) — the top of the hole, on the y axis. It comes out near 302 MPa against a nominal 100, so Kt ≈ 3.02: within 1 % of the textbook 3. Then probe σyy at (1, 0), the side of the hole on the load axis: about −100 MPa, a *compression* equal to the applied tension. That second number is the one that surprises people, and it is the better check, because getting it right means the whole field is right and not just the peak.",
+      "expect": { "cmd": "solve.run", "match": { "step": "static" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "static" }
+    },
+    {
+      "title": "Kirsch, and what the idealisations cost",
+      "explain": "One closed form, two assumptions, and the list of ways each of them can be wrong.",
+      "expect": null,
+      "theory": "**Kirsch (1898).** For an infinite plate in uniaxial tension $\\sigma$ with a hole of radius $a$, the stress on the hole edge is\n$$\\sigma_{\\theta\\theta}(a,\\theta) = \\sigma\\left(1 - 2\\cos 2\\theta\\right)$$\nmeasuring $\\theta$ from the load direction. At $\\theta = 90^\\circ$ (across the load) this is $3\\sigma$: the stress concentration factor $K_t = 3$, independent of the hole size, which is why a small hole is as dangerous as a large one. At $\\theta = 0$ (along the load) it is $-\\sigma$, a compression. Away from the hole the disturbance dies as $1/r^2$, so at three radii the field is within a few per cent of nominal.\n\nThe full field, for reference:\n$$\\sigma_{rr} = \\frac{\\sigma}{2}\\left(1 - \\frac{a^2}{r^2}\\right) + \\frac{\\sigma}{2}\\left(1 + \\frac{3a^4}{r^4} - \\frac{4a^2}{r^2}\\right)\\cos 2\\theta$$\n\n**$K_t = 3$ is for an infinite plate.** A plate of finite width $w$ carries more, because the ligament beside the hole has less material to carry the same force. For $2a/w = 0.2$ the factor is about $3.14$ on the *net* section; the standard NAFEMS finite-width case quotes $3.018$. If your model's plate is not much wider than the hole, do not compare with 3 — compare with a chart, or with the net-section stress.\n\n**What plane stress assumed.** That $\\sigma_{zz} = 0$ through the thickness. True in a thin sheet; false in the middle of a thick one, where the material cannot contract freely and the state drifts toward plane strain. The transition happens over roughly one thickness from a free surface. For a plate several times thicker than the hole radius, model it as a 3D solid and stop guessing.\n\n**What the symmetry assumed.** That geometry, material and loading are all symmetric about both planes. The first is obvious to check and the last is the one people forget: a symmetric part under an unsymmetric load has no symmetry to exploit. And symmetry constraints suppress antisymmetric modes entirely — a quarter model can never predict a buckling or vibration mode that is antisymmetric about a cut plane, so a modal or buckling analysis on a symmetric quarter model silently loses half of the answers."
+    }
+  ]
+}

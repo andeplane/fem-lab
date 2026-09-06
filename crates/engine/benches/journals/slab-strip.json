@@ -119,5 +119,13 @@
       ]
     },
     "hashAfter": "2224e10ab6aa74f3456b4fbb8e70e41c7369ca4520cb317b126dc2cd31710272"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "2224e10ab6aa74f3456b4fbb8e70e41c7369ca4520cb317b126dc2cd31710272"
   }
 ]

@@ -1,11 +1,21 @@
 {
   "title": "NAFEMS LE10 thick plate",
   "tag": "NAFEMS",
-  "sentence": "LE1's elliptic membrane extruded into a 3D plate under uniform pressure \u2014 a 3D solid benchmark.",
-  "reference": {
-    "label": "\u03c3yy(D)",
-    "value": "\u22125.38 MPa"
+  "tags": [
+    "static",
+    "solid",
+    "hex20",
+    "bending"
+  ],
+  "difficulty": 3,
+  "sentence": "LE1's elliptic membrane extruded into a 3D plate under uniform pressure — a 3D solid benchmark.",
+  "expected": {
+    "quantity": "σ_yy at D on the upper surface",
+    "value": -5.348,
+    "unit": "MPa",
+    "reference": "NAFEMS LE10: −5.38 MPa"
   },
-  "theory": "NAFEMS Standard Benchmark LE10: hex20 or tet10 elements converge to \u03c3yy(D) = \u22125.38 MPa within 2 %; hex8 shows the linear-element bending error the benchmark is known for.",
+  "theory": "LE10 is LE1's section as a $0.6\\,\\mathrm{m}$ thick plate under $1\\,\\mathrm{MPa}$, clamped at the outer rim. The target $\\sigma_{yy} = -5.38\\,\\mathrm{MPa}$ is on the upper surface at D, so it is a bending stress: it needs enough elements through the thickness, which is why the sweep uses four quadratic layers.",
+  "tutorial": null,
   "thumbnail": null
 }

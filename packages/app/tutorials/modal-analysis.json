@@ -1,0 +1,77 @@
+{
+  "id": "modal-analysis",
+  "title": "Modal analysis of a cantilever",
+  "minutes": 7,
+  "summary": "Find the natural frequencies of a clamped-free beam and check the first one against Euler–Bernoulli — including why a finite element model always predicts frequencies that are a little too high.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "A modal analysis asks a different question from a static one — not \"how far does it move under this load\" but \"what shapes does it like to vibrate in, and how fast\". The Model is built the same way.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "cantilever-modal" }
+    },
+    {
+      "title": "Choose units",
+      "explain": "Millimetres for a metre-long beam. Frequencies always come back in hertz.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "force": "kN", "stress": "MPa" } }
+    },
+    {
+      "title": "Add the beam",
+      "explain": "A 1 m beam, 50 mm wide and 25 mm deep. The section is deliberately *not* square: a square section has the same stiffness in both bending planes, so every bending mode comes in a degenerate pair at the same frequency, which is confusing the first time you see it. A rectangle separates them.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "beam" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "50 mm", "25 mm"] }
+    },
+    {
+      "title": "Density is not optional now",
+      "explain": "A static solve never touches `rho`; a modal solve is nothing but a fight between stiffness and mass, so `rho` is required and a Material without it makes the Step refuse. Frequencies scale as `√(E/ρ)`: get the density wrong by 10 % and every frequency is wrong by 5 %.",
+      "expect": { "cmd": "material.add", "match": { "name": "steel" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7800 kg/m^3", "source": "EN 10025" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material, one Body.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] }
+    },
+    {
+      "title": "Mesh it, quadratic",
+      "explain": "20 elements along the beam and 2 across each section dimension, at `order: 2` (hex20). Mode shapes are curved, and a quadratic element represents curvature directly; a linear mesh needs several times as many elements for the same frequency accuracy. Giving `size` as explicit counts rather than a length puts the elements exactly where you want them.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": { "nx": 20, "ny": 2, "nz": 2 } }, "order": 2 }
+    },
+    {
+      "title": "Clamp the root",
+      "explain": "A modal Step needs constraints for the same reason a static one does: without them the structure has six rigid-body modes at zero frequency, and the first real mode is the seventh. That is a legitimate analysis (it is how you check a free-floating part), but a cantilever is clamped.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "root" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" }
+    },
+    {
+      "title": "Ask for four modes",
+      "explain": "`procedure: \"modal\"` with `nModes: 4`. There are no Loads: a natural frequency is a property of the structure, not of what you do to it. The Step solves the eigenproblem `K φ = ω² M φ` — the shapes `φ` in which the elastic restoring force is exactly proportional to the inertia, so the beam can swing in them for free.",
+      "expect": { "cmd": "step.add", "match": { "name": "modes" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "modes", "procedure": "modal", "constraints": ["root"], "loads": [], "output": ["displacement"], "nModes": 4 }
+    },
+    {
+      "title": "Solve and read the frequencies",
+      "explain": "The Results panel lists four frequencies: about 21.1, 42.0, 131.7 and 260.3 Hz. Animate each one. Modes 1 and 3 wave in the thin direction (25 mm deep); modes 2 and 4 wave in the stiff direction (50 mm deep). The mode shapes have no magnitude — an eigenvector is only defined up to a scale factor, so the displayed amplitude means nothing and only the *shape* and the frequency are results.",
+      "expect": { "cmd": "solve.run", "match": { "step": "modes" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "modes" }
+    },
+    {
+      "title": "Check it against the formula, and note the sign of the error",
+      "explain": "Euler–Bernoulli gives 20.96, 41.91, 131.32 and 262.66 Hz. Three of the four computed values are *above* the formula, by 0.2–0.5 %. That is not a coincidence and it is worth understanding: read the theory below.",
+      "expect": null,
+      "theory": "For a clamped-free prismatic beam,\n$$f_n = \\frac{\\beta_n^2}{2\\pi}\\sqrt{\\frac{EI}{\\rho A L^4}},\\qquad \\beta_1 = 1.8751,\\; \\beta_2 = 4.6941,\\; \\beta_3 = 7.8548$$\nwith $I = \\dfrac{bh^3}{12}$ about the axis you are bending about. The $50 \\times 25\\,\\mathrm{mm}$ section gives two different $I$, hence two interleaved families:\n$21.0\\,\\mathrm{Hz}$ and $131\\,\\mathrm{Hz}$ in the thin plane, $41.9\\,\\mathrm{Hz}$ and $263\\,\\mathrm{Hz}$ in the stiff one.\n\n**Why the computed frequencies come in from above.** A displacement finite element model can only move in the shapes its shape functions can span, so it is a *constrained* version of the real beam — and a constraint can only add stiffness, never remove it. With the consistent mass matrix (the same shape functions used for $\\mathbf{M}$ as for $\\mathbf{K}$) the discrete eigenvalues are therefore upper bounds on the true ones, and every frequency falls as you refine, approaching the exact value from above. If a refinement makes a frequency *rise*, look for a modelling change rather than a converging mesh.\n\nA lumped mass matrix breaks that guarantee — it usually errs low — which is why an explicit dynamics run (which needs a lumped mass) does not give you the same bound.\n\n**Degenerate pairs.** Give the beam a square or circular section and $I$ is the same about every axis: modes 1 and 2 then have identical frequencies, and the solver returns an arbitrary pair of shapes spanning that two-dimensional eigenspace. Two frequencies printed to five identical digits are not a bug; they are a symmetry. Any rotation of the two shapes is an equally valid answer, so never read meaning into the particular directions the solver happened to pick.\n\n**The last mode is the least trustworthy.** Mode 4 here is $0.9\\,\\%$ *below* Euler–Bernoulli rather than above it, because at that wavelength the beam is no longer slender: shear deformation and rotary inertia, which the formula ignores and the solid elements include, soften the real beam. Ask for a few more modes than you need and treat the top of the list as unconverged."
+    }
+  ]
+}

@@ -1,6 +1,21 @@
 {
   "title": "Bolted flange",
   "tag": "everyday",
+  "tags": [
+    "static",
+    "csg",
+    "lattice",
+    "named-faces"
+  ],
+  "difficulty": 2,
   "sentence": "A circular flange with a central bore and a six-bolt hole pattern, seated under a uniform preload pressure.",
+  "expected": {
+    "quantity": "peak von Mises",
+    "value": 7.228,
+    "unit": "MPa",
+    "reference": "no closed form; a stair-stepped lattice puts only two or three elements across a 12 mm bolt hole, so read this as a load path, not a stress"
+  },
+  "theory": "The lattice mesher stair-steps a CSG solid, so the Body's own face Sets do not survive onto the mesh. `geometry.nameFace` with a plane predicate names the flat seat and crown from the mesh itself, which is the general way to put a boundary condition on a body no structured mesher fits.",
+  "tutorial": null,
   "thumbnail": null
 }

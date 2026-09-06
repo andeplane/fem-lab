@@ -1,0 +1,108 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "cantilever-modal"
+    },
+    "hashAfter": "58de6347cf18a6e915af3fa6ea2888b1ffdc8974b6c168236c3fba0469c6db12"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "kN",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "5f63ad24f83f447e8fb9a39155e3b3c9714490e3a972d7aabe62de964e5b7013"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addBox",
+      "name": "beam",
+      "size": [
+        "1 m",
+        "50 mm",
+        "25 mm"
+      ]
+    },
+    "hashAfter": "21d411901b5422987a9fb76eca2ed29268ee79fb61580fa1ae3e942dd93b57e8"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3",
+      "source": "EN 10025"
+    },
+    "hashAfter": "2df9487e4028f258260e58d039b0a8be8f80a792d8f7fc74d072ae5aff83d7e1"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "beam"
+      ]
+    },
+    "hashAfter": "4853ba5ff46210633dae048615062daecc199c68174c264cda27e8e6e62e2cda"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 20,
+          "ny": 2,
+          "nz": 2
+        }
+      },
+      "order": 2
+    },
+    "hashAfter": "30ba1745cf2cb50ba0993253f9a0d5bacd9df7f6547edbb98cbe250e7cfd4efd"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.xmin"
+    },
+    "hashAfter": "a73c68460939557f3579d20478c167e7811b8debf3a60d0c58f11d33abb0e7c4"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "modes",
+      "procedure": "modal",
+      "constraints": [
+        "root"
+      ],
+      "loads": [],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 4
+    },
+    "hashAfter": "6091811d31bfc05939f61f9693628565ec7e4a72b6832f0d2073b3d13cae9952"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "modes"
+    },
+    "hashAfter": "6091811d31bfc05939f61f9693628565ec7e4a72b6832f0d2073b3d13cae9952"
+  }
+]

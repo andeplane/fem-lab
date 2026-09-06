@@ -1,0 +1,98 @@
+{
+  "id": "transient-heat",
+  "title": "Transient heat and the θ-method",
+  "minutes": 9,
+  "summary": "March a driven bar through time with the θ-method, then run the same problem again with backward Euler and see what the choice of θ and Δt actually costs you.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "This is NAFEMS benchmark T3: a bar driven by a temperature that swings as a sine, held at zero at the far end. It has a published answer, which is what makes it worth building rather than inventing your own transient.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "bar-transient-heat" }
+    },
+    {
+      "title": "Units, including time",
+      "explain": "`model.setUnits` takes a `time` entry. Every `dt`, `tEnd` and history time is read and printed in it.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "time": "s" } }
+    },
+    {
+      "title": "Add the bar",
+      "explain": "100 mm long and a thin 5 × 5 mm section — the published benchmark is one-dimensional, and a thin bar with no side boundary conditions is the 3D way to say that. Faces with no Command on them are insulated, so no heat escapes sideways.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "bar" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "bar", "size": ["0.1 m", "5 mm", "5 mm"] }
+    },
+    {
+      "title": "A material with heat capacity",
+      "explain": "Time enters through `rho` and `cp`. The combination that matters is the thermal diffusivity `α = k/(ρ·cp)`, in m²/s: it sets how fast a disturbance spreads, and every transient timescale in the problem is `L²/α`. Here that is about 90 s, which is why a 32 s run is interesting and a 0.1 s run would show nothing.",
+      "expect": { "cmd": "material.add" },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "slab", "E": "210 GPa", "nu": 0.3, "rho": "7200 kg/m^3", "k": "35 W/(m K)", "cp": "440.5 J/(kg K)", "source": "NAFEMS T3" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material on the one Body.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "slab", "bodies": ["bar"] }
+    },
+    {
+      "title": "Mesh it: twenty elements along",
+      "explain": "Space and time have to be resolved together. A rule of thumb for the θ-method is that `α·Δt` should be comparable to the square of the element size — much smaller and the fine elements are wasted, much larger and a sharp front is smeared over an element. Twenty elements at Δt = 0.5 s is in the right region for this bar.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": { "nx": 20, "ny": 1, "nz": 1 } } }
+    },
+    {
+      "title": "The driven face",
+      "explain": "`constraint.temperature` with a value of \"100 K\" — a *difference*, not an absolute temperature, because this Step runs in kelvin above the initial state. In a transient Step the prescribed value is multiplied by the Step's `amplitude`, so this face follows `100·g(t)`.",
+      "expect": { "cmd": "constraint.temperature", "match": { "name": "driven" } },
+      "highlight": "constraint.temperature",
+      "doIt": { "cmd": "constraint.temperature", "name": "driven", "on": "bar.xmax", "value": "100 K" }
+    },
+    {
+      "title": "The held face",
+      "explain": "The other end stays at zero for the whole run. `0 K` times any amplitude is still zero.",
+      "expect": { "cmd": "constraint.temperature", "match": { "name": "cold" } },
+      "highlight": "constraint.temperature",
+      "doIt": { "cmd": "constraint.temperature", "name": "cold", "on": "bar.xmin", "value": "0 K" }
+    },
+    {
+      "title": "The transient Step: Crank–Nicolson",
+      "explain": "`procedure: \"heat-transient\"` needs `dt`, `tEnd` and an `initial` temperature; `theta` picks the integrator and `amplitude` is the time function. `theta: 0.5` is Crank–Nicolson. `outputEvery: 16` keeps every sixteenth step in the history rather than all 64, which is what a plot wants. The `amplitude` is data, never a formula you type: a sine or a table, so the Journal replays identically anywhere.",
+      "expect": { "cmd": "step.add", "match": { "name": "crankNicolson" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "crankNicolson", "procedure": "heat-transient", "constraints": ["driven", "cold"], "loads": [], "output": ["temperature"], "dt": "0.5 s", "tEnd": "32 s", "theta": 0.5, "initial": "0 K", "outputEvery": 16, "amplitude": { "kind": "sine", "amplitude": 1.0, "period": "80 s" } }
+    },
+    {
+      "title": "Solve it and read the history",
+      "explain": "The Result now has a `history`: one entry per kept step, with its time and the extremes of the field. Probe 20 mm inside the driven face (x = 80 mm) at the end of the run — about 36.8 K, against the published 36.60. Under 1 % on a benchmark whose reference is quoted to three figures.",
+      "expect": { "cmd": "solve.run", "match": { "step": "crankNicolson" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "crankNicolson" }
+    },
+    {
+      "title": "Now the same run with backward Euler",
+      "explain": "Identical Step, identical time step, `theta: 1.0`. Nothing else changes, so any difference in the answer is the integrator and nothing else.",
+      "expect": { "cmd": "step.add", "match": { "name": "backwardEuler" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "backwardEuler", "procedure": "heat-transient", "constraints": ["driven", "cold"], "loads": [], "output": ["temperature"], "dt": "0.5 s", "tEnd": "32 s", "theta": 1.0, "initial": "0 K", "outputEvery": 16, "amplitude": { "kind": "sine", "amplitude": 1.0, "period": "80 s" } }
+    },
+    {
+      "title": "Compare",
+      "explain": "Solve it and probe the same point. Backward Euler lands a little further from the reference: it is first-order accurate, so halving Δt halves its error, while Crank–Nicolson is second-order and halving Δt quarters its error. Both are unconditionally stable — neither will ever blow up, however big Δt is — which is the whole reason to use an implicit method for heat.",
+      "expect": { "cmd": "solve.run", "match": { "step": "backwardEuler" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "backwardEuler" }
+    },
+    {
+      "title": "What θ actually is",
+      "explain": "One parameter, three well-known schemes, and one trade-off between accuracy and well-behavedness.",
+      "expect": null,
+      "theory": "Transient conduction is $\\rho c_p \\dot T = \\nabla\\cdot(k\\,\\nabla T) + \\dot q$. Discretised in space it becomes\n$$\\mathbf{C}\\,\\dot{\\mathbf{T}} + \\mathbf{K}\\,\\mathbf{T} = \\mathbf{f}(t)$$\nwith $\\mathbf{C}$ the capacity matrix (it holds $\\rho c_p$) and $\\mathbf{K}$ the conductivity matrix. The $\\theta$-method evaluates the right-hand side at a point $\\theta$ of the way through the step:\n$$\\left(\\mathbf{C} + \\theta\\,\\Delta t\\,\\mathbf{K}\\right)\\mathbf{T}^{n+1} = \\left(\\mathbf{C} - (1-\\theta)\\,\\Delta t\\,\\mathbf{K}\\right)\\mathbf{T}^{n} + \\Delta t\\left(\\theta\\,\\mathbf{f}^{n+1} + (1-\\theta)\\,\\mathbf{f}^{n}\\right)$$\n\n| $\\theta$ | scheme | order | stability |\n|---|---|---|---|\n| $0$ | forward Euler | 1 | conditional: $\\Delta t \\le \\dfrac{2}{\\lambda_{max}}$, brutally small |\n| $0.5$ | Crank–Nicolson | 2 | unconditional, but not damped |\n| $2/3$ | Galerkin | 2 | unconditional, mildly damped |\n| $1$ | backward Euler | 1 | unconditional, strongly damped |\n\n**Crank–Nicolson is the accurate one, and it is the one that rings.** At $\\theta = 0.5$ the amplification factor of the stiffest mode tends to $-1$ as $\\Delta t$ grows: an error in that mode does not decay, it flips sign every step. Apply a step change in temperature with a large $\\Delta t$ and the first few steps oscillate about the answer instead of approaching it. It is stable — the oscillation does not grow — but it is visible and it is wrong.\n\n**Backward Euler is the safe one.** Its stiff modes are annihilated in one step, so a step change is handled without a wobble; the price is first-order accuracy, so you pay for the smoothness in time steps.\n\nThe practical rule: $\\theta = 0.5$ for a smooth drive like this sine, $\\theta = 1$ (or $2/3$) for the first few steps after a shock, and always confirm by halving $\\Delta t$ and seeing the answer stop moving. A time step study is the same discipline as a mesh study, and just as non-optional."
+    }
+  ]
+}

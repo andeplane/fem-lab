@@ -154,7 +154,15 @@ describe('the directory picker', () => {
 
 describe('the built-in skills', () => {
   it('all parse, and every one has a name, a description worth reading and a body', () => {
-    expect(BUILTIN_SKILLS.map((s) => s.name)).toEqual(['beam-theory-check', 'convergence-study', 'eurocode-1992-check', 'nafems-benchmark', 'write-report']);
+    expect(BUILTIN_SKILLS.map((s) => s.name)).toEqual([
+      'beam-theory-check',
+      'convergence-study',
+      'eurocode-1992-check',
+      'heat-transfer-check',
+      'modal-check',
+      'nafems-benchmark',
+      'write-report',
+    ]);
     for (const skill of BUILTIN_SKILLS) {
       expect(skill.description.length, skill.name).toBeGreaterThanOrEqual(40);
       expect(skill.when, skill.name).toBeTruthy();

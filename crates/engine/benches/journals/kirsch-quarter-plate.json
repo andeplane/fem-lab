@@ -12,12 +12,12 @@
     "cmd": {
       "cmd": "model.setUnits",
       "units": {
-        "length": "mm",
+        "length": "m",
         "force": "N",
         "stress": "MPa"
       }
     },
-    "hashAfter": "b39fd974f8c4a3372b884dd8cf61fdd3c9ceed29531b9473138df1e965740e15"
+    "hashAfter": "04d48a3569061484e75b218eb15f4a1c9ac0cb6810deec2647d8bf010584bd5b"
   },
   {
     "seq": 2,
@@ -25,10 +25,10 @@
       "cmd": "model.setIdealisation",
       "idealisation": {
         "kind": "planeStress",
-        "thickness": "5 mm"
+        "thickness": "1 m"
       }
     },
-    "hashAfter": "7aee728c76886e4dce068f1f25cce86b88b95a303c5287f2c9fbc272ff26045f"
+    "hashAfter": "6fbbc6abf6fd2d54bd3fe518485387489c2af4ded447cadd5c7656f0d9220b10"
   },
   {
     "seq": 3,
@@ -36,10 +36,9 @@
       "cmd": "material.add",
       "name": "steel",
       "E": "210 GPa",
-      "nu": 0.3,
-      "source": "EN 10025"
+      "nu": 0.3
     },
-    "hashAfter": "0ccbcf1b80ab6ba33a42ce29c360d9a4fcc86b003c3e2258eacb49e01ceeaf1a"
+    "hashAfter": "872bf752e9159d328954075501366f5469cd5321fd67ec4a4491565deeed5deb"
   },
   {
     "seq": 4,
@@ -52,20 +51,20 @@
           {
             "corners": [
               [
-                "10.0 mm",
-                "0 mm"
+                "1 m",
+                "0 m"
               ],
               [
-                "100.0 mm",
-                "0 mm"
+                "20 m",
+                "0 m"
               ],
               [
-                "100.0 mm",
-                "100.0 mm"
+                "20 m",
+                "20 m"
               ],
               [
-                "7.071067811865475 mm",
-                "7.071067811865475 mm"
+                "0.7071067811865476 m",
+                "0.7071067811865476 m"
               ]
             ],
             "edges": [
@@ -81,18 +80,18 @@
               {
                 "kind": "arc",
                 "center": [
-                  "0 mm",
-                  "0 mm"
+                  "0 m",
+                  "0 m"
                 ],
                 "ccw": false
               }
             ],
             "n": [
-              8,
-              8
+              32,
+              32
             ],
             "grading": [
-              1.15,
+              1.25,
               1.0
             ],
             "tags": [
@@ -105,20 +104,20 @@
           {
             "corners": [
               [
-                "7.071067811865475 mm",
-                "7.071067811865475 mm"
+                "0.7071067811865476 m",
+                "0.7071067811865476 m"
               ],
               [
-                "100.0 mm",
-                "100.0 mm"
+                "20 m",
+                "20 m"
               ],
               [
-                "0 mm",
-                "100.0 mm"
+                "0 m",
+                "20 m"
               ],
               [
-                "0 mm",
-                "10.0 mm"
+                "0 m",
+                "1 m"
               ]
             ],
             "edges": [
@@ -134,18 +133,18 @@
               {
                 "kind": "arc",
                 "center": [
-                  "0 mm",
-                  "0 mm"
+                  "0 m",
+                  "0 m"
                 ],
                 "ccw": false
               }
             ],
             "n": [
-              8,
-              8
+              32,
+              32
             ],
             "grading": [
-              1.15,
+              1.25,
               1.0
             ],
             "tags": [
@@ -159,7 +158,7 @@
       },
       "order": 2
     },
-    "hashAfter": "2676379970b8a05be5ae77a6e56ea50a524f42721be9e7e09b2cd69ea441aac3"
+    "hashAfter": "0468d02673cfca4040e0dee32223471db38b998ec0cde0768d00f7cadfed79b2"
   },
   {
     "seq": 5,
@@ -170,7 +169,7 @@
         "plate"
       ]
     },
-    "hashAfter": "1b98b0ea8faa11f71321dada7b1dc649ebb4d02c660132c80ebf65e6f131e296"
+    "hashAfter": "1c51c4da6c7e984964bd924fda033b918dbbef72f695f257e3ed99198fb70ac5"
   },
   {
     "seq": 6,
@@ -180,7 +179,7 @@
       "on": "plate.xmin",
       "normal": "x"
     },
-    "hashAfter": "8518730b35d43d1a7da2611e47d1e68e5e16dea698bda33dfaf4a968cbf57c3c"
+    "hashAfter": "3622f30ad1ca7f0b70c736f18d4b720770af8e52ca62044d610a354725917441"
   },
   {
     "seq": 7,
@@ -190,21 +189,17 @@
       "on": "plate.ymin",
       "normal": "y"
     },
-    "hashAfter": "e95e7cf5210e024975bb5c6c682ed5d8a3e07963050dda4a9f89192efaf34727"
+    "hashAfter": "c272b028fae5bbf89caabf893f4b50f01021560794409765ca5b6e28b1ff3879"
   },
   {
     "seq": 8,
     "cmd": {
-      "cmd": "load.traction",
-      "name": "pull",
+      "cmd": "load.pressure",
+      "name": "tension",
       "on": "plate.xmax",
-      "total": [
-        "10 kN",
-        "0 N",
-        "0 N"
-      ]
+      "value": "-100 MPa"
     },
-    "hashAfter": "b40d0d8665ebafbe52cea29da4bad0897ba7fc7a041e52f225fabb5070256bef"
+    "hashAfter": "648bec6d903c02a828598b11a75504e34fdc97be3fec2bfb0c74c9a011d7964f"
   },
   {
     "seq": 9,
@@ -217,9 +212,17 @@
         "symy"
       ],
       "loads": [
-        "pull"
+        "tension"
       ]
     },
-    "hashAfter": "a4afac4c6088d0f7c328145b6ced67c6d308bca3b05f6ace71b8563bf1b6f3d3"
+    "hashAfter": "ab46f709824c09bf4a1803d4021038ad97e1491d0972b9595d3937779dfb1c7e"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "ab46f709824c09bf4a1803d4021038ad97e1491d0972b9595d3937779dfb1c7e"
   }
 ]

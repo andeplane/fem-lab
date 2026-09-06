@@ -1,0 +1,111 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "explicit-free-fall"
+    },
+    "hashAfter": "03aba43106eb2c1107f6460c402ee44356e53130140f5d44837644ef3029efb5"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    "hashAfter": "3f02536102eb271d6f7be1d522baca8e27be37545891d552df11932548e8a8e0"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addBox",
+      "name": "block",
+      "size": [
+        "100 mm",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    "hashAfter": "773f6d9aa230dc495a61ac228fd51c7447c323724bb2005234c6cd6659579dc3"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3"
+    },
+    "hashAfter": "472095423a8ff216f47fbd6e5d70b00bf919ee97ec09492acbcfe5769d4f5f41"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "block"
+      ]
+    },
+    "hashAfter": "d9691b4c73b5a85d8348a4890ebc6c6546abda5d0df96db94eaec08c0b049ada"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 4,
+          "ny": 4,
+          "nz": 4
+        }
+      }
+    },
+    "hashAfter": "9fa9385f147494af886d30b9ecf65414abe3176f411304f165adb5b6f43b2791"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "load.gravity",
+      "name": "g",
+      "g": [
+        "0 m/s^2",
+        "0 m/s^2",
+        "-9.81 m/s^2"
+      ]
+    },
+    "hashAfter": "3109a59e43be104d906830524baa1a4095e8d86400fcd455b1773193ad0dab8b"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "drop",
+      "procedure": "explicit",
+      "constraints": [],
+      "loads": [
+        "g"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "tEnd": "1 ms",
+      "outputEvery": 100,
+      "dtFactor": 0.9
+    },
+    "hashAfter": "cc62cbdd457b02979c4d82c63fc18354b7b8312866738556cab43d4bdfaf5b78"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "drop"
+    },
+    "hashAfter": "cc62cbdd457b02979c4d82c63fc18354b7b8312866738556cab43d4bdfaf5b78"
+  }
+]

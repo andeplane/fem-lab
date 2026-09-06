@@ -1,0 +1,25 @@
+{
+  "title": "Cantilever: natural frequencies",
+  "tag": "P1 · verify",
+  "tags": [
+    "modal",
+    "dynamics",
+    "beam"
+  ],
+  "difficulty": 2,
+  "sentence": "A clamped-free steel beam with a rectangular section — four bending frequencies from one modal Step, two in each plane.",
+  "expected": {
+    "quantity": "f₁ … f₄",
+    "value": [
+      21.06,
+      42.01,
+      131.67,
+      260.33
+    ],
+    "unit": "Hz",
+    "reference": "Euler–Bernoulli 20.96, 41.91, 131.32, 262.66 Hz"
+  },
+  "theory": "For a clamped-free beam, $f_n = \\dfrac{\\beta_n^2}{2\\pi}\\sqrt{\\dfrac{EI}{\\rho A L^4}}$ with $\\beta_1 = 1.8751$ and $\\beta_2 = 4.6941$. The $50 \\times 25\\,\\mathrm{mm}$ section has a different $I$ about each axis, so the two planes give four distinct frequencies rather than degenerate pairs. A consistent-mass finite element model is stiffer than the real beam, so every computed frequency converges from above.",
+  "tutorial": "modal-analysis",
+  "thumbnail": null
+}

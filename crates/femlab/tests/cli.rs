@@ -46,7 +46,7 @@ fn run_replays_the_cantilever_journal_in_every_form() {
         .args(["run", journal.to_str().unwrap(), "--json", "--threads", "1"])
         .assert()
         .success()
-        .stdout(contains("\"revision\": 9"));
+        .stdout(contains("\"revision\": 10"));
     femlab()
         .args(["run", journal.to_str().unwrap(), "--as-script"])
         .assert()
@@ -66,7 +66,7 @@ fn run_replays_the_cantilever_journal_in_every_form() {
         .args(["run", p.to_str().unwrap(), "--verify", "--skip-solves"])
         .assert()
         .success()
-        .stdout(contains("revision 9"));
+        .stdout(contains("revision 10"));
     // a saved file round-trips: run --json gives the summary; write a femlab/1 file and run it
     let mut engine = femlab_engine::Engine::new(None, Box::new(femlab_engine::NoClock), 1);
     let entries: Vec<femlab_engine::JournalEntry> =
@@ -147,13 +147,16 @@ fn every_bundled_journal_replays_green_against_its_committed_hashes() {
         let hashes_path = path.with_extension("hashes");
         assert!(hashes_path.exists(), "{file_name} has no committed .hashes file");
         femlab().args(["run", path.to_str().unwrap(), "--verify"]).assert().success();
-        let out = femlab().args(["run", path.to_str().unwrap(), "--hashes"]).assert().success();
+        // `--skip-solves` here, not because the solve is doubtful (the line above just ran it)
+        // but because a solve entry's hash is the Model hash: re-solving to recompute the same
+        // hashes doubles the cost of this test for nothing, which in a debug build is minutes.
+        let out = femlab().args(["run", path.to_str().unwrap(), "--hashes", "--skip-solves"]).assert().success();
         let hashes = String::from_utf8(out.get_output().stdout.clone()).unwrap();
         let committed = std::fs::read_to_string(&hashes_path).unwrap();
         assert_eq!(hashes.trim(), committed.trim(), "{file_name} hashes have drifted");
         checked += 1;
     }
-    assert!(checked >= 16, "expected at least 16 bundled journals, found {checked}");
+    assert!(checked >= 22, "expected at least 22 bundled journals, found {checked}");
 }
 
 #[test]
