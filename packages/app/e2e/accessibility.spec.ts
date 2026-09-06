@@ -76,6 +76,7 @@ test.describe('@cpu accessibility and small screens', () => {
       expect(layout.centreTop).toBe(layout.workspaceTop);
       expect(layout.treeTop).toBeGreaterThanOrEqual(layout.centreBottom - 1);
       expect(layout.propsTop).toBeGreaterThanOrEqual(layout.treeTop);
+      await expect(page.locator('.resize-handle').first()).toBeHidden();
     }
   });
 
@@ -111,7 +112,7 @@ test.describe('@cpu accessibility and small screens', () => {
       const resultsTab = page.getByRole('tab', { name: /results/ });
       await resultsTab.click();
       await expect(resultsTab).toHaveAttribute('aria-selected', 'true');
-      await assertInside('.bottom');
+      await assertInside('.centre > section.bottom');
       const scriptTab = page.getByRole('tab', { name: /script/ });
       await scriptTab.click();
       await expect(scriptTab).toHaveAttribute('aria-selected', 'true');
