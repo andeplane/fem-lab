@@ -523,8 +523,9 @@ export type Command =
       nModes?: number | null;
       shift?: number | null;
       /**
-       * Maximum heat-transient time increment. A uniform increment no larger than dt is
-       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       * Maximum time increment of a heat-transient Step, or of a static Step with an
+       * amplitude. A uniform increment no larger than dt is chosen to finish exactly at
+       * tEnd; the Result reports the increment actually used.
        */
       dt?:
         | (
@@ -1335,7 +1336,9 @@ export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | 
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
 /**
- * A scalar `g(t)` that scales every prescribed temperature of a transient Step.
+ * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
+ * temperature of a heat-transient Step, and every Load and prescribed displacement of a
+ * static one.
  *
  * Commands are replayed from the Journal, so a time function is data, never a closure: it is
  * either a sine or a piecewise-linear table, and nothing else.
@@ -2166,8 +2169,9 @@ export type ModelFile_Command =
       nModes?: number | null;
       shift?: number | null;
       /**
-       * Maximum heat-transient time increment. A uniform increment no larger than dt is
-       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       * Maximum time increment of a heat-transient Step, or of a static Step with an
+       * amplitude. A uniform increment no larger than dt is chosen to finish exactly at
+       * tEnd; the Result reports the increment actually used.
        */
       dt?:
         | (

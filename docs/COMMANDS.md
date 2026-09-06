@@ -629,11 +629,17 @@ Step whose Result this one continues — a static Step after a heat Step picks u
 temperature field and turns it into thermal stress. The remaining fields belong to one
 procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
-conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
-`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any
-Step whose system depends on its own answer — today a radiation load — and are ignored by
-a Step that is linear.
+`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
+`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
+defaulting to the whole of it, so a table written in step fraction works unchanged) and
+keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
+scaled, so its thermal strain is present in full at every increment. Without an
+`amplitude` a static Step is the single solve it has always been and retains nothing.
+Heat-steady requires a finite positive material conductivity `k`; heat-transient also
+requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
+`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
+on its own answer — today a radiation load — and are ignored by a Step that is linear.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -645,7 +651,7 @@ a Step that is linear.
 | after | no | <code>{"type":["string","null"]}</code> |  |
 | nModes | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
 | shift | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
-| dt | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Maximum heat-transient time increment. A uniform increment no larger than dt is chosen to finish exactly at tEnd; the Result reports the increment actually used. |
+| dt | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Maximum time increment of a heat-transient Step, or of a static Step with an amplitude. A uniform increment no larger than dt is chosen to finish exactly at tEnd; the Result reports the increment actually used. |
 | tEnd | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> |  |
 | theta | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
 | outputEvery | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
@@ -714,7 +720,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "A scalar `g(t)` that scales every prescribed temperature of a transient Step.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
+  "description": "A scalar `g(t)` that scales the driven part of a Step over time: every prescribed\ntemperature of a heat-transient Step, and every Load and prescribed displacement of a\nstatic one.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
   "oneOf": [
     {
       "description": "`amplitude · sin(2π t / period)`. NAFEMS T3's `100 sin(π t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
