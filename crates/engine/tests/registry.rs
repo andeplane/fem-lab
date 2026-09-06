@@ -1165,6 +1165,7 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     ok(&mut e, r#"{"cmd":"load.pressure","name":"pfa","on":"fa","value":"1 MPa"}"#);
     ok(&mut e, r#"{"cmd":"load.convection","name":"cfa","on":"fa","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
     ok(&mut e, r#"{"cmd":"load.heatFlux","name":"hfa","on":"fa","q":"1 kW/m^2"}"#);
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"rfa","on":"fa","emissivity":0.9,"tInf":"20 degC"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"ta","bodies":["a"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"tb","bodies":["b"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
@@ -1196,6 +1197,7 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     assert_eq!(e.model().load("pfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("cfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("hfa").unwrap().kind.set(), Some("faa"));
+    assert_eq!(e.model().load("rfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("tra").unwrap().kind.set(), Some("aa.zmax"));
     let QueryResult::Objects(o) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Set]) }).unwrap() else {
         panic!()
@@ -6752,4 +6754,127 @@ fn body_rename_and_duplicate_reject_cut_names_without_mutation() {
     let mut replayed = engine();
     pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
     assert_eq!(serde_json::to_value(replayed.export_file()).unwrap(), after);
+}
+
+/// `load.radiation` validates its Set, its emissivity and its absolute surrounding temperature
+/// at dispatch, so a Journal never records a Load that cannot be integrated. Zero kelvin is a
+/// legitimate surrounding (a deep-space sink); below it is not.
+#[test]
+fn load_radiation_validates_its_emissivity_and_its_absolute_temperature() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    let cases: [(&str, ErrorCode, &str); 7] = [
+        (
+            r#"{"cmd":"load.radiation","name":"","on":"bar.xmax","emissivity":0.9,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "name",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"nowhere","emissivity":0.9,"tInf":"20 degC"}"#,
+            ErrorCode::NotFound,
+            "set 'nowhere'",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":0,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "emissivity",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":1.5,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "emissivity",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":-0.2,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "emissivity",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":0.9,"tInf":"5 m"}"#,
+            ErrorCode::UnitDimension,
+            "tInf",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":0.9,"tInf":"-5 K"}"#,
+            ErrorCode::ModelIllPosed,
+            "tInf",
+        ),
+    ];
+    for (json, code, field) in cases {
+        let got = err(&mut e, json);
+        assert_eq!((got.code, got.where_.as_deref()), (code, Some(field)), "{json}: {got:?}");
+    }
+    // The two validations this Command owns say what to do about it.
+    let bad_eps = err(&mut e, r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":2,"tInf":"0 K"}"#);
+    assert!(bad_eps.suggestion.expect("a range").contains("black body"));
+    let bad_t = err(&mut e, r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":1,"tInf":"-1 K"}"#);
+    assert!(bad_t.suggestion.expect("a floor").contains("0 K"));
+    // A black body and a 0 K sink are both inside the range.
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"space","on":"bar.xmax","emissivity":1,"tInf":"0 K"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    let row = m.loads.iter().find(|l| l.name == "space").expect("the Load is listed");
+    assert_eq!(row.kind, "radiation");
+    assert!(row.summary.contains("emissivity = 1"), "{}", row.summary);
+    assert!(row.summary.contains("tInf"), "{}", row.summary);
+    // Renaming the Body the Set belongs to follows the Load, as it does for a convection face.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"bar","to":"rod"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    assert_eq!(m.loads.iter().find(|l| l.name == "space").expect("still there").on.as_deref(), Some("rod.xmax"));
+}
+
+/// The two convergence fields are validated at dispatch and reach the procedure: a budget of one
+/// pass cannot converge a fourth-power film, and the Step says so with `solve.diverged` instead
+/// of reporting an unconverged temperature.
+#[test]
+fn a_radiating_step_iterates_under_the_control_step_add_carries() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmin","value":"1000 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"cool","on":"bar.xmax","emissivity":0.98,"tInf":"300 K"}"#);
+    for (json, field) in [
+        (
+            r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":[],"loads":[],
+                "nonlinearTolerance":0}"#,
+            "nonlinearTolerance",
+        ),
+        (
+            r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":[],"loads":[],
+                "nonlinearTolerance":-1}"#,
+            "nonlinearTolerance",
+        ),
+        (
+            r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":[],"loads":[],
+                "nonlinearMaxIterations":0}"#,
+            "nonlinearMaxIterations",
+        ),
+    ] {
+        let got = err(&mut e, json);
+        assert_eq!((got.code, got.where_.as_deref()), (ErrorCode::Schema, Some(field)), "{json}: {got:?}");
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"radiate","procedure":"heat-steady","constraints":["hot"],"loads":["cool"],
+            "output":["temperature"],"nonlinearMaxIterations":1}"#,
+    );
+    let stingy = err(&mut e, r#"{"cmd":"solve.run","step":"radiate"}"#);
+    assert_eq!(stingy.code, ErrorCode::SolveDiverged, "{stingy:?}");
+    assert!(stingy.suggestion.expect("a way out").contains("nonlinearMaxIterations"));
+
+    // With a real budget it converges, and the Result reports the passes it took.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"radiate","procedure":"heat-steady","constraints":["hot"],"loads":["cool"],
+            "output":["temperature"],"nonlinearTolerance":1e-10}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"radiate"}"#);
+    let summary = result_of(&mut e, Some("radiate"));
+    assert!(summary.iterations > 1 && summary.iterations < 50, "{} passes", summary.iterations);
+    assert!(!summary.stale);
+
+    // The whole Journal replays into the same Model, so the new Command and the two new Step
+    // fields survive a round trip through the Journal.
+    let before = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&before.journal.entries, true, true)).expect("the journal replays");
+    assert_eq!(replayed.export_file(), before);
 }

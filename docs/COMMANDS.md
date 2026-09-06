@@ -37,6 +37,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [load.heatFlux](#commands-load-heatFlux)
 - [load.heatSource](#commands-load-heatSource)
 - [load.pressure](#commands-load-pressure)
+- [load.radiation](#commands-load-radiation)
 - [load.remove](#commands-load-remove)
 - [load.temperature](#commands-load-temperature)
 - [load.traction](#commands-load-traction)
@@ -354,6 +355,29 @@ The total force is the pressure times the face area and is reported by query.mod
 | value | yes | <code>{"$ref":"#/$defs/Q_stress"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"load.pressure"}</code> |  |
 
+<a id="commands-load-radiation"></a>
+
+### load.radiation
+
+Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses
+`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant
+sigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model
+displayed in degC is converted to kelvin before the fourth power is taken. `emissivity`
+is dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this
+holds the temperature, so a heat Step whose only boundary is radiation is still well
+posed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and
+solution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A
+heat-steady Result reports the number of passes as its solver iteration count, and a Step
+that runs out of them fails with solve.diverged rather than returning a wrong answer.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| on | yes | <code>{"type":"string"}</code> |  |
+| emissivity | yes | <code>{"type":"number","format":"double"}</code> |  |
+| tInf | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"load.radiation"}</code> |  |
+
 <a id="commands-load-remove"></a>
 
 ### load.remove
@@ -607,7 +631,9 @@ procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
 `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
 conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
-`theta` must lie in [0, 1].
+`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any
+Step whose system depends on its own answer — today a radiation load — and are ignored by
+a Step that is linear.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -626,6 +652,8 @@ conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, a
 | dtFactor | no | <code>{"type":["number","null"],"format":"double"}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
 | amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}]}</code> |  |
 | initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
+| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Convergence tolerance for a Step that must iterate: the relative sup-norm change of the solution between two passes. Default 1e-6. |
+| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iteration budget for a Step that must iterate; exceeding it is &#96;solve.diverged&#96;. Default 50. |
 | cmd | yes | <code>{"type":"string","const":"step.add"}</code> |  |
 
 <a id="commands-step-remove"></a>
