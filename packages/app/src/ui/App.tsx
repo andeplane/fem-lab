@@ -458,6 +458,9 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
 
 export function App({ store, dispatch, viewer, query, commands = [], registry }: AppProps) {
   const s = useStore(store);
+  // Collapse hides the drawer, but keeps the conversation and any running turn alive.
+  const assistantOpened = useRef(false);
+  assistantOpened.current ||= s.panels['assistant'] === true;
   const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
 
@@ -508,9 +511,9 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
           opens on the start screen and keeps its conversation when the workspace comes up around
           it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
-          layout of the design while the top bar stays full-width. Closing it still clears the
-          conversation: that lives in the panel's own refs. */}
-      {registry && s.panels['assistant'] ? <AssistantPanel registry={registry} store={store} /> : null}
+          layout of the design while the top bar stays full-width. Collapsing only hides the
+          drawer, preserving the conversation and any running turn. */}
+      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}
     </>

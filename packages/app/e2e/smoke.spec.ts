@@ -53,7 +53,7 @@ test.describe('@cpu the shell', () => {
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
         await expectCanvasSized(page);
         await assistant.getByTitle('Close the assistant', { exact: true }).click();
-        await expect(assistant).toHaveCount(0);
+        await expect(assistant).toBeHidden();
         const centre = (await page.locator('.centre').boundingBox())!;
         expect(centre.y).toBe(workspace.y);
         expect(centre.height).toBe(workspace.height);
@@ -74,7 +74,7 @@ test.describe('@cpu the shell', () => {
     expect(drawer.height).toBe(workspace.height);
     await expectCanvasSized(page);
     await assistant.getByTitle('Close the assistant', { exact: true }).click();
-    await expect(assistant).toHaveCount(0);
+    await expect(assistant).toBeHidden();
     await expectCanvasSized(page);
   });
 
@@ -135,6 +135,28 @@ test.describe('@cpu the shell', () => {
 
     await testInfo.attach('shell.png', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
     expect(errors).toEqual([]);
+  });
+
+  test('collapsing the Assistant preserves its draft, references and transcript', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.model.new({ name: 'assistant-collapse' }));
+    await page.evaluate(() => window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] }));
+    await expect(page.locator('.assistant')).toHaveCount(0);
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
+    const drawer = page.locator('.assistant');
+    await expect(drawer).toBeVisible();
+    await drawer.locator('textarea').fill('Check the beam');
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'chat.insertMention', ref: 'body:beam' }));
+    await expect(drawer.locator('.token')).toContainText('@body:beam');
+    await drawer.locator('button.send').click();
+    await expect(drawer.locator('.bad-line')).toContainText('API key');
+    await drawer.locator('button[title="Close the assistant"]').click();
+    await expect(drawer).toBeHidden();
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
+    await expect(drawer.locator('.bad-line')).toContainText('API key');
+    await expect(drawer.locator('textarea')).toHaveValue('Check the beam');
+    await expect(drawer.locator('.token')).toContainText('@body:beam');
   });
 
   test('opens the bundled cantilever example as its own Journal', async ({ page }) => {
