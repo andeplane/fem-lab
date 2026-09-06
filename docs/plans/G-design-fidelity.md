@@ -133,13 +133,15 @@ gallery presentation (#30), and the integrated workflow checks, are still open r
 - #209 / PR #233 (`ff5c502`) passed review and GPU-inclusive 100% coverage (25,202 regions,
   1,331 functions, 11,328 lines). Real Step dragging and dependency rejection pass Chromium;
   its #134 dependency and current-head CI remain pending.
-- #11 / PR #236 (`331d45f`) implements PNG dimensions and modal phase parameters. Review
-  found stale export dimensions after viewport resize and phase-commit rejection/race bugs;
-  corrections are in progress. Passing initial tests do not clear these blockers.
-- #123 / PR #237 (`8949b8b`) implements Model naming and explicit save/open identity.
-  Review found the gallery-open baseline missing and an interaction with #103 top-bar sizing.
-  Corrections are in progress. Integration with #114 must compare cached Results against
+- #11 / PR #236 (`672dc2e`) passed final review after live export dimensions, rejected phase
+  rollback, old-gesture target invalidation and small-capture title/legend layout corrections.
+  It passes 489 app tests, registry 100% coverage and two real-WASM Chromium scenarios.
+- #123 / PR #237 (`05277d2`) passed final review after gallery-open baseline and responsive
+  wrapper corrections. A deferred Result-restoration test proves a concurrent later edit
+  remains dirty; 402 app tests and Chromium pass. Integration with #114 must compare Results against
   result_hash, preserving rename-then-chained-solve validity.
+- #250 separately tracks a pre-existing example.open input-format mismatch: advertised
+  full-file import receives bundled Journal-entry arrays. It is not fixed by #237.
 - #9 / plan PR #248 (`fb86dd8`) passed plan review. Existing full History vectors will be
   reused; children #243–#246 cover typed frame/time reads, memory, host parity and playback.
   The plan is not evidence of implemented transient playback and does not close #9.
