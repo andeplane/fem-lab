@@ -290,3 +290,59 @@ describe('the agent loop', () => {
     expect(turn.undoSteps).toBe(0);
   });
 });
+
+it('finishes an active tool on interruption, skips later tools and retains paired results', async () => {
+  const { registry } = fixture({ journals: [{ hash: 'same', entries: [], revision: 0, canUndo: false, canRedo: false }] });
+  const controller = new AbortController();
+  const dispatch = vi.spyOn(registry, 'dispatch').mockImplementation(async () => {
+    controller.abort();
+    return undefined;
+  });
+  const { provider, seen } = fakeProvider([[
+    { type: 'tool_use', id: 'a', name: 'view_fit', input: {} },
+    { type: 'tool_use', id: 'b', name: 'view_fit', input: {} },
+    { type: 'done', stopReason: 'tool_use' },
+  ]]);
+  const messages: Message[] = [];
+  const events = await drain(runTurn({ registry, provider, model: 'test', system: '', tools: [], messages, signal: controller.signal }));
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(seen).toHaveLength(1);
+  expect(turnOf(events).calls.map(c => c.status)).toEqual(['succeeded', 'cancelled']);
+  expect(messages[1]!.content).toEqual([
+    { type: 'tool_result', toolUseId: 'a', content: 'null' },
+    { type: 'tool_result', toolUseId: 'b', isError: true, content: expect.stringContaining('Interrupted before this tool started') },
+  ]);
+});
+
+it.each([false, true])('marks unreported interrupted usage unknown (prior round: %s)', async (priorRound) => {
+  const { registry } = fixture();
+  const controller = new AbortController();
+  let round = 0;
+  const provider: Provider = { id: 'anthropic', models: [], async *chat() {
+    if (priorRound && round++ === 0) {
+      yield { type: 'tool_use', id: 'a', name: 'view_fit', input: {} };
+      yield { type: 'usage', usage: { input: 100, output: 20, cacheRead: 0 } };
+      yield { type: 'done', stopReason: 'tool_use' };
+    } else {
+      yield { type: 'text_delta', text: 'Partial answer' };
+      controller.abort();
+    }
+  } };
+  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: [], messages: [], signal: controller.signal })));
+  expect(turn.cost).toBeNull();
+  expect(turn.usage.input).toBe(priorRound ? 100 : 0);
+});
+
+it('retains known usage when interrupted between requests without starting another request', async () => {
+  const { registry } = fixture();
+  const controller = new AbortController();
+  vi.spyOn(registry, 'dispatch').mockImplementation(async () => { controller.abort(); return undefined; });
+  const { provider, seen } = fakeProvider([[
+    { type: 'tool_use', id: 'a', name: 'view_fit', input: {} },
+    { type: 'usage', usage: { input: 100, output: 20, cacheRead: 0 } },
+    { type: 'done', stopReason: 'tool_use' },
+  ]]);
+  const turn = turnOf(await drain(runTurn({ registry, provider, model: 'claude-opus-5', system: '', tools: [], messages: [], signal: controller.signal })));
+  expect(seen).toHaveLength(1);
+  expect(turn.cost).toBeCloseTo(0.001);
+});

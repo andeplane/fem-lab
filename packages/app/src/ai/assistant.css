@@ -651,6 +651,41 @@
   color: var(--text-dim);
 }
 
+/* Transcript rows keep their natural height; landing-page cards must not size tool cards. */
+.assistant .messages > * {
+  flex: none;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.assistant .card {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.assistant .card .head > span { flex: none; }
+.assistant .card .head .cmd { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.assistant .card .args,
+.assistant .card .out {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  flex: none;
+}
+.assistant .prose p { margin: 0 0 8px; }
+.assistant .prose p:last-child { margin-bottom: 0; }
+.assistant .prose ul,
+.assistant .prose ol { margin: 6px 0; padding-left: 20px; white-space: normal; }
+.assistant .prose .prose-heading { font-weight: 600; color: var(--text-high); }
+.assistant .prose code { font-family: var(--mono); color: var(--cyan-text); }
+.assistant .prose pre { max-height: 240px; overflow: auto; white-space: pre-wrap; margin: 8px 0; padding: 8px; background: var(--bg-page); }
+.assistant .model-row { margin-top: 8px; }
+.assistant .model-row label { display: flex; align-items: center; gap: 8px; color: var(--text-low); font-size: 11px; }
+.assistant .model-row select { flex: 1; min-width: 0; background: var(--bg-page); color: var(--text-body); border: 1px solid var(--border-control); border-radius: var(--radius); padding: 3px 6px; font: inherit; }
+.assistant .queued { margin-top: 8px; color: var(--text-low); font-size: 11px; }
+.assistant .queued ol { max-height: 88px; overflow: auto; padding-left: 20px; margin: 4px 0; overflow-wrap: anywhere; }
+.assistant .cost { flex-wrap: wrap; }
 @media (prefers-reduced-motion: reduce) {
   .assistant *,
   .assistant *::before,
