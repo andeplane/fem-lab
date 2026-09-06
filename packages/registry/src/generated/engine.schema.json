@@ -1020,7 +1020,7 @@
         ]
       },
       {
-        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
+        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.",
         "type": "object",
         "properties": {
           "step": {
@@ -2751,7 +2751,7 @@
         "x-returns": "SetInfo"
       },
       {
-        "description": "Summary of a Step's Result: solver info, extremes of every field with their location,\nreactions per constraint and the applied totals, and whether the Result is stale\n(the Model changed after it was solved). Check the reaction balance first.",
+        "description": "Summary of a Step's Result: solver info, extremes of every field with their location,\nreactions per constraint, applied totals, solver-used omitted material assumptions, and\nwhether the Result is stale (the Model changed after it was solved). Check the reaction\nbalance and assumptions first.",
         "type": "object",
         "properties": {
           "step": {
@@ -4152,6 +4152,13 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "assumptions": {
+            "description": "Optional material properties the successful procedure actually read as zero because the\nMaterial omitted them. Empty when every solver-used property was explicit.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ResultAssumption"
+            }
+          },
           "frequencies": {
             "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
             "type": "array",
@@ -4249,6 +4256,53 @@
         "required": [
           "constraint",
           "total"
+        ]
+      },
+      "ResultAssumption": {
+        "description": "One solver-used material assumption captured at solve time.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "property": {
+            "$ref": "#/$defs/AssumedMaterialProperty"
+          },
+          "value": {
+            "$ref": "#/$defs/Valued"
+          },
+          "source": {
+            "description": "The Material provenance at solve time; null when the Material named none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "body",
+          "material",
+          "property",
+          "value",
+          "cause"
+        ]
+      },
+      "AssumedMaterialProperty": {
+        "description": "An omitted optional material property that a successful solve read as its resolved zero.\nThe value is kept in SI with the Result, so later unit, name and material edits cannot\nrewrite the assumption under an already-computed answer.",
+        "type": "string",
+        "enum": [
+          "rho",
+          "alpha"
         ]
       },
       "HistoryRow": {
@@ -5451,7 +5505,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {
@@ -7758,6 +7812,13 @@
             "minItems": 3,
             "maxItems": 3
           },
+          "assumptions": {
+            "description": "Optional material properties the successful procedure actually read as zero because the\nMaterial omitted them. Empty when every solver-used property was explicit.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ResultAssumption"
+            }
+          },
           "frequencies": {
             "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
             "type": "array",
@@ -7872,6 +7933,53 @@
         "required": [
           "constraint",
           "total"
+        ]
+      },
+      "ResultAssumption": {
+        "description": "One solver-used material assumption captured at solve time.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "property": {
+            "$ref": "#/$defs/AssumedMaterialProperty"
+          },
+          "value": {
+            "$ref": "#/$defs/Valued"
+          },
+          "source": {
+            "description": "The Material provenance at solve time; null when the Material named none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "body",
+          "material",
+          "property",
+          "value",
+          "cause"
+        ]
+      },
+      "AssumedMaterialProperty": {
+        "description": "An omitted optional material property that a successful solve read as its resolved zero.\nThe value is kept in SI with the Result, so later unit, name and material edits cannot\nrewrite the assumption under an already-computed answer.",
+        "type": "string",
+        "enum": [
+          "rho",
+          "alpha"
         ]
       },
       "HistoryRow": {
@@ -11063,7 +11171,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {

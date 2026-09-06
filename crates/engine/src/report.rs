@@ -638,6 +638,7 @@ mod tests {
             }],
             reactions: vec![],
             applied_total: [zero.clone(), zero.clone(), zero],
+            assumptions: vec![],
             frequencies: vec![],
             history: vec![],
             balance: 0.0,

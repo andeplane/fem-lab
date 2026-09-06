@@ -18,6 +18,7 @@ use crate::engine::{OnProgress, Progress};
 use crate::error::{Error, Warning};
 use crate::fem::problem::Problem;
 use crate::post::{Extremum, FieldData};
+use crate::query::ResultAssumption;
 use crate::solve::{SolveInfo, SolveOptions};
 
 /// A scalar `g(t)` multiplying every prescribed temperature of a transient Step.
@@ -134,6 +135,9 @@ pub struct StepResult {
     pub history: Option<History>,
     pub solver: SolveInfo,
     pub warnings: Vec<Warning>,
+    /// Solver-used optional material defaults, captured by the Model-to-Problem boundary only
+    /// after this procedure succeeds.
+    pub assumptions: Vec<ResultAssumption>,
 }
 
 /// Run one Step.
@@ -199,6 +203,7 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
         history: None,
         solver,
         warnings: Vec::new(),
+        assumptions: Vec::new(),
     }
 }
 
