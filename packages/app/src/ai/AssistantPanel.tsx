@@ -10,7 +10,7 @@ import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
 import './assistant.css';
 import { buildSystem, buildTurn, downscaleImage, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
-import { defaultProvider, maskKey, MODELS, resolveKey, storedModel, storeKey } from './keys';
+import { defaultProvider, maskKey, MODELS, resolveKey, storedModel } from './keys';
 import { openaiProvider } from './openai';
 import { ProjectFolder, pickFolder, projectSkills, watchAgents, type DirHandle } from './project';
 import type { ImageBlock, Message, Provider, ProviderId } from './provider';
@@ -38,6 +38,8 @@ export interface AssistantPanelProps {
 export const chatBridge = {
   /** The one line a `chat.send` before the drawer left behind; the panel takes it on mount. */
   pending: null as string | null,
+  pendingDraft: null as string | null,
+  setDraft: (text: string): void => { chatBridge.pendingDraft = text; },
   send: (text: string): void => {
     chatBridge.pending = text;
   },
@@ -236,6 +238,11 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       void send(text);
     };
     chatBridge.insertMention = insert;
+    chatBridge.setDraft = setDraft;
+    if (chatBridge.pendingDraft !== null) {
+      setDraft(chatBridge.pendingDraft);
+      chatBridge.pendingDraft = null;
+    }
     chatBridge.clear = () => {
       chatBridge.pending = null;
       messages.current = [];
@@ -247,6 +254,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     if (queued !== null) void send(queued);
     return () => {
       chatBridge.send = buffer;
+      chatBridge.setDraft = (text: string): void => { chatBridge.pendingDraft = text; };
     };
   });
 
@@ -265,20 +273,20 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         <span class="title">Assistant</span>
         <span class="note">shares this Model</span>
         <span class="grow" />
-        <Cmd cmd="panel.toggle" title="Settings" run={() => store.togglePanel('assistant.settings')}>
+        <Cmd cmd="panel.toggle" title="Settings" run={() => dispatch({ cmd: 'panel.toggle', panel: 'assistant.settings' })}>
           ⚙
         </Cmd>
-        <Cmd cmd="chat.clear" title="Start a new conversation" run={() => chatBridge.clear()}>
+        <Cmd cmd="chat.clear" title="Start a new conversation" run={() => dispatch({ cmd: 'chat.clear' })}>
           ⟲
         </Cmd>
-        <Cmd cmd="panel.toggle" title="Close the assistant" run={() => store.togglePanel('assistant', false)}>
+        <Cmd cmd="panel.toggle" title="Close the assistant" run={() => dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: false })}>
           ×
         </Cmd>
       </header>
 
       <div class="strip">
         {folder ? (
-          <Cmd cmd="panel.toggle" class="agents" title="The project rules in force" run={() => store.togglePanel('assistant.rules')}>
+          <Cmd cmd="panel.toggle" class="agents" title="The project rules in force" run={() => dispatch({ cmd: 'panel.toggle', panel: 'assistant.rules' })}>
             <span class="mono">{openPanel('rules') ? '▾' : '▸'}</span>
             <span class="file">{folder.agentsMd?.file ?? 'no AGENTS.md'}</span>
             <span class="count">{folder.agentsMd ? `${rules.length} project rules in force` : 'no project rules'}</span>
@@ -297,7 +305,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
           {skills.map((s) => {
             const on = ui.panels[`skill:${s.name}`] !== false;
             return (
-              <Cmd key={s.name} cmd="panel.toggle" title={s.description} pressed={on} run={() => store.togglePanel(`skill:${s.name}`, !on)}>
+              <Cmd key={s.name} cmd="panel.toggle" title={s.description} pressed={on} run={() => dispatch({ cmd: 'panel.toggle', panel: `skill:${s.name}`, open: !on })}>
                 <span class="dot" />
                 <span>{s.name}</span>
               </Cmd>
@@ -324,7 +332,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             <div class="hint">@{query} — reference anything in the Model, the Journal or the project folder</div>
             <div class="list">
               {shown.slice(0, 40).map((entry) => (
-                <Cmd key={entry.ref} cmd="chat.insertMention" title={entry.summary} run={() => insert(entry.ref)}>
+                <Cmd key={entry.ref} cmd="chat.insertMention" title={entry.summary} run={() => dispatch({ cmd: 'chat.insertMention', ref: entry.ref })}>
                   <span class="kind">{entry.kind}</span>
                   <span class="name">{entry.name}</span>
                   <span class="meta">{entry.summary}</span>
@@ -338,7 +346,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             <div class="hint">/{slash![1]} — a skill is loaded into the turn it is used in</div>
             <div class="list">
               {skillMenu.map((s) => (
-                <Cmd key={s.name} cmd="skill.invoke" title={s.description} run={() => setDraft(`/${s.name} `)}>
+                <Cmd key={s.name} cmd="chat.setDraft" title={s.description} run={() => dispatch({ cmd: 'chat.setDraft', text: `/${s.name} ` })}>
                   <span class="kind">{s.source}</span>
                   <span class="name">{s.name}</span>
                   <span class="meta">{s.description}</span>
@@ -381,7 +389,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  void send(compose());
+                  void dispatch({ cmd: 'chat.send', text: compose() }).catch(() => undefined);
                 }
               }}
               onPaste={(e) => {
@@ -412,10 +420,10 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             />
           </div>
           <div class="bar">
-            <Cmd cmd="panel.toggle" class="at" title="Reference a Model object, a file or a Result" run={() => void refreshIndex().then(() => store.togglePanel('assistant.mentions'))}>
+            <Cmd cmd="panel.toggle" class="at" title="Reference a Model object, a file or a Result" run={() => void refreshIndex().then(() => dispatch({ cmd: 'panel.toggle', panel: 'assistant.mentions' }))}>
               @
             </Cmd>
-            <Cmd cmd="chat.insertMention" title="Reference the current selection" disabled={ui.selection.refs.length === 0} run={() => ui.selection.refs.forEach(insert)}>
+            <Cmd cmd="chat.insertMention" title="Reference the current selection" disabled={ui.selection.refs.length === 0} run={() => Promise.all(ui.selection.refs.map((ref) => dispatch({ cmd: 'chat.insertMention', ref })))}>
               @selection
             </Cmd>
             <Cmd
@@ -439,7 +447,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
                 }}
               />
             </label>
-            <Cmd cmd="chat.send" class="send" disabled={busy !== '' || compose() === ''} run={() => send(compose())}>
+            <Cmd cmd="chat.send" class="send" disabled={busy !== '' || compose() === ''} run={() => dispatch({ cmd: 'chat.send', text: compose() })}>
               Send
             </Cmd>
           </div>
@@ -491,8 +499,9 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             <Cmd
               cmd="ai.setKey"
               title="Keep this key in this browser only"
-              run={() => {
-                storeKey(provider, keyDraft || null);
+              run={async () => {
+                const key = keyDraft || null;
+                await dispatch({ cmd: 'ai.setKey', key, provider });
                 setKeyDraft('');
                 setProvider(provider);
               }}

@@ -68,6 +68,7 @@ export interface ScriptResult {
   console: string[];
   error?: string;
 }
+export type AiProvider = 'anthropic' | 'openai';
 /** The autosave, as the start screen and `query.autosave` see it. */
 export interface AutosaveState {
   enabled: boolean;
@@ -132,7 +133,7 @@ export interface HostContext {
     writeBytes(path: string, bytes: Uint8Array): Promise<void>;
   };
   examples: { fetch(name: string): Promise<string> };
-  ai: { setKey(key: string | null): void; setModel(model: string): void };
+  ai: { setKey(key: string | null, provider: AiProvider): void; setModel(model: string): void };
   env: { webgpu: boolean; crossOriginIsolated: boolean; threads: number; userAgent: string; engine: 'local' | 'remote' };
 }
 
@@ -337,7 +338,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('project.refresh', 'Re-list the project folder and re-read AGENTS.md or CLAUDE.md and skills/*/SKILL.md after files changed outside the app.', none, (_, ctx) => ctx.project.refresh()),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
-  def('ai.setKey', 'Store the Anthropic API key for the AI assistant in this browser only (localStorage), or `null` to forget it. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable() }), ({ key }, ctx) => ctx.ai.setKey(key), false),
+  def('ai.setKey', 'Store an AI provider key in this browser only (localStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
   def('ai.setModel', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
 ];
 

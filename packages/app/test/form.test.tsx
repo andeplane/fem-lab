@@ -1,7 +1,9 @@
 // The Properties form against the real schema and a fake registry: what a field edit dispatches,
 // what the SI echo says, where a structured error lands, and that "will be recorded as" is
 // literally the Command Apply sends — the design's promise that you see it before it happens.
-import type { EngineSchema, JsonSchema, ModelSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type EngineSchema, type JsonSchema, type ModelSummary } from '@femlab/registry';
+import { fakeHost, fakeTransport } from '../../registry/test/fakes';
+import { appHostCommands } from '../src/host';
 import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from './wait-for';
@@ -36,11 +38,12 @@ function mount(cmd: string, values: Record<string, unknown> = {}) {
   const store = new Store();
   store.set({ model: model(), ready: true });
   store.openForm(cmd, values);
+  const transport = fakeTransport();
+  const registry = new Registry({ schema: doc, host: fakeHost(transport), hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, { current: null }, async () => undefined)] });
   const sent: { cmd: string }[] = [];
   const dispatch = vi.fn(async (c: { cmd: string } & Record<string, unknown>) => {
     sent.push(c);
-    if (c.cmd === 'form.open') store.openForm(c['command'] as string, (c['args'] as Record<string, unknown>) ?? {}, c['keepInitial'] === true);
-    return undefined;
+    return registry.dispatch(c);
   });
   const query = vi.fn(async (q: { query: string } & Record<string, unknown>) => {
     expect(q.query).toBe('query.convert');

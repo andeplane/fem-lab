@@ -14,8 +14,18 @@ import { Store } from '../src/store';
 async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
   transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : {})) as never;
-  const registry = new Registry({ schema: schema as unknown as EngineSchema, host: fakeHost(transport), hostCommands: HOST_COMMANDS });
   const store = new Store();
+  const host = fakeHost(transport);
+  host.panels.toggle = (panel, open) => store.togglePanel(panel, open);
+  host.chat.send = (text) => chatBridge.send(text);
+  host.chat.insertMention = (ref) => chatBridge.insertMention(ref);
+  host.chat.clear = () => chatBridge.clear();
+  host.ai.setKey = (key, provider = 'anthropic') => {
+    const slot = provider === 'openai' ? 'femlab.ai.key.openai' : 'femlab.ai.key';
+    if (key === null) localStorage.removeItem(slot);
+    else localStorage.setItem(slot, key);
+  };
+  const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: HOST_COMMANDS });
   store.set({ ready: true, ...patch });
   const root = document.createElement('div');
   document.body.append(root);
@@ -45,6 +55,7 @@ describe('the assistant drawer', () => {
     for (const root of [...document.body.children]) render(null, root as HTMLElement);
     document.body.innerHTML = '';
     chatBridge.pending = null;
+    chatBridge.pendingDraft = null;
     localStorage.clear();
   });
 

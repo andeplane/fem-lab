@@ -3,7 +3,7 @@
 // wired to nothing, fails here rather than in front of a person.
 import { HOST_COMMANDS, Registry, type EngineSchema, type ModelSummary } from '@femlab/registry';
 import { h, render } from 'preact';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
@@ -60,6 +60,10 @@ function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLEl
 }
 
 describe('the shell', () => {
+  afterEach(() => {
+    for (const root of [...document.body.children]) render(null, root as HTMLElement);
+    document.body.innerHTML = '';
+  });
   beforeEach(() => {
     document.body.innerHTML = '';
   });
@@ -67,6 +71,7 @@ describe('the shell', () => {
   it('names only Commands the registry has on every clickable, in every panel', () => {
     const seen = new Set<string>();
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
+      for (const root of [...document.body.children]) render(null, root as HTMLElement);
       document.body.innerHTML = '';
       const { root, registry } = mount({ tab, panels: { palette: true } });
       const { commands, queries } = registry.list();
@@ -76,7 +81,7 @@ describe('the shell', () => {
       expect([...new Set(used)].filter((c) => !known.has(c)), tab).toEqual([]);
     }
     // Every panel of the design is represented, not just the top bar.
-    for (const cmd of ['form.open', 'script.run', 'selection.setPickTarget', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode']) expect([...seen]).toContain(cmd);
+    for (const cmd of ['form.open', 'script.run', 'form.pick', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode']) expect([...seen]).toContain(cmd);
   });
 
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {

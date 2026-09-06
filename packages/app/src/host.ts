@@ -1,7 +1,7 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type AutosaveState, type HostContext, type HostDef, type Selection } from '@femlab/registry';
+import { FemError, type AiProvider, type AutosaveState, type EngineTransport, type HostContext, type HostDef, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
 import type { ResultsView } from './results';
@@ -10,7 +10,6 @@ import { type Autosave, applyShared, indexedDbStore, makeAutosave, memoryStore, 
 import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
-import type { WorkerTransport } from './worker-transport';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -68,7 +67,7 @@ export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
   lastSaved = { name, at: Date.now(), commands: journal.length };
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -219,7 +218,16 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     },
     examples: { fetch: fetchExample },
     ai: {
-      setKey: (key) => (key === null ? localStorage.removeItem('femlab.ai.key') : localStorage.setItem('femlab.ai.key', key)),
+      setKey: (key, provider: AiProvider) => {
+        // Keep the provider slots separate; the registry defaults provider for older callers.
+        const slot = provider === 'openai' ? 'femlab.ai.key.openai' : 'femlab.ai.key';
+        try {
+          if (key === null) localStorage.removeItem(slot);
+          else localStorage.setItem(slot, key);
+        } catch {
+          // A browser that refuses localStorage still keeps the app usable for dev-injected keys.
+        }
+      },
       setModel: (model) => localStorage.setItem('femlab.ai.model', model),
     },
     env: { webgpu: host.webgpu, crossOriginIsolated: host.crossOriginIsolated, threads: host.threads, userAgent: host.userAgent, engine: 'local' },
@@ -233,7 +241,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: WorkerTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
   return [
     {
       name: 'view.setMode',
@@ -244,6 +252,28 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         const { mode } = input as { mode: ViewMode };
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
+      },
+    },
+    {
+      name: 'chat.setDraft',
+      description: 'Replace the unsent Assistant draft with explicit text and open the drawer. Use this to insert a skill name for the person to complete with arguments; it does not invoke the skill or send a message.',
+      schema: z.object({ text: z.string() }),
+      tool: true,
+      run: async (input) => {
+        const { text } = input as { text: string };
+        store.togglePanel('assistant', true);
+        (await import('./ai')).chatBridge.setDraft(text);
+      },
+    },
+    {
+      name: 'form.pick',
+      description: 'Arm the next viewer face click to fill the explicit field path of an open Command form. `command` must name the currently open form; `field` names its argument path. This sets both the picking target and the form destination, without editing the Model or Journal.',
+      schema: z.object({ command: z.string(), field: z.array(z.string().min(1)).min(1) }),
+      tool: true,
+      run: (input) => {
+        const { command, field } = input as { command: string; field: string[] };
+        if (store.state.form?.cmd !== command) throw new FemError('schema', 'the requested Command form is not open', 'command', `form.open for ${command} before form.pick`);
+        store.set({ pickInto: field, pickTarget: 'face' });
       },
     },
     {
