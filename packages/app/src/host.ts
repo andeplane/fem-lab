@@ -1,7 +1,7 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type AutosaveState, type HostContext, type HostDef, type Selection } from '@femlab/registry';
+import { FemError, type AutosaveState, type AutosaveVersion, type HostContext, type HostDef, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
 import type { ResultsView } from './results';
@@ -37,7 +37,8 @@ async function fetchExample(name: string): Promise<string> {
  * The autosave, and the last thing it wrote. It is created once here rather than in `main.tsx`
  * so `file.autosave`, `file.restore` and `query.autosave` all see the same one; the boot hook
  * only has to call `note` after every Command and `primeAutosave` once.
- * `ponytail: one autosave slot, not a list of them — versioning is what file.save is for.`
+ * The storage keeps a bounded list; the newest entry remains exposed through the old
+ * `query.autosave` shape so existing callers can keep offering a one-click restore.
  */
 export const autosave: Autosave = makeAutosave({
   // a browser with IndexedDB blocked (private mode, or a headless test) keeps working: the
@@ -49,10 +50,19 @@ export const autosave: Autosave = makeAutosave({
 
 /** Read once at boot so `query.autosave` can answer without waiting on IndexedDB. */
 let lastSaved: AutosaveState['saved'] = null;
+let lastAutosaves: AutosaveVersion[] = [];
+
+const summary = (saved: { id?: string; name: string; at: number; cmds: unknown[] }): AutosaveVersion => ({
+  id: saved.id ?? `legacy-${saved.at}`,
+  name: saved.name,
+  at: saved.at,
+  commands: saved.cmds.length,
+});
 
 /** The other half of the boot hook: `await primeAutosave();` before the start screen renders. */
 export async function primeAutosave(): Promise<AutosaveState['saved']> {
   const saved = await autosave.read();
+  lastAutosaves = (await autosave.readAll()).map(summary);
   lastSaved = saved && { name: saved.name, at: saved.at, commands: saved.cmds.length };
   return lastSaved;
 }
@@ -66,6 +76,12 @@ export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
   if (!autosave.enabled() || journal.length === 0) return;
   autosave.note(name, journal as never);
   lastSaved = { name, at: Date.now(), commands: journal.length };
+  lastAutosaves = autosave.history().map(summary);
+}
+
+/** The UI copy of the bounded history, including a debounced newest snapshot. */
+export function autosaveHistory(): AutosaveVersion[] {
+  return lastAutosaves.slice();
 }
 
 export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
@@ -186,10 +202,16 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         localStorage.setItem('femlab.autosave', on ? 'on' : 'off');
         if (on) return;
         lastSaved = null;
+        lastAutosaves = [];
         void autosave.clear();
       },
-      restore: async () => {
-        const saved = await autosave.read();
+      restore: async (id) => {
+        const revisions = await autosave.readAll();
+        lastAutosaves = revisions.map(summary);
+        const saved = id === undefined ? revisions[0] : revisions.find((revision) => revision.id === id);
+        if (id !== undefined && !saved) {
+          throw new FemError('not-found', `autosave revision '${id}' was not found`, 'file.restore.id', 'query.autosaveHistory to choose an available revision, then call file.restore with its id');
+        }
         if (!saved) return null;
         // As with an example: a restored Journal that ends on a solve comes back solved on screen.
         let solved: unknown = null;
@@ -207,6 +229,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         return { name: saved.name, at: saved.at, commands: saved.cmds.length };
       },
       autosave: () => ({ enabled: autosave.enabled(), saved: lastSaved }),
+      autosaves: () => lastAutosaves,
     },
     project: {
       open: soon('the project folder', 'use file.open and file.save for now'),

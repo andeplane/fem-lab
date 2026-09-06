@@ -240,6 +240,14 @@ describe('Registry', () => {
     await expect(registry.dispatch({ cmd: 'file.autosave', on: 'yes' })).rejects.toMatchObject({ code: 'schema' });
   });
 
+  it('lists bounded autosave revisions and restores the explicitly selected Journal', async () => {
+    const { registry, host } = make();
+    await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toEqual({ enabled: true, revisions: expect.any(Array) });
+    await registry.dispatch({ cmd: 'file.restore', id: 'older' });
+    expect(host.files.restore).toHaveBeenCalledWith('older');
+    await expect(registry.dispatch({ cmd: 'file.restore', id: 7 })).rejects.toMatchObject({ code: 'schema', where: 'id' });
+  });
+
   it('file.read and file.write stay inside the project folder and refuse big files', async () => {
     const { registry, host } = make(true);
     await expect(registry.dispatch({ cmd: 'file.read', path: 'AGENTS.md' })).resolves.toEqual({ text: 'content of AGENTS.md' });

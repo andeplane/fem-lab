@@ -66,7 +66,7 @@ describe('the shell', () => {
 
   it('names only Commands the registry has on every clickable, in every panel', () => {
     const seen = new Set<string>();
-    for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
+    for (const tab of ['journal', 'history', 'script', 'results', 'checks', 'console'] as const) {
       document.body.innerHTML = '';
       const { root, registry } = mount({ tab, panels: { palette: true } });
       const { commands, queries } = registry.list();

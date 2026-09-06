@@ -74,6 +74,12 @@ export interface AutosaveState {
   /** The model name, when it was written, and how many Commands it holds; `null` if none. */
   saved: { name: string; at: number; commands: number } | null;
 }
+export interface AutosaveVersion {
+  id: string;
+  name: string;
+  at: number;
+  commands: number;
+}
 
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
@@ -117,10 +123,12 @@ export interface HostContext {
     shareLink(file: ModelFile): Promise<{ url: string }>;
     /** Turn the IndexedDB autosave on or off. The choice sticks in this browser. */
     setAutosave(on: boolean): void;
-    /** Replay the last autosave onto the current Model; `null` when there is nothing saved. */
-    restore(): Promise<AutosaveState['saved']>;
+    /** Replay one saved revision, or the newest revision when no id is supplied. */
+    restore(id?: string): Promise<AutosaveState['saved']>;
     /** Whether autosave is on and what it last wrote, for `query.autosave` and the start screen. */
     autosave(): AutosaveState;
+    /** Bounded saved Journal revisions, newest first, for the history view. */
+    autosaves(): AutosaveVersion[];
   };
   project: {
     open(how: z.output<typeof OpenHow>): Promise<void>;
@@ -325,7 +333,7 @@ export const HOST_COMMANDS: HostDef[] = [
     ctx.files.setAutosave(on);
     return ctx.files.autosave();
   }),
-  def('file.restore', 'Reopen the last autosave, replaying its Journal onto the current Model. Returns `{ name, at, commands }`, or `null` when this browser has nothing saved. Use query.autosave first to see whether there is anything to offer.', none, (_, ctx) => ctx.files.restore()),
+  def('file.restore', 'Reopen an autosaved Journal revision onto the current Model. Pass the `id` from query.autosaveHistory to reopen an earlier revision; omit it for the newest. Returns `{ name, at, commands }`, or `null` when this browser has nothing saved.', z.object({ id: z.string().optional() }), ({ id }, ctx) => ctx.files.restore(id)),
   def('file.read', 'Read a text file from the open project folder by relative path (AGENTS.md, a script, a report, a skill). Paths outside the folder are refused; files over 2 MB are not read.', z.object({ path: z.string() }), async ({ path }, ctx) => {
     const text = await ctx.project.readText(assertInside(path).join('/'));
     if (text.length > MAX_TEXT) throw new FemError('unsupported', `'${path}' is larger than 2 MB`, `path '${path}'`, 'read a smaller file or export a summary instead');
@@ -353,4 +361,5 @@ export const HOST_QUERIES: HostDef[] = [
   def('query.exportFormats', 'Every format file.export writes, with its extension, what it contains and what it needs first (`mesh`, `result`, `none`, or `soon` for one that is not written yet). The Export dialog is a view of this list.', none, () => ({ formats: EXPORT_FORMATS })),
   def('query.project', 'The open project folder: name, files with size and kind, which of AGENTS.md or CLAUDE.md is present, and the project skills; `null` when no folder is open.', none, (_, ctx) => ctx.project.info()),
   def('query.autosave', 'Whether the background autosave is on, and what this browser last saved (`{ name, at, commands }` or `null`). The start screen reads it to decide whether to offer "restore the last model"; file.restore reopens it.', none, (_, ctx) => ctx.files.autosave()),
+  def('query.autosaveHistory', 'List the bounded autosaved Journal revisions, newest first. Each `id` can be passed to file.restore to reopen that exact revision, including one with the same model name and time as another revision.', none, (_, ctx) => ({ enabled: ctx.files.autosave().enabled, revisions: ctx.files.autosaves() })),
 ];

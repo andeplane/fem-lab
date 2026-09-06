@@ -18,6 +18,7 @@ import {
   readShareFragment,
   shareUrl,
   type ShareCommand,
+  type JournalStore,
 } from '../src/share';
 
 const CMDS: ShareCommand[] = [
@@ -346,5 +347,41 @@ describe('autosave', () => {
     await new Promise((r) => setTimeout(r, 10));
     await a.flush();
     expect(await a.read()).not.toBeNull();
+  });
+
+  it('keeps bounded, addressable revisions and preserves same-name prefixes', async () => {
+    const store = memoryStore();
+    const timers = fakeTimers();
+    let now = 100;
+    const a = makeAutosave({ store, ...timers, now: () => now++, delayMs: 0 });
+    for (let count = 1; count <= 25; count++) {
+      a.note('beam', journal(count));
+      timers.tick();
+      await a.flush();
+    }
+    const revisions = await a.readAll();
+    expect(revisions).toHaveLength(20);
+    expect(revisions[0]?.cmds).toHaveLength(25);
+    expect(new Set(revisions.map((revision) => revision.id)).size).toBe(20);
+    const prefix = revisions.find((revision) => revision.cmds.length === 20);
+    expect(prefix?.name).toBe('beam');
+  });
+
+  it('migrates a pre-versioning single record and uses the injected clock', async () => {
+    const legacy = { name: 'old', at: 42, cmds: journal(2) };
+    let stored: unknown = legacy;
+    const store = {
+      read: vi.fn(async () => stored),
+      write: vi.fn(async (saved: unknown) => {
+        stored = saved;
+      }),
+      clear: vi.fn(async () => undefined),
+    } as JournalStore;
+    const a = makeAutosave({ store, now: () => 99 });
+    await expect(a.readAll()).resolves.toEqual([{ ...legacy, id: 'legacy-42' }]);
+    a.note('new', journal(3));
+    await a.flush();
+    expect(await a.readAll()).toMatchObject([{ name: 'new', at: 99 }, { name: 'old', at: 42 }]);
+    expect(store.write).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ id: 'legacy-42' })]));
   });
 });

@@ -1,6 +1,6 @@
 // The two ways a Model leaves and re-enters this browser without a file (PLAN.md 5.8, J11.4 and
-// J12.2): a share link that carries the Journal in the URL fragment, and an autosave that keeps
-// the last one in IndexedDB. Both move a *Command list*, never a Model snapshot — replay rebuilds
+// J12.2): a share link that carries the Journal in the URL fragment, and an autosave history in
+// IndexedDB. Both move a *Command list*, never a Model snapshot — replay rebuilds
 // the Model, and a Journal is an order of magnitude smaller than the `femlab/1` file.
 //
 // Nothing leaves the page in either case: a fragment is never sent to a server, and IndexedDB is
@@ -201,15 +201,20 @@ export async function openShared(registry: Dispatcher, hash: string): Promise<nu
 
 /** The last autosave: enough to say what it is before the person decides to reopen it. */
 export interface Saved {
+  /** Stable within this browser, so a history row can target one revision even when times tie. */
+  id?: string;
   name: string;
   at: number;
   cmds: ShareCommand[];
 }
 
+/** The newest revisions are kept first; old records are migrated to this list on read. */
+export const MAX_AUTOSAVES = 20;
+
 /** Where the autosave lives. One implementation per storage; the app injects the real one. */
 export interface JournalStore {
-  read(): Promise<Saved | null>;
-  write(s: Saved): Promise<void>;
+  read(): Promise<Saved[]>;
+  write(saved: Saved[]): Promise<void>;
   clear(): Promise<void>;
 }
 
@@ -223,7 +228,18 @@ const done = <T>(req: IDBRequest<T>): Promise<T> =>
     req.onerror = () => reject(req.error ?? new Error('IndexedDB request failed'));
   });
 
-/** The real one: a single record in a single object store. No library, no schema migration. */
+function storedList(value: unknown): Saved[] {
+  if (value === null || value === undefined) return [];
+  // Version 1 stored one Saved object at `last`; accept it as the newest revision.
+  const list = Array.isArray(value) ? value : [value];
+  return list.filter((item): item is Saved => {
+    if (typeof item !== 'object' || item === null) return false;
+    const candidate = item as Partial<Saved>;
+    return typeof candidate.name === 'string' && typeof candidate.at === 'number' && Array.isArray(candidate.cmds);
+  }).slice(0, MAX_AUTOSAVES);
+}
+
+/** The real one: the existing `last` record is read as the first entry and migrated on write. */
 export function indexedDbStore(factory: IDBFactory): JournalStore {
   const open = (): Promise<IDBDatabase> =>
     new Promise((resolve, reject) => {
@@ -241,23 +257,23 @@ export function indexedDbStore(factory: IDBFactory): JournalStore {
     }
   };
   return {
-    read: () => tx('readonly', (s) => s.get(KEY) as IDBRequest<Saved | undefined>).then((v) => v ?? null),
-    write: (saved) => tx('readwrite', (s) => s.put(saved, KEY)).then(() => undefined),
+    read: () => tx('readonly', (s) => s.get(KEY) as IDBRequest<unknown>).then(storedList),
+    write: (saved) => tx('readwrite', (s) => s.put(saved.slice(0, MAX_AUTOSAVES), KEY)).then(() => undefined),
     clear: () => tx('readwrite', (s) => s.delete(KEY)).then(() => undefined),
   };
 }
 
 /** For tests, and for a browser that refuses IndexedDB (private mode): autosave then costs nothing. */
 export function memoryStore(): JournalStore {
-  let saved: Saved | null = null;
+  let saved: Saved[] = [];
   return {
     read: () => Promise.resolve(saved),
     write: (s) => {
-      saved = s;
+      saved = s.slice(0, MAX_AUTOSAVES);
       return Promise.resolve();
     },
     clear: () => {
-      saved = null;
+      saved = [];
       return Promise.resolve();
     },
   };
@@ -270,7 +286,12 @@ export interface Autosave {
   enabled(): boolean;
   /** The pending write, awaited — for tests and for `beforeunload`. */
   flush(): Promise<void>;
+  /** The newest saved revision, or null when there is no autosave. */
   read(): Promise<Saved | null>;
+  /** All saved revisions, newest first. */
+  readAll(): Promise<Saved[]>;
+  /** Current in-memory revisions, including a debounced snapshot not written yet. */
+  history(): Saved[];
   clear(): Promise<void>;
 }
 
@@ -285,6 +306,8 @@ export interface AutosaveOptions {
   initiallyOn?: boolean;
   /** Told about a write that failed, so the console can say so instead of the tab dying. */
   onError?: (e: unknown) => void;
+  /** Injected clock for deterministic revision names and storage tests. */
+  now?: () => number;
 }
 
 /**
@@ -298,24 +321,57 @@ export function makeAutosave({
   clearTimer = (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
   initiallyOn = true,
   onError,
+  now = () => Date.now(),
 }: AutosaveOptions): Autosave {
   let on = initiallyOn;
   let timer: unknown = null;
-  let pending: Saved | null = null;
+  let pending: Saved[] = [];
+  let revisions: Saved[] = [];
+  let hydrated: Promise<void> | null = null;
+  let nextId = 0;
   let writing: Promise<void> = Promise.resolve();
+
+  const load = (): Promise<void> => {
+    if (hydrated) return hydrated;
+    hydrated = store.read().then((saved) => {
+      revisions = storedList(saved).map((entry) => ({ ...entry, id: entry.id ?? `legacy-${entry.at}` }));
+    });
+    return hydrated;
+  };
+
+  const same = (a: Saved, b: Saved): boolean => a.name === b.name && JSON.stringify(a.cmds) === JSON.stringify(b.cmds);
+  const visible = (): Saved[] => {
+    const seen = new Set<string>();
+    return [...pending, ...revisions].filter((revision) => {
+      const key = JSON.stringify(revision.cmds);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, MAX_AUTOSAVES);
+  };
 
   const write = (): void => {
     const saved = pending;
     timer = null;
-    pending = null;
-    if (!saved) return;
-    writing = store.write(saved).catch((e: unknown) => onError?.(e));
+    pending = [];
+    if (saved.length === 0) return;
+    writing = load().then(() => {
+      // `pending` is newest first; prepend oldest first to retain the user's Journal order.
+      for (const revision of saved.slice().reverse()) {
+        const current = revisions[0];
+        if (!current || !same(current, revision)) revisions = [revision, ...revisions].slice(0, MAX_AUTOSAVES);
+      }
+      return store.write(revisions);
+    }).catch((e: unknown) => onError?.(e));
   };
 
   return {
     note(name, journal) {
       if (!on) return;
-      pending = { name, at: Date.now(), cmds: journal.map((e) => e.cmd) };
+      const at = now();
+      const revision = { id: `${at}-${nextId++}`, name, at, cmds: journal.map((e) => e.cmd) };
+      if (pending[0] && same(pending[0], revision)) pending[0] = revision;
+      else pending = [revision, ...pending].slice(0, MAX_AUTOSAVES);
       if (timer === null) timer = setTimer(write, delayMs);
     },
     setEnabled(next) {
@@ -323,7 +379,7 @@ export function makeAutosave({
       if (on) return;
       if (timer !== null) clearTimer(timer);
       timer = null;
-      pending = null;
+      pending = [];
     },
     enabled: () => on,
     async flush() {
@@ -333,7 +389,24 @@ export function makeAutosave({
       }
       await writing;
     },
-    read: () => store.read(),
-    clear: () => store.clear(),
+    read: async () => {
+      const all = await (async () => { await load(); await writing; return store.read(); })();
+      revisions = storedList(all).map((entry) => ({ ...entry, id: entry.id ?? `legacy-${entry.at}` }));
+      return visible()[0] ?? null;
+    },
+    readAll: async () => {
+      await load();
+      await writing;
+      const all = await store.read();
+      revisions = storedList(all).map((entry) => ({ ...entry, id: entry.id ?? `legacy-${entry.at}` }));
+      return visible();
+    },
+    history: () => visible(),
+    clear: async () => {
+      await writing;
+      pending = [];
+      revisions = [];
+      await store.clear();
+    },
   };
 }

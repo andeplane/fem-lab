@@ -1,14 +1,14 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, AutosaveVersion, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
-export type Tab = 'journal' | 'script' | 'results' | 'checks' | 'console';
-export const TABS: Tab[] = ['journal', 'script', 'results', 'checks', 'console'];
+export type Tab = 'journal' | 'history' | 'script' | 'results' | 'checks' | 'console';
+export const TABS: Tab[] = ['journal', 'history', 'script', 'results', 'checks', 'console'];
 
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
@@ -34,6 +34,8 @@ export interface UiState {
   ready: boolean;
   /** What `query.autosave` last reported, so the start screen can offer `file.restore`. */
   autosave: AutosaveState['saved'];
+  /** Bounded Journal revisions that can be reopened with file.restore. */
+  autosaves: AutosaveVersion[];
   model: ModelSummary | null;
   journal: JournalDump | null;
   script: string;
@@ -125,6 +127,7 @@ export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], ref
 export const initialState: UiState = {
   ready: false,
   autosave: null,
+  autosaves: [],
   model: null,
   journal: null,
   script: '',

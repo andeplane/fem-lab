@@ -7,6 +7,10 @@ export const ACK: Ack = { seq: 1, revision: 1, hash: 'h', warnings: [], output: 
 export const MODEL_FILE = { format: 'femlab/1', engineVersion: '0', model: { name: 'beam' }, journal: { entries: [] } } as unknown as ModelFile;
 export const PROJECT: ProjectInfo = { name: 'proj', files: [], agentsMd: 'AGENTS.md', skills: [] };
 export const SAVED = { name: 'beam', at: 1_700_000_000_000, commands: 9 };
+export const AUTOSAVES = [
+  { id: 'newest', name: 'beam', at: 1_700_000_000_000, commands: 9 },
+  { id: 'older', name: 'beam', at: 1_699_999_000_000, commands: 7 },
+];
 
 const kN = (value: number) => ({ value, unit: 'kN' });
 const mm = (value: number) => ({ value, unit: 'mm' });
@@ -84,6 +88,7 @@ export function fakeHost(transport = fakeTransport(), projectOpen = false): Host
       }),
       restore: vi.fn(async () => (autosaveOn ? SAVED : null)),
       autosave: vi.fn(() => ({ enabled: autosaveOn, saved: autosaveOn ? SAVED : null })),
+      autosaves: vi.fn(() => (autosaveOn ? AUTOSAVES : [])),
     },
     project: {
       open: vi.fn(async () => undefined),
