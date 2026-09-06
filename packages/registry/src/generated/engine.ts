@@ -1303,7 +1303,9 @@ export type Axis = "x" | "y" | "z";
  */
 export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
 /**
- * Result fields.
+ * Result fields. Reaction is support force in N for structural Results and removed heat
+ * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
+ * display units.
  */
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
@@ -2849,6 +2851,10 @@ export interface Engine {
 export interface UnitSet {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;
@@ -3296,8 +3302,14 @@ export interface ResultSummary {
   residual: number;
   timeMs: number;
   extremes: Extreme[];
+  /**
+   * Force for structural Results; power for thermal Results, retained with the solved state.
+   */
+  reactionQuantity: "force" | "power";
   reactions: ReactionRow[];
   /**
+   * Applied force vector or thermal power in component 0 (remaining components zero).
+   *
    * @minItems 3
    * @maxItems 3
    */
@@ -3312,7 +3324,7 @@ export interface ResultSummary {
    */
   history?: HistoryRow[];
   /**
-   * |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+   * |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
    * by a prescribed displacement — where both totals are zero — still reports a meaningful
    * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
    */
@@ -3383,17 +3395,49 @@ export interface CostEstimate {
    */
   nnzLower: number;
   /**
-   * Mandatory assembly storage lower bound in bytes, including element slots and two CSRs.
-   * Excludes mesh/model, element buffers, reduction, solver storage/fill and time history.
+   * Estimated peak of the counted solve and frame-read phases. It includes mandatory
+   * assembly storage, retained primary values, a conservative transient f64 working-vector
+   * allowance and known native/browser frame-response storage. It is incomplete because
+   * solver fill, JSON and allocator overhead are not known before solving.
    */
   bytes: number;
+  /**
+   * Mandatory assembly storage before transient-specific values are added.
+   */
+  assemblyBytes: number;
+  /**
+   * Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
+   */
+  retainedFrames: number;
+  /**
+   * Logical f64 bytes for retained times and unpadded primary values.
+   */
+  retainedBytes: number;
+  /**
+   * Conservative full-field allowance for procedure working f64 vectors live with History.
+   * Free-DOF vectors are charged at the full nodal length.
+   */
+  transientWorkBytes: number;
+  /**
+   * One normalized three-component f64 frame owned by a native Query result.
+   */
+  transportStagingBytes: number;
+  /**
+   * Known lower bound for the WASM/Worker frame route while two normalized three-component
+   * numeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.
+   */
+  wasmTransportStagingBytes: number;
+  /**
+   * False while the generic JSON route has value- and runtime-dependent allocation overhead.
+   */
+  wasmTransportStagingComplete: boolean;
   /**
    * Fixed 1.5 GiB planning budget; not measured free memory on the current host.
    */
   budgetBytes: number;
   /**
-   * False if mandatory storage exceeds the planning budget; null means feasibility is
-   * unknown. Fitting a lower bound does not establish that assembly or factorisation fits.
+   * False if the counted conservative estimate exceeds the planning budget; null means
+   * feasibility is unknown. Fitting it does not establish that assembly or factorisation fits.
    */
   feasible?: boolean | null;
   note: string;
@@ -3700,6 +3744,7 @@ export interface EngineError {
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
     | "solve.stalled"
+    | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
     | "explicit.unstable";
@@ -3758,6 +3803,10 @@ export interface Model {
 export interface UnitSet1 {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;

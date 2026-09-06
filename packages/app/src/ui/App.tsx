@@ -9,7 +9,7 @@ import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
 import { lazy } from '../lazy';
-import { solveLabel, stageOf, type Store, type UiState } from '../store';
+import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
@@ -205,7 +205,7 @@ function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.lastError) {
     return (
-      <div class="banner error" role="alert">
+      <div class="banner error" role="alert" aria-live="assertive" aria-atomic="true">
         <span class="mono code">{s.lastError.code}</span>
         <span>{s.lastError.cause}</span>
         {s.lastError.suggestion ? <span class="suggestion">{s.lastError.suggestion}</span> : null}
@@ -248,9 +248,9 @@ function SolvingCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.solving === null) return null;
   const percent = Math.round((s.progress?.fraction ?? 0) * 100);
   return (
-    <div class="solving-card" role="status">
+    <div class="solving-card" role="status" aria-live="polite" aria-atomic="true">
       <div class="solving-head">
-        <span class="spinner" />
+        <span class="spinner" aria-hidden="true" />
         <b>Solving · {s.solving}</b>
         <Cmd dispatch={dispatch} cmd="solve.cancel" class="tbutton outline">
           Cancel
@@ -274,7 +274,7 @@ function ErrorCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const fix = e.suggestion && /^[a-z]+\.[a-zA-Z]+$/.test(e.suggestion.trim()) ? e.suggestion.trim() : null;
   const text = `${e.code}: ${e.cause}${e.where ? ` (at ${e.where})` : ''}`;
   return (
-    <div class="error-card" role="alert">
+    <div class="error-card" role="alert" aria-live="assertive" aria-atomic="true">
       <div class="error-head">
         <span class="mono code">{e.code}</span>
         <b>{e.cause}</b>
@@ -378,6 +378,27 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
  * than a replay of the history, and the bar's own title says so.
  */
 function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+  const phaseStart = useRef<{ phase: number; playing: boolean } | null>(null);
+  const phaseEpoch = useRef(0);
+  const step = s.result?.step ?? '';
+  const mode = choiceOf(s.fieldKey).mode;
+  const target = `${step}\u0000${String(mode)}`;
+  const phaseTarget = useRef(target);
+  // A Command may change the shown Step/mode while a native range gesture still owns the
+  // pointer. Its eventual pointerup belongs to the old target and must not pause the new one.
+  if (phaseTarget.current !== target) {
+    phaseTarget.current = target;
+    phaseStart.current = null;
+    phaseEpoch.current++;
+  }
+  const cancelPhase = (): void => {
+    const start = phaseStart.current;
+    if (!start) return;
+    phaseStart.current = null;
+    phaseEpoch.current++;
+    store.set(start);
+    viewer.current?.animate(start.playing, store.state.animationSpeed, start.phase);
+  };
   const previewStart = useRef<number | null>(null);
   const preview = (scale: number): void => {
     previewStart.current ??= store.state.deformScale;
@@ -392,8 +413,6 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
     store.set({ deformScale: scale });
     viewer.current?.previewDeformScale(scale);
   };
-  const step = s.result?.step ?? '';
-  const mode = choiceOf(s.fieldKey).mode;
   const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
   const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
   return (
@@ -405,10 +424,6 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         args={{ step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }}
         pressed={s.playing}
         title={s.playing ? 'pause' : `sweep ${what}`}
-        onRun={() => {
-          store.set({ playing: !s.playing });
-          void dispatch({ cmd: 'view.animate', step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
-        }}
       >
         {s.playing ? '❚❚' : '▶'}
       </Cmd>
@@ -418,18 +433,36 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
           class="phase"
           min="0"
           max="100"
-          step="2"
+          step="1"
           aria-label="animation phase"
           data-cmd="view.animate"
           value={String(Math.round(s.phase * 100))}
           onInput={(e) => {
             const turns = Number((e.target as HTMLInputElement).value) / 100;
-            // The Command carries the frame so a script and the AI can scrub too; the local
-            // call is what makes it visible until the host forwards `frame` to the viewer.
+            if (!phaseStart.current) {
+              phaseStart.current = { phase: store.state.phase, playing: store.state.playing };
+              phaseEpoch.current++;
+            }
             store.set({ phase: turns, playing: false });
             viewer.current?.setPhase(turns);
-            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
           }}
+          onChange={(e) => {
+            const start = phaseStart.current;
+            if (!start) return;
+            const turns = Number((e.target as HTMLInputElement).value) / 100;
+            phaseStart.current = null;
+            if (turns === start.phase && !start.playing) return;
+            const epoch = phaseEpoch.current;
+            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => {
+              // A later gesture or target change owns the viewer now. Only roll back while this
+              // rejected preview is still the state on screen.
+              if (phaseEpoch.current !== epoch || phaseTarget.current !== target || store.state.phase !== turns || store.state.playing) return;
+              store.set(start);
+              viewer.current?.animate(start.playing, store.state.animationSpeed, start.phase);
+            });
+          }}
+          onPointerCancel={cancelPhase}
+          onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelPhase(); } }}
         />
       ) : null}
       <span class="faint" title={exaggerationHelp(s.deformScale)}>
@@ -496,7 +529,10 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       addEventListener('resize', onResize);
       if (typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(onResize);
-        observer.observe(el);
+        // Observe the layout box, not the canvas' drawing buffer: a canvas can keep its old
+        // intrinsic size while its CSS track changes, so observing it alone misses a splitter
+        // or viewport resize. Viewer.resize then updates the backing store from clientWidth.
+        observer.observe(el.parentElement ?? el);
       }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);
@@ -579,6 +615,75 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
   );
 }
 
+/** A view-only splitter: pointer movement previews in Store, and pointer-up emits one Command. */
+function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }: { panel: ResizablePanel; axis: 'x' | 'y'; direction: 1 | -1; store: Store; dispatch: Dispatch; fixed?: boolean }) {
+  const gesture = useRef<{ pointerId: number; start: number; size: number; previous: number } | null>(null);
+  const limits = PANEL_SIZE_LIMITS[panel];
+  const position = (e: PointerEvent): number => (axis === 'x' ? e.clientX : e.clientY);
+  const preview = (size: number): void => store.resizePanel(panel, clampPanelSize(panel, size));
+  const effectiveSize = (): number => {
+    const selector = panel === 'tree' ? '.workspace > .panel.tree' : panel === 'properties' ? '.workspace > .panel.props' : panel === 'bottom' ? '.bottom' : 'aside.assistant';
+    const box = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+    const rendered = box ? (axis === 'x' ? box.width : box.height) : 0;
+    return rendered > 0 ? Math.round(rendered) : store.state.panelSizes[panel];
+  };
+  const finish = (commit: boolean): void => {
+    const active = gesture.current;
+    if (!active) return;
+    gesture.current = null;
+    if (commit && store.state.panelSizes[panel] !== active.previous) void dispatch({ cmd: 'panel.resize', panel, size: store.state.panelSizes[panel] }).catch(() => preview(active.previous));
+    else if (!commit) store.resizePanel(panel, active.previous);
+  };
+  return (
+    <div
+      class={`resize-handle ${axis} ${panel === 'assistant' ? 'assistant-resize' : panel}${fixed ? ' fixed' : ''}`}
+      style={fixed ? `--assistant-width:${store.state.panelSizes.assistant}px` : undefined}
+      role="separator"
+      tabIndex={0}
+      data-cmd="panel.resize"
+      aria-label={`Resize ${panel} panel`}
+      aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
+      aria-valuemin={limits.min}
+      aria-valuemax={limits.max}
+      aria-valuenow={effectiveSize()}
+      onPointerDown={(e) => {
+        const el = e.currentTarget as HTMLElement;
+        gesture.current = { pointerId: e.pointerId, start: position(e), size: effectiveSize(), previous: store.state.panelSizes[panel] };
+        el.focus();
+        el.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      }}
+      onPointerMove={(e) => {
+        const active = gesture.current;
+        if (!active || active.pointerId !== e.pointerId) return;
+        preview(active.size + (position(e) - active.start) * direction);
+      }}
+      onPointerUp={(e) => {
+        if (gesture.current?.pointerId === e.pointerId) finish(true);
+      }}
+      onPointerCancel={(e) => {
+        if (gesture.current?.pointerId === e.pointerId) finish(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(false);
+          return;
+        }
+        const positive = axis === 'x' ? e.key === 'ArrowRight' : e.key === 'ArrowDown';
+        const negative = axis === 'x' ? e.key === 'ArrowLeft' : e.key === 'ArrowUp';
+        if (!positive && !negative) return;
+        e.preventDefault();
+        const delta = (positive ? 10 : -10) * direction;
+        const size = clampPanelSize(panel, effectiveSize() + delta);
+        preview(size);
+        void dispatch({ cmd: 'panel.resize', panel, size }).catch(() => undefined);
+      }}
+    />
+  );
+}
+
 export function App({ store, dispatch, viewer, query, commands = [], registry }: AppProps) {
   const s = useStore(store);
   // Collapse hides the drawer, but keeps the conversation and any running turn alive.
@@ -604,17 +709,20 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   return (
     <>
       {started ? (
-        <div class="shell">
+        <div class="shell" style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <TopBar s={s} dispatch={dispatch} />
-          <div class="under-bar">
+          <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
               <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
+              <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />
               <div class="centre">
                 <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
+                <ResizeHandle panel="bottom" axis="y" direction={-1} store={store} dispatch={dispatch} />
               </div>
               <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
+              <ResizeHandle panel="properties" axis="x" direction={-1} store={store} dispatch={dispatch} />
             </div>
           </div>
         </div>
@@ -631,10 +739,11 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
       {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
           opens on the start screen and keeps its conversation when the workspace comes up around
-          it. `style.css` reserves its 392 px on `.workspace` when the window is wide enough, so
-          the five-column layout of the design holds and the top bar stays full-width. Collapsing
-          only hides the drawer, preserving the conversation and any running turn. */}
-      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} /> : null}
+          it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
+          layout of the design while the top bar stays full-width. Collapsing only hides the
+          drawer, preserving the conversation and any running turn. */}
+      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
+      {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}
     </>

@@ -3,10 +3,11 @@
 // and pressing "Export selected" dispatches one `file.export` per ticked row — no batching
 // Command, because each file is its own artefact and its own Journal line.
 import { EXPORT_FORMATS, type ExportFormatRow } from '@femlab/registry';
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Store, UiState } from '../store';
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
+import { useDialogFocus } from './Dialog';
 
 const GROUPS: ExportFormatRow['group'][] = ['Model & mesh', 'Results', 'Document & model file'];
 
@@ -19,9 +20,10 @@ export function unavailable(row: ExportFormatRow, s: { hasMesh: boolean; hasResu
 }
 
 /** The `file.export` spec a row runs; CSV defaults to the extremes table. */
-export function specOf(row: ExportFormatRow, step: string | undefined): Record<string, unknown> {
+export function specOf(row: ExportFormatRow, step: string | undefined, image?: { width: number; height: number }): Record<string, unknown> {
   if (row.format === 'csv') return { format: 'csv', table: 'extremes', ...(step ? { step } : {}) };
   if (row.format === 'vtu' && step) return { format: 'vtu', step };
+  if (row.format === 'png' && image) return { format: 'png', ...image };
   return { format: row.format };
 }
 
@@ -31,17 +33,11 @@ const SCALES = [1, 2];
 
 /**
  * The design's 1× / 2× on the viewer image. The Command is `query.screenshot`, whose schema
- * takes `width` and `height`; each chip asks for the canvas at that many device pixels and the
- * chosen scale then rides on the legend the viewer burns in.
- *
- * ponytail: the scale reaches the viewer through `ResultsView.legendBurn()`, because neither
- * `HostContext.view.screenshot` nor `buildExport`'s png branch forwards the Query's width and
- * height. One line in each — `host.ts` and `registry/src/host-commands.ts` — replaces this.
+ * takes `width` and `height`; each chip requests an exact multiple of the canvas CSS size.
+ * The same dimensions are passed by the row export and Export selected actions.
  */
-function Resolution({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
-  const canvas = typeof document === 'undefined' ? null : document.querySelector('canvas');
-  const w = canvas?.clientWidth ?? 1280;
-  const h = canvas?.clientHeight ?? 720;
+function Resolution({ s, store, dispatch, query, size }: { s: UiState; store: Store; dispatch: Dispatch; query: Query; size: ImageSize }) {
+  const { width: w, height: h } = size;
   return (
     <div class="segmented" role="group" aria-label="image resolution">
       {SCALES.map((n) => (
@@ -66,6 +62,36 @@ function Resolution({ s, store, dispatch, query }: { s: UiState; store: Store; d
   );
 }
 
+interface ImageSize { width: number; height: number }
+
+/** Track the canvas content box while the dialog is open, so its visible Command stays exact
+ *  when a window resize or docked panel changes the viewer underneath the modal. */
+function useCanvasSize(open: boolean): ImageSize {
+  const measure = (): ImageSize => {
+    const canvas = typeof document === 'undefined' ? null : document.querySelector<HTMLCanvasElement>('.viewer canvas');
+    return { width: Math.max(1, Math.round(canvas?.clientWidth || 1280)), height: Math.max(1, Math.round(canvas?.clientHeight || 720)) };
+  };
+  const [size, setSize] = useState<ImageSize>(measure);
+  useEffect(() => {
+    if (!open) return;
+    const canvas = document.querySelector<HTMLCanvasElement>('.viewer canvas');
+    if (!canvas) return;
+    const update = () => {
+      const next = measure();
+      setSize((old) => old.width === next.width && old.height === next.height ? old : next);
+    };
+    update();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(update);
+      observer.observe(canvas);
+      return () => observer.disconnect();
+    }
+    addEventListener('resize', update);
+    return () => removeEventListener('resize', update);
+  }, [open]);
+  return size;
+}
+
 /** A data-URL PNG onto the person's disk. `file.export` does the same for the formats the
  *  engine writes; a Query hands back bytes rather than writing them, so this is its other half. */
 function save(name: string, png: string): void {
@@ -75,23 +101,31 @@ function save(name: string, png: string): void {
 
 export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
   const [ticked, setTicked] = useState<string[]>([]);
-  if (s.panels['export'] !== true) return null;
+  const open = s.panels['export'] === true;
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, dialog);
+  const canvasSize = useCanvasSize(open);
+  if (!open) return null;
   const ctx = { hasMesh: Boolean(s.model?.meshSettings), hasResult: s.result !== null };
   const step = s.result?.step;
+  const image = () => {
+    return { width: canvasSize.width * s.screenshotScale, height: canvasSize.height * s.screenshotScale };
+  };
   const close = { cmd: 'panel.toggle', panel: 'export', open: false };
   const runAll = (): void => {
     for (const format of ticked) {
       const row = EXPORT_FORMATS.find((r) => r.format === format);
-      if (row) void dispatch({ cmd: 'file.export', spec: specOf(row, step) }).catch(() => undefined);
+      if (row) void dispatch({ cmd: 'file.export', spec: specOf(row, step, image()) }).catch(() => undefined);
     }
   };
   return (
     <div class="overlay wide" onClick={() => void dispatch(close)}>
-      <div class="export-modal" role="dialog" aria-modal="true" aria-label="Export" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialog} class="export-modal" role="dialog" aria-modal="true" aria-label="Export" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div class="gallery-head">
           <span class="gallery-title">Export</span>
           <span class="gallery-sub">Every row is one Command, so anything here is also scriptable and callable by the Assistant.</span>
           <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'export', open: false }}>
+            <span class="sr-only">Close export</span>
             ×
           </Cmd>
         </div>
@@ -100,7 +134,7 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
             <div class="section-label">{group}</div>
             {EXPORT_FORMATS.filter((r) => r.group === group).map((row) => {
               const why = unavailable(row, ctx);
-              const spec = specOf(row, step);
+              const spec = specOf(row, step, image());
               return (
                 <div key={row.format} class={why ? 'export-row off' : 'export-row'}>
                   <input
@@ -114,7 +148,7 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
                   <span class="export-name">{row.name}</span>
                   <span class="export-note">{why ?? row.note}</span>
                   <span class="mono export-cmd">{line(spec)}</span>
-                  {row.format === 'png' ? <Resolution s={s} store={store} dispatch={dispatch} query={query} /> : null}
+                  {row.format === 'png' ? <Resolution s={s} store={store} dispatch={dispatch} query={query} size={canvasSize} /> : null}
                   <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null} title={line(spec)}>
                     export
                   </Cmd>

@@ -317,7 +317,8 @@ function Menu({ item, dispatch, close }: { item: TreeItem; dispatch: Dispatch; c
 }
 
 export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: Dispatch; shapes?: { kind: string; hint: string }[] }) {
-  const [menu, setMenu] = useState<string | null>(null);
+  const openMenu = Object.keys(s.panels).find((panel) => panel.startsWith('tree.menu.') && s.panels[panel]);
+  const menu = openMenu?.slice('tree.menu.'.length) ?? null;
   const [adding, setAdding] = useState<string | null>(null);
   const groups = treeGroups(s, shapes);
   const stepNames = (s.model?.steps ?? []).map((x) => x.name);
@@ -341,109 +342,157 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
         <span class="mono panel-sub">rev {s.revision}</span>
       </div>
       <div class="tree-body">
-        {groups.map((group) => (
-          <div key={group.label} class="tree-group">
-            <div class="group-head">
-              <span class="mono caret">▾</span>
-              <span class="group-label">{group.label}</span>
-              <span class={`mono ${group.badgeClass}`}>{group.badge}</span>
-            </div>
-            {group.items.map((item, i) => (
-              <div key={`${item.kind}:${item.name}`} class={(item.active ?? selected === item.name) ? 'row selected' : 'row'} onContextMenu={(e) => (e.preventDefault(), setMenu(`${item.kind}:${item.name}`))}>
-                <Cmd
-                  dispatch={dispatch}
-                  cmd={item.run ? item.cmd : 'form.open'}
-                  class="row-main"
-                  args={item.run ? item.args : { command: item.cmd, args: item.args }}
-                  title={`${item.cmd} — ${item.name}`}
-                >
-                  <span class={item.glyphClass}>{item.glyph}</span>
-                  <span class="row-text">
-                    <span class="mono name">{item.name}</span>
-                    <span class="summary">{item.summary}</span>
-                  </span>
-                </Cmd>
-                {group.label === 'Steps' && stepNames.length > 1 ? (
-                  <Cmd
-                    dispatch={dispatch}
-                    cmd="step.reorder"
-                    class="at"
-                    title="move this Step earlier"
-                    disabled={i === 0}
-                    args={{ order: stepNames }}
-                    onRun={() => {
-                      const order = [...stepNames];
-                      order.splice(i - 1, 0, ...order.splice(i, 1));
-                      void dispatch({ cmd: 'step.reorder', order }).catch(() => undefined);
-                    }}
-                  >
-                    ↑
-                  </Cmd>
-                ) : null}
-                <Cmd
-                  dispatch={dispatch}
-                  cmd="chat.insertMention"
-                  class="at"
-                  title={`reference @${item.kind}:${item.name} in chat`}
-                  onRun={() => {
-                    const ref = `${item.kind}:${item.name}`;
-                    void dispatch({ cmd: 'chat.insertMention', ref }).catch(() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'mention', ref } }).catch(() => undefined));
-                  }}
-                >
-                  @
-                </Cmd>
-                {menu === `${item.kind}:${item.name}` ? <Menu item={item} dispatch={dispatch} close={() => setMenu(null)} /> : null}
-              </div>
-            ))}
-            {group.items.length === 0 ? <div class="empty-note">{group.note}</div> : null}
-            {/* Outside the empty branch: a group that already has one thing in it is exactly where
-                a person goes to add the second (issue #43). */}
-            {group.add ? (
-              <div
-                class="add-row"
-                onKeyDown={(e) => {
-                  // A menu closes on Escape and hands focus back to what opened it (issue #211).
-                  // One handler on the row: keydown bubbles from the chip and every item alike.
-                  if (e.key !== 'Escape' || adding !== group.label) return;
-                  e.stopPropagation();
-                  setAdding(null);
-                  (e.currentTarget as HTMLElement).querySelector<HTMLElement>('.chip-add')?.focus();
-                }}
-              >
-                <Cmd
-                  dispatch={dispatch}
-                  cmd="form.open"
-                  class="chip-add"
-                  args={{ command: group.add.cmd }}
-                  pressed={adding === group.label}
-                  title={group.add.menu ? `choose what to add to ${group.label}` : `fill in ${group.add.cmd}`}
-                  {...(group.add.menu ? { onRun: () => setAdding(adding === group.label ? null : group.label) } : {})}
-                >
-                  + add {group.add.what}
-                  {group.add.menu ? ' …' : ''}
-                </Cmd>
-                {group.add.menu && adding === group.label ? (
-                  <div class="menu add-menu">
-                    {group.add.menu.map((choice) => (
+        {groups.map((group) => {
+          const slug = group.label.toLowerCase();
+          const panel = `tree.${slug}`;
+          const bodyId = `tree-${slug}-items`;
+          const open = s.panels[panel] !== false;
+          return (
+            <div key={group.label} class="tree-group">
+              <Cmd dispatch={dispatch} cmd="panel.toggle" class="group-head" args={{ panel, open: !open }} expanded={open} controls={bodyId} title={`${open ? 'collapse' : 'expand'} ${group.label}`}>
+                <span class="mono caret">{open ? '▾' : '▸'}</span>
+                <span class="group-label">{group.label}</span>
+                <span class={`mono ${group.badgeClass}`}>{group.badge}</span>
+              </Cmd>
+              {open ? (
+                <div id={bodyId} class="tree-group-body">
+                  {group.items.map((item, i) => {
+                    const itemKey = `${item.kind}:${item.name}`;
+                    const menuPanel = `tree.menu.${itemKey}`;
+                    const visible = !s.hiddenBodies.includes(item.name);
+                    return (
+                      <div
+                        key={itemKey}
+                        class={(item.active ?? selected === item.name) ? 'row selected' : 'row'}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          void dispatch({ cmd: 'panel.toggle', panel: menuPanel, open: true }).catch(() => undefined);
+                        }}
+                      >
+                        <Cmd
+                          dispatch={dispatch}
+                          cmd={item.run ? item.cmd : 'form.open'}
+                          class="row-main"
+                          args={item.run ? item.args : { command: item.cmd, args: item.args }}
+                          title={`${item.cmd} — ${item.name}`}
+                        >
+                          <span class={item.glyphClass}>{item.glyph}</span>
+                          <span class="row-text">
+                            <span class="mono name">{item.name}</span>
+                            <span class="summary">{item.summary}</span>
+                          </span>
+                        </Cmd>
+                        {group.label === 'Steps' && stepNames.length > 1 ? (
+                          <Cmd
+                            dispatch={dispatch}
+                            cmd="step.reorder"
+                            class="at"
+                            title="move this Step earlier"
+                            disabled={i === 0}
+                            args={{ order: stepNames }}
+                            onRun={() => {
+                              const order = [...stepNames];
+                              order.splice(i - 1, 0, ...order.splice(i, 1));
+                              void dispatch({ cmd: 'step.reorder', order }).catch(() => undefined);
+                            }}
+                          >
+                            ↑
+                          </Cmd>
+                        ) : null}
+                        {item.kind === 'body' ? (
+                          <Cmd
+                            dispatch={dispatch}
+                            cmd="view.setVisible"
+                            class={visible ? 'tree-action visibility' : 'tree-action visibility off'}
+                            args={{ bodies: [item.name], on: !visible }}
+                            pressed={visible}
+                            label={`${visible ? 'Hide' : 'Show'} ${item.name} in viewer`}
+                            title={`${visible ? 'hide' : 'show'} ${item.name} in viewer`}
+                          >
+                            <span class="eye" aria-hidden="true" />
+                          </Cmd>
+                        ) : null}
+                        <Cmd
+                          dispatch={dispatch}
+                          cmd="chat.insertMention"
+                          class="at"
+                          title={`reference @${item.kind}:${item.name} in chat`}
+                          onRun={() => {
+                            const ref = `${item.kind}:${item.name}`;
+                            void dispatch({ cmd: 'chat.insertMention', ref }).catch(() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'mention', ref } }).catch(() => undefined));
+                          }}
+                        >
+                          @
+                        </Cmd>
+                        <Cmd
+                          dispatch={dispatch}
+                          cmd="panel.toggle"
+                          class="tree-action menu-trigger"
+                          args={{ panel: menuPanel, open: menu !== itemKey }}
+                          pressed={menu === itemKey}
+                          label={`Actions for ${item.name}`}
+                          title={`actions for ${item.name}`}
+                        >
+                          ⋯
+                        </Cmd>
+                        {menu === itemKey ? (
+                          <Menu item={item} dispatch={dispatch} close={() => void dispatch({ cmd: 'panel.toggle', panel: menuPanel, open: false }).catch(() => undefined)} />
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  {group.items.length === 0 ? <div class="empty-note">{group.note}</div> : null}
+                  {/* Outside the empty branch: a group that already has one thing in it is exactly where
+                      a person goes to add the second (issue #43). */}
+                  {group.add ? (
+                    <div
+                      class="add-row"
+                      onKeyDown={(e) => {
+                        // A menu closes on Escape and hands focus back to what opened it (issue #211).
+                        // One handler on the row: keydown bubbles from the chip and every item alike.
+                        if (e.key !== 'Escape' || adding !== group.label) return;
+                        e.stopPropagation();
+                        setAdding(null);
+                        (e.currentTarget as HTMLElement).querySelector<HTMLElement>('.chip-add')?.focus();
+                      }}
+                    >
                       <Cmd
-                        key={choice.label}
                         dispatch={dispatch}
                         cmd="form.open"
-                        class="menu-item"
-                        args={{ command: choice.cmd, args: choice.args }}
-                        title={choice.hint}
-                        onRun={() => (setAdding(null), void dispatch({ cmd: 'form.open', command: choice.cmd, args: choice.args }).catch(() => undefined))}
+                        class="chip-add"
+                        args={{ command: group.add.cmd }}
+                        pressed={adding === group.label}
+                        title={group.add.menu ? `choose what to add to ${group.label}` : `fill in ${group.add.cmd}`}
+                        {...(group.add.menu ? { onRun: () => setAdding(adding === group.label ? null : group.label) } : {})}
                       >
-                        <span class="mono glyph low">{choice.glyph}</span>
-                        <span>{choice.label}</span>
+                        + add {group.add.what}
+                        {group.add.menu ? ' …' : ''}
                       </Cmd>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ))}
+                      {group.add.menu && adding === group.label ? (
+                        <div class="menu add-menu">
+                          {group.add.menu.map((choice) => (
+                            <Cmd
+                              key={choice.label}
+                              dispatch={dispatch}
+                              cmd="form.open"
+                              class="menu-item"
+                              args={{ command: choice.cmd, args: choice.args }}
+                              title={choice.hint}
+                              onRun={() => (setAdding(null), void dispatch({ cmd: 'form.open', command: choice.cmd, args: choice.args }).catch(() => undefined))}
+                            >
+                              <span class="mono glyph low">{choice.glyph}</span>
+                              <span>{choice.label}</span>
+                            </Cmd>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </aside>
   );

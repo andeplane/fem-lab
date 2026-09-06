@@ -3,7 +3,7 @@ export type { Fem } from './generated/fem';
 export { FemError, nearest, type ErrorCode } from './error';
 export { Registry, type CommandDef, type QueryDef, type HostDef, type EngineSchema, type JsonSchema, type Provider, type RegistryOptions } from './registry';
 export { decodeBulk, type EngineTransport, type Progress, type Surface, type FieldData, type ExportSpec, type ExportedFile, type Op, type Req, type Res, type BufferSpec, type Dtype } from './transport';
-export { HOST_COMMANDS, HOST_QUERIES, EXPORT_FORMATS, extremesCsv, reactionsCsv, pathCsv, dataUrlBytes, type ExportFormatRow, type HostContext, type Selection, type FolderInfo, type ScriptResult, type ProjectMeta, type OpenProject, type ProjectSaveReceipt } from './host-commands';
+export { MAX_MODEL_FILE_BYTES, HOST_COMMANDS, HOST_QUERIES, EXPORT_FORMATS, extremesCsv, reactionsCsv, pathCsv, dataUrlBytes, type AiProvider, type ExportFormatRow, type HostContext, type Selection, type FolderInfo, type ScriptResult, type ProjectMeta, type OpenProject, type ProjectSaveReceipt, type AutosaveState, type AutosaveVersion } from './host-commands';
 export { toToolDefinitions, toolNameFor, commandNameFor, inlineDefs, stripDiscriminator, TOOL_NAME, RUN_SCRIPT, type ToolDefinition } from './tools';
 export { makeFemProxy, type Dispatch, type QueryFn } from './script-api';
 export { parseMentions, refOf, MENTION_KINDS, type MentionKind, type Chip } from './mentions';

@@ -7,6 +7,7 @@ import { render } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { Store } from '../src/store';
+import { exampleFor, validCommand } from './command-schema';
 import { SchemaForm } from '../src/ui/SchemaForm';
 import { fieldsOf, type Defs, type Field } from '../src/ui/schema';
 
@@ -69,6 +70,23 @@ describe('the generated Properties form, for every Command in the schema', () =>
     const wrong = mount(cmd, wrongValues(fields));
     expect(wrong.querySelector('.apply')).not.toBeNull();
     expect(errors).toEqual([]);
+  });
+
+  it.each(NAMES)('submits %s against the independent registry JSON Schema', async (name) => {
+    const expected = exampleFor(VARIANTS.get(name)!) as { cmd: string } & Record<string, unknown>;
+    expect(validCommand(expected), JSON.stringify(validCommand.errors)).toBe(true);
+    const { cmd, ...args } = expected;
+    const store = new Store();
+    store.openForm(cmd, args);
+    const sent: unknown[] = [];
+    const root = document.createElement('div');
+    document.body.append(root);
+    render(<SchemaForm s={store.state} store={store} dispatch={async value => { sent.push(value); }} query={query} defs={DEFS} variants={VARIANTS} />, root);
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent).toHaveLength(1);
+    expect(validCommand(sent[0]), JSON.stringify(validCommand.errors)).toBe(true);
+    expect(sent[0]).toEqual(expected);
+    render(null, root);
   });
 
   it('puts a data-cmd on every control of every form, so ADR 0003 holds field by field', () => {

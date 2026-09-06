@@ -1,17 +1,17 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { storeKey } from './ai/key-storage';
 import type { HostCaps } from './capabilities';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
-import { type ShareCommand, shareUrl } from './share';
-import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
+import { type Autosave, type ShareCommand, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
+import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
-import type { WorkerTransport } from './worker-transport';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -40,6 +40,51 @@ async function fetchExample(name: string): Promise<string> {
  * import time; the three hooks below are what `main.tsx` needs and are safe to call before it.
  */
 let projects: Projects | null = null;
+
+export const autosave: Autosave = makeAutosave({
+  // a browser with IndexedDB blocked (private mode, or a headless test) keeps working: the
+  // autosave is then simply per-session, and file.save is still there.
+  store: typeof indexedDB === 'undefined' ? memoryStore() : indexedDbStore(indexedDB),
+  initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
+  onError: (e) => console.warn('autosave failed', e),
+});
+
+/** Read once at boot so `query.autosave` can answer without waiting on IndexedDB. */
+let lastSaved: AutosaveState['saved'] = null;
+let lastAutosaves: AutosaveVersion[] = [];
+
+const summary = (saved: { id?: string; name: string; at: number; cmds: unknown[] }): AutosaveVersion => ({
+  id: saved.id ?? `legacy-${saved.at}`,
+  name: saved.name,
+  at: saved.at,
+  commands: saved.cmds.length,
+});
+
+/** The other half of the boot hook: `await primeAutosave();` before the start screen renders. */
+export async function primeAutosave(): Promise<AutosaveState['saved']> {
+  const saved = await autosave.read();
+  lastAutosaves = (await autosave.readAll()).map(summary);
+  lastSaved = saved && { name: saved.name, at: saved.at, commands: saved.cmds.length };
+  return lastSaved;
+}
+
+/**
+ * The boot hook proper: one line at the end of `main.tsx`'s `refresh()`, which already runs
+ * after every journaled Command and has just re-read the Model and the Journal.
+ */
+export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
+  // Boot refreshes before any Command; an empty Journal is nothing to restore (issue #48).
+  if (!autosave.enabled() || journal.length === 0) return;
+  autosave.note(name, journal as never);
+  lastSaved = { name, at: Date.now(), commands: journal.length };
+  lastAutosaves = autosave.history().map(summary);
+}
+
+/** The UI copy of the bounded history, including a debounced newest snapshot. */
+export function autosaveHistory(): AutosaveVersion[] {
+  return lastAutosaves.slice();
+}
+
 
 /** A viewer screenshot cut down to a Recent card. `view.screenshot` renders at the canvas size
  *  and ignores `width`/`height`, so the downscale is a canvas draw here, not a screenshot option. */
@@ -78,7 +123,7 @@ export function forkProject(): void {
   projects?.fork();
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, save: Autosave = autosave): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
@@ -138,17 +183,24 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         const visible = v().setLayer(layer, on);
         store.set({ layerVisibility: { ...store.state.layerVisibility, [layer]: visible } });
       },
-      setVisible: (bodies, on) => v().setVisible(bodies, on),
+      setVisible: (bodies, on) => {
+        v().setVisible(bodies, on);
+        store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
+      },
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
       },
-      animate: (a) => v().animate(a.playing),
+      animate: (a) => {
+        v();
+        if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
+        return results.animate(a);
+      },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
         const burn = o.legend === false ? null : results?.legendBurn();
-        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined) };
+        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
     },
     selection: {
@@ -157,7 +209,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       setPickTarget: (t) => store.set({ pickTarget: t }),
       get: (): Selection => store.state.selection,
     },
-    panels: { toggle: (panel, open) => store.togglePanel(panel, open) },
+    panels: {
+      toggle: (panel, open) => store.togglePanel(panel, open),
+      resize: (panel, size) => store.resizePanel(panel, size),
+    },
     script: {
       validate: (code, timeoutMs) => {
         if (!scripts) throw new FemError('unsupported', 'no validation Worker is available', 'query.validateScript', 'run the app with script workers');
@@ -187,6 +242,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     chat: {
       send: (text) => void import('./ai').then((m) => m.chatBridge.send(text)),
       insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
+      setDraft: (text) => import('./ai').then((m) => m.chatBridge.setDraft(text)),
       clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
     },
     skills: () => store.state.skills,
@@ -200,6 +256,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
           input.onchange = () => {
             const file = input.files?.[0];
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            if (file.size > MAX_MODEL_FILE_BYTES) return reject(new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'picker', 'open a smaller file written by file.save'));
             file.text().then(resolve, reject);
           };
           input.click();
@@ -225,8 +282,35 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       // with a background save into a project there is no "unsaved" copy to throw away.
       setAutosave: (on) => {
         own.setEnabled(on);
+        save.setEnabled(on);
         localStorage.setItem('femlab.autosave', on ? 'on' : 'off');
       },
+      restore: async (id) => {
+        const revisions = await save.readAll();
+        lastAutosaves = revisions.map(summary);
+        const saved = id === undefined ? revisions[0] : revisions.find((revision) => revision.id === id);
+        if (id !== undefined && !saved) {
+          throw new FemError('not-found', `autosave revision '${id}' was not found`, 'file.restore.id', 'query.autosaveHistory to choose an available revision, then call file.restore with its id');
+        }
+        if (!saved) return null;
+        // As with an example: a restored Journal that ends on a solve comes back solved on screen.
+        own.fork();
+        let solved: unknown = null;
+        await applyShared(
+          {
+            dispatch: async (cmd) => {
+              const ack = await transport.dispatch(cmd as never);
+              if (String(cmd.cmd).startsWith('solve.') || cmd.cmd === 'study.converge') solved = ack;
+              return ack;
+            },
+          },
+          saved.cmds,
+        );
+        if (solved) await results?.onAck(solved);
+        return { name: saved.name, at: saved.at, commands: saved.cmds.length };
+      },
+      autosave: () => ({ enabled: save.enabled(), saved: save.history()[0] ? summary(save.history()[0]!) : null }),
+      autosaves: () => save.history().map(summary),
     },
     projects: {
       new: (name) => own.new(name),
@@ -256,21 +340,26 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     },
     examples: { fetch: fetchExample },
     ai: {
-      setKey: (key) => (key === null ? localStorage.removeItem('femlab.ai.key') : localStorage.setItem('femlab.ai.key', key)),
-      setModel: (model) => localStorage.setItem('femlab.ai.model', model),
+      setKey: (key, provider: AiProvider) => {
+        storeKey(provider, key);
+      },
+      setModel: (model) => {
+        localStorage.setItem('femlab.ai.model', model);
+        store.set({ assistantModel: model });
+      },
     },
     env: { webgpu: host.webgpu, crossOriginIsolated: host.crossOriginIsolated, threads: host.threads, userAgent: host.userAgent, engine: 'local' },
   };
 }
 
 /**
- * Three Commands the design's shell needs that `@femlab/registry` does not declare: the display
+ * Four Commands the design's shell needs that `@femlab/registry` does not declare: the display
  * mode segmented control, opening a bundled example that is a Journal rather than a saved
  * `femlab/1` file, and putting a Command into the Properties form without running it (every
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: WorkerTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
   let editRequest = 0;
   let intentRun = 0;
   return [
@@ -325,6 +414,28 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
       },
     },
     {
+      name: 'chat.setDraft',
+      description: 'Replace the unsent Assistant draft with explicit text and open the drawer. Use this to insert a skill name for the person to complete with arguments; it does not invoke the skill or send a message.',
+      schema: z.object({ text: z.string() }),
+      tool: true,
+      run: async (input, ctx) => {
+        const { text } = input as { text: string };
+        store.togglePanel('assistant', true);
+        await ctx.chat.setDraft(text);
+      },
+    },
+    {
+      name: 'form.pick',
+      description: 'Arm the next viewer face click to fill the explicit field path of an open Command form. `command` must name the currently open form; `field` names its argument path. This sets both the picking target and the form destination, without editing the Model or Journal.',
+      schema: z.object({ command: z.string(), field: z.array(z.string().min(1)).min(1) }),
+      tool: true,
+      run: (input) => {
+        const { command, field } = input as { command: string; field: string[] };
+        if (store.state.form?.cmd !== command) throw new FemError('schema', 'the requested Command form is not open', 'command', `form.open for ${command} before form.pick`);
+        store.set({ pickInto: field, pickTarget: 'face' });
+      },
+    },
+    {
       name: 'form.open',
       description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
       schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional() }),
@@ -332,6 +443,16 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
       run: (input) => {
         const { command, args, keepInitial } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean };
         store.openForm(command, args ?? {}, keepInitial === true);
+      },
+    },
+    {
+      name: 'example.filter',
+      description: 'Filter the Examples gallery by one metadata tag and one difficulty level. Pass `null` for either field to show every value in that dimension; this changes only the gallery view.',
+      schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable() }),
+      tool: true,
+      run: (input) => {
+        const { tag, difficulty } = input as { tag: string | null; difficulty: ExampleDifficulty | null };
+        store.set({ exampleFilter: { tag, difficulty } });
       },
     },
     {
