@@ -181,7 +181,7 @@ textarea:focus {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   padding: 0 12px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-panel);
@@ -341,7 +341,7 @@ textarea:focus {
    text labels while giving the flexible model and command fields the remaining room. */
 @media (min-width: 1180px) and (max-width: 1599px) {
   .topbar {
-    gap: 5px;
+    gap: 4px;
     padding-inline: 8px;
   }
   .logo {
@@ -353,8 +353,9 @@ textarea:focus {
     min-width: 48px;
     max-width: 140px;
   }
+  /* Leave room for the editable name, Save as file and Report without hiding actions. */
   .topbar > .tbutton {
-    padding-inline: 6px;
+    padding-inline: 4px;
   }
   .topbar > .chip {
     max-width: 164px;
@@ -375,7 +376,7 @@ textarea:focus {
    through 1299 px so the next breakpoint has space for every fixed-width action. */
 @media (min-width: 1180px) and (max-width: 1299px) {
   .topbar {
-    gap: 4px;
+    gap: 3px;
     padding-inline: 6px;
   }
   /* Two more actions than #137 measured (Projects, Save). The engine chip gives up their width
@@ -391,9 +392,6 @@ textarea:focus {
   }
   .palette-field {
     min-width: 80px;
-  }
-  .topbar > .tbutton {
-    padding-inline: 5px;
   }
   .topbar > .segmented button {
     padding-inline: 5px;
