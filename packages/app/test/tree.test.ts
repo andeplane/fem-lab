@@ -4,7 +4,7 @@
 import type { ModelSummary } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import { Store, initialState, type UiState } from '../src/store';
-import { reorderSteps, treeGroups } from '../src/ui/Tree';
+import { reorderSteps, shapeMenu, treeGroups } from '../src/ui/Tree';
 
 const v = (value: number, unit: string) => ({ value, unit });
 
@@ -107,6 +107,29 @@ describe('treeGroups', () => {
     const s = state({ ...MODEL, meshSettings: null } as ModelSummary);
     expect(group(s, 'Mesh').badge).toBe('1 warning');
     expect(group(state({ ...MODEL, bodies: [], meshSettings: null } as unknown as ModelSummary), 'Mesh').badge).toBe('—');
+  });
+
+  // Issue #43: the tree offered `geometry.addBox` and nothing else.
+  it('offers every shape ShapeSpec declares plus the cut, with box keeping its own Command', () => {
+    const menu = shapeMenu([
+      { kind: 'box', hint: 'a box' },
+      { kind: 'cylinder', hint: 'a cylinder' },
+      { kind: 'wormhole', hint: 'an engine kind this file has never heard of' },
+    ]);
+    expect(menu.map((m) => m.label)).toEqual(['box', 'cylinder', 'wormhole', 'cut']);
+    expect(menu[0]).toMatchObject({ cmd: 'geometry.addBox', args: {} });
+    expect(menu[1]).toMatchObject({ cmd: 'geometry.add', args: { shape: { kind: 'cylinder' } } });
+    expect(menu[2]!.glyph).toBe('◇');
+    expect(menu[3]).toMatchObject({ cmd: 'geometry.subtract' });
+  });
+
+  it('hangs that menu off the Geometry chip, and nowhere else', () => {
+    const s = state(MODEL);
+    const shapes = [{ kind: 'box', hint: 'a box' }];
+    expect(treeGroups(s, shapes).find((g) => g.label === 'Geometry')!.add!.menu!.map((m) => m.label)).toEqual(['box', 'cut']);
+    expect(treeGroups(s, shapes).find((g) => g.label === 'Materials')!.add!.menu).toBeUndefined();
+    // No shapes handed in (a test that does not care) and the chip is the plain one it was.
+    expect(treeGroups(s).find((g) => g.label === 'Geometry')!.add).toEqual({ what: 'body', cmd: 'geometry.addBox' });
   });
 
   it('marks the row whose Command the Properties panel is showing', () => {
