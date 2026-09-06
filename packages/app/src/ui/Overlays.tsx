@@ -52,11 +52,9 @@ export function objectRoute(object: ObjectRef, s: UiState): { cmd: string; [key:
   if (object.ref.endsWith('.*')) return null; // query.objects can describe a family of cut faces, not one selectable Set.
   if (object.kind === 'body') return { cmd: 'selection.set', bodies: [object.name], mode: 'replace' };
   if (object.kind === 'set' || object.kind === 'face') return { cmd: 'selection.set', sets: [object.name], mode: 'replace' };
-  const entries = s.journal?.entries ?? [];
-  const entry = object.kind === 'journal' ? entries.find((e) => e.seq === Number(object.name)) : [...entries].reverse().find((e) => {
-    const c = e.cmd as { cmd: string; name?: string };
-    return c.name === object.name && c.cmd.startsWith(`${object.kind}.`);
-  });
+  if (['material', 'constraint', 'load', 'step'].includes(object.kind)) return { cmd: 'form.edit', kind: object.kind, name: object.name };
+  if (object.kind !== 'journal') return null;
+  const entry = s.journal?.entries.find((e) => e.seq === Number(object.name));
   if (!entry) return null;
   const { cmd, ...args } = entry.cmd;
   return { cmd: 'form.open', command: cmd, args };

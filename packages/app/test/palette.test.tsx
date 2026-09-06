@@ -143,3 +143,14 @@ it('routes a Journal object to its actual saved Command parameters', () => {
     args: { name: 'p', on: 'bearing_top', value: '2.4 MPa' },
   });
 });
+
+it('routes current editable objects through form.edit without reconstructing historical definitions', () => {
+  const store = new Store();
+  for (const kind of ['material', 'constraint', 'load', 'step']) {
+    expect(objectRoute({ ref: `${kind}:renamed`, kind, name: 'renamed', summary: 'current object' }, store.state)).toEqual({
+      cmd: 'form.edit',
+      kind,
+      name: 'renamed',
+    });
+  }
+});
