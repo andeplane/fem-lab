@@ -756,7 +756,7 @@ code (same rule as engine Commands). `n` = number, `PanelId` = the `id` column o
 | `project.refresh` | `{}` | re-list files, re-read `AGENTS.md`/`CLAUDE.md` and `skills/*/SKILL.md` | yes |
 | `example.open` | `{ name: string }` | fetch `examples/<name>.json` → `importFile` | yes |
 | `solve.cancel` | `{}` | `transport.cancel()` | yes |
-| `ai.setKey` | `{ key: string \| null }` | localStorage; never journaled, never a tool, never in exports | no |
+| `ai.setKey` | `{ key: string \| null }` | sessionStorage (ADR 0016); never journaled, never a tool, never in exports | no |
 | `ai.setModel` | `{ model: string }` | model id for the agent (default `claude-opus-5`) | no |
 
 Host Queries (same file, same zod treatment, all `tool: true` unless noted): `query.screenshot
@@ -1111,7 +1111,7 @@ as one `<context>` JSON block after the text. A leading `/name` (§7.8) is repla
 body as a preceding block. Nothing about the message layout is visual; the designer decides how
 chips look.
 
-Key in `localStorage['femlab.anthropicKey']`, never in the store snapshot, Journal, export or
+Keys in `sessionStorage['femlab.ai.key']` and `sessionStorage['femlab.ai.key.openai']` (ADR 0016), never in the store snapshot, Journal, export or
 screenshot. Phase 4's eval suite decides when the `?ai=1` flag is removed.
 
 Tests (vitest, no network): the loop against a fake `Anthropic` client that replays a scripted

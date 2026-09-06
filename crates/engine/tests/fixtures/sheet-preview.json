@@ -1,0 +1,112 @@
+[
+  {
+    "cmd": "model.new",
+    "name": "sheet-preview"
+  },
+  {
+    "cmd": "model.setIdealisation",
+    "idealisation": {
+      "kind": "planeStress",
+      "thickness": "10 mm"
+    }
+  },
+  {
+    "cmd": "geometry.add",
+    "name": "plate",
+    "shape": {
+      "kind": "transform",
+      "at": {
+        "translate": [
+          "5 m",
+          "7 m",
+          "0 m"
+        ],
+        "rotate": [
+          0,
+          0,
+          90
+        ],
+        "scale": [
+          2,
+          3,
+          1
+        ]
+      },
+      "shape": {
+        "kind": "sheet",
+        "sketch": {
+          "outer": [
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "0 m"
+              ],
+              "tag": "left"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "2 m",
+                "0 m"
+              ],
+              "tag": "bottom"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "2 m",
+                "2 m"
+              ],
+              "tag": "right"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "2 m"
+              ],
+              "tag": "top"
+            }
+          ],
+          "holes": [
+            [
+              {
+                "kind": "line",
+                "to": [
+                  "0.5 m",
+                  "0.5 m"
+                ],
+                "tag": "hole"
+              },
+              {
+                "kind": "line",
+                "to": [
+                  "1.5 m",
+                  "0.5 m"
+                ],
+                "tag": "hole"
+              },
+              {
+                "kind": "line",
+                "to": [
+                  "1.5 m",
+                  "1.5 m"
+                ],
+                "tag": "hole"
+              },
+              {
+                "kind": "line",
+                "to": [
+                  "0.5 m",
+                  "1.5 m"
+                ],
+                "tag": "hole"
+              }
+            ]
+          ]
+        }
+      }
+    }
+  }
+]

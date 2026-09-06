@@ -34,6 +34,14 @@ export const ClipPlane = z.object({ normal: vec3, offset: z.number() });
 export const Layer = z.enum(['mesh', 'edges', 'loads', 'constraints', 'sets', 'legend', 'axes', 'grid']);
 export const Theme = z.enum(['dark', 'light']);
 export const Animation = z.object({ step: z.string(), mode: int.positive().optional(), playing: z.boolean(), speed: z.number().positive().optional(), frame: int.min(0).max(100).optional() });
+const TimeQuantity = z.union([z.string(), z.object({ value: z.number(), unit: z.string() })]);
+export const TransientPlayback = z.object({
+  step: z.string(), playing: z.boolean(), speed: z.number().positive().optional(),
+  sample: z.union([
+    z.object({ kind: z.literal('frame'), index: int.nonnegative() }),
+    z.object({ kind: z.literal('time'), time: TimeQuantity, sampling: z.enum(['exact', 'nearest']) }),
+  ]).optional(),
+});
 export const SelectionInput = z.object({
   bodies: z.array(z.string()).optional(),
   faces: z.array(z.string()).optional(),
@@ -135,6 +143,7 @@ export interface HostContext {
     setVisible(bodies: string[], on: boolean): void;
     setTheme(t: z.output<typeof Theme>): void;
     animate(a: z.output<typeof Animation>): void | Promise<void>;
+    playTransient(a: z.output<typeof TransientPlayback>): void | Promise<void>;
     camera(): z.output<typeof CameraState>;
     screenshot(o: z.output<typeof ScreenshotOptions>): Promise<{ png: string }>;
   };
@@ -145,6 +154,10 @@ export interface HostContext {
     get(): Selection;
   };
   panels: { toggle(panel: string, open?: boolean): void; resize(panel: z.output<typeof PanelTarget>, size: number): void };
+  report: {
+    /** Open the browser print dialog for the mounted calculation note. */
+    print(): void;
+  };
   script: {
     validate(code: string, timeoutMs?: number): Promise<ScriptValidation>;
     run(code: string, timeoutMs?: number): Promise<ScriptResult>;
@@ -216,7 +229,13 @@ async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, 
   return { name, to: dest };
 }
 
+/** Browser imports are bounded before JSON parsing or transfer to the engine Worker. */
+export const MAX_MODEL_FILE_BYTES = 16 * 1024 * 1024;
+
 async function importText(ctx: HostContext, text: string) {
+  if (text.length > MAX_MODEL_FILE_BYTES || new TextEncoder().encode(text).byteLength > MAX_MODEL_FILE_BYTES) {
+    throw new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'json', 'open a smaller file written by file.save');
+  }
   let file: ModelFile;
   try {
     file = JSON.parse(text) as ModelFile;
@@ -348,13 +367,15 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.toggle', 'Show or hide an overlay layer: mesh, edges, loads, constraints, sets, legend, axes or grid. Omit `on` to flip the current state.', z.object({ layer: Layer, on: z.boolean().optional() }), ({ layer, on }, ctx) => ctx.view.toggle(layer, on)),
   def('view.setVisible', 'Show or hide the named bodies in the viewer (the tree\'s eye icon). Hidden bodies stay in the Model and in every solve; only the display changes.', z.object({ bodies: z.array(z.string()), on: z.boolean() }), ({ bodies, on }, ctx) => ctx.view.setVisible(bodies, on)),
   def('view.setTheme', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
-  def('view.animate', 'Play, pause or scrub the displacement amplitude of a solved Step. mode selects a one-based modal shape; speed is positive cycles per second. frame is phase from 0 to 100 percent of a sinusoidal cycle, including while paused. The current engine retains one field, so this is an amplitude sweep, not transient-history playback. No Model or Journal change.', Animation, (a, ctx) => ctx.view.animate(a)),
+  def('view.animate', 'Play, pause or scrub the displacement amplitude of a solved Step. mode selects a one-based modal shape; speed is positive cycles per second. frame is phase from 0 to 100 percent of a sinusoidal cycle, including while paused. Use view.playTransient for retained physical-time fields. No Model or Journal change.', Animation, (a, ctx) => ctx.view.animate(a)),
+  def('view.playTransient', 'Play, pause or select actual retained fields of a solved transient Step. speed is positive simulated seconds per wall second. sample selects a zero-based retained frame or a unit-bearing time resolved by the engine with exact/nearest sampling. Playback holds stored fields until the next retained time, stops at the endpoint, and synchronizes temperature or displacement contours, deformation, legend and probes. Historical derived fields are unavailable. Display only; no Model or Journal change.', TransientPlayback, (a, ctx) => ctx.view.playTransient(a)),
   def('selection.set', 'Select bodies, faces (named face Sets) and Sets by name, never by id. `mode` is replace (default), add or remove, like shift-click; the selection drives `view.fit` and `@selection` in the chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
   def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
   def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
   def('panel.resize', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
-  def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with an optional timeout in milliseconds. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), async ({ code, timeoutMs }, ctx) => {
+  def('report.print', 'Open Chromium\'s print dialog for the rendered calculation note. Choose Save as PDF there for a paginated PDF of the current report.', none, (_, ctx) => ctx.report.print()),
+  def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
     const validation = await ctx.script.validate(code);
     if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
     return ctx.script.run(code, timeoutMs);
@@ -379,7 +400,7 @@ export const HOST_COMMANDS: HostDef[] = [
     await ctx.clipboard.writeText(text);
     return { text };
   }),
-  def('file.open', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Replaces the current Model and Journal.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
+  def('file.open', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Accepts at most 16 MiB of UTF-8 JSON. Replaces the current Model and Journal after engine validation.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
     if ('json' in how) return importText(ctx, how.json);
     if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
     return importText(ctx, await ctx.files.pick());
@@ -424,7 +445,7 @@ export const HOST_COMMANDS: HostDef[] = [
     none, (_, ctx) => ctx.projects.save()),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
-  def('ai.setKey', 'Store an AI provider key in this browser only (localStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
+  def('ai.setKey', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
   def('ai.setModel', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
 ];
 

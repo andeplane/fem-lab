@@ -1,16 +1,18 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { storeKey } from './ai/key-storage';
 import type { HostCaps } from './capabilities';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
 import { type Autosave, type ShareCommand, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
-import { EMPTY_SELECTION, type Store, type ViewMode, visibilityReducer } from './store';
+import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
+import type { TransientInput } from './transient';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -21,6 +23,8 @@ import type { CameraState, Viewer } from './viewer/viewer';
 export interface ViewerRef {
   current: Viewer | null;
   onReady?: () => void;
+  /** A scrub preview; only the final gesture is dispatched as a host Command. */
+  previewTransient?: (input: TransientInput) => Promise<void>;
 }
 
 const soon = (what: string, suggestion: string) => (): never => {
@@ -122,7 +126,16 @@ export function forkProject(): void {
   projects?.fork();
 }
 
-export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, save: Autosave = autosave): HostContext {
+export function makeHostContext(
+  store: Store,
+  transport: EngineTransport,
+  viewer: ViewerRef,
+  host: HostCaps,
+  scripts?: ScriptHost,
+  results?: ResultsView,
+  save: Autosave = autosave,
+  printPage: () => void = () => window.print(),
+): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
@@ -196,6 +209,11 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
         if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
         return results.animate(a);
       },
+      playTransient: (a) => {
+        v();
+        if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.playTransient', 'solve a transient Step in the app');
+        return results.playTransient(a);
+      },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
         const burn = o.legend === false ? null : results?.legendBurn();
@@ -211,6 +229,14 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
     panels: {
       toggle: (panel, open) => store.togglePanel(panel, open),
       resize: (panel, size) => store.resizePanel(panel, size),
+    },
+    report: {
+      print: () => {
+        if (!store.state.panels['report'] || !store.state.reportReady) {
+          throw new FemError('unsupported', 'the calculation note is not ready to print', 'report', 'open Report and wait for its paper and viewer figure');
+        }
+        printPage();
+      },
     },
     script: {
       validate: (code, timeoutMs) => {
@@ -255,6 +281,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
           input.onchange = () => {
             const file = input.files?.[0];
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            if (file.size > MAX_MODEL_FILE_BYTES) return reject(new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'picker', 'open a smaller file written by file.save'));
             file.text().then(resolve, reject);
           };
           input.click();
@@ -339,13 +366,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
     examples: { fetch: fetchExample },
     ai: {
       setKey: (key, provider: AiProvider) => {
-        const slot = provider === 'openai' ? 'femlab.ai.key.openai' : 'femlab.ai.key';
-        try {
-          if (key === null) localStorage.removeItem(slot);
-          else localStorage.setItem(slot, key);
-        } catch {
-          // Keep the app usable when a browser refuses localStorage.
-        }
+        storeKey(provider, key);
       },
       setModel: (model) => {
         localStorage.setItem('femlab.ai.model', model);
@@ -357,15 +378,39 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
 }
 
 /**
- * Three Commands the design's shell needs that `@femlab/registry` does not declare: the display
+ * Four Commands the design's shell needs that `@femlab/registry` does not declare: the display
  * mode segmented control, opening a bundled example that is a Journal rather than a saved
  * `femlab/1` file, and putting a Command into the Properties form without running it (every
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
   let editRequest = 0;
+  let intentRun = 0;
   return [
+    {
+      name: 'palette.resolve',
+      description: 'Prepare natural-language intent as editable engine Command previews using the configured Assistant provider. Never executes the proposed Commands. Ambiguity and missing parameters are shown for clarification before opening Properties.',
+      schema: z.object({ text: z.string().min(1) }),
+      tool: false,
+      run: async (input) => {
+        const { text } = input as { text: string };
+        if (store.state.paletteIntent?.status === 'loading' && store.state.paletteIntent.text === text) return null;
+        const run = ++intentRun;
+        const base = { text, modelHash: store.state.model?.hash ?? null, proposals: [], clarification: '' };
+        store.set({ paletteIntent: { ...base, status: 'loading' } });
+        try {
+          if (!registry) throw new Error('Intent resolution is unavailable in this host.');
+          const { resolvePaletteIntent } = await import('./ai/palette-intent');
+          const result = await resolvePaletteIntent(text, registry(), store.state.objects);
+          if (run === intentRun) store.set({ paletteIntent: { ...base, ...result, status: 'ready' } });
+          return result;
+        } catch (error) {
+          if (run === intentRun) store.set({ paletteIntent: { ...base, status: 'error', clarification: error instanceof Error ? error.message : String(error) } });
+          return null;
+        }
+      },
+    },
     {
       name: 'view.setMode',
       description: 'Choose what the viewer draws: the Bodies (`geometry`), the Mesh (`mesh`) or the Result contours (`results`). Display only — the Model and the Journal are untouched and the mode survives every solve.',
@@ -423,6 +468,16 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       run: (input) => {
         const { command, args, keepInitial } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean };
         store.openForm(command, args ?? {}, keepInitial === true);
+      },
+    },
+    {
+      name: 'example.filter',
+      description: 'Filter the Examples gallery by one metadata tag and one difficulty level. Pass `null` for either field to show every value in that dimension; this changes only the gallery view.',
+      schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable() }),
+      tool: true,
+      run: (input) => {
+        const { tag, difficulty } = input as { tag: string | null; difficulty: ExampleDifficulty | null };
+        store.set({ exampleFilter: { tag, difficulty } });
       },
     },
     {
