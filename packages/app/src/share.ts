@@ -211,10 +211,13 @@ export interface Saved {
 /** The newest revisions are kept first; old records are migrated to this list on read. */
 export const MAX_AUTOSAVES = 20;
 
+type MergeSaved = (current: Saved[]) => Saved[];
+
 /** Where the autosave lives. One implementation per storage; the app injects the real one. */
 export interface JournalStore {
   read(): Promise<Saved[]>;
-  write(saved: Saved[]): Promise<void>;
+  /** Stores may merge atomically inside the write transaction when given a callback. */
+  write(saved: Saved[], merge?: MergeSaved): Promise<void>;
   clear(): Promise<void>;
 }
 
@@ -256,9 +259,49 @@ export function indexedDbStore(factory: IDBFactory): JournalStore {
       db.close();
     }
   };
+  const atomicWrite = async (saved: Saved[], merge?: MergeSaved): Promise<void> => {
+    if (!merge) {
+      await tx('readwrite', (s) => s.put(saved.slice(0, MAX_AUTOSAVES), KEY));
+      return;
+    }
+    const db = await open();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(STORE, 'readwrite');
+      const objectStore = transaction.objectStore(STORE);
+      let settled = false;
+      const close = () => {
+        if (!settled) {
+          settled = true;
+          db.close();
+        }
+      };
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        db.close();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      transaction.oncomplete = () => {
+        close();
+        resolve();
+      };
+      transaction.onerror = () => fail(transaction.error ?? new Error('IndexedDB write failed'));
+      transaction.onabort = () => fail(transaction.error ?? new Error('IndexedDB write aborted'));
+      const request = objectStore.get(KEY);
+      request.onerror = () => transaction.abort();
+      request.onsuccess = () => {
+        try {
+          objectStore.put(merge(storedList(request.result)).slice(0, MAX_AUTOSAVES), KEY);
+        } catch (error) {
+          transaction.abort();
+          fail(error);
+        }
+      };
+    });
+  };
   return {
     read: () => tx('readonly', (s) => s.get(KEY) as IDBRequest<unknown>).then(storedList),
-    write: (saved) => tx('readwrite', (s) => s.put(saved.slice(0, MAX_AUTOSAVES), KEY)).then(() => undefined),
+    write: atomicWrite,
     clear: () => tx('readwrite', (s) => s.delete(KEY)).then(() => undefined),
   };
 }
@@ -268,8 +311,8 @@ export function memoryStore(): JournalStore {
   let saved: Saved[] = [];
   return {
     read: () => Promise.resolve(saved),
-    write: (s) => {
-      saved = s.slice(0, MAX_AUTOSAVES);
+    write: (s, merge) => {
+      saved = (merge ? merge(saved) : s).slice(0, MAX_AUTOSAVES);
       return Promise.resolve();
     },
     clear: () => {
@@ -331,15 +374,24 @@ export function makeAutosave({
   let nextId = 0;
   let writing: Promise<void> = Promise.resolve();
 
+  const normalize = (saved: Saved[]): Saved[] =>
+    storedList(saved).map((entry) => ({ ...entry, id: entry.id ?? `legacy-${entry.at}` }));
+  const same = (a: Saved, b: Saved): boolean => a.name === b.name && JSON.stringify(a.cmds) === JSON.stringify(b.cmds);
+  const merge = (current: Saved[], incoming: Saved[]): Saved[] => {
+    let merged = normalize(current);
+    for (const revision of incoming.slice().reverse()) {
+      if (!merged.some((existing) => same(existing, revision))) merged = [revision, ...merged];
+    }
+    return merged.slice(0, MAX_AUTOSAVES);
+  };
   const load = (): Promise<void> => {
     if (hydrated) return hydrated;
     hydrated = store.read().then((saved) => {
-      revisions = storedList(saved).map((entry) => ({ ...entry, id: entry.id ?? `legacy-${entry.at}` }));
+      revisions = normalize(saved);
     });
     return hydrated;
   };
 
-  const same = (a: Saved, b: Saved): boolean => a.name === b.name && JSON.stringify(a.cmds) === JSON.stringify(b.cmds);
   const visible = (): Saved[] => {
     const seen = new Set<string>();
     return [...pending, ...revisions].filter((revision) => {
@@ -355,21 +407,27 @@ export function makeAutosave({
     timer = null;
     pending = [];
     if (saved.length === 0) return;
-    writing = load().then(() => {
-      // `pending` is newest first; prepend oldest first to retain the user's Journal order.
-      for (const revision of saved.slice().reverse()) {
-        const current = revisions[0];
-        if (!current || !same(current, revision)) revisions = [revision, ...revisions].slice(0, MAX_AUTOSAVES);
-      }
-      return store.write(revisions);
-    }).catch((e: unknown) => onError?.(e));
+    writing = load().then(async () => {
+      // Read immediately before writing for simple stores, and merge again inside stores that
+      // support an atomic write callback so two open tabs cannot overwrite each other's history.
+      const latest = normalize(await store.read());
+      const mergePending = (current: Saved[]) => merge(current, saved);
+      revisions = merge(latest, saved);
+      await store.write(revisions, mergePending);
+    }).catch((e: unknown) => {
+      // Keep an uncommitted revision visible and retryable after a quota or IndexedDB failure.
+      pending = [...saved, ...pending].slice(0, MAX_AUTOSAVES);
+      onError?.(e);
+    });
   };
 
   return {
     note(name, journal) {
       if (!on) return;
       const at = now();
-      const revision = { id: `${at}-${nextId++}`, name, at, cmds: journal.map((e) => e.cmd) };
+      const candidate = { id: `${at}-${nextId++}`, name, at, cmds: journal.map((e) => e.cmd) };
+      const current = pending[0] ?? revisions[0];
+      const revision = current && same(current, candidate) ? { ...candidate, id: current.id } : candidate;
       if (pending[0] && same(pending[0], revision)) pending[0] = revision;
       else pending = [revision, ...pending].slice(0, MAX_AUTOSAVES);
       if (timer === null) timer = setTimer(write, delayMs);
@@ -386,19 +444,21 @@ export function makeAutosave({
       if (timer !== null) {
         clearTimer(timer);
         write();
+      } else if (pending.length > 0) {
+        write();
       }
       await writing;
     },
     read: async () => {
       const all = await (async () => { await load(); await writing; return store.read(); })();
-      revisions = storedList(all).map((entry) => ({ ...entry, id: entry.id ?? `legacy-${entry.at}` }));
+      revisions = normalize(all);
       return visible()[0] ?? null;
     },
     readAll: async () => {
       await load();
       await writing;
       const all = await store.read();
-      revisions = storedList(all).map((entry) => ({ ...entry, id: entry.id ?? `legacy-${entry.at}` }));
+      revisions = normalize(all);
       return visible();
     },
     history: () => visible(),

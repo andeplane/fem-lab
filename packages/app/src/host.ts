@@ -84,7 +84,15 @@ export function autosaveHistory(): AutosaveVersion[] {
   return lastAutosaves.slice();
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+export function makeHostContext(
+  store: Store,
+  transport: WorkerTransport,
+  viewer: ViewerRef,
+  host: HostCaps,
+  scripts?: ScriptHost,
+  results?: ResultsView,
+  save: Autosave = autosave,
+): HostContext {
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -198,15 +206,15 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         return { url };
       },
       setAutosave: (on) => {
-        autosave.setEnabled(on);
+        save.setEnabled(on);
         localStorage.setItem('femlab.autosave', on ? 'on' : 'off');
         if (on) return;
         lastSaved = null;
         lastAutosaves = [];
-        void autosave.clear();
+        void save.clear();
       },
       restore: async (id) => {
-        const revisions = await autosave.readAll();
+        const revisions = await save.readAll();
         lastAutosaves = revisions.map(summary);
         const saved = id === undefined ? revisions[0] : revisions.find((revision) => revision.id === id);
         if (id !== undefined && !saved) {
@@ -228,8 +236,8 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         if (solved) await results?.onAck(solved);
         return { name: saved.name, at: saved.at, commands: saved.cmds.length };
       },
-      autosave: () => ({ enabled: autosave.enabled(), saved: lastSaved }),
-      autosaves: () => lastAutosaves,
+      autosave: () => ({ enabled: save.enabled(), saved: save.history()[0] ? summary(save.history()[0]!) : null }),
+      autosaves: () => save.history().map(summary),
     },
     project: {
       open: soon('the project folder', 'use file.open and file.save for now'),

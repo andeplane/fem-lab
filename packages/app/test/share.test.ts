@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { deflateRawSync } from 'node:zlib';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { HOST_COMMANDS } from '@femlab/registry';
-import { appHostCommands } from '../src/host';
+import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
+import schema from '../../registry/src/generated/engine.schema.json';
+import { appHostCommands, makeHostContext } from '../src/host';
 import { Store } from '../src/store';
 import type { WorkerTransport } from '../src/worker-transport';
 import {
@@ -40,6 +41,11 @@ const hostCommands = [
   ...HOST_COMMANDS,
   ...appHostCommands(new Store(), {} as WorkerTransport, { current: null }, async () => undefined),
 ];
+function autosaveRegistry(save: ReturnType<typeof makeAutosave>) {
+  const transport = { dispatch: vi.fn(async () => ({ seq: 0, revision: 1, hash: 'h', warnings: [], output: { type: 'none' } })) } as unknown as WorkerTransport;
+  const host = makeHostContext(new Store(), transport, { current: null }, {} as never, undefined, undefined, save);
+  return { registry: new Registry({ schema: schema as unknown as EngineSchema, host }), transport };
+}
 const journals = path.resolve(import.meta.dirname, '../../../crates/engine/benches/journals');
 const fixtures = readdirSync(journals).filter((name) => name.endsWith('.json') && !name.endsWith('.meta.json'));
 
@@ -367,6 +373,65 @@ describe('autosave', () => {
     expect(prefix?.name).toBe('beam');
   });
 
+  it('keeps an unchanged revision id targetable after a refresh and flush', async () => {
+    const store = memoryStore();
+    const timers = fakeTimers();
+    const a = makeAutosave({ store, ...timers, now: () => 100 });
+    a.note('beam', journal(1));
+    await a.flush();
+    const saved = (await a.readAll())[0]!;
+    a.note('beam', journal(1));
+    const shown = a.history()[0]!;
+    await a.flush();
+    expect((await a.readAll()).find((revision) => revision.id === shown.id)).toEqual(saved);
+  });
+
+  it('keeps a refreshed History id targetable through the Registry restore Command', async () => {
+    const store = memoryStore();
+    const timers = fakeTimers();
+    const a = makeAutosave({ store, ...timers, now: () => 100 });
+    const { registry, transport } = autosaveRegistry(a);
+    a.note('beam', journal(1));
+    await a.flush();
+    a.note('beam', journal(1));
+    const shown = (await registry.query({ query: 'query.autosaveHistory' }) as { revisions: { id: string }[] }).revisions[0]!;
+    await a.flush();
+    await expect(registry.dispatch({ cmd: 'file.restore', id: shown.id })).resolves.toMatchObject({ name: 'beam' });
+    expect(transport.dispatch).toHaveBeenCalled();
+  });
+
+  it('merges revisions from two already-open sessions', async () => {
+    const store = memoryStore();
+    const a = makeAutosave({ store, now: () => 100 });
+    const b = makeAutosave({ store, now: () => 200 });
+    await a.readAll();
+    await b.readAll();
+    a.note('a', journal(1));
+    await a.flush();
+    b.note('b', journal(2));
+    await b.flush();
+    const { registry } = autosaveRegistry(b);
+    await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toMatchObject({ revisions: [{ name: 'b' }, { name: 'a' }] });
+  });
+
+  it('keeps a failed revision visible and retryable after a quota error', async () => {
+    const store = memoryStore();
+    const onError = vi.fn();
+    const a = makeAutosave({ store, onError, now: () => 100 });
+    a.note('a', journal(1));
+    await a.flush();
+    store.write = async () => {
+      throw new Error('QuotaExceededError');
+    };
+    a.note('b', journal(2));
+    const shown = a.history()[0]!;
+    await a.flush();
+    expect(onError).toHaveBeenCalledOnce();
+    const { registry } = autosaveRegistry(a);
+    await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toMatchObject({ revisions: expect.arrayContaining([expect.objectContaining({ id: shown.id })]) });
+    await expect(registry.dispatch({ cmd: 'file.restore', id: shown.id })).resolves.toMatchObject({ name: 'b' });
+  });
+
   it('migrates a pre-versioning single record and uses the injected clock', async () => {
     const legacy = { name: 'old', at: 42, cmds: journal(2) };
     let stored: unknown = legacy;
@@ -382,6 +447,9 @@ describe('autosave', () => {
     a.note('new', journal(3));
     await a.flush();
     expect(await a.readAll()).toMatchObject([{ name: 'new', at: 99 }, { name: 'old', at: 42 }]);
-    expect(store.write).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ id: 'legacy-42' })]));
+    expect(store.write).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: 'legacy-42' })]),
+      expect.any(Function),
+    );
   });
 });
