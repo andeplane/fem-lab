@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::GeomError;
 
-/// The eight element kinds the engine integrates.
+/// The element kinds the engine integrates: eight isoparametric solids and the two-node
+/// line member (a truss), which is embedded in a 3D mesh rather than being of its dimension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ElementKind {
@@ -26,6 +27,8 @@ pub enum ElementKind {
     Quad8,
     Tri3,
     Tri6,
+    /// Two-node straight line member carrying axial force only, in a 3D mesh.
+    Truss2,
 }
 
 /// The shape of an element face: a quad or triangle in 3D, a line in 2D.
@@ -67,6 +70,7 @@ const HEX_EDGES: [[u8; 2]; 12] =
 const TET_EDGES: [[u8; 2]; 6] = [[0, 1], [1, 2], [2, 0], [0, 3], [1, 3], [2, 3]];
 const QUAD_EDGES: [[u8; 2]; 4] = [[0, 1], [1, 2], [2, 3], [3, 0]];
 const TRI_EDGES: [[u8; 2]; 3] = [[0, 1], [1, 2], [2, 0]];
+const LINE_EDGES: [[u8; 2]; 1] = [[0, 1]];
 
 // Face tables, S1..S6 (0-based), corners first then the mid-edge nodes of edges (c0c1, c1c2, ...).
 const HEX8_FACES: [[u8; 4]; 6] = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
@@ -96,6 +100,7 @@ impl ElementKind {
             ElementKind::Quad8 => 8,
             ElementKind::Tri3 => 3,
             ElementKind::Tri6 => 6,
+            ElementKind::Truss2 => 2,
         }
     }
     /// Corner nodes; the first `n_corners` entries of the connectivity.
@@ -104,12 +109,15 @@ impl ElementKind {
             ElementKind::Hex8 | ElementKind::Hex20 => 8,
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Quad4 | ElementKind::Quad8 => 4,
             ElementKind::Tri3 | ElementKind::Tri6 => 3,
+            ElementKind::Truss2 => 2,
         }
     }
+    /// The element's own dimension: 3 for solids, 2 for plane elements, 1 for a line member.
     pub const fn dim(self) -> usize {
         match self {
             ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Tet4 | ElementKind::Tet10 => 3,
             ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Tri3 | ElementKind::Tri6 => 2,
+            ElementKind::Truss2 => 1,
         }
     }
     /// Faces in 3D, edges in 2D.
@@ -118,6 +126,7 @@ impl ElementKind {
             ElementKind::Hex8 | ElementKind::Hex20 => 6,
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Quad4 | ElementKind::Quad8 => 4,
             ElementKind::Tri3 | ElementKind::Tri6 => 3,
+            ElementKind::Truss2 => 0,
         }
     }
     pub const fn face_kind(self) -> FaceKind {
@@ -128,6 +137,7 @@ impl ElementKind {
             ElementKind::Tet10 => FaceKind::Tri6,
             ElementKind::Quad4 | ElementKind::Tri3 => FaceKind::Line2,
             ElementKind::Quad8 | ElementKind::Tri6 => FaceKind::Line3,
+            ElementKind::Truss2 => FaceKind::Line2,
         }
     }
     /// Element-local nodes of face `f` (Abaqus S1..S6 identity), corners first, counter-clockwise
@@ -142,6 +152,8 @@ impl ElementKind {
             ElementKind::Quad8 => &QUAD8_FACES[f],
             ElementKind::Tri3 => &TRI3_FACES[f],
             ElementKind::Tri6 => &TRI6_FACES[f],
+            // A line member has no faces; `n_faces() == 0`, so `f` never names one.
+            ElementKind::Truss2 => &[],
         }
     }
     /// Element-local corner pairs of every edge; for quadratic kinds node `n_corners() + i` is the
@@ -152,6 +164,7 @@ impl ElementKind {
             ElementKind::Tet4 | ElementKind::Tet10 => &TET_EDGES,
             ElementKind::Quad4 | ElementKind::Quad8 => &QUAD_EDGES,
             ElementKind::Tri3 | ElementKind::Tri6 => &TRI_EDGES,
+            ElementKind::Truss2 => &LINE_EDGES,
         }
     }
 }
@@ -215,6 +228,71 @@ pub struct Surface {
     pub tri_face: Vec<Option<u32>>,
     /// 2D only, parallel to `faces`: the corner nodes of each boundary edge. Empty in 3D.
     pub edges: Vec<[u32; 2]>,
+}
+
+/// Weld nodes closer together than `tol` into one, keeping the lowest node id of each cluster.
+///
+/// Line Bodies are meshed one at a time and concatenated, so two members that meet at a shared
+/// joint arrive as two nodes at the same point; left alone they are a hinge, not a joint.
+/// Clustering is by a `tol`-sized grid cell and its 26 neighbours, and a node only ever joins a
+/// cluster whose survivor has a lower id, so the survivors and the renumbering are a pure
+/// function of the coordinates. Element and face sets are untouched (elements keep their ids);
+/// node sets are remapped and re-sorted.
+pub fn merge_coincident(mesh: &mut Mesh, tol: f64) {
+    let cell = |x: f64| (x / tol).floor() as i64;
+    let mut buckets: BTreeMap<[i64; 3], Vec<u32>> = BTreeMap::new();
+    let mut owner: Vec<u32> = Vec::with_capacity(mesh.n_nodes());
+    for node in 0..mesh.n_nodes() {
+        let p = mesh.node(node as u32);
+        let k = [cell(p[0]), cell(p[1]), cell(p[2])];
+        let mut found = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let near = buckets.get(&[k[0] + dx, k[1] + dy, k[2] + dz]);
+                    for &other in near.map_or(&[][..], Vec::as_slice) {
+                        let q = mesh.node(other);
+                        let d2: f64 = (0..3).map(|i| (p[i] - q[i]) * (p[i] - q[i])).sum();
+                        if d2 <= tol * tol && found.is_none_or(|f| other < f) {
+                            found = Some(other);
+                        }
+                    }
+                }
+            }
+        }
+        match found {
+            Some(o) => owner.push(o),
+            None => {
+                buckets.entry(k).or_default().push(node as u32);
+                owner.push(node as u32);
+            }
+        }
+    }
+    // Survivors keep their relative order, so the renumbering is monotonic.
+    let mut new_id = vec![0u32; owner.len()];
+    let mut coords = Vec::with_capacity(mesh.coords.len());
+    for (node, &own) in owner.iter().enumerate() {
+        if own == node as u32 {
+            new_id[node] = (coords.len() / 3) as u32;
+            coords.extend_from_slice(&mesh.coords[3 * node..3 * node + 3]);
+        }
+    }
+    if coords.len() == mesh.coords.len() {
+        return;
+    }
+    mesh.coords = coords;
+    for blk in &mut mesh.blocks {
+        for n in &mut blk.conn {
+            *n = new_id[owner[*n as usize] as usize];
+        }
+    }
+    for set in mesh.node_sets.values_mut() {
+        for n in set.iter_mut() {
+            *n = new_id[owner[*n as usize] as usize];
+        }
+        set.sort_unstable();
+        set.dedup();
+    }
 }
 
 /// A finite-element mesh. Coordinates are SI metres with stride 3 (`z = 0` in 2D). Sets are
@@ -373,7 +451,10 @@ impl Mesh {
         let n_nodes = self.n_nodes() as u32;
         let mut next = 0u32;
         for (b, blk) in self.blocks.iter().enumerate() {
-            if blk.kind.dim() != self.dim {
+            // A line member is embedded in the mesh's space rather than being of its
+            // dimension: its two nodes carry the mesh's three displacements, so it belongs in
+            // a 3D mesh whatever direction it points.
+            if blk.kind.dim() != self.dim && !(blk.kind.dim() == 1 && self.dim == 3) {
                 return Err(GeomError(format!("block {b} is {:?} in a {}D mesh", blk.kind, self.dim)));
             }
             if !blk.conn.len().is_multiple_of(blk.kind.n_nodes()) {

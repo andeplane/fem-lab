@@ -5304,6 +5304,16 @@ fn sections_are_named_assigned_removed_and_listed_like_materials() {
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::Schema, Some("shape.radius")));
     assert_eq!(e.model_hash(), hash, "a refused Command changes nothing");
 
+    // A Section on a solid Body is carried through to the Problem and simply not used: the
+    // solid gets its cross-section from its own geometry.
+    let mut solid = engine();
+    cantilever(&mut solid);
+    ok(&mut solid, r#"{"cmd":"section.add","name":"rod","shape":{"kind":"circle","radius":"25 mm"}}"#);
+    ok(&mut solid, r#"{"cmd":"section.assign","section":"rod","bodies":["beam"]}"#);
+    ok(&mut solid, r#"{"cmd":"solve.run","step":"static"}"#);
+    let QueryResult::Result(r) = solid.query(Query::Result { step: None }).unwrap() else { panic!("result") };
+    assert!(!r.stale);
+
     // Reassigning frees the first Section, which can then be removed.
     ok(&mut e, r#"{"cmd":"section.add","name":"other","shape":{"kind":"rectangle","width":"1 mm","height":"2 mm"}}"#);
     ok(&mut e, r#"{"cmd":"section.assign","section":"other","bodies":["beam"]}"#);

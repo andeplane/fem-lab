@@ -84,6 +84,7 @@ const GROUP_OF: Record<string, string> = {
   'model.empty': 'Geometry',
   'model.ill-posed': 'Geometry',
   'model.no-material': 'Materials',
+  'model.no-section': 'Materials',
   'model.unconstrained': 'Constraints',
   'model.unloaded': 'Loads',
   'model.no-step': 'Steps',

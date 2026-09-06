@@ -17,3 +17,4 @@ pub mod problem;
 pub mod quadrature;
 pub mod section;
 pub mod shape;
+pub mod truss;

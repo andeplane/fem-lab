@@ -108,12 +108,22 @@ fn build_problem_with_temperature<'a>(
         };
         constraints.push(Constraint { name: c.name.clone(), nodes: c.on.clone(), dofs, value });
     }
+    let section_of_block = built
+        .body_of_block
+        .iter()
+        .map(|body| {
+            let name = model.body(body).and_then(|b| b.section.as_deref())?;
+            model.sections.iter().position(|s| s.name == name)
+        })
+        .collect();
     let mut p = Problem {
         mesh: &built.mesh,
         sets: &built.sets,
         body_of_block: &built.body_of_block,
         material_of_block,
         materials,
+        section_of_block,
+        sections: model.sections.iter().map(|s| s.section).collect(),
         idealisation: model.idealisation.clone(),
         formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),
         constraints,

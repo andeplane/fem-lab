@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use femlab_geometry::{
-    annulus, elliptic_annulus, extrude, free, mapped, perturb_interior, revolve, split_to_simplices, Curve,
-    ElementBlock, ElementKind, Face, FaceKind, Mesh, QuadBlock, RefineBox, Segment, Structured,
+    annulus, elliptic_annulus, extrude, free, line as line_mesher, mapped, merge_coincident, perturb_interior, revolve,
+    split_to_simplices, Curve, ElementBlock, ElementKind, Face, FaceKind, Mesh, QuadBlock, RefineBox, Segment,
+    Structured,
 };
 use proptest::prelude::*;
 
@@ -1611,4 +1612,140 @@ fn any_segment() -> impl Strategy<Value = Segment> {
             Segment::Arc { center: [cx, cy], to: [cx + r * d[0], cy + r * d[1]], ccw, tag: None }
         }),
     ]
+}
+
+// ---- line members ----------------------------------------------------------------------------
+
+fn truss(points: &[[f64; 3]], members: &[[u32; 2]], divisions: u32) -> Mesh {
+    line_mesher(points, members, divisions, ElementKind::Truss2).expect("a valid line body")
+}
+
+#[test]
+fn truss2_tables_describe_a_two_node_line_member() {
+    let k = ElementKind::Truss2;
+    assert_eq!((k.n_nodes(), k.n_corners(), k.dim(), k.n_faces()), (2, 2, 1, 0));
+    assert_eq!(k.edges(), &[[0, 1]]);
+    // A member has no face, so no face table entry and no face load can name one.
+    assert!(k.face_nodes(0).is_empty());
+    assert_eq!(k.face_kind(), FaceKind::Line2);
+    assert_eq!(serde_json::to_string(&k).unwrap(), "\"truss2\"");
+    assert_eq!(serde_json::from_str::<ElementKind>("\"truss2\"").unwrap(), k);
+}
+
+#[test]
+fn the_line_mesher_divides_every_member_and_names_every_joint() {
+    // A two-bar planar truss: joints 0, 1, 2 with members 0-2 and 1-2.
+    let pts = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 1.0, 0.0]];
+    let m = truss(&pts, &[[0, 2], [1, 2]], 1);
+    m.validate().unwrap();
+    assert_eq!((m.dim, m.n_nodes(), m.n_elems()), (3, 3, 2));
+    assert_eq!(m.blocks[0].conn, [0, 2, 1, 2]);
+    assert_eq!(m.node_sets.keys().collect::<Vec<_>>(), ["p0", "p1", "p2"]);
+    assert_eq!(m.node_sets["p2"], [2]);
+    // A member has no boundary face and contributes no skin triangle.
+    assert!(m.boundary_faces().is_empty());
+    assert!(m.surface().triangles.is_empty());
+
+    // Subdivision adds interior nodes after the joints, in member order, evenly spaced.
+    let m = truss(&pts, &[[0, 1]], 4);
+    m.validate().unwrap();
+    assert_eq!((m.n_nodes(), m.n_elems()), (6, 4));
+    assert_eq!(m.blocks[0].conn, [0, 3, 3, 4, 4, 5, 5, 1]);
+    assert_eq!(m.node(4), [1.0, 0.0, 0.0]);
+    assert_eq!(m.node_sets.len(), 3);
+    // Total member length is preserved exactly by the subdivision.
+    let total: f64 = (0..m.n_elems() as u32)
+        .map(|e| {
+            let c = corners(&m, e);
+            dot(sub(c[1], c[0]), sub(c[1], c[0])).sqrt()
+        })
+        .sum();
+    assert!((total - 2.0).abs() < 1e-15, "{total}");
+}
+
+#[test]
+fn the_line_mesher_rejects_every_ill_formed_body() {
+    let ok = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+    /// Points, members, divisions and the cause the mesher should name.
+    type BadLine<'a> = (&'a [[f64; 3]], &'a [[u32; 2]], u32, &'a str);
+    let cases: [BadLine<'_>; 6] = [
+        (&ok[..1], &[[0, 1]], 1, "at least 2 points"),
+        (&[[0.0, 0.0, 0.0], [f64::NAN, 0.0, 0.0]], &[[0, 1]], 1, "non-finite point"),
+        (&ok[..2], &[], 1, "at least one member"),
+        (&ok[..2], &[[0, 1]], 0, "divisions must be at least 1"),
+        (&ok[..2], &[[0, 2]], 1, "references point 2 but there are 2 points"),
+        (&ok, &[[1, 2]], 1, "zero length"),
+    ];
+    for (points, members, divisions, want) in cases {
+        let e = line_mesher(points, members, divisions, ElementKind::Truss2).unwrap_err();
+        assert!(e.0.contains(want), "got '{}', wanted '{want}'", e.0);
+    }
+    let e = line_mesher(&ok[..2], &[[1, 1]], 1, ElementKind::Truss2).unwrap_err();
+    assert!(e.0.contains("joins point 1 to itself"), "{}", e.0);
+}
+
+#[test]
+fn a_line_block_is_accepted_in_a_3d_mesh_and_refused_in_a_2d_one() {
+    let mut m = truss(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1);
+    m.validate().unwrap();
+    m.dim = 2;
+    assert!(m.validate().unwrap_err().0.contains("Truss2 in a 2D mesh"));
+}
+
+#[test]
+fn quality_of_a_straight_member_is_perfect_whatever_its_direction() {
+    let m = truss(&[[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [2.0, 2.0, 3.0]], &[[0, 1], [1, 2]], 2);
+    let q = quality(&m, 4);
+    assert_eq!(q.min_det_j_ratio, 1.0);
+    assert!((q.max_aspect - 1.0).abs() < 1e-12, "{q:?}");
+    // A segment has no corner to measure an angle at, so nothing lowers the mesh minimum.
+    assert_eq!(q.min_angle_deg, 180.0);
+    assert_eq!(q.worst.len(), 4);
+}
+
+#[test]
+fn merge_coincident_welds_joints_keeps_the_lowest_id_and_leaves_a_clean_mesh_alone() {
+    // Two Bodies meeting at one joint: node 1 of the first and node 2 of the second coincide.
+    let a = truss(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1);
+    let mut m = a.clone();
+    m.coords.extend([1.0, 0.0, 0.0, 1.0, 1.0, 0.0]);
+    m.blocks.push(ElementBlock { kind: ElementKind::Truss2, conn: vec![2, 3], first_elem: 1 });
+    m.node_sets.insert("b.p0".into(), vec![2]);
+    m.node_sets.insert("b.p1".into(), vec![3]);
+    merge_coincident(&mut m, 1e-9);
+    m.validate().unwrap();
+    assert_eq!(m.n_nodes(), 3);
+    assert_eq!(m.blocks[0].conn, [0, 1]);
+    // The survivor is the lower id, so the second body's first joint became node 1.
+    assert_eq!(m.blocks[1].conn, [1, 2]);
+    assert_eq!(m.node_sets["p1"], [1]);
+    assert_eq!(m.node_sets["b.p0"], [1]);
+    assert_eq!(m.node_sets["b.p1"], [2]);
+
+    // Nothing coincident: the mesh comes back untouched, node ids included.
+    let mut clean = a.clone();
+    merge_coincident(&mut clean, 1e-9);
+    assert_eq!(clean, a);
+
+    // Three coincident nodes collapse to one, and a set naming all three becomes one node.
+    let mut triple = a.clone();
+    triple.coords.extend([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    triple.node_sets.insert("z".into(), vec![1, 2, 3]);
+    merge_coincident(&mut triple, 1e-9);
+    assert_eq!(triple.n_nodes(), 2);
+    assert_eq!(triple.node_sets["z"], [1]);
+
+    // A node within tolerance of two survivors that sit in different grid cells joins the
+    // lower-numbered one, whichever cell the scan reaches first.
+    let mut spanning = Mesh {
+        dim: 3,
+        coords: vec![0.6e-9, 0.0, 0.0, -0.6e-9, 0.0, 0.0, 0.0, 0.0, 0.0],
+        blocks: vec![ElementBlock { kind: ElementKind::Truss2, conn: vec![0, 1], first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    merge_coincident(&mut spanning, 1e-9);
+    assert_eq!(spanning.n_nodes(), 2);
+    assert_eq!(spanning.blocks[0].conn, [0, 1]);
 }

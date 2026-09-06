@@ -4069,6 +4069,7 @@ export interface EngineError {
     | "mesh.inverted"
     | "mesh.failed"
     | "model.no-material"
+    | "model.no-section"
     | "model.ill-posed"
     | "result.stale"
     | "constraint.conflict"

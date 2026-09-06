@@ -20,6 +20,7 @@ fn cell_type(kind: ElementKind) -> u8 {
         ElementKind::Quad8 => 23,
         ElementKind::Tri3 => 5,
         ElementKind::Tri6 => 22,
+        ElementKind::Truss2 => 3,
     }
 }
 

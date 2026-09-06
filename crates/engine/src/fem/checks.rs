@@ -14,7 +14,7 @@ use crate::fem::assembly::resolve;
 use crate::fem::element::min_det_j;
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::Load;
-use crate::fem::problem::{empty_set, no_material, Problem};
+use crate::fem::problem::{empty_set, no_material, no_section, Problem};
 use crate::model::Idealisation;
 
 /// A restricted rigid mode this small is not constrained at all.
@@ -24,6 +24,7 @@ const RIGID_TOL: f64 = 1e-10;
 pub fn all(p: &Problem<'_>) -> Vec<Error> {
     let mut out = Vec::new();
     out.extend(missing_materials(p));
+    out.extend(missing_sections(p));
     out.extend(empty_sets(p));
     out.extend(inverted(p.mesh));
     out.extend(resolve(p).err());
@@ -61,6 +62,21 @@ fn missing_materials(p: &Problem<'_>) -> Vec<Error> {
         .collect();
     bodies.dedup();
     bodies.into_iter().map(no_material).collect()
+}
+
+/// A Body of line members with no Section: a member is a curve, so nothing else says how much
+/// cross-sectional area carries the force.
+fn missing_sections(p: &Problem<'_>) -> Vec<Error> {
+    let mut bodies: Vec<&str> = p
+        .mesh
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(b, blk)| blk.kind.dim() == 1 && p.section_of_block[*b].is_none())
+        .map(|(b, _)| p.body_of_block[b].as_str())
+        .collect();
+    bodies.dedup();
+    bodies.into_iter().map(no_section).collect()
 }
 
 /// A Constraint or Load on a Set that resolved to nothing does nothing, silently.

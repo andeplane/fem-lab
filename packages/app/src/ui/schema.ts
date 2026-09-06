@@ -385,6 +385,7 @@ const WCODES: Record<string, { code: string; text: string; fix: string }> = {
   'model.empty': { code: 'W-1000', text: 'Nothing to analyse yet. Add the first body.', fix: 'geometry.addBox' },
   'model.ill-posed': { code: 'W-1002', text: 'A Body and the idealisation disagree on dimension.', fix: 'model.setIdealisation' },
   'model.no-material': { code: 'W-1101', text: 'A Body has no material — nothing carries stiffness.', fix: 'material.assign' },
+  'model.no-section': { code: 'W-1102', text: 'A Body of line members has no section — nothing says how much area carries the force.', fix: 'section.assign' },
   'model.unconstrained': { code: 'W-1300', text: 'Nothing holds the body — six rigid body modes.', fix: 'constraint.fix' },
   'model.unloaded': { code: 'W-1400', text: 'No load. A solve would return zeros.', fix: 'load.pressure' },
   'model.no-step': { code: 'W-1500', text: 'No Step. A Step says what to solve.', fix: 'step.add' },
