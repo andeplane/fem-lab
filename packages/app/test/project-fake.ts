@@ -40,4 +40,3 @@ export function fakeDir(files: Record<string, string>, name = 'bridge', at = 1):
   });
   return make('', name);
 }
-

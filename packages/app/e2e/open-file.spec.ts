@@ -12,7 +12,7 @@ async function persistedProject(page: Page): Promise<unknown> {
     const id = (open as { id?: string } | null)?.id;
     if (id === undefined) return null;
     return new Promise<unknown>((resolve, reject) => {
-      const opening = indexedDB.open('femlab', 2);
+      const opening = indexedDB.open('femlab');
       opening.onerror = () => reject(opening.error);
       opening.onsuccess = () => {
         const db = opening.result;
@@ -75,8 +75,8 @@ test.describe('@cpu opening a model file', () => {
 
       // No engine Command follows the import: each assertion reads the resulting state.
       await expect(page.locator('.model-name')).toHaveValue('imported-model');
-      await expect(page.locator('.tree')).toContainText('imported-cube');
-      await expect(page.locator('.tree')).not.toContainText('steel');
+      await expect(page.locator('aside.panel.tree')).toContainText('imported-cube');
+      await expect(page.locator('aside.panel.tree')).not.toContainText('steel');
       await expect(page.locator('.legend')).toHaveCount(0);
       await expect(page.locator('.bottom-body')).toContainText('No Result yet.');
       await expect(page.locator('button.solve')).not.toHaveClass(/solved/);

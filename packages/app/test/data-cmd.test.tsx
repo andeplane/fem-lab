@@ -1,16 +1,19 @@
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
-import { HOST_COMMANDS, Registry, type EngineSchema, type JournalDump, type ModelSummary, type ResultSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type Command, type QueryResult, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
 import { h, render } from 'preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
-import { Store } from '../src/store';
+import { Store, visibilityReducer } from '../src/store';
 import { App, handleGlobalKey, isEditableTarget } from '../src/ui/App';
+import { journalTarget } from '../src/ui/Bottom';
+import type { Dispatch } from '../src/ui/cmd';
 import type { WorkerTransport } from '../src/worker-transport';
+import { afterEffects, waitFor, waitForGone } from './wait-for';
 
 // `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40
 // is about *where* that chunk is mounted, so this file swaps in a marker element it can find.
@@ -35,6 +38,14 @@ const model = (): ModelSummary =>
     meshSettings: null,
     warnings: [{ code: 'W-1200', text: 'no mesh settings yet', where: null }],
   }) as unknown as ModelSummary;
+
+const objects = (): ObjectRef[] => [
+  { ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' },
+  { ref: 'material:steel', kind: 'material', name: 'steel', summary: 'steel' },
+  { ref: 'constraint:fix', kind: 'constraint', name: 'fix', summary: 'on beam.xmin' },
+  { ref: 'load:p', kind: 'load', name: 'p', summary: 'on beam.top' },
+  { ref: 'step:static', kind: 'step', name: 'static', summary: 'static' },
+] as ObjectRef[];
 
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
 
@@ -72,8 +83,9 @@ const staleSeqs = (root: HTMLElement): string[] => [...root.querySelectorAll('.j
 function mount(
   patch: Partial<Parameters<Store['set']>[0]> = {},
   dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> = vi.fn(async () => undefined),
-): { root: HTMLElement; registry: Registry; store: Store; dispatch: typeof dispatch } {
+): { root: HTMLElement; registry: Registry; store: Store; dispatch: typeof dispatch; commands: ({ cmd: string } & Record<string, unknown>)[] } {
   const store = new Store();
+  const commands: ({ cmd: string } & Record<string, unknown>)[] = [];
   const viewer = { current: null };
   const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
   const registry = new Registry({
@@ -81,12 +93,18 @@ function mount(
     host: makeHostContext(store, transport, viewer, host),
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, async () => undefined)],
   });
-  store.set({ ready: true, model: model(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
+  store.set({ ready: true, model: model(), objects: objects(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
-  act(() => render(<App store={store} dispatch={dispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root));
-  return { root, registry, store, dispatch };
+  const shellDispatch = async (cmd: { cmd: string } & Record<string, unknown>): Promise<unknown> => {
+    commands.push(cmd);
+    if (cmd.cmd === 'panel.toggle') store.togglePanel(String(cmd['panel']), cmd['open'] as boolean | undefined);
+    if (cmd.cmd === 'view.setVisible') store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, cmd['bodies'] as string[], Boolean(cmd['on'])) });
+    return dispatch(cmd);
+  };
+  act(() => render(<App store={store} dispatch={shellDispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root));
+  return { root, registry, store, dispatch, commands };
 }
 
 async function cleanupShells() {
@@ -98,6 +116,9 @@ async function cleanupShells() {
 }
 
 describe('the shell', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ examples: [] }) })));
+  });
   afterEach(cleanupShells);
 
   it('releases shell keyboard handlers before removing its DOM', async () => {
@@ -107,16 +128,35 @@ describe('the shell', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ cmd: 'panel.toggle', panel: 'palette' });
     await cleanupShells();
+    // Journal unmount clears its viewer highlight through dispatch. Count only the next key.
+    vi.mocked(dispatch).mockClear();
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
     expect(document.body.children).toHaveLength(0);
+  });
+
+  it('closes the command palette before opening a parameterized Command form', async () => {
+    const { root, commands } = mount({ panels: { palette: true } });
+    const input = root.querySelector<HTMLInputElement>('.palette input')!;
+    input.value = 'load.traction';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await afterEffects();
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    input.dispatchEvent(enter);
+    // Closing restores focus to the opener before Chromium performs Enter's default click.
+    expect(enter.defaultPrevented).toBe(true);
+    await waitForGone(() => root.querySelector('.palette'), 'the command palette');
+    expect(commands.slice(-2)).toEqual([
+      { cmd: 'panel.toggle', panel: 'palette', open: false },
+      { cmd: 'form.open', command: 'load.traction' },
+    ]);
   });
 
   it('names only Commands the registry has on every clickable, in every panel', async () => {
     const seen = new Set<string>();
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
       await cleanupShells();
-      const { root, registry } = mount({ tab, panels: { palette: true } });
+      const { root, registry } = mount({ tab, panels: { palette: true, examples: true } });
       const { commands, queries } = registry.list();
       const known = new Set([...commands, ...queries].map((d) => d.name));
       const used = [...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
@@ -124,17 +164,65 @@ describe('the shell', () => {
       expect([...new Set(used)].filter((c) => !known.has(c)), tab).toEqual([]);
     }
     // Every panel of the design is represented, not just the top bar.
-    for (const cmd of ['form.open', 'script.run', 'selection.setPickTarget', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode']) expect([...seen]).toContain(cmd);
+    for (const cmd of ['form.open', 'script.run', 'form.pick', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode', 'example.filter']) expect([...seen]).toContain(cmd);
   });
 
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {
     const { root, registry } = mount();
     const known = new Set(registry.list().commands.map((d) => d.name));
+    await afterEffects();
     root.querySelector('.tree .row')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 20)); // preact re-renders after the state change
+    await waitFor(() => root.querySelector('.menu'), 'the tree context menu');
     const menu = [...root.querySelectorAll('.menu [data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
     expect(menu).toEqual(['model.rename', 'model.duplicate', 'geometry.remove', 'selection.set', 'clipboard.copy']);
     expect(menu.filter((c) => !known.has(c))).toEqual([]);
+  });
+
+  it('collapses groups and exposes body visibility and row actions as Commands', async () => {
+    const { root, store, commands } = mount();
+    await afterEffects();
+    const geometry = root.querySelector<HTMLButtonElement>('.group-head')!;
+    expect(geometry.getAttribute('aria-expanded')).toBe('true');
+    geometry.click();
+    await waitFor(() => root.querySelector('.group-head')?.getAttribute('aria-expanded') === 'false', 'the Geometry group to collapse');
+    expect(root.querySelector('.group-head')!.getAttribute('aria-expanded')).toBe('false');
+    await waitForGone(() => root.querySelector('#tree-geometry-items'), 'the Geometry group body');
+    expect(store.state.revision).toBe(3);
+    root.querySelector<HTMLButtonElement>('.group-head')!.click();
+    await waitFor(() => root.querySelector('#tree-geometry-items'), 'the Geometry group body');
+
+    root.querySelector<HTMLButtonElement>('[aria-label="Hide beam in viewer"]')!.click();
+    await waitFor(() => root.querySelector('[aria-label="Show beam in viewer"]'), 'the hidden-body eye');
+    expect(store.state.hiddenBodies).toEqual(['beam']);
+    expect(root.querySelector('[aria-label="Show beam in viewer"]')).not.toBeNull();
+    root.querySelector<HTMLButtonElement>('[aria-label="Actions for beam"]')!.click();
+    await waitFor(() => root.querySelector('.menu'), 'the body actions menu');
+    expect(root.querySelector('.menu')).not.toBeNull();
+    expect(commands.slice(-4)).toEqual([
+      { cmd: 'panel.toggle', panel: 'tree.geometry', open: false },
+      { cmd: 'panel.toggle', panel: 'tree.geometry', open: true },
+      { cmd: 'view.setVisible', bodies: ['beam'], on: false },
+      { cmd: 'panel.toggle', panel: 'tree.menu.body:beam', open: true },
+    ]);
+  });
+
+  it('keeps row menus exclusive and a closed menu closed across unrelated panel changes', async () => {
+    const { root, store } = mount();
+    await afterEffects();
+    const actions = [...root.querySelectorAll<HTMLButtonElement>('[aria-label^="Actions for"]')];
+    expect(actions.length).toBeGreaterThan(1);
+    const secondName = actions[1]!.getAttribute('aria-label')!.slice('Actions for '.length);
+    actions[0]!.click();
+    await waitFor(() => root.querySelector('.menu'), 'the first row menu');
+    actions[1]!.click();
+    await waitFor(() => root.querySelector('.menu')?.closest('.row')?.querySelector('.name')?.textContent === secondName, 'the second row menu');
+    expect(Object.entries(store.state.panels).filter(([key, open]) => key.startsWith('tree.menu.') && open)).toHaveLength(1);
+
+    root.querySelector('.menu')!.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+    await waitForGone(() => root.querySelector('.menu'), 'the dismissed row menu');
+    store.togglePanel('examples', true);
+    await afterEffects();
+    expect(root.querySelector('.menu')).toBeNull();
   });
 
   it('names only Commands the registry has on every clickable', () => {
@@ -362,6 +450,101 @@ describe('the shell', () => {
     expect(boundarySeq(mount({ journal: restoring, result: result('static', false, 1) }).root)).toBeUndefined();
   });
 
+  it('resolves only explicit, live Journal targets to drawable Model names', () => {
+    const current = model();
+    const refs = objects();
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'beam' }, current, refs)).toEqual({ ref: 'body:beam', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'material.add', name: 'steel' }, current, refs)).toEqual({ ref: 'material:steel', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'constraint.fix', name: 'fix', on: 'old.face' }, current, refs)).toEqual({ ref: 'constraint:fix', highlight: { sets: ['beam.xmin'] } });
+    expect(journalTarget({ cmd: 'load.pressure', name: 'p', on: 'old.face' }, current, refs)).toEqual({ ref: 'load:p', highlight: { sets: ['beam.top'] } });
+    expect(journalTarget({ cmd: 'model.rename', kind: 'body', name: 'old', to: 'beam' }, current, refs)).toEqual({ ref: 'body:beam', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'step.add', name: 'static' }, current, refs)).toEqual({ ref: 'step:static', highlight: null });
+
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'deleted' }, current, refs)).toBeNull();
+    expect(journalTarget({ cmd: 'geometry.remove', name: 'beam' }, current, refs)).toBeNull();
+    expect(journalTarget({ cmd: 'solve.run', step: 'static' }, current, refs)).toBeNull();
+  });
+
+  it('selects and highlights a Journal target while keeping copy separate', async () => {
+    const dispatch = vi.fn<Dispatch>(async () => undefined);
+    const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m', '1 m'] }, { cmd: 'geometry.addBox', name: 'deleted', size: ['1 m', '1 m', '1 m'] });
+    const { root, store } = mount({ tab: 'journal', journal: entries }, dispatch);
+    const row = root.querySelector<HTMLElement>('[data-target-ref="body:beam"]')!;
+    const select = row.querySelector<HTMLButtonElement>('.jrow-main')!;
+
+    row.dispatchEvent(new MouseEvent('mouseenter'));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight', bodies: ['beam'] });
+    row.dispatchEvent(new MouseEvent('mouseleave'));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+    select.focus();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight', bodies: ['beam'] });
+    select.blur();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+
+    select.click();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'selection.set', refs: ['body:beam'] });
+    row.querySelector<HTMLButtonElement>('.jcopy')!.click();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
+    expect(store.state.journal).toBe(entries);
+
+    const unavailable = [...root.querySelectorAll<HTMLElement>('.jrow')].find((item) => item.textContent?.includes('deleted'))!;
+    expect(unavailable.dataset['targetRef']).toBeUndefined();
+    expect(unavailable.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+    expect(root.querySelector<HTMLElement>('.jrow')!.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+
+    row.dispatchEvent(new MouseEvent('mouseenter'));
+    render(null, root);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+  });
+
+  it('keeps semantic object selection and Properties on the Journal object', async () => {
+    const { registry, store } = mount();
+    const definition = { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3, rho: '7800 kg/m^3', alpha: '12e-6 1/K' } satisfies Command;
+    const query = vi.spyOn(transport, 'query').mockResolvedValueOnce({ command: definition });
+    await registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    expect(query).toHaveBeenCalledWith({ query: 'query.definition', kind: 'material', name: 'steel' });
+    expect(store.state.selection.refs).toEqual(['material:steel']);
+    expect(store.state.selection.bodies).toEqual([]);
+    const { cmd, ...values } = definition;
+    expect(store.state.form).toMatchObject({ cmd, values });
+    query.mockRestore();
+  });
+
+  it('keeps a newer explicit form edit when a Journal selection definition returns late', async () => {
+    const { registry, store } = mount();
+    let resolveSelection!: (value: QueryResult) => void;
+    const query = vi.spyOn(transport, 'query')
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSelection = resolve; }))
+      .mockResolvedValueOnce({ command: { cmd: 'load.pressure', name: 'newer', on: 'beam.top', value: '3 MPa' } });
+    const selection = registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    await registry.dispatch({ cmd: 'form.edit', kind: 'load', name: 'newer' });
+    resolveSelection({ command: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3 } });
+    await selection;
+    expect(store.state.form).toMatchObject({ cmd: 'load.pressure', values: { name: 'newer', on: 'beam.top', value: '3 MPa' } });
+    query.mockRestore();
+  });
+
+  it.each([
+    { cmd: 'selection.clear' },
+    { cmd: 'selection.set', bodies: ['beam'] },
+  ])('does not open a late Journal definition after $cmd changes the selection', async (next) => {
+    const { registry, store } = mount();
+    const previousForm = store.state.form;
+    let resolveSelection!: (value: QueryResult) => void;
+    const query = vi.spyOn(transport, 'query')
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSelection = resolve; }));
+    const selection = registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    await registry.dispatch(next);
+    const selected = store.state.selection;
+    resolveSelection({ command: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3 } });
+    await selection;
+    expect(store.state.form).toBe(previousForm);
+    expect(store.state.selection).toBe(selected);
+    expect(store.state.selection.refs).not.toContain('material:steel');
+    query.mockRestore();
+  });
+
   // Issue #41: the start screen leads with the assistant composer, then New project, then the
   // Recent list, then the three cards. Every one of them is a Command with its own `data-cmd`.
   it('renders the start screen in the issue’s reading order before a Model exists', () => {
@@ -441,8 +624,7 @@ describe('the shell', () => {
     const known = new Set(registry.list().commands.map((d) => d.name));
     const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
     expect(chip).toBeTruthy();
-    chip.click();
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => chip.click());
     const menu = [...root.querySelectorAll('.add-menu [data-cmd]')];
     expect(menu.map((el) => el.textContent)).toEqual(['▭box', '⬭cylinder', '◯sphere', '▱sheet', '⬒extrude', '◑revolve', '⬬union', '⊖subtract', '⊗intersect', '⇲transform', '∖cut']);
     expect(menu.map((el) => el.getAttribute('data-cmd')!).filter((c) => !known.has(c))).toEqual([]);
@@ -452,15 +634,15 @@ describe('the shell', () => {
   it('closes the shape menu on Escape and returns focus to the chip', async () => {
     const { root } = mount();
     const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
-    chip.click();
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => chip.click());
     expect(root.querySelector('.add-menu')).toBeTruthy();
 
     // From inside the menu, which is where the keystroke actually lands.
     const item = root.querySelector<HTMLElement>('.add-menu [data-cmd]')!;
-    item.focus();
-    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => {
+      item.focus();
+      item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
     expect(root.querySelector('.add-menu')).toBeNull();
     expect(document.activeElement).toBe(chip);
   });

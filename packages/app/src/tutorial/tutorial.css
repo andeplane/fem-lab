@@ -19,6 +19,16 @@
   color: var(--text-body);
 }
 
+@media (max-width: 600px) {
+  .tutorial-panel {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+    max-width: none;
+  }
+}
+
 .tutorial-head {
   display: flex;
   align-items: center;
@@ -262,4 +272,17 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tutorial-panel *,
+  .tutorial-panel *::before,
+  .tutorial-panel *::after,
+  .tour-callout *,
+  .tour-callout *::before,
+  .tour-callout *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

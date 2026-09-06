@@ -144,7 +144,12 @@ textarea:focus {
 }
 .workspace {
   display: grid;
-  grid-template-columns: 274px minmax(520px, 1fr) 308px;
+  /* Splitters preview these variables while a gesture is in flight. Each side is capped
+     against the viewer's minimum so a wide panel cannot create page overflow at 1180 px. */
+  --tree-used: min(var(--tree-width, 274px), max(180px, calc(100% - 520px - var(--properties-width, 308px))));
+  --properties-used: min(var(--properties-width, 308px), max(240px, calc(100% - 520px - var(--tree-width, 274px))));
+  grid-template-columns: minmax(180px, var(--tree-used)) minmax(520px, 1fr) minmax(240px, var(--properties-used));
+  position: relative;
   min-height: 0;
   min-width: 0;
 }
@@ -408,7 +413,12 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 7px;
+  width: 100%;
   padding: 5px 12px;
+  text-align: left;
+}
+.group-head:hover {
+  background: #171a20;
 }
 .caret {
   font-size: 9px;
@@ -507,6 +517,46 @@ textarea:focus {
 .at:hover:not(:disabled) {
   color: var(--cyan);
 }
+.tree-action {
+  flex: none;
+  width: 22px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: #3a4048;
+}
+.tree-action:hover {
+  color: var(--text-low);
+}
+.visibility .eye {
+  position: relative;
+  width: 12px;
+  height: 8px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+.visibility .eye::after {
+  content: '';
+  position: absolute;
+  inset: 2px 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.visibility.off .eye::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  width: 14px;
+  height: 1px;
+  top: 3px;
+  left: -2px;
+  background: currentColor;
+  transform: rotate(-35deg);
+}
+.menu-trigger {
+  padding-bottom: 5px;
+  font-size: 15px;
+}
 .empty {
   padding: 2px 12px 8px 26px;
 }
@@ -560,9 +610,50 @@ textarea:focus {
 /* ── viewer ────────────────────────────────────────────────────────────────────────────── */
 .centre {
   display: grid;
-  grid-template-rows: minmax(460px, 1fr) 252px;
+  --bottom-used: min(var(--bottom-height, 252px), max(184px, calc(100% - 460px)));
+  grid-template-rows: minmax(460px, 1fr) var(--bottom-used);
+  position: relative;
   min-height: 0;
   min-width: 0;
+}
+
+/* A transparent hit target keeps the visible divider quiet while making the resize affordance
+   keyboard reachable. The active state is exposed by the cursor and focus ring. */
+.resize-handle {
+  position: absolute;
+  z-index: 8;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  touch-action: none;
+}
+.resize-handle.x {
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  margin-left: -5px;
+  cursor: col-resize;
+}
+.resize-handle.y {
+  left: 0;
+  right: 0;
+  height: 10px;
+  margin-top: -5px;
+  cursor: row-resize;
+}
+.resize-handle.tree {
+  left: var(--tree-used, 274px);
+}
+.resize-handle.properties {
+  right: var(--properties-used, 308px);
+}
+.resize-handle.bottom {
+  top: calc(100% - var(--bottom-used, 252px));
+}
+.resize-handle:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -1px;
+  background: #58b7d633;
 }
 .viewer {
   position: relative;
@@ -734,13 +825,15 @@ textarea:focus {
 .jrow,
 .crow {
   display: flex;
-  gap: 12px;
   width: 100%;
-  padding: 2.5px 14px;
   font-family: var(--mono);
   font-size: 11.5px;
   text-align: left;
   border-left: 2px solid transparent;
+}
+.crow {
+  gap: 12px;
+  padding: 2.5px 14px;
 }
 .jrow:hover {
   background: #171a20;
@@ -748,6 +841,29 @@ textarea:focus {
 .jrow.stale {
   background: var(--warn-bg);
   border-left-color: var(--yellow);
+}
+.jrow-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 12px;
+  padding: 2.5px 8px 2.5px 12px;
+  text-align: left;
+}
+.jrow-main:disabled {
+  opacity: 0.58;
+  cursor: default;
+}
+.jcopy {
+  flex: none;
+  padding: 2.5px 14px 2.5px 8px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  opacity: 0.45;
+}
+.jrow:hover .jcopy,
+.jcopy:focus-visible {
+  opacity: 1;
 }
 .no {
   width: 24px;
@@ -1286,6 +1402,37 @@ textarea:focus {
   font-size: 11.5px;
   color: var(--text-low);
 }
+.gallery-filters {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-divider);
+  background: var(--bg-panel);
+}
+.gallery-filters label {
+  display: grid;
+  gap: 4px;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.gallery-filters select {
+  min-width: 150px;
+  height: 28px;
+  padding: 0 24px 0 8px;
+  font: 11px var(--mono);
+  color: var(--text-body);
+  background: var(--bg-well);
+  border: 1px solid var(--border-panel);
+  border-radius: var(--radius);
+}
+.gallery-count {
+  margin: 0 auto 7px 0;
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
 .cards-grid {
   flex: 1;
   overflow: auto;
@@ -1298,6 +1445,7 @@ textarea:focus {
 .ex-card {
   display: flex;
   flex-direction: column;
+  min-height: 300px;
   background: var(--bg-panel);
   border: 1px solid var(--border-panel);
   border-radius: 4px;
@@ -1308,10 +1456,34 @@ textarea:focus {
   border-color: var(--border-hover);
 }
 .ex-thumb {
-  display: block;
+  position: relative;
+  display: grid;
+  place-items: center;
   height: 96px;
+  flex: 0 0 96px;
   border-bottom: 1px solid var(--border-panel);
-  background: linear-gradient(135deg, #22788e, #440154);
+  background: var(--bg-well);
+  overflow: hidden;
+}
+.ex-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ex-thumb-pending {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.ex-tag {
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  padding: 2px 5px;
+  color: var(--text-high);
+  background: rgb(13 15 19 / 82%);
+  border: 1px solid rgb(139 146 157 / 35%);
+  border-radius: 2px;
+  font-size: 9.5px;
 }
 .ex-body {
   display: flex;
@@ -1331,17 +1503,49 @@ textarea:focus {
   color: var(--text-low);
   line-height: 1.5;
 }
+.ex-expected {
+  display: grid;
+  gap: 3px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-divider);
+}
+.ex-expected .cyan {
+  font-size: 11.5px;
+}
+.ex-reference {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-faint);
+}
 .ex-foot {
   display: flex;
   justify-content: space-between;
   margin-top: 9px;
   padding-top: 8px;
-  border-top: 1px solid var(--border-divider);
   font-size: 10.5px;
   color: var(--text-faint);
 }
+.gallery-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 10px;
+}
 
 /* ── start screen ──────────────────────────────────────────────────────────────────────── */
+.start-layout {
+  height: 100%;
+  min-width: 0;
+}
+.start-layout.with-properties {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--properties-width, 308px);
+}
+.start-layout > .start {
+  min-width: 0;
+  overflow: auto;
+}
 .start {
   display: flex;
   flex-direction: column;
@@ -1524,6 +1728,8 @@ button.solve.stale {
   right: 190px;
   bottom: 10px;
   display: flex;
+  flex-wrap: wrap;
+  max-width: calc(100% - 200px);
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
@@ -1537,6 +1743,9 @@ button.solve.stale {
   width: 120px;
   accent-color: var(--accent);
 }
+.transient-speed { display: inline-flex; align-items: center; gap: 4px; }
+.transient-speed select { max-width: 76px; }
+.transient-time { white-space: nowrap; }
 
 .stale-banner {
   position: absolute;
@@ -2107,6 +2316,20 @@ input.model-name:focus {
   z-index: 40;
   box-shadow: 0 0 40px #000000cc;
 }
+.resize-handle.assistant-resize.fixed {
+  position: fixed;
+  top: 0;
+  right: var(--assistant-width, 392px);
+  bottom: 0;
+  left: auto;
+  margin-left: 0;
+}
+.shell ~ .resize-handle.assistant-resize.fixed {
+  top: 46px;
+}
+.shell:has(.banner) ~ .resize-handle.assistant-resize.fixed {
+  top: 78px;
+}
 .shell ~ .assistant {
   top: 46px;
 }
@@ -2115,15 +2338,15 @@ input.model-name:focus {
 }
 @media (min-width: 1494px) {
   #app:has(> .assistant:not([hidden])) .workspace {
-    margin-right: 392px;
+    margin-right: var(--assistant-width, 392px);
   }
 }
 /* The start screen has no `.workspace` to carry the reservation, and the drawer would otherwise
    sit over its composer. Wide enough for the 880 px column plus the drawer, it moves aside and
    centres in what is left; narrower, the drawer simply floats over it. */
 @media (min-width: 1320px) {
-  .start:has(~ .assistant) {
-    margin-right: 416px;
+  #app:has(> .assistant:not([hidden])) > .start-layout {
+    margin-right: var(--assistant-width, 392px);
   }
 }
 
@@ -2155,10 +2378,13 @@ input.model-name:focus {
     display: none;
   }
   .workspace {
-    grid-template-columns: 210px minmax(360px, 1fr) 260px;
+    --tree-used: min(var(--tree-width, 210px), max(180px, calc(100% - 360px - var(--properties-width, 260px))));
+    --properties-used: min(var(--properties-width, 260px), max(240px, calc(100% - 360px - var(--tree-width, 210px))));
+    grid-template-columns: minmax(180px, var(--tree-used)) minmax(360px, 1fr) minmax(240px, var(--properties-used));
   }
   .centre {
-    grid-template-rows: minmax(320px, 1fr) 220px;
+    --bottom-used: min(var(--bottom-height, 220px), max(184px, calc(100% - 320px)));
+    grid-template-rows: minmax(320px, 1fr) var(--bottom-used);
   }
   .results {
     grid-template-columns: 1fr;
@@ -2171,10 +2397,14 @@ input.model-name:focus {
   .deform-bar {
     right: 10px;
     left: 10px;
+    max-width: calc(100% - 20px);
     justify-content: flex-end;
   }
 }
 
+.palette-intent { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-divider); }
+.palette-intent button { color: var(--accent); border: 1px solid var(--border-panel); padding: 4px 8px; border-radius: 3px; }
+.palette-intent .faint { font-size: 11px; }
 /* Plan F · #42: what was solved, spanning both Result columns. */
 .result-header {
   grid-column: 1 / -1;
@@ -2304,4 +2534,117 @@ input.model-name:focus {
 .sketch .seg.danger:hover {
   color: var(--red-text);
   border-color: var(--red-border);
+}
+/* Visually hidden text remains available to screen readers without changing the compact UI. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The viewer is the primary work surface on a phone or tablet. Keep the tree and Properties
+   reachable below it instead of forcing the desktop's three minimum-width columns to scroll. */
+@media (max-width: 1023px) {
+  .under-bar {
+    overflow: auto;
+  }
+  .resize-handle {
+    display: none;
+  }
+  .workspace {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+  .centre {
+    order: -1;
+    flex: none;
+    min-height: 520px;
+    grid-template-rows: minmax(320px, 1fr) 200px;
+  }
+  .panel.tree,
+  .panel.props {
+    flex: none;
+    min-width: 0;
+    border-right: 0;
+    border-left: 0;
+  }
+  .panel.tree {
+    order: 1;
+    min-height: 190px;
+    max-height: 280px;
+    border-top: 1px solid var(--border-panel);
+  }
+  .panel.props {
+    order: 2;
+    min-height: 260px;
+    border-top: 1px solid var(--border-panel);
+  }
+  .viewer {
+    min-width: 0;
+    min-height: 320px;
+  }
+  .bottom {
+    min-width: 0;
+  }
+  .tabs {
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .shell {
+    grid-template-rows: auto 1fr;
+  }
+  .topbar {
+    min-height: 46px;
+    height: auto;
+    padding: 6px 8px;
+    overflow-x: auto;
+  }
+  .centre {
+    min-height: 500px;
+    grid-template-rows: minmax(280px, 1fr) 190px;
+  }
+  .panel.tree {
+    max-height: 250px;
+  }
+  .overlay.wide {
+    padding: 8px;
+  }
+  .gallery-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .gallery-sub {
+    flex-basis: 100%;
+  }
+  .cards-grid {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 10px;
+  }
+  .export-row {
+    grid-template-columns: 18px 40px minmax(0, 1fr) auto;
+  }
+  .export-note,
+  .export-cmd {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
 }

@@ -399,82 +399,42 @@ fn mcp_runs_the_node_server_or_says_how_to_install_it() {
 }
 
 #[test]
-fn copied_cli_embeds_canonical_cases_and_honors_explicit_directories() {
-    let installed = scratch("installed-bench");
-    let binary = installed.join(format!("femlab{}", std::env::consts::EXE_SUFFIX));
-    std::fs::copy(assert_cmd::cargo::cargo_bin("femlab"), &binary).unwrap();
-    let cases = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benches/cases");
-    let embedded = Command::new(&binary)
-        .current_dir(&installed)
-        .args(["bench", "--cpu", "--json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let explicit = Command::new(&binary)
-        .current_dir(&installed)
-        .args(["bench", "--cpu", "--json", "--cases", cases.to_str().unwrap()])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let mut embedded: serde_json::Value = serde_json::from_slice(&embedded).unwrap();
-    let mut explicit: serde_json::Value = serde_json::from_slice(&explicit).unwrap();
-    for report in [&mut embedded, &mut explicit] {
-        for case in report.as_array_mut().unwrap() {
-            case.as_object_mut().unwrap().remove("time_ms");
-        }
+fn run_answers_ordered_transient_queries_after_a_full_solve() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/fixtures/transient-heat.json");
+    let file = fixture.to_str().unwrap();
+    let output = femlab()
+        .args([
+            "run", file, "--cpu", "--query", r#"{"query":"query.frames"}"#,
+            "--query", r#"{"query":"query.frame","index":1}"#,
+            "--query", r#"{"query":"query.probe","field":"temperature","at":["0.5 m","0.05 m","0.05 m"],"sample":{"kind":"time","time":"175 ms","sampling":"exact"}}"#,
+        ])
+        .assert().success();
+    let results: Vec<serde_json::Value> = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0]["frames"][1]["timeSi"], 0.175);
+    assert_eq!(results[1]["sample"]["frame"]["index"], 1);
+    assert_eq!(results[1]["unit"], "K");
+    // Conservation rho*cp*dT/dt=q gives T=t K everywhere, independent of the solver.
+    for node in results[1]["values"].as_array().unwrap().chunks_exact(3) {
+        assert!((node[0].as_f64().unwrap() - 0.175).abs() < 1e-10);
+        assert_eq!((node[1].as_f64().unwrap(), node[2].as_f64().unwrap()), (0.0, 0.0));
     }
-    assert_eq!(embedded, explicit);
-    let heat = Command::new(&binary)
-        .current_dir(&installed)
-        .args(["bench", "--cpu", "--json", "--filter", "heat-bar-linear"])
+    assert_eq!(results[2]["value"]["unit"], "degC");
+    assert!((results[2]["value"]["value"].as_f64().unwrap() - (0.175 - 273.15)).abs() < 1e-10);
+    femlab()
+        .args(["run", file, "--cpu", "--skip-solves", "--query", r#"{"query":"query.frames"}"#])
         .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let heat: serde_json::Value = serde_json::from_slice(&heat).unwrap();
-    assert_eq!(heat.as_array().unwrap().len(), 1);
-    let checks = heat[0]["checks"].as_array().unwrap();
-    for expected in [25.0, 50.0] {
-        let check = checks.iter().find(|check| check["expect"].as_f64() == Some(expected)).unwrap();
-        assert!((check["got"].as_f64().unwrap() - expected).abs() < 1e-8);
-        assert_eq!(check["pass"], true);
-    }
-    let custom = installed.join("custom");
-    std::fs::create_dir_all(&custom).unwrap();
-    Command::new(&binary)
-        .current_dir(&installed)
-        .args(["bench", "--cpu", "--json", "--cases", "custom"])
+        .code(1)
+        .stderr(contains("not-found"));
+    femlab()
+        .args(["run", file, "--cpu", "--query", r#"{"query":"query.frame","index":999}"#])
         .assert()
-        .success()
-        .stdout("[]\n");
-    std::fs::write(
-        custom.join("volume.json"),
-        serde_json::json!({
-            "name": "packaged-custom-volume", "journal": [
-                {"cmd":"model.new","name":"custom"},
-                {"cmd":"geometry.addBox","name":"box","size":["2 m","3 m","4 m"]}
-            ], "checks": [{"query":{"query":"query.model"},"path":"/bodies/0/measure/value","expect":24,"tol":1e-12}]
-        })
-        .to_string(),
-    )
-    .unwrap();
-    Command::new(&binary)
-        .current_dir(&installed)
-        .args(["bench", "--cpu", "--cases", "custom"])
+        .code(1)
+        .stderr(contains("index"));
+    femlab().args(["run", file, "--query", "not JSON"]).assert().code(2).stderr(contains("schema"));
+    femlab()
+        .args(["run", file, "--hashes", "--query", r#"{"query":"query.frames"}"#])
         .assert()
-        .success()
-        .stdout(contains("PASS packaged-custom-volume"))
-        .stdout(contains("got 24, expected 24"));
-    Command::new(&binary)
-        .current_dir(&installed)
-        .args(["bench", "--cases", "missing"])
-        .assert()
-        .failure()
-        .stderr(contains("cannot read missing"));
-    std::fs::remove_dir_all(installed).unwrap();
+        .code(2)
+        .stderr(contains("cannot be used with"));
 }

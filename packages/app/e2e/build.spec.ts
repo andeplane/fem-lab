@@ -185,6 +185,54 @@ test.describe('@cpu the cantilever, built through the UI', () => {
 test.describe('@cpu the gallery, the palette and the Script tab', () => {
   test.setTimeout(120_000);
 
+  test('filters metadata cards by keyboard and shows generated viewer thumbnails and reference values', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+    await page.goto('./');
+    await ready(page);
+    expect(await page.evaluate(() => performance.getEntriesByType('resource').some((entry) => entry.name.includes('/examples/thumbnails/')))).toBe(false);
+    await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Examples' }).click();
+    const examples = await page.evaluate(async () =>
+      ((await (await fetch('examples/index.json')).json()) as { examples: { name: string; tags: string[]; difficulty: number; expected: { reference: string } }[] }).examples,
+    );
+    const exampleCount = examples.length;
+    expect(exampleCount).toBeGreaterThanOrEqual(22);
+    await expect(page.locator('.ex-card')).toHaveCount(exampleCount);
+    await expect.poll(() => page.evaluate(() => performance.getEntriesByType('resource').some((entry) => entry.name.includes('/examples/thumbnails/')))).toBe(true);
+
+    const cantilever = page.locator('button[title="file.openExample cantilever"]');
+    await expect(cantilever).toContainText('tip deflection δ');
+    await expect(cantilever).toContainText('-0.1901 mm');
+    await expect(cantilever).toContainText(examples.find((example) => example.name === 'cantilever')!.expected.reference);
+    const thumbnail = cantilever.locator('img');
+    await thumbnail.scrollIntoViewIfNeeded();
+    await expect(thumbnail).toHaveJSProperty('naturalWidth', 320);
+    await expect(thumbnail).toHaveJSProperty('naturalHeight', 180);
+    expect((await thumbnail.boundingBox())!.height).toBeGreaterThan(90);
+
+    const tag = page.getByLabel('Filter examples by tag');
+    await tag.focus();
+    await page.keyboard.press('b');
+    await page.keyboard.press('Enter');
+    await expect(tag).toHaveValue('beam');
+    await expect(page.locator('.ex-card')).toHaveCount(examples.filter((example) => example.tags.includes('beam')).length);
+
+    const difficulty = page.getByLabel('Filter examples by difficulty');
+    await difficulty.focus();
+    await page.keyboard.press('3');
+    await page.keyboard.press('Enter');
+    await expect(difficulty).toHaveValue('3');
+    await expect(page.locator('.ex-card')).toHaveCount(0);
+    await expect(page.locator('.gallery-empty')).toContainText('No examples match both filters.');
+
+    const reset = page.locator('.gallery-empty button[data-cmd="example.filter"]');
+    await reset.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.ex-card')).toHaveCount(exampleCount);
+    await expect(tag).toHaveValue('');
+    await expect(difficulty).toHaveValue('');
+  });
+
   test('opens an example from the gallery and shows its Journal', async ({ page }) => {
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
@@ -192,6 +240,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     await ready(page);
     await page.locator('.start button[data-cmd="panel.toggle"]', { hasText: 'Examples' }).click();
     await expect(page.locator('.gallery')).toBeVisible();
+    await expect(page.locator('button[title="file.openExample cantilever"]')).toBeVisible();
     await shot(page, '06-gallery');
     await page.locator('button[title="file.openExample cantilever"]').click();
     // The fixture ends on solve.run, so it opens solved and on the Results tab; the Journal is a tab away.
