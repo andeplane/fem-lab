@@ -14,15 +14,22 @@ export interface OpenAILike {
 
 /** Keep tool call IDs paired with their results, including multiple calls in a turn. */
 export function toResponseInput(messages: Message[]): OpenAI.Responses.ResponseInput {
-  return messages.flatMap((m) => m.content.flatMap((b): OpenAI.Responses.ResponseInput => {
-    if (b.type === 'tool_use') return [{ type: 'function_call', call_id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}) }];
-    if (b.type === 'tool_result') return [{ type: 'function_call_output', call_id: b.toolUseId, output: b.content }];
-    if (b.type === 'text') return [{ role: m.role, content: b.text }];
-    return [{ role: 'user', content: [
-      { type: 'input_image', image_url: `data:${b.mediaType};base64,${b.base64}`, detail: 'auto' },
-      ...(b.caption ? [{ type: 'input_text' as const, text: b.caption }] : []),
-    ] }];
-  }));
+  return messages.flatMap((m) => {
+    // Replay the complete output in order, including encrypted reasoning and message phase.
+    // These items replace the display blocks; adding both would duplicate text and tool calls.
+    if (m.role === 'assistant' && m.continuation?.provider === 'openai') {
+      return m.continuation.value as OpenAI.Responses.ResponseInput;
+    }
+    return m.content.flatMap((b): OpenAI.Responses.ResponseInput => {
+      if (b.type === 'tool_use') return [{ type: 'function_call', call_id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}) }];
+      if (b.type === 'tool_result') return [{ type: 'function_call_output', call_id: b.toolUseId, output: b.content }];
+      if (b.type === 'text') return [{ role: m.role, content: b.text }];
+      return [{ role: 'user', content: [
+        { type: 'input_image', image_url: `data:${b.mediaType};base64,${b.base64}`, detail: 'auto' },
+        ...(b.caption ? [{ type: 'input_text' as const, text: b.caption }] : []),
+      ] }];
+    });
+  });
 }
 
 /** A model that returns unparseable arguments gets a schema error back rather than empty input. */
@@ -46,6 +53,7 @@ export function openaiProvider(apiKey: string, make: (key: string) => OpenAILike
           max_output_tokens: req.maxTokens,
           stream: true,
           store: false,
+          include: ['reasoning.encrypted_content'],
           instructions: req.system,
           input: toResponseInput(req.messages),
           // Registry schemas intentionally have optional fields; strict mode would rewrite them.
@@ -61,6 +69,7 @@ export function openaiProvider(apiKey: string, make: (key: string) => OpenAILike
               const cacheRead = response.usage.input_tokens_details.cached_tokens;
               yield { type: 'usage', usage: { input: response.usage.input_tokens - cacheRead, output: response.usage.output_tokens, cacheRead } };
             }
+            yield { type: 'continuation', continuation: { provider: 'openai', value: response.output } };
             yield { type: 'done', stopReason: calls.length ? 'tool_use' : 'end_turn' };
           }
           if (event.type === 'error') yield { type: 'error', message: event.message };

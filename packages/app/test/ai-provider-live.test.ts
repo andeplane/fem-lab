@@ -29,7 +29,7 @@ for (const [id, keyName, make, model] of [
     expect(call.input).toEqual({ field: null });
     await registry.dispatch({ cmd: commandNameFor(call.name, registry)!, ...call.input as object });
     expect(host.view.showField).toHaveBeenCalledWith({ field: null });
-    messages.push({ role: 'assistant', content: [call] }, { role: 'user', content: [{ type: 'tool_result', toolUseId: call.id, content: '{"ok":true}' }] });
+    messages.push({ role: 'assistant', content: [call], continuation: events.find((e) => e.type === 'continuation')?.continuation }, { role: 'user', content: [{ type: 'tool_result', toolUseId: call.id, content: '{"ok":true}' }] });
     const followup: ChatEvent[] = [];
     for await (const event of provider.chat(request)) followup.push(event);
     expect(followup.filter((e) => e.type === 'error' || e.type === 'tool_use')).toEqual([]);

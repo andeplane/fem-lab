@@ -135,6 +135,7 @@ describe('the OpenAI adapter', () => {
       { type: 'tool_use', id: 'c1', name: 'geometry_addBox', input: { name: 'beam' } },
       { type: 'tool_use', id: 'c2', name: 'geometry_addBox', input: {} },
       { type: 'usage', usage: { input: 12, output: 5, cacheRead: 8 } },
+      { type: 'continuation', continuation: { provider: 'openai', value: [call('c1', '{"name":"beam"}'), call('c2', '{}')] } },
       { type: 'done', stopReason: 'tool_use' },
     ]);
   });
