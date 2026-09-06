@@ -45,6 +45,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'file.open': { json: JSON.stringify(MODEL_FILE) },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
+  'file.cancelAnimationCapture': {},
   'file.shareLink': {},
   'file.autosave': { on: true },
   'file.read': { path: 'AGENTS.md' },
@@ -140,6 +141,7 @@ describe('Registry', () => {
     expect(bad.where).toBe('position');
     const root = (await registry.query({ query: 'query.screenshot', width: 'wide' }).catch((e: unknown) => e)) as FemError;
     expect(root.code).toBe('schema');
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 0, height: 720 } })).rejects.toMatchObject({ code: 'schema', where: 'spec', suggestion: expect.stringContaining("describe('file.export')") });
     // a union that matches no member reports at the root: `where` is null
     const union = (await registry.dispatch({ cmd: 'view.showField', nothing: true }).catch((e: unknown) => e)) as FemError;
     expect(union.toJSON()).toMatchObject({ code: 'schema', where: null });
@@ -324,6 +326,12 @@ describe('Registry', () => {
     expect(wrote()).toEqual(['beam.png', 'image/png', new Uint8Array([65, 66, 67])]);
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'png', legend: false } });
     expect(host.view.screenshot).toHaveBeenLastCalledWith({ legend: false });
+
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 1280, height: 720 } });
+    expect(host.view.captureAnimation).toHaveBeenCalledWith({ width: 1280, height: 720, fps: 30, duration: 4 });
+    expect(wrote()).toEqual(['beam.webm', 'video/webm', new Uint8Array([26, 69, 223, 163])]);
+    (host.view.captureAnimation as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ webm: null });
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 640, height: 360, fps: 24, duration: 2 } })).resolves.toEqual({ cancelled: true });
 
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv' } });
     expect(wrote()[0]).toBe('beam-extremes.csv');

@@ -79,13 +79,13 @@ under `e2e/fixtures/` found four more.
   the smallest positive `yield` in `query.model`'s current material rows, converted to SI
   from their display stress units. The legend opens clamped at 1 for a utilisation and
   at the safety cap for a factor.
-- **`query.screenshot` at 1× / 2×** on the export dialog's PNG row.
+- **`query.screenshot` at 1× / 2×** on the export dialog's PNG row, with explicit pixel
+  dimensions forwarded to the viewer.
+- **Mode-shape WebM capture** at 720p or 1080p from the Export dialog. The typed `file.export`
+  Command also accepts any validated pixel size, frame rate and duration; `view.animate` uses
+  the same selected mode and phase-percentage sweep.
 
 ## Follow-ups
 
-- A WebM / GIF capture of the sweep is out of scope for this pass; the animation is on-screen
-  and `query.screenshot` writes single frames.
-- `HostContext.view.screenshot` and `buildExport`'s png branch both drop the Query's `width`
-  and `height`. Until they forward them, the chosen scale rides on `ResultsView.legendBurn()`.
-- `view.animate`'s `mode`, `speed` and `frame` are dropped by `host.ts` (`v().animate(a.playing)`);
-  the scrub therefore also calls `Viewer.setPhase` directly.
+- GIF and true transient-frame video wait for a GIF encoder and the transient frame playback
+  path respectively; the app does not advertise either as available.

@@ -71,6 +71,8 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       animate: vi.fn(),
       camera: vi.fn(() => ({ position: [1, 2, 3] as [number, number, number], target: [0, 0, 0] as [number, number, number] })),
       screenshot: vi.fn(async () => ({ png: 'data:image/png;base64,QUJD' })),
+      captureAnimation: vi.fn(async () => ({ webm: new Uint8Array([26, 69, 223, 163]) })),
+      cancelAnimationCapture: vi.fn(() => true),
     },
     selection: { set: vi.fn(), clear: vi.fn(), setPickTarget: vi.fn(), get: vi.fn(() => ({ bodies: ['beam'], faces: ['beam.top'], sets: [], refs: ['body:beam', 'face:beam.top'] })) },
     panels: { toggle: vi.fn() },

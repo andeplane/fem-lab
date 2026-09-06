@@ -270,6 +270,16 @@ describe('the deformation bar', () => {
     const { root } = mount({ result: transient });
     expect(root.querySelector<HTMLButtonElement>('.deform-bar [data-cmd="view.animate"]')!.title).toContain('the sweep is the amplitude');
   });
+
+  it('offers explicit WebM resolutions and a registry-callable cancel while recording', () => {
+    const first = mount({ result: modal, fieldKey: 'mode:2', panels: { export: true } });
+    const row = [...first.root.querySelectorAll('.export-row')].find((el) => el.textContent?.includes('Viewer animation'))!;
+    expect([...row.querySelectorAll('[data-cmd="file.export"]')].map((el) => el.textContent?.trim())).toEqual(['720p', '1080p', 'export']);
+    document.body.innerHTML = '';
+    const active = mount({ result: modal, fieldKey: 'mode:2', panels: { export: true }, capturingAnimation: true });
+    const cancel = active.root.querySelector('[data-cmd="file.cancelAnimationCapture"]');
+    expect(cancel?.textContent?.trim()).toBe('cancel recording');
+  });
 });
 
 describe('the convergence study, through the same chart', () => {

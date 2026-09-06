@@ -76,6 +76,45 @@ test.describe('@cpu the Results tab after a modal Step', () => {
     await phase.dispatchEvent('input');
     await expect(play).toHaveText('▶');
 
+    // WebM capture uses the same phase sweep at a commanded pixel size. Decode the browser's
+    // own file independently: the EBML signature and video metadata prove this is a playable
+    // 320 × 240 recording, not renamed PNG bytes or the live canvas size.
+    await play.click();
+    const download = page.waitForEvent('download');
+    const exported = page.evaluate(() => window.fem.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 320, height: 240, fps: 15, duration: 0.5 } }));
+    const file = await download;
+    await exported;
+    expect(file.suggestedFilename()).toBe('cantilever-modal.webm');
+    const saved = await file.path();
+    expect(saved).not.toBeNull();
+    const webm = readFileSync(saved!);
+    expect([...webm.subarray(0, 4)]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
+    expect(webm.length).toBeGreaterThan(1000);
+    const dimensions = await page.evaluate(async (base64) => {
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const video = document.createElement('video');
+      video.src = URL.createObjectURL(new Blob([bytes], { type: 'video/webm' }));
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => resolve();
+        video.onerror = () => reject(new Error('Chromium could not decode its WebM recording'));
+      });
+      const size = [video.videoWidth, video.videoHeight];
+      URL.revokeObjectURL(video.src);
+      return size;
+    }, webm.toString('base64'));
+    expect(dimensions).toEqual([320, 240]);
+    await expect(play).toHaveText('❚❚');
+
+    // Cancellation resolves without a partial download and restores the running animation.
+    const cancelled = await page.evaluate(async () => {
+      const recording = window.fem.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 320, height: 240, fps: 15, duration: 2 } });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const cancel = await window.fem.dispatch({ cmd: 'file.cancelAnimationCapture' });
+      return { cancel, recording: await recording };
+    });
+    expect(cancelled).toEqual({ cancel: { cancelled: true }, recording: { cancelled: true } });
+    await expect(play).toHaveText('❚❚');
+
   });
 });
 

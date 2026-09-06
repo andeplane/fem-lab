@@ -11,10 +11,11 @@ import { Cmd, type Dispatch } from './cmd';
 const GROUPS: ExportFormatRow['group'][] = ['Model & mesh', 'Results', 'Document & model file'];
 
 /** Why a row cannot be exported yet, or `null` when it can. */
-export function unavailable(row: ExportFormatRow, s: { hasMesh: boolean; hasResult: boolean }): string | null {
+export function unavailable(row: ExportFormatRow, s: { hasMesh: boolean; hasResult: boolean; hasAnimation: boolean }): string | null {
   if (row.needs === 'soon') return 'not written yet';
   if (row.needs === 'mesh' && !s.hasMesh) return 'needs a Mesh (mesh.set)';
   if (row.needs === 'result' && !s.hasResult) return 'needs a solved Step';
+  if (row.needs === 'animation' && !s.hasAnimation) return 'needs a selected mode shape';
   return null;
 }
 
@@ -22,6 +23,7 @@ export function unavailable(row: ExportFormatRow, s: { hasMesh: boolean; hasResu
 export function specOf(row: ExportFormatRow, step: string | undefined): Record<string, unknown> {
   if (row.format === 'csv') return { format: 'csv', table: 'extremes', ...(step ? { step } : {}) };
   if (row.format === 'vtu' && step) return { format: 'vtu', step };
+  if (row.format === 'webm') return { format: 'webm', width: 1280, height: 720 };
   return { format: row.format };
 }
 
@@ -32,11 +34,7 @@ const SCALES = [1, 2];
 /**
  * The design's 1× / 2× on the viewer image. The Command is `query.screenshot`, whose schema
  * takes `width` and `height`; each chip asks for the canvas at that many device pixels and the
- * chosen scale then rides on the legend the viewer burns in.
- *
- * ponytail: the scale reaches the viewer through `ResultsView.legendBurn()`, because neither
- * `HostContext.view.screenshot` nor `buildExport`'s png branch forwards the Query's width and
- * height. One line in each — `host.ts` and `registry/src/host-commands.ts` — replaces this.
+ * chosen scale also rides on the legend, so a later plain `file.export` uses the same choice.
  */
 function Resolution({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
   const canvas = typeof document === 'undefined' ? null : document.querySelector('canvas');
@@ -66,6 +64,31 @@ function Resolution({ s, store, dispatch, query }: { s: UiState; store: Store; d
   );
 }
 
+const VIDEO_SIZES = [
+  { label: '720p', width: 1280, height: 720 },
+  { label: '1080p', width: 1920, height: 1080 },
+];
+
+/** Each size is the same typed file.export Command scripts use; recording can be cancelled. */
+function AnimationResolution({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  if (s.capturingAnimation) {
+    return (
+      <Cmd dispatch={dispatch} cmd="file.cancelAnimationCapture" class="tbutton" title="cancel the WebM recording and restore the viewer">
+        cancel recording
+      </Cmd>
+    );
+  }
+  return (
+    <div class="segmented" role="group" aria-label="animation resolution">
+      {VIDEO_SIZES.map(({ label, width, height }) => (
+        <Cmd key={label} dispatch={dispatch} cmd="file.export" args={{ spec: { format: 'webm', width, height } }} title={`file.export WebM ${width} × ${height} px`}>
+          {label}
+        </Cmd>
+      ))}
+    </div>
+  );
+}
+
 /** A data-URL PNG onto the person's disk. `file.export` does the same for the formats the
  *  engine writes; a Query hands back bytes rather than writing them, so this is its other half. */
 function save(name: string, png: string): void {
@@ -76,7 +99,11 @@ function save(name: string, png: string): void {
 export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
   const [ticked, setTicked] = useState<string[]>([]);
   if (s.panels['export'] !== true) return null;
-  const ctx = { hasMesh: Boolean(s.model?.meshSettings), hasResult: s.result !== null };
+  const ctx = {
+    hasMesh: Boolean(s.model?.meshSettings),
+    hasResult: s.result !== null,
+    hasAnimation: s.fieldKey.startsWith('mode:'),
+  };
   const step = s.result?.step;
   const close = { cmd: 'panel.toggle', panel: 'export', open: false };
   const runAll = (): void => {
@@ -115,7 +142,8 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
                   <span class="export-note">{why ?? row.note}</span>
                   <span class="mono export-cmd">{line(spec)}</span>
                   {row.format === 'png' ? <Resolution s={s} store={store} dispatch={dispatch} query={query} /> : null}
-                  <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null} title={line(spec)}>
+                  {row.format === 'webm' && why === null ? <AnimationResolution s={s} dispatch={dispatch} /> : null}
+                  <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null || (row.format === 'webm' && s.capturingAnimation)} title={line(spec)}>
                     export
                   </Cmd>
                 </div>
@@ -124,7 +152,7 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
           </div>
         ))}
         <div class="export-foot">
-          <Cmd dispatch={dispatch} cmd="file.export" class="apply" disabled={ticked.length === 0} onRun={runAll} title="one file.export per ticked row">
+          <Cmd dispatch={dispatch} cmd="file.export" class="apply" disabled={ticked.length === 0 || s.capturingAnimation} onRun={runAll} title="one file.export per ticked row">
             Export selected
           </Cmd>
         </div>

@@ -38,6 +38,11 @@ export interface CameraState {
   target: [number, number, number];
   up?: [number, number, number];
 }
+export interface AnimationState {
+  playing: boolean;
+  phase: number;
+  speed: number;
+}
 export type ViewPreset = 'iso' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 export interface Pick {
   face: string | null;
@@ -119,6 +124,7 @@ export class Viewer {
   private disposed = false;
   private readonly click = (e: MouseEvent) => this.pickCb?.(this.pick(e.clientX, e.clientY));
   private readonly pointerMove = (e: PointerEvent) => this.hoverAt(e);
+  private animation: AnimationState = { playing: false, phase: 0.25, speed: 1 };
   /** The last displacement handed to `setDeformed`, and the scale it was drawn at, so the
    *  animation can sweep the same array without the host re-fetching it every frame. */
   private deformation: Float32Array | null = null;
@@ -161,9 +167,7 @@ export class Viewer {
     const w = this.canvas.clientWidth || 640;
     const h = this.canvas.clientHeight || 480;
     this.renderer.setSize(w, h, false);
-    this.perspective.aspect = w / h;
-    this.perspective.updateProjectionMatrix();
-    this.frameOrtho();
+    this.setAspect(w / h);
     this.render();
   }
 
@@ -471,10 +475,20 @@ export class Viewer {
    */
   animate(playing: boolean, speed = 1): void {
     cancelAnimationFrame(this.frame);
-    if (!playing) return void this.drawDeformed(this.deformation, this.deformScale);
-    const t0 = performance.now();
+    if (!playing) {
+      this.animation = { playing: false, phase: 0.25, speed };
+      return void this.drawDeformed(this.deformation, this.deformScale);
+    }
+    this.startAnimation(speed, 0);
+  }
+
+  private startAnimation(speed: number, phase: number): void {
+    this.animation = { playing: true, phase, speed };
+    const t0 = performance.now() - (phase / speed) * 1000;
     const step = () => {
-      this.drawDeformed(this.deformation, this.deformScale * Math.sin(((performance.now() - t0) / 1000) * speed * 2 * Math.PI));
+      const turns = (((performance.now() - t0) / 1000) * speed) % 1;
+      this.animation.phase = turns;
+      this.drawDeformed(this.deformation, this.deformScale * Math.sin(turns * 2 * Math.PI));
       this.frame = requestAnimationFrame(step);
     };
     this.frame = requestAnimationFrame(step);
@@ -483,7 +497,33 @@ export class Viewer {
   /** Where in one sweep the shape sits, as a phase in turns: what the scrub slider sets. */
   setPhase(turns: number): void {
     cancelAnimationFrame(this.frame);
+    this.animation = { playing: false, phase: turns, speed: this.animation.speed };
     this.drawDeformed(this.deformation, this.deformScale * Math.sin(turns * 2 * Math.PI));
+  }
+
+  animationState(): AnimationState {
+    return { ...this.animation };
+  }
+
+  restoreAnimation(state: AnimationState): void {
+    cancelAnimationFrame(this.frame);
+    if (state.playing) this.startAnimation(state.speed, state.phase);
+    else this.setPhase(state.phase);
+  }
+
+  /** Render into an exact-size canvas while `task` records it, then restore the live viewport. */
+  async atCaptureSize<T>(width: number, height: number, task: (canvas: HTMLCanvasElement) => Promise<T>): Promise<T> {
+    const pixelRatio = this.renderer.getPixelRatio();
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(width, height, false);
+    this.setAspect(width / height);
+    this.render();
+    try {
+      return await task(this.canvas);
+    } finally {
+      this.renderer.setPixelRatio(pixelRatio);
+      this.resize();
+    }
   }
 
   fit(): void {
@@ -520,14 +560,18 @@ export class Viewer {
    * painted into the right-hand edge when one is given: a saved image has to be readable on
    * its own, and the HTML legend is not part of the WebGL canvas.
    */
-  screenshot(legend?: LegendBurn): string {
+  screenshot(legend?: LegendBurn, width?: number, height?: number): string {
     const scale = Math.max(1, Math.min(4, legend?.scale ?? 1));
     // ponytail: 2× re-renders at double the drawing-buffer size and puts it back. Enough for a
     // report figure; a genuinely large plate (4× of a 4k canvas) wants an offscreen target.
-    const restore = scale === 1 ? null : this.renderer.getPixelRatio();
+    const exact = width !== undefined && height !== undefined;
+    const restore = scale === 1 && !exact ? null : this.renderer.getPixelRatio();
     if (restore !== null) {
-      this.renderer.setPixelRatio(restore * scale);
-      this.renderer.setSize(this.canvas.clientWidth || 640, this.canvas.clientHeight || 480, false);
+      this.renderer.setPixelRatio(exact ? 1 : restore * scale);
+      const w = exact ? width : this.canvas.clientWidth || 640;
+      const h = exact ? height : this.canvas.clientHeight || 480;
+      this.renderer.setSize(w, h, false);
+      this.setAspect(w / h);
     }
     this.render();
     const png = this.burn(legend);
@@ -619,9 +663,14 @@ export class Viewer {
     this.render();
   }
 
-  private frameOrtho(): void {
+  private setAspect(aspect: number): void {
+    this.perspective.aspect = aspect;
+    this.perspective.updateProjectionMatrix();
+    this.frameOrtho(aspect);
+  }
+
+  private frameOrtho(aspect = (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480)): void {
     const h = Math.max(this.box.getSize(new Vector3()).length() * 0.7, 1e-6);
-    const aspect = (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480);
     Object.assign(this.orthographic, { left: -h * aspect, right: h * aspect, top: h, bottom: -h });
     this.orthographic.updateProjectionMatrix();
   }

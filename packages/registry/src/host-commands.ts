@@ -42,6 +42,12 @@ export const SelectionInput = z.object({
 });
 export const PickTarget = z.enum(['face', 'body', 'off']);
 export const ScreenshotOptions = z.object({ width: int.optional(), height: int.optional(), legend: z.boolean().optional(), title: z.string().optional() });
+export const AnimationCaptureOptions = z.object({
+  width: int.min(64).max(3840),
+  height: int.min(64).max(2160),
+  fps: int.min(1).max(60).default(30),
+  duration: z.number().min(0.1).max(30).default(4),
+});
 export const CopyWhat = z.union([
   z.object({ kind: z.literal('selection') }),
   z.object({ kind: z.literal('mention'), ref: z.string() }),
@@ -121,6 +127,8 @@ export interface HostContext {
     animate(a: z.output<typeof Animation>): void;
     camera(): z.output<typeof CameraState>;
     screenshot(o: z.output<typeof ScreenshotOptions>): Promise<{ png: string }>;
+    captureAnimation(o: z.output<typeof AnimationCaptureOptions>): Promise<{ webm: Uint8Array | null }>;
+    cancelAnimationCapture(): boolean;
   };
   selection: {
     set(s: z.output<typeof SelectionInput>): void;
@@ -213,7 +221,7 @@ export interface ExportFormatRow {
   note: string;
   group: 'Model & mesh' | 'Results' | 'Document & model file';
   /** What has to exist first, so the dialog can grey the row and say why. */
-  needs: 'mesh' | 'result' | 'none' | 'soon';
+  needs: 'mesh' | 'result' | 'animation' | 'none' | 'soon';
 }
 
 export const EXPORT_FORMATS: ExportFormatRow[] = [
@@ -223,6 +231,7 @@ export const EXPORT_FORMATS: ExportFormatRow[] = [
   { format: 'vtu', ext: 'vtu', name: 'VTK unstructured grid', note: 'The mesh with every nodal field of the Step. Opens in ParaView.', group: 'Results', needs: 'mesh' },
   { format: 'csv', ext: 'csv', name: 'Result table (CSV)', note: 'One table: extremes, reactions, or a sampled path.', group: 'Results', needs: 'result' },
   { format: 'png', ext: 'png', name: 'Viewer image', note: 'Exactly what the viewer shows, with the legend burned in.', group: 'Results', needs: 'none' },
+  { format: 'webm', ext: 'webm', name: 'Viewer animation', note: 'One mode-shape sweep at an explicit resolution, encoded by Chromium as WebM.', group: 'Results', needs: 'animation' },
   { format: 'script', ext: 'ts', name: 'TypeScript script', note: 'The Journal, typed: run it back and the Model rebuilds.', group: 'Document & model file', needs: 'none' },
   { format: 'journal', ext: 'json', name: 'Model file (femlab/1)', note: 'The Model and its Journal, what file.open reads back.', group: 'Document & model file', needs: 'none' },
   { format: 'report', ext: 'md', name: 'Calculation note', note: 'Assumptions, mesh, loads, results and the Journal as Markdown.', group: 'Document & model file', needs: 'none' },
@@ -281,7 +290,7 @@ interface Built {
  * cannot see - the script, the model file, the viewer image and the result tables - are built
  * here from Queries it can.
  */
-async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built> {
+async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built | null> {
   const { name } = (await ctx.transport.query({ query: 'query.model' })) as ModelSummary;
   if (spec.format === 'script') {
     const { text } = (await ctx.transport.query({ query: 'query.script' })) as { text: string };
@@ -293,6 +302,14 @@ async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built> {
   if (spec.format === 'png') {
     const { png } = await ctx.view.screenshot({ legend: spec['legend'] !== false });
     return { filename: `${name}.png`, mime: 'image/png', data: dataUrlBytes(png) };
+  }
+  if (spec.format === 'webm') {
+    const width = spec['width'] as number;
+    const height = spec['height'] as number;
+    const fps = spec['fps'] as number;
+    const duration = spec['duration'] as number;
+    const { webm } = await ctx.view.captureAnimation({ width, height, fps, duration });
+    return webm === null ? null : { filename: `${name}.webm`, mime: 'video/webm', data: webm };
   }
   if (spec.format === 'csv') {
     const table = String(spec['table'] ?? 'extremes');
@@ -359,10 +376,19 @@ export const HOST_COMMANDS: HostDef[] = [
     const file = await ctx.transport.exportFile();
     return deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', JSON.stringify(file, null, 2));
   }),
-  def('file.export', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG, the Journal as a TypeScript script or as a `femlab/1` file. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({ spec: z.looseObject({ format: z.string() }), name: z.string().optional(), to: Destination }), async ({ spec, name, to }, ctx) => {
+  def('file.export', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
+    spec: z.union([
+      AnimationCaptureOptions.extend({ format: z.literal('webm') }),
+      z.looseObject({ format: z.string().refine((format) => format !== 'webm') }),
+    ]),
+    name: z.string().optional(),
+    to: Destination,
+  }), async ({ spec, name, to }, ctx) => {
     const out = await buildExport(spec as ExportSpec, ctx);
+    if (out === null) return { cancelled: true };
     return deliver(ctx, to, name ?? out.filename, out.mime, out.data);
   }),
+  def('file.cancelAnimationCapture', 'Cancel the WebM animation recording in progress. The viewer returns to the exact phase and play state it had before recording; returns `{ cancelled: false }` when no recording is active.', none, (_, ctx) => ({ cancelled: ctx.view.cancelAnimationCapture() })),
   def('file.shareLink', 'Make a URL that reopens the current Model: the Journal deflated into the URL fragment, so nothing is uploaded anywhere and the link works offline. Returns `{ url }` and copies it to the clipboard; paste it in a message or a report. Links replay validated engine Commands only. Refuses with `unsupported` over 32 kB encoded or 1 MiB uncompressed — use file.save and send the file for a big Model.', none, async (_, ctx) => ctx.files.shareLink(await ctx.transport.exportFile())),
   def('file.autosave', 'Turn the background save on or off. When on (the default) the Journal is written into the open project after every Command, so a crash or a closed tab loses nothing, and nothing is uploaded anywhere. Turning it off stops writing; the projects already saved in this browser are kept.', z.object({ on: z.boolean() }), ({ on }, ctx) => {
     ctx.files.setAutosave(on);
@@ -408,7 +434,7 @@ export const HOST_QUERIES: HostDef[] = [
   })),
   def('query.selection', 'The current selection as bodies, faces and Sets plus the `refs` list (`face:beam.top`, …) that `@selection` expands to in the chat.', none, (_, ctx) => ctx.selection.get()),
   def('query.skills', 'Every available skill with its name, description, when to use it and whether it is built in or from the project folder. Invoke one with skill.invoke.', none, (_, ctx) => ctx.skills().map(({ name, description, when, source }) => ({ name, description, when, source }))),
-  def('query.exportFormats', 'Every format file.export writes, with its extension, what it contains and what it needs first (`mesh`, `result`, `none`, or `soon` for one that is not written yet). The Export dialog is a view of this list.', none, () => ({ formats: EXPORT_FORMATS })),
+  def('query.exportFormats', 'Every format file.export writes, with its extension, what it contains and what it needs first (`mesh`, `result`, `animation`, `none`, or `soon` for one that is not written yet). The Export dialog is a view of this list.', none, () => ({ formats: EXPORT_FORMATS })),
   def('query.folder', 'The open folder on disk: name, files with size and kind, which of AGENTS.md or CLAUDE.md is present, and the skills it carries; `null` when no folder is open.', none, (_, ctx) => ctx.folder.info()),
   def('query.projects',
     'Every project saved in this browser, most recently edited first: id, name, when it was last written, how many Commands its Journal holds, and a small thumbnail. The start screen\u2019s Recent projects list is a view of this Query.',

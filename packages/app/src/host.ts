@@ -3,6 +3,7 @@
 // except through the transport, and nothing in the registry knows the DOM exists.
 import { FemError, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
@@ -78,7 +79,7 @@ export function forkProject(): void {
   projects?.fork();
 }
 
-export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+export function makeHostContext(store: Store, transport: WorkerTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, captureEnvironment: AnimationCaptureEnvironment = browserAnimationCaptureEnvironment()): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
@@ -101,6 +102,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     onChange: () => store.set({ projects: own.list(), project: own.current() }),
   });
   projects = own;
+  const capture = new AnimationCapture(captureEnvironment);
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;
@@ -144,12 +146,36 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
       },
-      animate: (a) => v().animate(a.playing),
+      animate: (a) => {
+        if (a.frame !== undefined) {
+          store.set({ phase: a.frame / 100, playing: false });
+          return v().setPhase(a.frame / 100);
+        }
+        store.set({ playing: a.playing });
+        v().animate(a.playing, a.speed);
+      },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
         const burn = o.legend === false ? null : results?.legendBurn();
-        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined) };
+        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o.width, o.height) };
       },
+      captureAnimation: async (o) => {
+        const s = store.state;
+        if (!s.fieldKey.startsWith('mode:')) throw new FemError('export.unavailable', 'the selected Result field is not a mode shape that can be recorded', 'file.export', 'solve a modal Step and select one of its mode fields');
+        const target = v();
+        const before = target.animationState();
+        const ui = { playing: s.playing, phase: s.phase };
+        store.set({ capturingAnimation: true, playing: false });
+        target.setPhase(0);
+        try {
+          const webm = await target.atCaptureSize(o.width, o.height, (canvas) => capture.record(canvas, o, (phase) => target.setPhase(phase)));
+          return { webm };
+        } finally {
+          target.restoreAnimation(before);
+          store.set({ capturingAnimation: false, ...ui });
+        }
+      },
+      cancelAnimationCapture: () => capture.cancel(),
     },
     selection: {
       set: (s) => store.select(s),
