@@ -19,6 +19,7 @@ const kN = (value: number): Valued => ({ value, unit: 'kN' });
 
 const RESULT: ResultSummary = {
   resultId: 'result-1',
+  reactionQuantity: 'force',
   step: 'static',
   revision: 10,
   stale: false,
@@ -33,6 +34,25 @@ const RESULT: ResultSummary = {
   reactions: [{ constraint: 'root', total: [kN(0), kN(0), kN(1)] }],
   appliedTotal: [kN(0), kN(0), kN(-1)],
   balance: 0,
+};
+
+const MODEL: ModelSummary = {
+  name: 'results-test',
+  revision: 0,
+  hash: 'results-test',
+  units: { length: 'mm' },
+  idealisation: 'solid',
+  bodies: [{ name: 'body', bbox: [
+    { value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' },
+    { value: 1, unit: 'm' }, { value: 1, unit: 'm' }, { value: 1, unit: 'm' },
+  ], measure: { value: 1, unit: 'm^3' }, faces: [] }],
+  materials: [],
+  sets: [],
+  constraints: [],
+  loads: [],
+  steps: [],
+  meshSettings: null,
+  warnings: [],
 };
 
 describe('the solve state machine', () => {
@@ -109,6 +129,24 @@ describe('the Results tab', () => {
   it('writes the balance as a percentage and passes at zero', () => {
     expect(balanceLine(RESULT)).toEqual({ pass: true, text: 'Σ reactions = −Σ loads · 0.0000 %' });
     expect(balanceLine({ ...RESULT, balance: 0.0123 })).toEqual({ pass: false, text: 'Σ reactions = −Σ loads · 1.2300 %' });
+  });
+
+  it('keeps thermal reactions as power through the legend and reaction table', () => {
+    expect(siUnitOf('reaction', 'power')).toBe('W');
+    expect(displayUnitOf('reaction', { force: 'kN' }, 'power')).toBe('W');
+    expect(displayUnitOf('reaction', { force: 'N', power: 'kW' }, 'power')).toBe('kW');
+    expect(displayUnitOf('reaction', { force: 'kN', power: 'W' }, 'force')).toBe('kN');
+    const kw = (value: number): Valued => ({ value, unit: 'kW' });
+    const result: ResultSummary = { ...RESULT, reactionQuantity: 'power',
+      reactions: [{ constraint: 'cold', total: [kw(0.01), kw(0), kw(0)] }],
+      appliedTotal: [kw(0.01), kw(0), kw(0)], extremes: [] };
+    const root = document.createElement('div');
+    render(<Results s={{ ...initialState, result }} dispatch={vi.fn()} query={vi.fn()} />, root);
+    expect(root.textContent).toContain('Power kW');
+    expect(root.textContent).not.toContain('Fx');
+    const table = [...root.querySelectorAll('table')].find((t) => t.textContent?.includes('Power kW'))!;
+    expect([...table.querySelectorAll('tbody tr')].map((r) => r.children.length)).toEqual([2, 2, 2]);
+    expect(table.textContent).toContain('cold0.01');
   });
 
   it('leads with the extreme of the largest magnitude', () => {
@@ -195,7 +233,7 @@ function fakeViewer() {
 }
 
 function harness(result: ResultSummary | null = RESULT) {
-  const store = new Store({ ...initialState, model: { units: { length: 'mm' } } as never });
+  const store = new Store({ ...initialState, model: MODEL });
   const viewer = { current: fakeViewer() };
   const transport = {
     query: vi.fn(async (q: { query: string; quantity?: { value: number } }) => {
@@ -250,7 +288,7 @@ describe('ResultsView', () => {
   it('converts Kelvin contours and legends using scale plus offset, cached by unit pair', async () => {
     const heat = { ...RESULT, extremes: [{ ...RESULT.extremes[0]!, field: 'temperature' }] };
     const { store, viewer, results, transport } = harness(heat);
-    store.set({ model: { units: { temperature: 'degC', length: 'm' } } as never });
+    store.set({ model: { ...MODEL, units: { temperature: 'degC', length: 'm' } } });
     const { Engine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as { Engine: new (threads: number) => { query(json: string): string } };
     const engine = new Engine(1);
     const conversions = vi.fn(async (q: { query: string; quantity?: { value: number }; to?: string }) => {
@@ -269,10 +307,30 @@ describe('ResultsView', () => {
     expect(conversions.mock.calls.filter(([q]) => q.query === 'query.convert')).toHaveLength(2);
     await results.refresh(true);
     expect(conversions.mock.calls.filter(([q]) => q.query === 'query.convert')).toHaveLength(2);
-    store.set({ model: { units: { temperature: 'K', length: 'm' } } as never });
+    store.set({ model: { ...MODEL, units: { temperature: 'K', length: 'm' } } });
     await results.refresh(true);
     expect(viewer.current.setField.mock.calls.at(-1)![0]).toEqual(Float32Array.from([273.15, 293.15, 373.15]));
     expect(store.state.legend?.unit).toBe('K');
+  });
+
+  it('uses the thermal result quantity when converting a reaction contour', async () => {
+    const thermal = { ...RESULT, reactionQuantity: 'power' as const };
+    const { store, results, transport } = harness(thermal);
+    store.set({ result: thermal, model: { ...MODEL, units: { power: 'kW', length: 'm' } } });
+    transport.query.mockImplementation(async (q: { query: string; quantity?: { value: number; unit?: string }; to?: string }) => {
+      if (q.query !== 'query.convert') return thermal;
+      expect(q.quantity?.unit).toBe('W');
+      expect(q.to).toBe('kW');
+      return { value: q.quantity!.value / 1000, unit: 'kW' };
+    });
+    type Contour = { values: Float32Array; range: [number, number]; unit: string };
+    const contour = (results as unknown as {
+      contour: (choice: { field: string; component: number | null }, raw: Float32Array) => Promise<Contour>;
+    }).contour;
+    const output = await contour.call(results, { field: 'reaction', component: 0 }, Float32Array.from([1000, 2000]));
+    expect(output.values).toEqual(Float32Array.from([1, 2]));
+    expect(output.range).toEqual([1, 2]);
+    expect(output.unit).toBe('kW');
   });
 
   it('does the second refresh without refetching, and a forced one with', async () => {

@@ -183,7 +183,10 @@ impl Engine {
     ) -> Result<crate::query::ResultField, Error> {
         let record = self.selected_record(step, id)?;
         let (field, which) = record.named_field(name)?;
-        let unit = crate::units::UnitSet::default().resolve().fmt(0.0, crate::solve_run::field_dimension(which)).1;
+        let unit = crate::units::UnitSet::default()
+            .resolve()
+            .fmt(0.0, crate::solve_run::field_dimension(which, record.result.reaction_quantity))
+            .1;
         Ok(crate::query::ResultField {
             result_id: record.id.clone(),
             step: record.step.clone(),

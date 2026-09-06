@@ -514,6 +514,21 @@ nine successful solves. After each solve, `query.cost` includes every live recor
 field and Mesh payload, plus the new Mesh snapshot. At the eight-record limit the oldest
 record remains charged during preparation; reads and rejected solves cannot advance eviction.
 These are payload accounting checks, not estimates of allocator or serialized Model overhead.
+### Thermal reaction power and display units (#120)
+
+For a `1 × 0.1 × 0.1 m` bar with `k=45 W/(m K)`, a `1000 W/m²` end flux
+removes exactly `10 W` at the held cold end. With convection instead (`h=50 W/(m² K)`,
+`T_inf=100 °C`, cold end `0 °C`), the exact series thermal resistance gives
+`Q=A*(T_inf-T_cold)/(L/k+1/h)=23.6842105263 W`. Both cases run on two and four axial
+elements. Reaction sums and each of four equal cold-node shares match these independent
+power values to `1e-9 W`; positive reaction retains the current removed-heat convention.
+
+Result totals/extremes, probes and paths report W independently of force=N/kN and convert
+to kW when the power display unit changes. The raw field stays SI, the VTU array is labelled
+`ReactionPower_W`, and the report/viewer label its scalar as power. Mechanical reactions
+retain force units and their vector components. [Issue #208](https://github.com/andeplane/fem-lab/issues/208)
+separately tracks the existing balance diagnostic sign, net-convection and transient-storage
+defects; the physical reaction checks here do not treat that diagnostic as an oracle.
 
 ### Automatic hand-reference applicability (#149)
 
@@ -531,3 +546,8 @@ mapped geometry. The hook only recognizes uncut, axis-aligned 3D lattice boxes
 with one fully fixed end and one single-component force at the opposite end.
 Other geometries and boundary conditions explicitly report no applicable
 automatic reference; their verification belongs to a dedicated Benchmark.
+
+The retained thermal-reaction case (#280 with #120) applies 900 W/m² over 0.01 m²:
+all retained SI reaction values sum to 9 W, and each cold corner carries 2.25 W at
+2, 4 and 8 axial divisions. After the live Model changes to kW and a different mesh,
+explicit Result fields, summaries, probes and paths still use the solved watt convention.

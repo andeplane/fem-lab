@@ -453,3 +453,37 @@ fn retained_cost_counts_all_live_records_before_the_next_solve() {
         );
     }
 }
+
+#[test]
+fn retained_thermal_reaction_fields_and_samples_use_power_with_solved_units() {
+    for nx in [2, 4, 8] {
+        let mut e = engine();
+        retained_conductor(&mut e);
+        ok(&mut e, &json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":nx,"ny":1,"nz":1}}}).to_string());
+        let id = retained_solve(&mut e, "conduct");
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"power":"kW","force":"N"}}"#);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":12,"ny":2,"nz":2}}}"#);
+        let field = retained_query(&mut e, json!({"query":"query.field","resultId":id,"field":"reaction"}));
+        assert_eq!(field["unit"], "W");
+        let total: f64 = field["values"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).sum();
+        // Fourier end flux times area: 900 W/m² × 0.01 m² = 9 W removed at the cold face.
+        assert!((total - 9.0).abs() < 1e-8);
+        let summary = retained_query(&mut e, json!({"query":"query.result","resultId":id}));
+        assert_eq!(summary["reactionQuantity"], "power");
+        assert_eq!(summary["reactions"][0]["total"][0]["unit"], "W");
+        let probe = retained_query(
+            &mut e,
+            json!({"query":"query.probe","resultId":id,"field":"reaction","component":0,"at":["0 m","0 m","0 m"]}),
+        );
+        assert_eq!(probe["value"]["unit"], "W");
+        retained_close(&probe["value"]["value"], 2.25);
+        let path = retained_query(
+            &mut e,
+            json!({"query":"query.path","resultId":id,"field":"reaction","component":0,"from":["0 m","0 m","0 m"],"to":["0 m","0.1 m","0 m"],"n":3}),
+        );
+        assert_eq!(path["unit"], "W");
+        for value in path["values"].as_array().unwrap() {
+            retained_close(value, 2.25);
+        }
+    }
+}

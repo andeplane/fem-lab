@@ -381,7 +381,7 @@ impl Engine {
         })
     }
 
-    /// The nodal field a probe or a path samples, plus its display unit, refusing a Result
+    /// The nodal field a probe or a path samples, plus its physical dimension, refusing a Result
     /// whose Mesh is no longer the one it was solved on.
     fn sampled(
         &self,
@@ -403,7 +403,7 @@ impl Engine {
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
         let model = if id.is_some() { &record.model } else { &self.model };
-        let unit = display(model, 0.0, crate::solve_run::field_dimension(field)).unit;
+        let unit = display(model, 0.0, crate::solve_run::field_dimension(field, record.result.reaction_quantity)).unit;
         Ok((f, unit, resolved, record))
     }
 
@@ -432,7 +432,11 @@ impl Engine {
         let (elem, v) = crate::post::probe::probe(mesh, &f, x).ok_or_else(|| {
             Error::new(ErrorCode::NotFound, "the point is outside the mesh").at("at").suggest("query.mesh reports bbox")
         })?;
-        let value = display(model, Engine::pick(&v, component), crate::solve_run::field_dimension(field));
+        let value = display(
+            model,
+            Engine::pick(&v, component),
+            crate::solve_run::field_dimension(field, record.result.reaction_quantity),
+        );
         Ok(ProbeResult { sample, value: Valued { value: value.value, unit }, element: elem, interpolated: true })
     }
 
@@ -449,7 +453,7 @@ impl Engine {
         let (step, id) = selection;
         let (f, unit, sample, record) = self.sampled(step, id, field, sample)?;
         let (a, b) = (si3(&line[0])?, si3(&line[1])?);
-        let dim = crate::solve_run::field_dimension(field);
+        let dim = crate::solve_run::field_dimension(field, record.result.reaction_quantity);
         let mesh = &record.built.mesh;
         let model = if id.is_some() { &record.model } else { &self.model };
         let samples = crate::post::probe::path(mesh, &f, a, b, n as usize);

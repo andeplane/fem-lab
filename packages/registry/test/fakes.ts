@@ -13,6 +13,7 @@ const mm = (value: number) => ({ value, unit: 'mm' });
 
 export const RESULT: ResultSummary = {
   resultId: 'result-1',
+  reactionQuantity: 'force',
   step: 'static',
   revision: 10,
   stale: false,

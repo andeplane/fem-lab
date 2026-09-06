@@ -21,16 +21,19 @@ use crate::post::{Extremum, FieldData};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{Extreme, HistoryRow, Output, ReactionRow, ResultSummary, StudyReport, StudyRow, Valued};
 use crate::solve::SolveOptions;
-use crate::units::{Dim, Dimension, Force, Frequency, Length, Stress, Temperature, Time, Q};
+use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Q};
 
 /// The material law every Model material resolves to for now; plugins add their own later.
 const LAW: &str = "linear-elastic";
 
 /// The dimension a Result field carries, so a summary reports it in the Model's own units.
-pub fn field_dimension(field: Field) -> Dimension {
+pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
     match field {
         Field::Displacement => Length::DIM,
-        Field::Reaction => Force::DIM,
+        Field::Reaction => match reaction {
+            ReactionQuantity::Force => Force::DIM,
+            ReactionQuantity::Power => Power::DIM,
+        },
         Field::Temperature => Temperature::DIM,
         Field::Strain => Dimension::NONE,
         Field::Stress | Field::StressUnaveraged | Field::VonMises | Field::Principal => Stress::DIM,
@@ -345,7 +348,7 @@ impl Engine {
                     .at(format!("step '{}'", step.name))
                     .suggest(format!("solve.run on step '{name}' again")));
                 }
-                Some(record.result.clone())
+                Some(std::sync::Arc::clone(record))
             }
             None => None,
         };
@@ -357,14 +360,15 @@ impl Engine {
                 &self.model,
                 built,
                 &step,
-                prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)),
+                prev.as_ref().and_then(|r| r.result.fields.get(&Field::Temperature)),
             )?;
             if matches!(&proc_step, procedure::Step::HeatTransient { .. } | procedure::Step::Explicit { .. }) {
                 planned_cost(p.mesh, Some(&p), &proc_step)?
                     .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                     .enforce(&step.name)?;
             }
-            procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
+            procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref().map(|r| &r.result), on_progress)
+                .await?
         };
         result.solver.time_ms = self.host.now_ms() - started;
         self.retain_result(step.name.clone(), result);
@@ -509,7 +513,7 @@ impl Engine {
                 Engine::pick(&v, component)
             }
         };
-        let d = display(&self.model, raw, field_dimension(field));
+        let d = display(&self.model, raw, field_dimension(field, res.reaction_quantity));
         Ok((d.value, d.unit))
     }
 
@@ -595,26 +599,33 @@ impl Engine {
         Ok(ResultSummary {
             result_id: record.id.clone(),
             step: name.to_string(),
+            reaction_quantity: res.reaction_quantity,
             revision: if id.is_some() { record.revision } else { self.revision() },
             stale: *hash != crate::hash::result_hash(&self.model),
             solver: res.solver.solver.to_string(),
             iterations: res.solver.iterations as u32,
             residual: res.solver.rel_residual,
             time_ms: res.solver.time_ms,
-            extremes: res.extremes.iter().map(|(f, e)| extreme(m, *f, e)).collect(),
+            extremes: res.extremes.iter().map(|(f, e)| extreme(m, *f, e, res.reaction_quantity)).collect(),
             reactions: res
                 .reactions
                 .iter()
-                .map(|(n, r)| ReactionRow { constraint: n.clone(), total: vec3(m, *r, Force::DIM) })
+                .map(|(n, r)| ReactionRow {
+                    constraint: n.clone(),
+                    total: vec3(m, *r, field_dimension(Field::Reaction, res.reaction_quantity)),
+                })
                 .collect(),
-            applied_total: vec3(m, applied, Force::DIM),
+            applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
             history: res
                 .history
                 .iter()
                 .flat_map(crate::procedure::heat::history_extremes)
                 .map(|(t, lo, hi)| {
-                    let dim = field_dimension(res.history.as_ref().map_or(Field::Temperature, |h| h.field));
+                    let dim = field_dimension(
+                        res.history.as_ref().map_or(Field::Temperature, |h| h.field),
+                        res.reaction_quantity,
+                    );
                     HistoryRow { time: display(m, t, Time::DIM), min: display(m, lo, dim), max: display(m, hi, dim) }
                 })
                 .collect(),
@@ -627,8 +638,8 @@ fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> [Valued; 3] {
     [display(model, v[0], dim), display(model, v[1], dim), display(model, v[2], dim)]
 }
 
-fn extreme(model: &Model, field: Field, e: &Extremum) -> Extreme {
-    let dim = field_dimension(field);
+fn extreme(model: &Model, field: Field, e: &Extremum, reaction: ReactionQuantity) -> Extreme {
+    let dim = field_dimension(field, reaction);
     Extreme {
         field: field_name(field),
         component: e.component as u8,
@@ -639,11 +650,15 @@ fn extreme(model: &Model, field: Field, e: &Extremum) -> Extreme {
     }
 }
 
-/// The point fields `mesh.export` writes for a Step: what ParaView colours by.
+/// The point fields `mesh.export` writes in SI. Thermal reactions are `ReactionPower_W`,
+/// with removed power in component 0; mechanical `Reaction` remains a force vector in N.
 pub fn export_fields(res: &StepResult) -> Vec<(&'static str, usize, Vec<f64>)> {
     [
         ("Displacement", Field::Displacement),
-        ("Reaction", Field::Reaction),
+        (
+            if res.reaction_quantity == ReactionQuantity::Power { "ReactionPower_W" } else { "Reaction" },
+            Field::Reaction,
+        ),
         ("Stress", Field::Stress),
         ("VonMises", Field::VonMises),
         ("Temperature", Field::Temperature),
@@ -673,7 +688,7 @@ mod tests {
         ];
         for (field, name, dim) in all {
             assert_eq!(field_name(field), name);
-            assert_eq!(field_dimension(field), dim);
+            assert_eq!(field_dimension(field, ReactionQuantity::Force), dim);
         }
     }
 }
