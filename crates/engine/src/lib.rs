@@ -20,6 +20,7 @@ pub mod post;
 pub mod procedure;
 pub mod queries;
 pub mod query;
+pub mod report;
 pub mod solve;
 pub mod solve_run;
 pub mod units;

@@ -343,14 +343,16 @@ impl Engine {
             self.model.mesh = Some(settings);
             self.mesh = None;
         }
-        Ok(Output::Study {
-            report: StudyReport {
-                rows,
-                observed_rate: Some(rate).filter(|r| r.is_finite()),
-                extrapolated: Some(extrapolated).filter(|x| x.is_finite()),
-                unit,
-            },
-        })
+        let report = StudyReport {
+            rows,
+            observed_rate: Some(rate).filter(|r| r.is_finite()),
+            extrapolated: Some(extrapolated).filter(|x| x.is_finite()),
+            unit,
+        };
+        // Kept so `query.report` can append the table to the Step it measured; a study is a
+        // measurement of the Model, never part of it, so it is not hashed and not journaled.
+        self.studies.insert(step_name.to_string(), report.clone());
+        Ok(Output::Study { report })
     }
 
     /// One [`QuantityOfInterest`] read off a Result, in the Model's display units.

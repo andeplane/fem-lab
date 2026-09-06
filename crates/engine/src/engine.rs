@@ -60,6 +60,9 @@ pub struct Engine {
     /// One Result per Step with the Model hash it was solved at. An edit does not throw a
     /// Result away — it makes it stale, and `query.result` says so (plan B §2.1).
     pub(crate) results: BTreeMap<String, (String, crate::procedure::StepResult)>,
+    /// The last `study.converge` report per Step, so `query.report` can append the table. Not
+    /// part of the Model and never hashed: a study is a measurement, not a definition.
+    pub(crate) studies: BTreeMap<String, crate::query::StudyReport>,
 }
 
 impl Engine {
@@ -76,6 +79,7 @@ impl Engine {
             solids: BTreeMap::new(),
             mesh: None,
             results: BTreeMap::new(),
+            studies: BTreeMap::new(),
         }
     }
 
@@ -206,6 +210,7 @@ impl Engine {
         self.undo.clear();
         self.redo.clear();
         self.results.clear();
+        self.studies.clear();
         self.invalidate_geometry();
         Ok(())
     }
@@ -225,6 +230,7 @@ impl Engine {
         self.redo.clear();
         self.solids.clear();
         self.results.clear();
+        self.studies.clear();
         let mut hashes = Vec::with_capacity(entries.len());
         let mut nop = |_p: Progress| true;
         for e in entries {
@@ -756,29 +762,34 @@ impl Engine {
         }
     }
 
-    /// `mesh.export`: the Mesh as text, with the element id and Body index as cell data.
+    /// `mesh.export`: the Mesh as text, with the element id and Body index as cell data — or,
+    /// for `report`, the calculation note `query.report` writes, which needs no Mesh at all.
     fn mesh_export(&mut self, format: ExportFormat, step: Option<&str>) -> Result<Output, Error> {
         let name = self.model.name.clone();
-        // A Step's fields are point data on the same Mesh; without a Step the file is the Mesh
-        // alone, which is what a user exports before solving.
-        let point: Vec<(&str, usize, Vec<f64>)> = match step {
-            Some(s) => crate::solve_run::export_fields(self.stored(Some(s))?.2),
-            None => Vec::new(),
-        };
-        let built = self.mesh()?;
+        let (ext, mime) = format.extension();
         let text = match format {
+            ExportFormat::Report => self.report(step, None)?.markdown,
             ExportFormat::Vtu => {
+                // A Step's fields are point data on the same Mesh; without a Step the file is
+                // the Mesh alone, which is what a user exports before solving.
+                let point: Vec<(&str, usize, Vec<f64>)> = match step {
+                    Some(s) => crate::solve_run::export_fields(self.stored(Some(s))?.2),
+                    None => Vec::new(),
+                };
+                let built = self.mesh()?;
                 let ids: Vec<f64> = (0..built.mesh.n_elems()).map(|e| e as f64).collect();
                 let bodies: Vec<f64> =
                     (0..built.mesh.n_elems() as u32).map(|e| built.mesh.block_of(e).0 as f64).collect();
                 let point: Vec<(&str, usize, &[f64])> = point.iter().map(|(n, c, v)| (*n, *c, v.as_slice())).collect();
                 crate::io::write_vtu(&built.mesh, &point, &[("ElementId", 1, &ids), ("Body", 1, &bodies)])
             }
-            ExportFormat::Msh => crate::io::write_msh(&built.mesh),
-            ExportFormat::Inp => crate::io::write_inp(&built.mesh, &name),
-            ExportFormat::Stl => crate::io::write_stl_mesh(&built.mesh),
+            ExportFormat::Msh => crate::io::write_msh(&self.mesh()?.mesh),
+            ExportFormat::Inp => {
+                let mesh = self.mesh()?.mesh.clone();
+                crate::io::write_inp(&mesh, &name)
+            }
+            ExportFormat::Stl => crate::io::write_stl_mesh(&self.mesh()?.mesh),
         };
-        let (ext, mime) = format.extension();
         Ok(Output::Export { format, filename: format!("{name}.{ext}"), mime: mime.into(), text })
     }
 

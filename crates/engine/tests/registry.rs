@@ -7,6 +7,7 @@ use femlab_engine::command::{
 };
 use femlab_engine::post::convergence::richardson;
 use femlab_engine::query::{Output, Query, QueryResult};
+use femlab_engine::report::ReportSection;
 use femlab_engine::units::{Quantity, Q};
 use femlab_engine::{Command, Engine, Error, ErrorCode, Host, NoClock, Progress};
 
@@ -905,6 +906,8 @@ fn imported_file_with_a_broken_shape_fails_at_query_time() {
     e.import_file(file).unwrap();
     let er = e.query(Query::Model {}).unwrap_err();
     assert_eq!(er.code, ErrorCode::Schema);
+    // a calculation note is a read of the whole Model, so it fails the same way and as early
+    assert_eq!(e.query(Query::Report { step: None, include: None }).unwrap_err().code, ErrorCode::Schema);
     assert_eq!(er.where_.as_deref(), Some("body 'b'"));
     // the Mesh and the viewer surfaces need the same Solids, so they fail the same way
     assert_eq!(e.query(Query::Mesh {}).unwrap_err().code, ErrorCode::Schema);
@@ -913,7 +916,11 @@ fn imported_file_with_a_broken_shape_fails_at_query_time() {
     assert_eq!(e.mesh().unwrap_err().code, ErrorCode::Schema);
     assert_eq!(e.mesh_surface().unwrap_err().code, ErrorCode::Schema);
     assert_eq!(e.query(Query::Set { name: "b.xmin".into() }).unwrap_err().code, ErrorCode::Schema);
-    assert_eq!(err(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#).code, ErrorCode::Schema);
+    // every writer needs the same Mesh, so every export refuses for the same reason
+    for format in ["vtu", "msh", "inp", "stl", "report"] {
+        let er = err(&mut e, &format!(r#"{{"cmd":"mesh.export","format":"{format}"}}"#));
+        assert_eq!(er.code, ErrorCode::Schema, "{format}: {er:?}");
+    }
 }
 
 #[test]
@@ -3312,4 +3319,271 @@ fn the_mapped_meshers_implicit_body_owns_a_material() {
     ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"solid3d"}}"#);
     let QueryResult::Model(m) = e.query(Query::Model {}).expect("a model") else { panic!("a ModelSummary") };
     assert!(m.bodies.is_empty(), "{:?}", m.bodies);
+}
+
+// ---------------------------------------------------------------- query.report
+
+/// The shipped cantilever fixture, so the report is written about the model the gallery shows.
+const CANTILEVER_JOURNAL: &str = include_str!("../benches/journals/cantilever.json");
+
+fn replay_cantilever(e: &mut Engine) {
+    let entries: Vec<femlab_engine::JournalEntry> = serde_json::from_str(CANTILEVER_JOURNAL).expect("the fixture");
+    pollster::block_on(e.replay(&entries, false, true)).expect("the fixture replays");
+}
+
+fn report(e: &mut Engine, step: Option<&str>, include: Option<Vec<ReportSection>>) -> femlab_engine::query::ReportText {
+    let QueryResult::Report(r) = e.query(Query::Report { step: step.map(str::to_string), include }).expect("a report")
+    else {
+        panic!("a ReportText")
+    };
+    r
+}
+
+/// The calculation note J11.2 asks for: every section, in order, about the cantilever fixture —
+/// and the same bytes both times, because a note whose text depends on the clock cannot be
+/// reviewed in a diff (J11.3).
+#[test]
+fn the_report_is_the_whole_analysis_in_order_and_reproducible() {
+    let mut e = engine();
+    replay_cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let r = report(&mut e, None, None);
+    assert_eq!(
+        r.sections,
+        ["header", "assumptions", "geometry", "materials", "mesh", "loads", "results", "verification", "journal"]
+    );
+    let md = &r.markdown;
+    let headings = [
+        "# Calculation note: cantilever",
+        "## Assumptions",
+        "## Geometry",
+        "## Materials",
+        "## Mesh",
+        "## Loads and constraints",
+        "## Results",
+        "## Verification",
+        "## Journal",
+    ];
+    let mut at = 0;
+    for h in headings {
+        let found = md[at..].find(h).unwrap_or_else(|| panic!("'{h}' is missing or out of order in:\n{md}")) + at;
+        at = found + h.len();
+    }
+    // the header carries what identifies the run, and nothing that changes between runs
+    assert!(md.contains("| Idealisation | solid3d |"), "{md}");
+    assert!(md.contains(&format!("| Model hash | `{}` |", e.model_hash())), "{md}");
+    assert!(md.contains("| Units | length mm, force kN, stress MPa"), "{md}");
+    // assumptions, with the formulation the mesh actually uses and a KaTeX block
+    assert!(md.contains("- **Linear elastic material.**"), "{md}");
+    assert!(md.contains("- **Element formulation**: incompatible-modes, order 1."), "{md}");
+    assert!(md.contains("$$\\boldsymbol{\\sigma} = \\mathbf{C}"), "{md}");
+    assert!(md.contains("The Model carries no warnings."), "{md}");
+    // geometry, materials with their source, mesh with quality and cost
+    assert!(md.contains("| `beam` | steel | 1000 × 100 × 100 mm | 10000000 mm^3 | 78.5 kg |"), "{md}");
+    assert!(md.contains("Faces of `beam`: beam.xmax, beam.xmin"), "{md}");
+    assert!(md.contains("| `steel` | 210000 MPa | 0.3 | 7850 kg/m^3 | EN 10025 | beam |"), "{md}");
+    assert!(md.contains("| Element kind | hex8 |"), "{md}");
+    assert!(md.contains("min det J ratio"), "{md}");
+    assert!(md.contains("Cost estimate:"), "{md}");
+    // loads with their totals, and the Steps
+    assert!(md.contains("Total applied force from Forces and Tractions: 0, 0, -1 kN."), "{md}");
+    assert!(md.contains("| `root` | `beam.xmin` | fix ux, uy, uz |"), "{md}");
+    // results: extremes with locations, reactions against the applied total, and the balance
+    assert!(md.contains("### Step `static`"), "{md}");
+    assert!(md.contains("#### Extremes"), "{md}");
+    assert!(md.contains("#### Reactions and applied load"), "{md}");
+    assert!(md.contains("| **Σ applied** | 0 | 0 | -1 | kN |"), "{md}");
+    assert!(md.contains("Reaction balance |Σ reactions + Σ applied| / max|F| ="), "{md}");
+    assert!(md.contains("— **pass** (tolerance 1e-9)."), "{md}");
+    // verification: the checks, the verdict and the hand calculation next to the FEM number
+    assert!(md.contains("- no element is inverted (min det J > 0 everywhere);"), "{md}");
+    assert!(md.contains("### Hand calculation for step `static`"), "{md}");
+    assert!(md.contains("$$\\delta = \\frac{P L^3}{3 E I}"), "{md}");
+    assert!(md.contains("with P = 1 kN, L = 1000 mm, b = 100 mm, h = 100 mm, E = 210000 MPa."), "{md}");
+    assert!(md.contains("| Hand calculation | 0.19048 mm |"), "{md}");
+    assert!(md.contains("| This analysis | 0.19012 mm |"), "{md}");
+    // the Journal appendix: the entries as JSON and the same Journal as a script
+    assert!(md.contains("\"cmd\": \"geometry.addBox\""), "{md}");
+    assert!(md.contains(r#"await fem.geometry.addBox({ name: "beam", size: ["1 m", "100 mm", "100 mm"] });"#), "{md}");
+    // byte-identical when the same Journal is replayed and solved again
+    let mut again = engine();
+    replay_cantilever(&mut again);
+    ok(&mut again, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(report(&mut again, None, None).markdown, *md);
+    // and the same text arrives through mesh.export, as the file the Export dialog offers
+    let Output::Export { format, filename, mime, text } =
+        ok(&mut e, r#"{"cmd":"mesh.export","format":"report"}"#).output
+    else {
+        panic!("an export")
+    };
+    assert_eq!(format, femlab_engine::command::ExportFormat::Report);
+    assert_eq!(filename, "cantilever.md");
+    assert_eq!(mime, "text/markdown");
+    assert_eq!(text, *md);
+}
+
+/// `include` picks sections; each one stands on its own, and `step` picks one Step's Result.
+#[test]
+fn a_report_can_be_asked_for_one_section_or_one_step() {
+    let mut e = engine();
+    replay_cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    for s in ReportSection::ALL {
+        let r = report(&mut e, None, Some(vec![s]));
+        assert_eq!(r.sections, [s.name()]);
+        assert!(!r.markdown.is_empty(), "{s:?} wrote nothing");
+    }
+    let all = report(&mut e, None, Some(ReportSection::ALL.to_vec()));
+    assert_eq!(all.markdown, report(&mut e, None, None).markdown);
+    let one = report(&mut e, Some("static"), Some(vec![ReportSection::Results]));
+    assert!(one.markdown.contains("### Step `static`"), "{}", one.markdown);
+    // a Step with no Result names the ones that have one
+    let er = e.query(Query::Report { step: Some("nope".into()), include: None }).expect_err("no such Result");
+    assert_eq!(er.code, ErrorCode::NotFound);
+}
+
+/// A Model that has not been meshed or solved still produces a note; it says what is missing
+/// instead of pretending, which is the point of writing the assumptions down.
+#[test]
+fn a_report_on_an_empty_model_says_what_is_missing() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"blank"}"#);
+    let md = report(&mut e, None, None).markdown;
+    assert!(md.contains("- **Element formulation**: no mesh settings yet."), "{md}");
+    assert!(md.contains("The Model has no Bodies yet."), "{md}");
+    assert!(md.contains("The Model has no materials yet."), "{md}");
+    assert!(md.contains("No Mesh: the Model has no mesh settings"), "{md}");
+    assert!(md.contains("No Constraints: a static solve would be singular."), "{md}");
+    assert!(md.contains("No Loads."), "{md}");
+    assert!(md.contains("No analysis Steps: add one with `step.add`."), "{md}");
+    assert!(md.contains("No Step has been solved yet; run `solve.run` first."), "{md}");
+    assert!(md.contains("Nothing has been solved, so there is nothing to verify yet."), "{md}");
+    assert!(md.contains("`model.empty`"), "{md}");
+    // a Body with neither material nor density, and a body load that names no Set
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"paper","E":"1 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"tipZone","where":{"kind":"bbox","min":["900 mm","0 mm","0 mm"],"max":["1 m","100 mm","100 mm"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"25 mm"},"order":1}"#);
+    let md = report(&mut e, None, None).markdown;
+    assert!(md.contains("| `beam` | none | 1 × 0.1 × 0.1 m | 0.01 m^3 | — |"), "{md}");
+    assert!(md.contains("| `paper` | 1e9 Pa | 0.3 | — | not stated |"), "{md}");
+    assert!(md.contains("| `g` | gravity | whole model |"), "{md}");
+    assert!(md.contains("| `tipZone` | region | region Bbox"), "{md}");
+    assert!(md.contains("| Element kind | hex8 |"), "{md}");
+    // mesh settings that cannot build: the Mesh section says so rather than failing the report
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"beam"}"#);
+    let md = report(&mut e, None, None).markdown;
+    assert!(md.contains("No Mesh: the Model has no mesh settings, or they do not build."), "{md}");
+}
+
+/// The hand calculation is a hook, not a solver: it fires for one box under one force and
+/// stands aside for anything else. A bar loaded along its axis gets the uniaxial formula.
+#[test]
+fn the_hand_calculation_covers_the_one_case_it_claims() {
+    let mut e = engine();
+    replay_cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["100 kN","0 N","0 N"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let md = report(&mut e, None, None).markdown;
+    assert!(md.contains("is a prismatic bar in uniaxial bar theory"), "{md}");
+    assert!(md.contains("$$\\delta = \\frac{F L}{E A}$$"), "{md}");
+    assert!(md.contains("with F = 100 kN, L = 1000 mm, A = 10000 mm^2, E = 210000 MPa."), "{md}");
+    // δ = FL/EA = 100e3 · 1 / (210e9 · 0.01) = 47.62 µm
+    assert!(md.contains("| Hand calculation | 0.047619 mm |"), "{md}");
+    // a load that carries no total force is not a case the hook knows
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"tip","on":"beam.xmax","value":"1 MPa"}"#);
+    assert!(!report(&mut e, Some("static"), None).markdown.contains("### Hand calculation"));
+    // nor is a second material, a second Body, or a Body that is not an axis-aligned box
+    let mut e = engine();
+    replay_cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"alu","E":"70 GPa","nu":0.33}"#);
+    assert!(!report(&mut e, Some("static"), None).markdown.contains("### Hand calculation"));
+    ok(&mut e, r#"{"cmd":"material.remove","name":"alu"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"plate","size":["1 m","1 m","10 mm"]}"#);
+    assert!(!report(&mut e, Some("static"), None).markdown.contains("### Hand calculation"));
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"plate"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"],"at":["1 m","0 m","0 m"]}"#);
+    assert!(!report(&mut e, Some("static"), None).markdown.contains("### Hand calculation"));
+    // the Result the Step produced has no displacement to compare against: a heat Step
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"bar"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"k":"45 W/(m*K)","cp":"460 J/(kg*K)","rho":"7850 kg/m^3"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["bar"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"300 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"400 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.force","name":"unused","on":"bar.zmax","total":["0 N","0 N","-1 kN"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold","hot"],"loads":[]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    let md = report(&mut e, None, None).markdown;
+    assert!(!md.contains("### Hand calculation"), "{md}");
+    assert!(md.contains("| temperature | 0 |"), "{md}");
+}
+
+/// A modal Step contributes its frequencies, a transient its history, and a convergence study
+/// the table it measured: the three things a note about a dynamic or refined model must carry.
+#[test]
+fn the_report_carries_frequencies_history_and_the_convergence_study() {
+    let mut e = engine();
+    replay_cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root"],"loads":[],"nModes":3}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"static","sizes":["100 mm","50 mm","25 mm"],
+            "quantity":{"kind":"min","field":"displacement","component":2}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let md = report(&mut e, None, None).markdown;
+    assert!(md.contains("#### Natural frequencies"), "{md}");
+    assert!(md.contains("| Mode | Frequency |"), "{md}");
+    assert!(md.contains("#### Convergence study\n"), "{md}");
+    assert!(md.contains("| Element size | Degrees of freedom | Quantity of interest |"), "{md}");
+    assert!(md.contains("Observed convergence rate:"), "{md}");
+    // a transient Step reports its history instead
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"bar"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"k":"45 W/(m*K)","cp":"460 J/(kg*K)","rho":"7850 kg/m^3"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["bar"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"100 mm"},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmin","value":"400 K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"cool","procedure":"heat-transient","constraints":["hot"],"loads":[],
+            "dt":"10 s","tEnd":"30 s","initial":"300 K"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"cool"}"#);
+    let md = report(&mut e, None, None).markdown;
+    assert!(md.contains("#### History"), "{md}");
+    assert!(md.contains("| Time | Minimum | Maximum |"), "{md}");
+}
+
+/// A stale Result — the Model changed after the solve — says so in the note rather than
+/// quietly reporting numbers that no longer describe the Model in front of it.
+#[test]
+fn a_stale_result_is_labelled_in_the_report() {
+    let mut e = engine();
+    replay_cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert!(report(&mut e, None, None).markdown.contains("| Up to date | yes |"));
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    let md = report(&mut e, Some("static"), None).markdown;
+    assert!(md.contains("| Up to date | no: the Model changed after the solve |"), "{md}");
 }
