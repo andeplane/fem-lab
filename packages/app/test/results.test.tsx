@@ -1,11 +1,14 @@
 // The results state machine and everything it computes on the way to the screen: the design's
 // states 4–7 as one word, the Solve button's label, the legend's ticks, the balance line, and
 // the field→unit table both the Worker and the viewer read.
-import type { CostEstimate, ModelSummary, PathResult, ResultSummary, Valued } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type CostEstimate, type EngineSchema, type ModelSummary, type PathResult, type ResultSummary, type Valued } from '@femlab/registry';
 import { render } from 'preact';
 import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
+import schema from '../../registry/src/generated/engine.schema.json';
+import { readHostCaps } from '../src/capabilities';
 import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, legendTicks, siUnitOf } from '../src/fields';
+import { makeHostContext } from '../src/host';
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
 import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
 import { Store, initialState, solveLabel, stageOf } from '../src/store';
@@ -16,6 +19,25 @@ import type { WorkerTransport } from '../src/worker-transport';
 
 const mm = (value: number): Valued => ({ value, unit: 'mm' });
 const kN = (value: number): Valued => ({ value, unit: 'kN' });
+
+const MODEL: ModelSummary = {
+  name: 'results-test',
+  revision: 0,
+  hash: 'results-test',
+  units: { length: 'mm' },
+  idealisation: 'solid',
+  bodies: [{ name: 'body', bbox: [
+    { value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' },
+    { value: 1, unit: 'm' }, { value: 1, unit: 'm' }, { value: 1, unit: 'm' },
+  ], measure: { value: 1, unit: 'm^3' }, faces: [] }],
+  materials: [],
+  sets: [],
+  constraints: [],
+  loads: [],
+  steps: [],
+  meshSettings: null,
+  warnings: [],
+};
 
 const RESULT: ResultSummary = {
   step: 'static',
@@ -89,11 +111,13 @@ describe('fields and the legend', () => {
     expect(FIELD_CHOICES.find((c) => c.key === 'temperature')?.field).toBe('temperature');
   });
 
-  it('maps a `view.showField` back to the picker key it names, falling back to the field', () => {
+  it('maps supported `view.showField` fields and rejects unsupported requests', () => {
     expect(fieldKeyOf('displacement', 2)).toBe('uz');
     expect(fieldKeyOf('displacement', null)).toBe('umag');
-    expect(fieldKeyOf('stress', 99)).toBe('sxx');
-    expect(fieldKeyOf('nonsense', 0)).toBe('vonMises');
+    expect(fieldKeyOf('stress', 0)).toBe('sxx');
+    expect(() => fieldKeyOf('stress', 99)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField', suggestion: expect.stringContaining('query.result') }));
+    expect(() => fieldKeyOf('reaction', 0)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField' }));
+    expect(() => fieldKeyOf('nonsense', 0)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField' }));
     expect(choiceOf('nope').key).toBe('vonMises');
   });
 
@@ -195,7 +219,7 @@ function fakeViewer() {
 }
 
 function harness(result: ResultSummary | null = RESULT) {
-  const store = new Store({ ...initialState, model: { units: { length: 'mm' } } as never });
+  const store = new Store({ ...initialState, model: MODEL });
   const viewer = { current: fakeViewer() };
   const transport = {
     query: vi.fn(async (q: { query: string; quantity?: { value: number } }) => {
@@ -206,6 +230,18 @@ function harness(result: ResultSummary | null = RESULT) {
     field: vi.fn(async (_s: string, field: string) => ({ values: field === 'displacement' ? Float32Array.from([0, 0, 0, 0, 0, -0.0001919]) : Float32Array.from([0, 12.4e6]), min: 0, max: 1, unit: '' })),
   };
   return { store, viewer, results: new ResultsView(store, transport as unknown as WorkerTransport, viewer as never), transport };
+}
+
+function registryHarness(result: ResultSummary) {
+  const { store, viewer, results, transport } = harness(result);
+  store.set({ result });
+  const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
+  const registry = new Registry({
+    schema: schema as unknown as EngineSchema,
+    host: makeHostContext(store, transport as unknown as WorkerTransport, viewer as never, host, undefined, results),
+    hostCommands: HOST_COMMANDS,
+  });
+  return { registry, store, transport };
 }
 
 describe('ResultsView', () => {
@@ -322,6 +358,7 @@ describe('ResultsView', () => {
 
   it('showField picks a scalar, and `{ field: null }` turns contours off', async () => {
     const { store, viewer, results } = harness();
+    store.set({ result: RESULT });
     await results.showField({ field: 'displacement', component: 2 });
     expect(store.state.fieldKey).toBe('uz');
     expect((viewer.current.setField.mock.calls.at(-1)![0] as Float32Array)[5]).toBeCloseTo(-0.1919, 5);
@@ -329,6 +366,34 @@ describe('ResultsView', () => {
     await results.showField({ field: null });
     expect(store.state.viewMode).toBe('geometry');
     expect(viewer.current.setField).toHaveBeenLastCalledWith(null, [0, 1]);
+  });
+
+  it('routes structural and thermal field requests through the registry without fallback', async () => {
+    const structural = registryHarness(RESULT);
+    await structural.registry.dispatch({ cmd: 'view.showField', field: 'displacement', component: 2 });
+    expect(structural.store.state.fieldKey).toBe('uz');
+    const structuralQueries = structural.transport.query.mock.calls.length;
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'reaction', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'stress', component: 99 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'mode:999' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: '' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    expect(structural.store.state.fieldKey).toBe('uz');
+    expect(structural.transport.query.mock.calls.length).toBe(structuralQueries);
+
+    const thermal: ResultSummary = {
+      ...RESULT,
+      extremes: [{
+        field: 'temperature', component: 0, min: { value: 0, unit: 'K' },
+        minAt: [mm(0), mm(0), mm(0)], max: { value: 100, unit: 'K' }, maxAt: [mm(0), mm(0), mm(0)],
+      }],
+    };
+    const thermalRegistry = registryHarness(thermal);
+    await thermalRegistry.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 0 });
+    expect(thermalRegistry.store.state.fieldKey).toBe('temperature');
+    await expect(thermalRegistry.registry.dispatch({ cmd: 'view.showField', field: 'reaction', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(thermalRegistry.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 1 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    expect(thermalRegistry.store.state.fieldKey).toBe('temperature');
   });
 
   it('setLegend takes the colour map and the clamp', async () => {
@@ -383,6 +448,7 @@ describe('ResultsView', () => {
   // Issue #42: the shape a person sees must not depend on which chain got there first.
   it('pushes the same exaggeration for every field, memoised path and forced path alike', async () => {
     const { viewer, results } = harness();
+    await results.refresh(); // Hydrate the current Result before requesting one of its fields.
     await results.showField({ field: 'vonMises' });
     const first = viewer.current.setDeformed.mock.calls.at(-1)![1];
     await results.showField({ field: 'displacement', component: null });
@@ -465,7 +531,10 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
   const { waitForText } = await import('./wait-for');
   const root = document.createElement('div');
   const cost: CostEstimate = {
-    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, budgetBytes: 1_610_612_736,
+    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000,
+    retainedFrames: 3, retainedBytes: 900_000, transientWorkBytes: 50_000, transportStagingBytes: 864,
+    wasmTransportStagingBytes: 1728, wasmTransportStagingComplete: false,
+    budgetBytes: 1_610_612_736,
     feasible, note: 'Excludes direct-factor fill/workspace.',
   };
   const model = { bodies: [], warnings: [], meshSettings: {}, steps: [{ name: 'static' }] } as unknown as ModelSummary;
@@ -475,7 +544,11 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
     const text = await waitForText(() => root, feasible === false ? 'over budget' : 'not established');
     expect(query).toHaveBeenCalledWith({ query: 'query.cost', step: 'static' });
     expect(text).toContain('matrix non-zeros (upper bound)1296');
-    expect(text).toContain('mandatory memory (at least)1.7 GB');
+    expect(text).toContain('counted peak memory estimate1.7 GB');
+    expect(text).toContain('retained frames3');
+    expect(text).toContain('retained primary fields900 kB');
+    expect(text).toContain('native frame staging1 kB');
+    expect(text).toContain('browser frame staging≥ 2 kB + JSON/JS overhead');
     expect(text).toContain('planning budget1.6 GB');
     expect(text).toContain('Excludes direct-factor fill/workspace.');
     expect(text).not.toContain('feasible here');

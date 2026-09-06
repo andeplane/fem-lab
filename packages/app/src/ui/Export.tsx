@@ -3,10 +3,11 @@
 // and pressing "Export selected" dispatches one `file.export` per ticked row — no batching
 // Command, because each file is its own artefact and its own Journal line.
 import { EXPORT_FORMATS, type ExportFormatRow } from '@femlab/registry';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Store, UiState } from '../store';
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
+import { useDialogFocus } from './Dialog';
 
 const GROUPS: ExportFormatRow['group'][] = ['Model & mesh', 'Results', 'Document & model file'];
 
@@ -100,8 +101,11 @@ function save(name: string, png: string): void {
 
 export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: Store; dispatch: Dispatch; query: Query }) {
   const [ticked, setTicked] = useState<string[]>([]);
-  const canvasSize = useCanvasSize(s.panels['export'] === true);
-  if (s.panels['export'] !== true) return null;
+  const open = s.panels['export'] === true;
+  const dialog = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, dialog);
+  const canvasSize = useCanvasSize(open);
+  if (!open) return null;
   const ctx = { hasMesh: Boolean(s.model?.meshSettings), hasResult: s.result !== null };
   const step = s.result?.step;
   const image = () => {
@@ -116,11 +120,12 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
   };
   return (
     <div class="overlay wide" onClick={() => void dispatch(close)}>
-      <div class="export-modal" role="dialog" aria-modal="true" aria-label="Export" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialog} class="export-modal" role="dialog" aria-modal="true" aria-label="Export" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div class="gallery-head">
           <span class="gallery-title">Export</span>
           <span class="gallery-sub">Every row is one Command, so anything here is also scriptable and callable by the Assistant.</span>
           <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'export', open: false }}>
+            <span class="sr-only">Close export</span>
             ×
           </Cmd>
         </div>
