@@ -276,6 +276,9 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         store.togglePanel('examples', false);
         await refresh();
         if (solved) await results?.onAck(solved);
+        // An example is an explicit open. Use the normalized Journal that refresh just read
+        // from the engine, and establish the baseline only after the whole open succeeded.
+        if (store.state.journal) store.markSaved(store.state.journal);
         return { name, commands: entries.length };
       },
     },

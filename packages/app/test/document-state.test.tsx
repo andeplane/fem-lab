@@ -1,7 +1,9 @@
 import { render } from 'preact';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { appHostCommands } from '../src/host';
 import { Store, journalIdentity, unsaved } from '../src/store';
 import { ModelName } from '../src/ui/ModelName';
+import type { WorkerTransport } from '../src/worker-transport';
 
 beforeEach(() => {
   document.body.innerHTML = '';
@@ -56,4 +58,29 @@ it('commits the name exactly once on Enter or blur, cancels Escape, and rejects 
   expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'model.setName', name: 'second' });
   expect(root.querySelector('[aria-label="Unsaved changes"]')).not.toBeNull();
   render(null, root);
+});
+
+it('establishes an exact saved baseline only after a bundled example opens completely', async () => {
+  const first = { seq: 0, cmd: { cmd: 'model.new' as const, name: 'example' }, hashAfter: 'normalized-0' };
+  const second = {
+    seq: 1,
+    cmd: { cmd: 'geometry.addBox' as const, name: 'beam', size: ['1 m', '1 m', '1 m'] as [string, string, string] },
+    hashAfter: 'normalized-1',
+  };
+  const store = new Store({ ...new Store().state, savedJournal: 'previous baseline' });
+  const dispatch = vi.fn(async () => ({ output: { kind: 'none' } }));
+  const transport = { dispatch } as unknown as WorkerTransport;
+  const refresh = vi.fn(async () => store.set({ journal: { entries: [first, second], revision: 2, hash: 'journal', canUndo: true, canRedo: false } }));
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => JSON.stringify([{ cmd: first.cmd }, { cmd: second.cmd }]) })));
+  const open = appHostCommands(store, transport, { current: null }, refresh).find((def) => def.name === 'file.openExample')!;
+
+  await open.run({ name: 'example' }, {} as never);
+  expect(dispatch).toHaveBeenCalledTimes(2);
+  expect(store.state.savedJournal).toBe(journalIdentity([first, second]));
+
+  store.set({ savedJournal: 'still previous' });
+  dispatch.mockResolvedValueOnce({ output: { kind: 'none' } });
+  dispatch.mockRejectedValueOnce(new Error('second command failed'));
+  await expect(open.run({ name: 'broken' }, {} as never)).rejects.toThrow('second command failed');
+  expect(store.state.savedJournal).toBe('still previous');
 });

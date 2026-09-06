@@ -12,6 +12,14 @@ test('@cpu editable Model name and explicit save baseline survive rename, undo a
   const name = page.getByRole('textbox', { name: 'Model name', exact: true });
   const dirty = page.getByRole('img', { name: 'Unsaved changes' });
   await expect(dirty).toBeVisible();
+  await page.setViewportSize({ width: 1180, height: 900 });
+  const title = await page.locator('.model-title').boundingBox();
+  const nameBox = await name.boundingBox();
+  const dotBox = await dirty.boundingBox();
+  expect(title?.width).toBeLessThanOrEqual(96);
+  expect(nameBox!.x + nameBox!.width).toBeLessThanOrEqual(title!.x + title!.width);
+  expect(dotBox!.x + dotBox!.width).toBeLessThanOrEqual(title!.x + title!.width);
+  await page.setViewportSize({ width: 1800, height: 1000 });
   const before = await page.evaluate(() => window.fem.query.model());
   const journal = await page.evaluate(() => window.fem.query.journal());
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save', exact: true }).click()]);
@@ -52,5 +60,8 @@ test('@cpu editable Model name and explicit save baseline survive rename, undo a
   await name.blur();
   await expect(dirty).toBeVisible();
   await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save', exact: true }).click()]);
+  await expect(dirty).toBeHidden();
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
+  await expect(name).toHaveValue('cantilever');
   await expect(dirty).toBeHidden();
 });

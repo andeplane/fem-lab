@@ -1828,7 +1828,14 @@ button.solve.stale {
   }
 }
 
-/* The document name is an undoable engine edit; the dot tracks explicit saves, not autosave. */
-.model-title { display: flex; align-items: center; gap: 6px; }
-.topbar input.model-name { width: auto; min-width: 60px; max-width: 190px; padding: 3px 0; border: 0; background: transparent; color: var(--text-high); }
+/* The document name is an undoable engine edit; the dot tracks explicit saves, not autosave.
+   The wrapper is the top-bar flex item, so it, rather than only its input, has to give way. */
+.model-title { display: flex; flex: 0 1 196px; align-items: center; gap: 6px; min-width: 60px; max-width: 196px; overflow: hidden; }
+.topbar input.model-name { flex: 1 1 auto; width: auto; min-width: 0; max-width: 190px; padding: 3px 0; border: 0; background: transparent; color: var(--text-high); }
 .unsaved-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #d9a441; }
+@media (min-width: 1180px) and (max-width: 1599px) {
+  .model-title { flex-basis: 140px; max-width: 140px; }
+}
+@media (min-width: 1180px) and (max-width: 1299px) {
+  .model-title { flex-basis: 96px; max-width: 96px; }
+}
