@@ -717,7 +717,7 @@
         ]
       },
       {
-        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.",
         "type": "object",
         "properties": {
           "name": {
@@ -809,7 +809,7 @@
         ]
       },
       {
-        "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+        "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
         "type": "object",
         "properties": {
           "name": {
@@ -5093,7 +5093,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.",
             "type": "object",
             "properties": {
               "name": {
@@ -5185,7 +5185,7 @@
             ]
           },
           {
-            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
               "name": {
@@ -10385,7 +10385,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.",
             "type": "object",
             "properties": {
               "name": {
@@ -10477,7 +10477,7 @@
             ]
           },
           {
-            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
               "name": {

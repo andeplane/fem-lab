@@ -172,6 +172,7 @@ export interface Fem {
     /**
      * A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
      * producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
+     * Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.
      */
     temperature(args: Omit<Extract<Command, { cmd: 'load.temperature' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -188,6 +189,8 @@ export interface Fem {
     /**
      * A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
      * It is a density, not a total: the heat delivered is `q` times each Body's volume.
+     * Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
+     * for a plane-stress Sheet, the volume includes its specified thickness.
      */
     heatSource(args: Omit<Extract<Command, { cmd: 'load.heatSource' }>, 'cmd'>): Promise<Ack>;
     /**
