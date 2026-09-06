@@ -42,6 +42,9 @@ use femlab_engine::{OnProgress, Progress};
 use femlab_geometry::mesh::{ElementKind, FaceKind};
 use femlab_geometry::{annulus, mapped, perturb_interior, Curve, Mesh, QuadBlock, Structured};
 
+#[path = "support/cost_allocator.rs"]
+mod cost_allocator;
+
 // ---------------------------------------------------------------- quadrature
 
 fn integrate_monomial(r: &Rule, e: [i32; 3]) -> f64 {
@@ -3041,18 +3044,106 @@ fn auto_picks_the_direct_solver_until_the_factor_stops_fitting() {
 }
 
 #[test]
-fn the_cost_estimate_matches_the_pattern_it_came_from() {
-    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 2, 2] }.box_([1.0, 1.0, 1.0]);
-    let pat = pattern(&mesh, 3);
-    for solver in [Solver::Auto, Solver::CpuDirect, Solver::CpuPcg, Solver::GpuPcg] {
-        let c = cost_estimate(&mesh, 3, solver);
-        assert_eq!(c.dofs, pat.csr.n as u64);
-        assert_eq!(c.nnz, pat.csr.nnz() as u64);
-        assert_eq!(c.bytes, c.nnz * 12 + c.dofs * 32);
-        assert!(c.feasible, "a 2 x 2 x 2 box fits anywhere");
-        assert!(c.note.contains(&c.nnz.to_string()));
+fn the_cost_estimate_counts_small_patterns_and_their_mandatory_storage() {
+    for kind in ALL_KINDS {
+        let mesh = patch_mesh(kind);
+        for dpn in [1, 2, 3] {
+            let pat = pattern(&mesh, dpn);
+            for solver in [Solver::Auto, Solver::CpuDirect, Solver::CpuPcg, Solver::GpuPcg] {
+                let c = cost_estimate(&mesh, dpn, solver);
+                assert_eq!(c.dofs, pat.csr.n as u64);
+                assert_eq!(c.nnz, pat.csr.nnz() as u64);
+                assert_eq!(c.nnz_lower, c.nnz);
+                let csr_bytes = pat.csr.row_ptr.len() * 4 + pat.csr.col_idx.len() * 4 + pat.csr.vals.len() * 8;
+                let expected = 2 * csr_bytes + 4 * (pat.slot.len() + pat.slot_ptr.len()) + 8 * pat.csr.n;
+                assert_eq!(c.bytes, expected as u64);
+                assert_eq!(c.feasible, None, "factor fill/workspace is unknown even for small meshes");
+                assert!(c.note.contains(&c.nnz.to_string()));
+            }
+        }
+        assert!(cost_estimate(&mesh, 3, Solver::Auto).note.starts_with("cpu-direct"));
     }
-    assert!(cost_estimate(&mesh, 3, Solver::Auto).note.starts_with("cpu-direct"));
+    // Adjacent cells deduplicate shared couplings; unused nodes have empty rows.
+    let mut mesh = Structured { kind: ElementKind::Hex8, n: [2, 2, 2] }.box_([1.0, 1.0, 1.0]);
+    mesh.coords.extend([0.0; 3]);
+    assert_eq!(cost_estimate(&mesh, 3, Solver::Auto).nnz, pattern(&mesh, 3).csr.nnz() as u64);
+    mesh.blocks.clear();
+    assert_eq!(cost_estimate(&mesh, 3, Solver::Auto).nnz, 0);
+}
+
+#[test]
+fn cost_counts_a_quarter_million_hexes_with_bounded_live_scratch() {
+    // Independent tensor-grid graph oracle: each axis contributes 3*n+1 directed
+    // neighbour pairs, including self pairs. Construct topology only, outside measurement.
+    let [nx, ny, nz] = [50, 50, 100];
+    let node = |x, y, z| (x + (nx + 1) * (y + (ny + 1) * z)) as u32;
+    let mut conn = Vec::with_capacity(nx * ny * nz * 8);
+    for z in 0..nz {
+        for y in 0..ny {
+            for x in 0..nx {
+                conn.extend([
+                    node(x, y, z),
+                    node(x + 1, y, z),
+                    node(x + 1, y + 1, z),
+                    node(x, y + 1, z),
+                    node(x, y, z + 1),
+                    node(x + 1, y, z + 1),
+                    node(x + 1, y + 1, z + 1),
+                    node(x, y + 1, z + 1),
+                ]);
+            }
+        }
+    }
+    let mesh = Mesh {
+        dim: 3,
+        coords: vec![0.0; (nx + 1) * (ny + 1) * (nz + 1) * 3],
+        blocks: vec![ElementBlock { kind: ElementKind::Hex8, conn, first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let (c, peak) = cost_allocator::measure(|| cost_estimate(&mesh, 3, Solver::Auto));
+    assert_eq!(c.nnz, ((3 * nx + 1) * (3 * ny + 1) * (3 * nz + 1) * 9) as u64);
+    assert_eq!(c.nnz_lower, c.nnz);
+    assert!(peak <= 16 * 1024 * 1024, "scratch high-water mark: {peak} bytes");
+    assert!(c.bytes >= 250_000 * 24 * 24 * 4, "element slots alone occupy 576 MB");
+    assert_eq!(c.feasible, Some(false));
+    println!("250000 hex8: nnz={}, mandatory={} bytes, scratch peak={peak} bytes", c.nnz, c.bytes);
+}
+
+#[test]
+fn cost_bounds_oversized_topology_without_allocating_adjacency() {
+    // Two overlapping eight-node cliques on twelve nodes, repeated: actual node NNZ
+    // is 64+64-16=112. Repetition grows slots/adjacency but never changes this graph.
+    let mut conn = Vec::with_capacity(750_000 * 8);
+    for _ in 0..375_000 {
+        conn.extend(0..8);
+        conn.extend(4..12);
+    }
+    let mut mesh = Mesh {
+        dim: 3,
+        coords: vec![0.0; 12 * 3],
+        blocks: vec![ElementBlock { kind: ElementKind::Hex8, conn, first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let (c, peak) = cost_allocator::measure(|| cost_estimate(&mesh, 3, Solver::Auto));
+    assert_eq!((c.nnz_lower, c.nnz), (64 * 9, 144 * 9));
+    assert!(c.nnz_lower <= 112 * 9 && c.nnz >= 112 * 9);
+    assert!(peak < 1024, "fallback allocated {peak} bytes");
+    assert!(c.bytes >= 750_000 * 24 * 24 * 4);
+    assert_eq!(c.feasible, Some(false));
+    assert_eq!(c.budget_bytes, 1_610_612_736);
+    assert!(c.note.contains("exceeds planning budget"));
+    // A degenerate first clique must not overstate the lower bound. Also exercise empty
+    // blocks without reading a nonexistent first element.
+    mesh.blocks[0].conn[..8].fill(0);
+    mesh.blocks.push(ElementBlock { kind: ElementKind::Tri3, conn: vec![], first_elem: 750_000 });
+    assert_eq!(cost_estimate(&mesh, 3, Solver::Auto).nnz_lower, 9);
+    let c = cost_estimate(&mesh, usize::MAX, Solver::Auto);
+    assert_eq!(c.bytes, u64::MAX);
+    assert_eq!(c.nnz, u64::MAX);
 }
 
 #[test]

@@ -2367,10 +2367,24 @@ fn the_cost_of_a_step_is_the_sparsity_of_its_mesh() {
     let QueryResult::Cost(c) = e.query(Query::Cost { step: "static".into() }).unwrap() else { panic!() };
     assert_eq!(c.dofs, 3075, "1025 nodes x 3");
     assert!(c.nnz > c.dofs);
-    assert_eq!(c.bytes, c.nnz * 12 + c.dofs * 32);
-    assert!(c.feasible);
+    assert!(c.bytes > c.nnz * 12 + c.dofs * 32);
+    assert_eq!(c.nnz_lower, c.nnz);
+    assert_eq!(c.feasible, None);
+    assert_eq!(c.budget_bytes, 1_610_612_736);
     assert!(c.note.starts_with("cpu-direct"), "{}", c.note);
     assert_eq!(e.query(Query::Cost { step: "nope".into() }).expect_err("no such step").code, ErrorCode::NotFound);
+    for procedure in ["heat-steady", "heat-transient"] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"{procedure}","procedure":"{procedure}","loads":[],"constraints":[],"dt":"0.1 s","tEnd":"1 s"}}"#
+            ),
+        );
+        let QueryResult::Cost(heat) = e.query(Query::Cost { step: procedure.into() }).unwrap() else { panic!() };
+        assert_eq!(heat.dofs, c.dofs / 3);
+        assert_eq!(heat.nnz, c.nnz / 9);
+        assert!(heat.bytes < c.bytes);
+    }
 }
 
 #[test]

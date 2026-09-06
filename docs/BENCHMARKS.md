@@ -383,3 +383,20 @@ mapped geometry. The hook only recognizes uncut, axis-aligned 3D lattice boxes
 with one fully fixed end and one single-component force at the opposite end.
 Other geometries and boundary conditions explicitly report no applicable
 automatic reference; their verification belongs to a dedicated Benchmark.
+
+## Cost-query memory benchmark (#122)
+
+The estimator is tested against every small element-family assembly pattern at one, two and
+three DOFs per node, including shared nodes and unused nodes. Its mandatory-storage lower
+bound equals the actual lengths of two CSR arrays, element slots and their offsets, and one
+RHS; it makes no claim about unknown factor fill or solver workspace.
+
+A synthetic 50 × 50 × 100 Hex8 grid (250,000 elements) has exactly
+`9 × (3×50+1) × (3×50+1) × (3×100+1) = 61,767,909` directed scalar matrix entries at three
+DOFs per node. The independent tensor-neighbour graph formula checks the count while a
+per-thread allocator measures peak live scratch **after** mesh construction: at most 16 MiB,
+compared with 576 MB for element slots alone. A 750,000-element repeated overlapping-clique
+mesh forces the bounded fallback; its known graph count lies within the returned interval,
+the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
+1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
+These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.
