@@ -486,6 +486,21 @@ export type Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -550,6 +565,16 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -2122,6 +2147,21 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -2186,6 +2226,16 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -2864,6 +2914,12 @@ export type Load1 =
       h: number;
       t_inf: number;
       kind: "convection";
+    }
+  | {
+      on: string;
+      emissivity: number;
+      t_inf: number;
+      kind: "radiation";
     }
   | {
       on: string;
@@ -3885,6 +3941,7 @@ export interface EngineError {
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
     | "solve.stalled"
+    | "solve.diverged"
     | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
@@ -4041,6 +4098,8 @@ export interface Step {
   dtFactor?: number | null;
   amplitude?: Amplitude | null;
   initial?: number | null;
+  nonlinearTolerance?: number | null;
+  nonlinearMaxIterations?: number | null;
 }
 /**
  * A Plugin used by the Model (phase P).
