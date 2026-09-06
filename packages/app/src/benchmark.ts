@@ -215,7 +215,7 @@ export async function readBenchmark(comparison: BenchmarkComparison, result: Res
     if (!extreme) throw new Error(`${at.field}.${at.component} is absent from this Result`);
     values = [extreme[at.pick]];
   } else if (at.kind === 'probe') {
-    const probe = (await query({ query: 'query.probe', field: at.field, component: at.component, at: at.at })) as ProbeResult;
+    const probe = (await query({ query: 'query.probe', step: result.step, field: at.field, component: at.component, at: at.at })) as ProbeResult;
     values = [probe.value];
   } else if (at.kind === 'frequencies') {
     values = result.frequencies ?? [];

@@ -82,7 +82,7 @@ describe('benchmark comparison registry', () => {
     const comparison = BENCHMARK_COMPARISONS['bar-transient-heat']!;
     const query = vi.fn(async () => ({ value: { value: 36.79, unit: 'K' }, element: 15, interpolated: true }));
     const reading = await readBenchmark(comparison, result(), query);
-    expect(query).toHaveBeenCalledWith({ query: 'query.probe', field: 'temperature', component: 0, at: ['80 mm', '2.5 mm', '2.5 mm'] });
+    expect(query).toHaveBeenCalledWith({ query: 'query.probe', step: 'static', field: 'temperature', component: 0, at: ['80 mm', '2.5 mm', '2.5 mm'] });
     expect(reading.delta).toBeCloseTo(0.19);
     expect(reading.pass).toBe(true);
   });
@@ -91,7 +91,7 @@ describe('benchmark comparison registry', () => {
     const comparison = BENCHMARK_COMPARISONS['tube-under-pressure']!;
     const query = vi.fn(async () => ({ value: { value: 71.1645, unit: 'MPa' }, element: 28, interpolated: true }));
     const reading = await readBenchmark(comparison, result(), query);
-    expect(query).toHaveBeenCalledWith({ query: 'query.probe', field: 'stress', component: 1, at: ['47.5 mm', '0 mm', '100 mm'] });
+    expect(query).toHaveBeenCalledWith({ query: 'query.probe', step: 'static', field: 'stress', component: 1, at: ['47.5 mm', '0 mm', '100 mm'] });
     expect(reading.percent).toBeCloseTo(6.3625, 3);
     expect(reading.pass).toBeNull();
   });
@@ -132,7 +132,7 @@ describe('benchmark comparison registry', () => {
     const comparison = BENCHMARK_COMPARISONS['nafems-le10-plate']!;
     const query = vi.fn(async () => ({ value: { value: -5.234137, unit: 'MPa' }, element: 0, interpolated: true }));
     const reading = await readBenchmark(comparison, result(), query);
-    expect(query).toHaveBeenCalledWith({ query: 'query.probe', field: 'stress', component: 1, at: ['2 m', '0 m', '0.6 m'] });
+    expect(query).toHaveBeenCalledWith({ query: 'query.probe', step: 'static', field: 'stress', component: 1, at: ['2 m', '0 m', '0.6 m'] });
     expect(reading.percent).toBeCloseTo(0.30215, 4);
     expect(reading.pass).toBe(true);
   });
@@ -259,6 +259,7 @@ describe('Theory panel', () => {
     const root = document.createElement('div');
     render(<Theory benchmark={benchmark} result={first} current={provenance()} query={query} />, root);
     await waitFor(() => pending.length === 1, 'first probe');
+    expect(query).toHaveBeenLastCalledWith({ query: 'query.probe', step: 'static', field: 'temperature', component: 0, at: ['80 mm', '2.5 mm', '2.5 mm'] });
     pending.shift()!({ value: { value: 36.6, unit: 'K' } });
     await waitFor(() => root.querySelector('.theory-values'), 'first reading');
     expect(root.textContent).toContain('36.6 K');
@@ -268,6 +269,7 @@ describe('Theory panel', () => {
     expect(root.textContent).toContain('Reading T at x = 80 mm, t = 32 s');
     expect(root.querySelector('.theory-values')).toBeNull();
     await waitFor(() => pending.length === 1, 'second probe');
+    expect(query).toHaveBeenLastCalledWith({ query: 'query.probe', step: 'thermal-later', field: 'temperature', component: 0, at: ['80 mm', '2.5 mm', '2.5 mm'] });
     pending.shift()!({ value: { value: 36.8, unit: 'K' } });
     await waitFor(() => root.textContent?.includes('36.8 K'), 'replacement reading');
   });
