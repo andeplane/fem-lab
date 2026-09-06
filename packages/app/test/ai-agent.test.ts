@@ -75,6 +75,26 @@ async function drain(gen: AsyncGenerator<AgentEvent, unknown>): Promise<AgentEve
 const turnOf = (events: AgentEvent[]) => (events.find((e) => e.type === 'turn') as Extract<AgentEvent, { type: 'turn' }>).turn;
 
 describe('the agent loop', () => {
+  it('returns validation diagnostics as a failed script tool result without starting execution', async () => {
+    const transport = fakeTransport();
+    transport.query = vi.fn(async () => ({ entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
+    const host = fakeHost(transport);
+    const invalid = { ok: false, diagnostics: [{ code: 'TS2339', cause: 'unknown API', where: { line: 1, column: 1 }, hint: 'fix the call' }] };
+    host.script.validate = vi.fn(async () => invalid);
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host });
+    const { provider, seen } = fakeProvider([
+      [{ type: 'tool_use', id: 'bad-script', name: 'run_script', input: { code: 'wrong' } }, { type: 'done', stopReason: 'tool_use' }],
+      FINAL_ROUND,
+    ]);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
+    expect(turn.calls[0]?.status).toBe('failed');
+    expect(host.script.run).not.toHaveBeenCalled();
+    expect(transport.dispatch).not.toHaveBeenCalled();
+    const result = seen[1]!.messages[2]!.content[0] as { isError: boolean; content: string };
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content).diagnostics).toEqual(invalid.diagnostics);
+  });
+
   it('runs every tool call of the turn and returns them in ONE tool_result message', async () => {
     const { registry, dispatched } = fixture();
     const { provider, seen } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);
@@ -112,6 +132,16 @@ describe('the agent loop', () => {
     expect(turn.undoJournal).toEqual(JOURNALS[1]!.hash);
     expect(turn.usage).toEqual({ input: 300, output: 30, cacheRead: 40 });
     expect(turn.cost).toBeCloseTo((300 * 5 + 30 * 25 + 4 * 5) / 1e6, 9);
+  });
+
+  it('sums request prices without treating separate short contexts as one long context', async () => {
+    const { registry } = fixture();
+    const rounds = [TOOL_ROUND, FINAL_ROUND].map((round) => round.map((event): ChatEvent =>
+      event.type === 'usage' ? { type: 'usage', usage: { input: 150_000, cacheRead: 25_000, output: 1_000 } } : event));
+    const { provider } = fakeProvider(rounds);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'gpt-6-astra', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
+    expect(turn.usage).toEqual({ input: 300_000, cacheRead: 50_000, output: 2_000 });
+    expect(turn.cost).toBeCloseTo(3.15, 12);
   });
 
   it('undoes the whole turn with one journal.undo, and does nothing when it changed nothing', async () => {

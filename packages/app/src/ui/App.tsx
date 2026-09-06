@@ -47,7 +47,7 @@ export interface AppProps {
 /** Text controls own editing shortcuts; the shell must leave them to the browser. */
 export function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
   if (target.isContentEditable) return true;
   for (let node: HTMLElement | null = target; node; node = node.parentElement) {
     const value = node.getAttribute('contenteditable');
@@ -56,12 +56,23 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   return false;
 }
 
+const CAMERA_SHORTCUTS = {
+  Digit1: { cmd: 'view.preset', view: 'iso' },
+  Digit2: { cmd: 'view.preset', view: 'front' },
+  Digit3: { cmd: 'view.preset', view: 'top' },
+  Digit4: { cmd: 'view.fit' },
+} as const;
+
 export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionCount: number, panels: Record<string, boolean>): void {
   if (e.defaultPrevented) return;
   const meta = e.metaKey || e.ctrlKey;
   const key = e.key.toLowerCase();
+  const camera = e.shiftKey && !meta && !e.altKey && !e.repeat && !isEditableTarget(e.target)
+    ? CAMERA_SHORTCUTS[e.code as keyof typeof CAMERA_SHORTCUTS]
+    : undefined;
   if (isEditableTarget(e.target) && meta && (key === 'z' || key === 'c')) return;
-  if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
+  if (camera) (e.preventDefault(), void dispatch(camera).catch(() => undefined));
+  else if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
   else if (meta && key === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
   else if (meta && key === 'c' && selectionCount > 0) (e.preventDefault(), void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined));
   else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
@@ -225,7 +236,11 @@ export function probeLine(p: { face: string | null; body: string | null; point: 
 }
 
 const MODES = ['geometry', 'mesh', 'results'] as const;
-const PRESETS = ['iso', 'front', 'top'] as const;
+const PRESETS = [
+  { view: 'iso', shortcut: '⇧1' },
+  { view: 'front', shortcut: '⇧2' },
+  { view: 'top', shortcut: '⇧3' },
+] as const;
 const LAYERS = ['edges', 'loads', 'constraints', 'grid'] as const;
 
 /** Design state 4: the centred solving card, with the one Command that stops it. */
@@ -510,19 +525,19 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
             ))}
           </div>
           {LAYERS.map((layer) => (
-            <Cmd key={layer} dispatch={dispatch} cmd="view.toggle" class="toggle" args={{ layer }}>
+            <Cmd key={layer} dispatch={dispatch} cmd="view.toggle" class="toggle" args={{ layer }} pressed={s.layerVisibility[layer] ?? true}>
               {layer}
             </Cmd>
           ))}
           <Cmd dispatch={dispatch} cmd="view.setClip" class="toggle" args={{ plane: s.clipOn ? null : { normal: [0, 1, 0], offset: 0 } }} pressed={s.clipOn}>
             clip
           </Cmd>
-          {PRESETS.map((view) => (
-            <Cmd key={view} dispatch={dispatch} cmd="view.preset" class="tbutton" args={{ view }}>
+          {PRESETS.map(({ view, shortcut }) => (
+            <Cmd key={view} dispatch={dispatch} cmd="view.preset" class="tbutton" args={{ view }} title={`${view} view · ${shortcut}`}>
               {view}
             </Cmd>
           ))}
-          <Cmd dispatch={dispatch} cmd="view.fit" class="tbutton">
+          <Cmd dispatch={dispatch} cmd="view.fit" class="tbutton" title="fit view · ⇧4">
             fit
           </Cmd>
         </div>
@@ -538,7 +553,10 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       </div>
       {stale ? (
         <div class="stale-banner" role="status">
-          <span>Result is stale — Model changed after journal line {s.result!.revision}</span>
+          <span>
+            Result is stale — Model changed after journal line {s.result!.revision}.
+            {s.study ? ' The convergence table reports separate study solves; it does not refresh these stale contours. Re-solve to display the current Model.' : ''}
+          </span>
           <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }}>
             Re-solve
           </Cmd>

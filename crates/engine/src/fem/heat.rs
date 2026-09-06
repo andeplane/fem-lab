@@ -58,7 +58,6 @@ struct Kin {
 fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
     let rule = rule_of(kind);
-    let v_ref: f64 = rule.weights.iter().sum();
     let n_gp = rule.points.len();
     let mut kin = Kin {
         n_gp,
@@ -74,7 +73,7 @@ fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
         let xi = rule.points[gp];
         shape_of(kind, xi, &mut sh);
         dshape_of(kind, xi, &mut dn);
-        let (inv, det) = jac_inv(dim, c.coords, &dn, v_ref).ok_or_else(inverted)?;
+        let (inv, det) = jac_inv(dim, c.coords, &dn).ok_or_else(inverted)?;
         kin.min_det = kin.min_det.min(det);
         let mut x = [0.0; 3];
         for (a, &n) in sh.iter().enumerate() {

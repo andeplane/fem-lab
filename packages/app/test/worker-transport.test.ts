@@ -120,18 +120,19 @@ describe('WorkerTransport', () => {
     expect((replay!.payload as { entries: { cmd: Command }[] }).entries.map((e) => (e.cmd as unknown as { cmd: string }).cmd)).toEqual(['model.new', 'geometry.addBox']);
   });
 
-  it('replays only up to the revision an undo left behind, keeping the entries a redo needs', async () => {
+  it('retains the redo tail and supplies the active revision separately', async () => {
     const { transport, workers } = make((req, reply) => {
       const p = req.payload as { cmd?: string; seq?: number };
       if (req.op !== 'dispatch') return reply(ok(req.id, null));
-      if (p.cmd === 'journal.undo') return reply(ok(req.id, ack({ seq: -1, revision: 1 })));
+      if (p.cmd === 'journal.undo') return reply(ok(req.id, ack({ seq: 1, revision: 1 })));
       return reply(ok(req.id, ack({ seq: p.seq ?? 0, revision: (p.seq ?? 0) + 1 })));
     });
     await transport.dispatch({ cmd: 'model.new', name: 'x', seq: 0 } as unknown as Command);
     await transport.dispatch({ cmd: 'geometry.addBox', name: 'b', seq: 1 } as unknown as Command);
     await transport.dispatch({ cmd: 'journal.undo' } as unknown as Command);
     await transport.cancel();
-    expect((workers[1]!.sent[1]!.payload as { entries: unknown[] }).entries).toHaveLength(1);
+    expect((workers[1]!.sent[1]!.payload as { entries: unknown[] }).entries).toHaveLength(2);
+    expect(workers[1]!.sent[1]!.payload).toMatchObject({ revision: 1 });
   });
 
   it('restarts the engine after a wasm panic, reports it once, and keeps working', async () => {
@@ -176,6 +177,20 @@ describe('WorkerTransport', () => {
     await Promise.resolve();
     workers[0]!.onerror?.({ message: 'out of memory' } as ErrorEvent);
     await expect(call).rejects.toMatchObject({ code: 'internal' });
+  });
+
+  it('ignores a terminated worker error while the replacement is recovering', async () => {
+    const { transport, workers } = make(() => undefined);
+    const recovered = transport.cancel();
+    await Promise.resolve();
+    const replacement = workers[1]!;
+    workers[0]!.onerror?.({ message: 'late old-worker error' } as ErrorEvent);
+    const create = replacement.sent[0]!;
+    replacement.onmessage?.({ data: ok(create.id, null) } as MessageEvent<AppRes>);
+    await vi.waitFor(() => expect(replacement.sent).toHaveLength(2));
+    const replay = replacement.sent[1]!;
+    replacement.onmessage?.({ data: ok(replay.id, null) } as MessageEvent<AppRes>);
+    await expect(recovered).resolves.toBeUndefined();
   });
 
   it('ignores replies for calls it has already settled', async () => {

@@ -30,6 +30,20 @@ serves the whole registry to an editor over MCP (`mcp --project <dir>`; see
 Tests: `npm test` (vitest), `npm run typecheck`, and in `packages/app`,
 `npx playwright install chromium && npx playwright test` for the browser smokes.
 
+The app test command always measures every authored `src/**/*.ts` and `src/**/*.tsx` module,
+including browser entry points, workers and the viewer. Its #44 baseline is 68.31% lines,
+67.19% statements, 61.96% functions and 67.03% branches; CI fails below any of these floors.
+Raise the thresholds in `packages/app/vitest.config.ts` when tests improve coverage; do not
+lower them or exclude untested modules. HTML and JSON summaries are in `packages/app/coverage/`.
+Only non-executable `.d.ts` declarations are excluded. Generated wasm JavaScript is covered
+by the Rust and browser gates, not the authored TypeScript denominator. A post-test check
+rejects missing source modules, so a transform failure cannot inflate the reported coverage.
+
+Every Playwright spec imports `test` from `e2e/fixtures.ts`, whose automatic fixture fails on
+uncaught page errors, including popup pages. The panel lifecycle smoke reopens implemented
+panels, Assistant disclosures, bottom tabs and viewer modes twice. The Report renderer is
+still tracked separately in [#14](https://github.com/andeplane/fem-lab/issues/14).
+
 **Status: research, plan, engine, and a browser shell. Read in this order:**
 
 1. [`docs/PROPOSAL.md`](docs/PROPOSAL.md): the questions answered (can FEniCS run in a
