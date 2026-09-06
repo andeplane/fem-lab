@@ -2092,6 +2092,7 @@ fn solving_the_cantilever_reports_the_tip_deflection_and_balanced_reactions() {
     // the applied total is the 1 kN the traction asked for, and the root carries it back
     assert_eq!(r.applied_total[2].unit, "kN");
     assert!((r.applied_total[2].value + 1.0).abs() <= 1e-9);
+    assert_eq!(r.reaction_quantity, femlab_engine::units::ReactionQuantity::Force);
     assert_eq!(r.reactions.len(), 1);
     assert_eq!(r.reactions[0].constraint, "root");
     assert!((r.reactions[0].total[2].value - 1.0).abs() <= 1e-9);
@@ -2110,6 +2111,10 @@ fn solving_the_cantilever_reports_the_tip_deflection_and_balanced_reactions() {
     // query.model now says the Step is solved
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
     assert!(m.steps[0].solved);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"force":"kN","power":"kW"}}"#);
+    let shown = result(&mut e);
+    assert_eq!(shown.reactions, r.reactions);
+    assert_eq!(shown.applied_total, r.applied_total);
 }
 
 /// B1 again, through `solve.run { solver: 'cpu-pcg' }`: the iterative path is a Command away
@@ -3005,6 +3010,96 @@ fn a_steady_heat_step_conducts_a_linear_profile_and_exports_it() {
     }
 }
 
+/// E: exact thermal-resistance/flux balances, with stored SI power exposed in display units.
+#[test]
+fn thermal_reactions_keep_power_units_in_every_result_view() {
+    for nx in [2, 4] {
+        // Positive reaction means heat removed at the cold support. The convection case has
+        // Q = A*(T_inf-T_cold)/(L/k + 1/h); the flux case has Q = q*A.
+        for (load, removed) in [
+            (r#"{"cmd":"load.heatFlux","name":"in","on":"bar.xmax","q":"1000 W/m^2"}"#, 10.0),
+            (
+                r#"{"cmd":"load.convection","name":"in","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"100 degC"}"#,
+                0.01 * 100.0 / (1.0 / 45.0 + 1.0 / 50.0),
+            ),
+        ] {
+            let mut e = engine();
+            heat_bar(&mut e);
+            ok(
+                &mut e,
+                &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{{"nx":{nx},"ny":1,"nz":1}}}}}}"#),
+            );
+            ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+            ok(&mut e, load);
+            ok(
+                &mut e,
+                r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["cold"],"loads":["in"]}"#,
+            );
+            ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+            let original = result_of(&mut e, Some("heat"));
+            assert_eq!(original.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
+            assert!((original.reactions[0].total[0].value - removed).abs() < 1e-9);
+            assert_eq!(original.reactions[0].total[0].unit, "W");
+            let raw = e.field(Some("heat"), Field::Reaction).unwrap().clone();
+            assert!((raw.data.iter().step_by(3).sum::<f64>() - removed).abs() < 1e-9);
+            for (force, power, factor) in [("kN", "W", 1.0), ("N", "kW", 0.001)] {
+                ok(&mut e, &format!(r#"{{"cmd":"model.setUnits","units":{{"force":"{force}","power":"{power}"}}}}"#));
+                let r = result_of(&mut e, Some("heat"));
+                assert!(r.stale);
+                assert_eq!(r.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
+                assert!((r.reactions[0].total[0].value - factor * removed).abs() < 1e-9);
+                assert!(r.reactions[0].total.iter().chain(&r.applied_total).all(|v| v.unit == power));
+                assert!((r.applied_total[0].value - original.applied_total[0].value * factor).abs() < 1e-9);
+                // The four cold face nodes carry equal quarters of the exact removed power.
+                let extreme = r.extremes.iter().find(|x| x.field == "reaction" && x.component == 0).unwrap();
+                assert_eq!(extreme.max.unit, power);
+                assert!((extreme.max.value - factor * removed / 4.0).abs() < 1e-9);
+                // Changing display units marks the retained Result stale. Re-solving the same
+                // physics under the new units refreshes that Result; omitted-step queries below
+                // must then find this refreshed default and keep its thermal power dimension.
+                ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+                let refreshed = result_of(&mut e, Some("heat"));
+                assert!(!refreshed.stale);
+                assert_eq!(refreshed.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
+                assert!(refreshed.reactions[0].total.iter().chain(&refreshed.applied_total).all(|v| v.unit == power));
+                let probe = e
+                    .query(Query::Probe {
+                        step: None,
+                        field: Field::Reaction,
+                        component: Some(0),
+                        at: [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")],
+                    })
+                    .unwrap();
+                let probe = serde_json::to_value(probe).unwrap();
+                assert_eq!(probe["value"]["unit"], power);
+                assert!((probe["value"]["value"].as_f64().unwrap() - factor * removed / 4.0).abs() < 1e-9);
+                let path = e
+                    .query(Query::Path {
+                        step: None,
+                        field: Field::Reaction,
+                        component: Some(0),
+                        from: [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")],
+                        to: [Q::text("1 m"), Q::text("0 m"), Q::text("0 m")],
+                        n: 2,
+                    })
+                    .unwrap();
+                let path = serde_json::to_value(path).unwrap();
+                assert_eq!(path["unit"], power);
+                assert!((path["values"][0].as_f64().unwrap() - factor * removed / 4.0).abs() < 1e-9);
+                let md = report(&mut e, Some("heat"), Some(vec![ReportSection::Results])).markdown;
+                assert!(md.contains("| Constraint | Power | Unit |"), "{md}");
+                assert!(md.contains("max|Q|"), "{md}");
+                let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"heat"}"#).output;
+                let output = serde_json::to_value(output).unwrap();
+                assert!(output["text"].as_str().unwrap().contains("Name=\"ReactionPower_W\""));
+                assert_eq!(e.field(Some("heat"), Field::Reaction).unwrap(), &raw);
+            }
+            // #208 tracks the separate balance diagnostic sign/net-convection defect. These
+            // tests verify physical removed power, not the currently incorrect balance scalar.
+        }
+    }
+}
+
 /// Convection, flux and source loads reach the Model, report themselves, survive a Body rename,
 /// and hold a Step that has no fixed temperature at all.
 #[test]
@@ -3248,6 +3343,8 @@ fn a_transient_heat_step_reports_its_history_and_validates_its_amplitude() {
     ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
     let summary = result_of(&mut e, Some("warm"));
     // Rows at t = 0, 10 and 20 s: the initial state and every fifth of the ten steps.
+    assert_eq!(summary.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
+    assert!(summary.reactions.iter().flat_map(|r| &r.total).all(|v| v.unit == "W"));
     assert_eq!(summary.history.len(), 3);
     assert_eq!(summary.history[0].time.value, 0.0);
     assert_eq!(summary.history[2].time.value, 20.0);
