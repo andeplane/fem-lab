@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 /** A provider stream, never a live API request. The tool still runs against real browser wasm. */
 function response(tool: boolean): string {
@@ -14,7 +14,7 @@ function response(tool: boolean): string {
   return events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
 }
 
-test('@cpu Assistant turn undo preserves later human edits and reports why it cannot run', async ({ page }) => {
+async function assistantTurn(page: Page) {
   await page.setViewportSize({ width: 1800, height: 1000 });
   await page.addInitScript(() => localStorage.setItem('femlab.ai.key', 'test-key'));
   let request = 0;
@@ -29,10 +29,24 @@ test('@cpu Assistant turn undo preserves later human edits and reports why it ca
   await drawer.locator('textarea').fill('Add one body');
   await drawer.locator('button.send').click();
   await expect(drawer.locator('.diff')).toContainText('geometry.addBox');
+  return drawer;
+}
+
+test('@cpu Assistant turn undo preserves later human edits and reports why it cannot run', async ({ page }) => {
+  const drawer = await assistantTurn(page);
   await page.evaluate(() => window.fem.geometry.addBox({ name: 'human-body', size: ['2 m', '1 m', '1 m'] }));
   await drawer.locator('.undo').click();
   await expect(drawer.locator('.diff')).toContainText('Journal changed after this turn');
   await expect(drawer.locator('.undo')).toBeDisabled();
   const model = await page.evaluate(() => window.fem.query.model()) as { bodies: { name: string }[] };
   expect(model.bodies.map((body) => body.name)).toEqual(['ai-body', 'human-body']);
+});
+
+test('@cpu Assistant turn undo removes its Commands once and disables the old card', async ({ page }) => {
+  const drawer = await assistantTurn(page);
+  await drawer.locator('.undo').click();
+  await expect(drawer.locator('.undo')).toHaveText('Turn undone');
+  await expect(drawer.locator('.undo')).toBeDisabled();
+  const model = await page.evaluate(() => window.fem.query.model()) as { bodies: { name: string }[] };
+  expect(model.bodies).toEqual([]);
 });
