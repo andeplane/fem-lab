@@ -12,10 +12,11 @@ import { useDialogFocus } from './Dialog';
 const GROUPS: ExportFormatRow['group'][] = ['Model & mesh', 'Results', 'Document & model file'];
 
 /** Why a row cannot be exported yet, or `null` when it can. */
-export function unavailable(row: ExportFormatRow, s: { hasMesh: boolean; hasResult: boolean }): string | null {
+export function unavailable(row: ExportFormatRow, s: { hasMesh: boolean; hasResult: boolean; hasAnimation: boolean }): string | null {
   if (row.needs === 'soon') return 'not written yet';
   if (row.needs === 'mesh' && !s.hasMesh) return 'needs a Mesh (mesh.set)';
   if (row.needs === 'result' && !s.hasResult) return 'needs a solved Step';
+  if (row.needs === 'animation' && !s.hasAnimation) return 'needs a selected mode shape';
   return null;
 }
 
@@ -23,6 +24,7 @@ export function unavailable(row: ExportFormatRow, s: { hasMesh: boolean; hasResu
 export function specOf(row: ExportFormatRow, step: string | undefined, image?: { width: number; height: number }): Record<string, unknown> {
   if (row.format === 'csv') return { format: 'csv', table: 'extremes', ...(step ? { step } : {}) };
   if (row.format === 'vtu' && step) return { format: 'vtu', step };
+  if (row.format === 'webm') return { format: 'webm', width: 1280, height: 720 };
   if (row.format === 'png' && image) return { format: 'png', ...image };
   return { format: row.format };
 }
@@ -63,6 +65,31 @@ function Resolution({ s, store, dispatch, query, size }: { s: UiState; store: St
 }
 
 interface ImageSize { width: number; height: number }
+
+const VIDEO_SIZES = [
+  { label: '720p', width: 1280, height: 720 },
+  { label: '1080p', width: 1920, height: 1080 },
+];
+
+/** Each size is the same typed file.export Command scripts use; recording can be cancelled. */
+function AnimationResolution({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  if (s.capturingAnimation) {
+    return (
+      <Cmd dispatch={dispatch} cmd="file.cancelAnimationCapture" class="tbutton" title="cancel the WebM recording and restore the viewer">
+        cancel recording
+      </Cmd>
+    );
+  }
+  return (
+    <div class="segmented" role="group" aria-label="animation resolution">
+      {VIDEO_SIZES.map(({ label, width, height }) => (
+        <Cmd key={label} dispatch={dispatch} cmd="file.export" args={{ spec: { format: 'webm', width, height } }} title={`file.export WebM ${width} × ${height} px`}>
+          {label}
+        </Cmd>
+      ))}
+    </div>
+  );
+}
 
 /** Track the canvas content box while the dialog is open, so its visible Command stays exact
  *  when a window resize or docked panel changes the viewer underneath the modal. */
@@ -106,16 +133,20 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
   useDialogFocus(open, dialog);
   const canvasSize = useCanvasSize(open);
   if (!open) return null;
-  const ctx = { hasMesh: Boolean(s.model?.meshSettings), hasResult: s.result !== null };
+  const ctx = {
+    hasMesh: Boolean(s.model?.meshSettings),
+    hasResult: s.result !== null,
+    hasAnimation: s.result !== null && s.fieldKey.startsWith('mode:'),
+  };
   const step = s.result?.step;
   const image = () => {
     return { width: canvasSize.width * s.screenshotScale, height: canvasSize.height * s.screenshotScale };
   };
   const close = { cmd: 'panel.toggle', panel: 'export', open: false };
-  const runAll = (): void => {
+  const runAll = async (): Promise<void> => {
     for (const format of ticked) {
       const row = EXPORT_FORMATS.find((r) => r.format === format);
-      if (row) void dispatch({ cmd: 'file.export', spec: specOf(row, step, image()) }).catch(() => undefined);
+      if (row) await dispatch({ cmd: 'file.export', spec: specOf(row, step, image()) }).catch(() => undefined);
     }
   };
   return (
@@ -149,7 +180,8 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
                   <span class="export-note">{why ?? row.note}</span>
                   <span class="mono export-cmd">{line(spec)}</span>
                   {row.format === 'png' ? <Resolution s={s} store={store} dispatch={dispatch} query={query} size={canvasSize} /> : null}
-                  <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null} title={line(spec)}>
+                  {row.format === 'webm' && why === null ? <AnimationResolution s={s} dispatch={dispatch} /> : null}
+                  <Cmd dispatch={dispatch} cmd="file.export" class="chip-add" args={{ spec }} disabled={why !== null || (row.format === 'webm' && s.capturingAnimation)} title={line(spec)}>
                     export
                   </Cmd>
                 </div>
@@ -158,7 +190,7 @@ export function ExportModal({ s, store, dispatch, query }: { s: UiState; store: 
           </div>
         ))}
         <div class="export-foot">
-          <Cmd dispatch={dispatch} cmd="file.export" class="apply" disabled={ticked.length === 0} onRun={runAll} title="one file.export per ticked row">
+          <Cmd dispatch={dispatch} cmd="file.export" class="apply" disabled={ticked.length === 0 || s.capturingAnimation} onRun={() => void runAll()} title="one file.export per ticked row">
             Export selected
           </Cmd>
         </div>
