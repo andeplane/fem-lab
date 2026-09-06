@@ -38,6 +38,18 @@ const model = (): ModelSummary =>
 
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
 
+const withSteps = (names: string[]): ModelSummary => ({
+  ...model(),
+  steps: names.map((name) => ({ name, procedure: 'static', constraints: ['fix'], loads: ['p'], solved: false })),
+} as unknown as ModelSummary);
+
+function dragEvent(type: string, transfer: DataTransfer, clientY = 0): DragEvent {
+  const event = new DragEvent(type, { bubbles: true, cancelable: true, clientY });
+  // happy-dom does not implement DragEventInit.dataTransfer yet.
+  Object.defineProperties(event, { dataTransfer: { value: transfer }, clientY: { value: clientY } });
+  return event;
+}
+
 /**
  * The whole shell with every panel showing at once: the tree, the generated Properties form,
  * each bottom tab and the ⌘K palette. If any of them names a Command the registry does not
@@ -142,6 +154,55 @@ describe('the shell', () => {
     store.togglePanel('examples', true);
     await afterEffects();
     expect(root.querySelector('.menu')).toBeNull();
+  });
+
+  it('reorders Steps once per completed drag and leaves the tree controlled by the Model', async () => {
+    const { root, commands } = mount({ model: withSteps(['heat', 'static', 'modal']) });
+    await afterEffects();
+    const source = root.querySelector<HTMLElement>('[data-step="modal"]')!;
+    const transfer = new DataTransfer();
+
+    // happy-dom does not declare native `ondrag*` properties, so Preact retains the JSX case.
+    source.dispatchEvent(dragEvent('DragStart', transfer));
+    expect(transfer.getData('text/plain')).toBe('modal');
+    await afterEffects();
+    expect(root.querySelector('[data-step="modal"]')!.classList.contains('dragging')).toBe(true);
+    const currentTarget = root.querySelector<HTMLElement>('[data-step="heat"]')!;
+    currentTarget.getBoundingClientRect = () => ({ top: 100, height: 40 } as DOMRect);
+    currentTarget.dispatchEvent(dragEvent('DragOver', transfer, 105));
+    await afterEffects();
+    const markedTarget = root.querySelector<HTMLElement>('[data-step="heat"]')!;
+    expect(markedTarget.classList.contains('drop-before'), markedTarget.className).toBe(true);
+    markedTarget.dispatchEvent(dragEvent('Drop', transfer, 105));
+    source.dispatchEvent(dragEvent('DragEnd', transfer));
+    await afterEffects();
+
+    expect(commands).toEqual([{ cmd: 'step.reorder', order: ['modal', 'heat', 'static'] }]);
+    expect([...root.querySelectorAll('[data-step] .name')].map((el) => el.textContent)).toEqual(['heat', 'static', 'modal']);
+    expect(root.querySelector('.drop-before, .drop-after, .dragging')).toBeNull();
+  });
+
+  it('offers a keyboard reorder and dispatches nothing for cancelled or same-position drags', async () => {
+    const { root, commands } = mount({ model: withSteps(['heat', 'static', 'modal']) });
+    await afterEffects();
+    root.querySelector<HTMLButtonElement>('[aria-label="Move heat later"]')!.click();
+    expect(commands).toEqual([{ cmd: 'step.reorder', order: ['static', 'heat', 'modal'] }]);
+
+    const cancelled = root.querySelector<HTMLElement>('[data-step="modal"]')!;
+    const cancelledTransfer = new DataTransfer();
+    cancelled.dispatchEvent(dragEvent('DragStart', cancelledTransfer));
+    await afterEffects();
+    root.querySelector<HTMLElement>('[data-step="heat"]')!.dispatchEvent(dragEvent('DragOver', cancelledTransfer, 0));
+    root.querySelector<HTMLElement>('[data-step="modal"]')!.dispatchEvent(dragEvent('DragEnd', cancelledTransfer));
+    await afterEffects();
+    expect(commands).toHaveLength(1);
+
+    const row = root.querySelector<HTMLElement>('[data-step="static"]')!;
+    const transfer = new DataTransfer();
+    row.dispatchEvent(dragEvent('DragStart', transfer));
+    row.dispatchEvent(dragEvent('Drop', transfer));
+    row.dispatchEvent(dragEvent('DragEnd', transfer));
+    expect(commands).toHaveLength(1);
   });
 
   it('names only Commands the registry has on every clickable', () => {

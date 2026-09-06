@@ -4,7 +4,7 @@
 import type { ModelSummary } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import { Store, initialState, type UiState } from '../src/store';
-import { treeGroups } from '../src/ui/Tree';
+import { reorderSteps, treeGroups } from '../src/ui/Tree';
 
 const v = (value: number, unit: string) => ({ value, unit });
 
@@ -115,5 +115,20 @@ describe('treeGroups', () => {
     store.openForm('geometry.addBox', { name: 'beam' });
     expect(store.state.form!.values['name']).toBe('beam');
     expect(group(store.state, 'Geometry').items[0]!.name).toBe('beam');
+  });
+});
+
+describe('reorderSteps', () => {
+  const order = ['heat', 'static', 'modal'];
+
+  it('inserts a dragged Step on either edge of its target', () => {
+    expect(reorderSteps(order, 'modal', 'heat', 'before')).toEqual(['modal', 'heat', 'static']);
+    expect(reorderSteps(order, 'heat', 'static', 'after')).toEqual(['static', 'heat', 'modal']);
+  });
+
+  it('does not emit a permutation for the same place or an unknown drag source', () => {
+    expect(reorderSteps(order, 'heat', 'static', 'before')).toBeNull();
+    expect(reorderSteps(order, 'static', 'static', 'after')).toBeNull();
+    expect(reorderSteps(order, 'unknown', 'static', 'after')).toBeNull();
   });
 });

@@ -953,8 +953,9 @@ pub enum Command {
     #[serde(rename = "step.remove", rename_all = "camelCase")]
     StepRemove { name: String },
 
-    /// Set the run order of Steps; `order` must list every Step name exactly once. Steps run in
-    /// this order and a later Step may inherit state (a temperature field) from an earlier one.
+    /// Set the run order of Steps; `order` must list every Step name exactly once and keep each
+    /// Step after the prerequisite named by its `after` field. Steps run in this order and a
+    /// later Step may inherit state (a temperature field) from an earlier one.
     #[serde(rename = "step.reorder", rename_all = "camelCase")]
     StepReorder { order: Vec<String> },
 

@@ -518,6 +518,25 @@ fn rename_and_duplicate_follow_references() {
     );
     ok(&mut e, r#"{"cmd":"step.reorder","order":["sls","uls"]}"#);
     assert_eq!(e.model().steps[0].name, "sls");
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"buckling","procedure":"static","constraints":["clamp"],"loads":["end"],"after":"uls"}"#,
+    );
+    let revision = e.revision();
+    let er = err(&mut e, r#"{"cmd":"step.reorder","order":["buckling","sls","uls"]}"#);
+    assert_eq!(er.code, ErrorCode::Schema);
+    assert_eq!(er.where_.as_deref(), Some("order"));
+    assert!(er.cause.contains("buckling") && er.cause.contains("uls"));
+    assert!(er.suggestion.as_deref().unwrap().contains("step.reorder"));
+    assert_eq!(e.revision(), revision, "a rejected order is not recorded");
+    assert_eq!(e.model().steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["sls", "uls", "buckling"]);
+    ok(&mut e, r#"{"cmd":"step.reorder","order":["uls","buckling","sls"]}"#);
+    assert_eq!(e.model().steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["uls", "buckling", "sls"]);
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model().steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["sls", "uls", "buckling"]);
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.model().steps.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["uls", "buckling", "sls"]);
+    ok(&mut e, r#"{"cmd":"step.remove","name":"buckling"}"#);
     ok(&mut e, r#"{"cmd":"step.remove","name":"sls"}"#);
     // removals that are allowed
     ok(&mut e, r#"{"cmd":"load.remove","name":"end2"}"#);

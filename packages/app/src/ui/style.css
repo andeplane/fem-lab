@@ -375,6 +375,30 @@ textarea:focus {
   background: var(--bg-selected);
   border-left-color: var(--accent);
 }
+.step-row {
+  cursor: grab;
+}
+.step-row.dragging {
+  opacity: 0.45;
+}
+.step-row.drop-before::before,
+.step-row.drop-after::after {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--cyan);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--cyan) 55%, transparent);
+  pointer-events: none;
+}
+.step-row.drop-before::before {
+  top: -1px;
+}
+.step-row.drop-after::after {
+  bottom: -1px;
+}
 .row-main {
   display: flex;
   align-items: flex-start;
@@ -435,6 +459,24 @@ textarea:focus {
 }
 .at:hover:not(:disabled) {
   color: var(--cyan);
+}
+.step-moves {
+  flex: none;
+  display: flex;
+  padding-top: 3px;
+}
+.step-move {
+  width: 15px;
+  height: 20px;
+  color: #3a4048;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.step-move:hover:not(:disabled) {
+  color: var(--cyan);
+}
+.step-move:disabled {
+  color: #252a31;
 }
 .tree-action {
   flex: none;
