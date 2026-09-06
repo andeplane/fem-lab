@@ -84,8 +84,13 @@ async function boot(): Promise<void> {
    * do their own bookkeeping and go through the transport, so they are deliberately absent.
    */
   const REPLACES_MODEL = new Set(['model.new', 'file.open', 'file.openExample', 'example.open']);
-  /** Host Commands that change the Model or the project without the engine journaling anything. */
-  const REFRESHES = new Set(['file.export', 'project.new', 'project.open']);
+  /**
+   * Host Commands after which the Model, the Journal or the project has changed and the shell
+   * has to catch up. `file.open` and `example.open` replace the whole Model through the
+   * transport, so without this the tree, the Journal and the new project all lag a Command
+   * behind; `file.openExample` refreshes on its own way out and needs no row here.
+   */
+  const REFRESHES = new Set(['file.export', 'file.open', 'example.open', 'project.new', 'project.open']);
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
   const dispatch: Registry['dispatch'] = async (cmd) => {

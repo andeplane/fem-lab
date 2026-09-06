@@ -516,7 +516,7 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   }, [dispatch, s.selection.refs.length, s.panels]);
 
   // One fragment for both states, with the overlays at fixed positions: the start screen
-  // offers "Start a tutorial", and a tutorial that begins there has to survive the switch to
+  // offers "Tutorials", and a tutorial that begins there has to survive the switch to
   // the workspace its first Command causes — which it only does if the node keeps its slot.
   return (
     <>
