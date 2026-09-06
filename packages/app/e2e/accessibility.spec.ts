@@ -10,7 +10,7 @@ test.describe('@cpu accessibility and small screens', () => {
     await page.goto('./');
     await ready(page);
 
-    const examplesOpener = page.getByRole('button', { name: /Open an example/ });
+    const examplesOpener = page.getByRole('button', { name: /^Examples/ });
     await examplesOpener.focus();
     await examplesOpener.press('Enter');
     const examples = page.getByRole('dialog', { name: 'Examples and benchmarks' });
