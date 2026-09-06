@@ -3691,3 +3691,47 @@ fn a_stale_result_is_labelled_in_the_report() {
     let md = report(&mut e, Some("static"), None).markdown;
     assert!(md.contains("| Up to date | no: the Model changed after the solve |"), "{md}");
 }
+
+#[test]
+fn rejected_direct_results_preserve_the_journal_and_previous_result() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let previous = e.field(Some("static"), Field::Displacement).unwrap().data.clone();
+    // Every input is finite, but the exact displacement scales as F/E=1e500.
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"1e-200 Pa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 N","0 N","1e300 N"]}"#);
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(error.code, ErrorCode::SolveStalled);
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    assert_eq!(e.field(Some("static"), Field::Displacement).unwrap().data, previous);
+    // The same Engine remains usable after rejection.
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 N","0 N","-1 kN"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(e.field(Some("static"), Field::Displacement).unwrap().data, previous);
+}
+
+#[test]
+fn transient_heat_propagates_a_rejected_direct_solve_without_panicking() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"1 kg/m^3","k":"1e-200 W/(m K)","cp":"1e-200 J/(kg K)"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"1e300 W/m^3"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"heat","procedure":"heat-transient","constraints":["cold"],"loads":["source"],"dt":"1 s","tEnd":"1 s","theta":1,"initial":"0 K"}"#,
+    );
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    assert_eq!(error.code, ErrorCode::SolveStalled);
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"0 W/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    assert!(e.field(Some("heat"), Field::Temperature).unwrap().data.iter().all(|&t| t == 0.0));
+}

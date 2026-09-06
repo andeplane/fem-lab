@@ -1,7 +1,7 @@
 //! Linear solvers behind one trait, and the cost estimate a host asks for before solving.
 //!
 //! `LinearSolve` is the Extension Point: give it a right-hand side, get a solution and what it
-//! took. The sparse direct factorisation ([`direct`]) is exact; the f64 Jacobi-PCG ([`pcg`]) is
+//! took. The sparse direct factorisation ([`direct`]) verifies its residual; the f64 Jacobi-PCG ([`pcg`]) is
 //! approximate and is driven by the f64 refinement loop in [`refine`], which is also what wraps
 //! the GPU's f32 conjugate gradient (ADR 0002, plan A §5.2–§5.4).
 
@@ -20,8 +20,8 @@ use crate::query::CostEstimate;
 
 /// What a Command asked of the solver. `rel_tol` is the accuracy the *answer* must have, which
 /// the f64 refinement loop is measured against; `inner_tol` and `max_iterations` are the
-/// approximate inner solver's own, much looser, budget. The direct path is exact and reports
-/// the residual it achieved.
+/// approximate inner solver's own, much looser, budget. The direct path verifies and reports
+/// its residual against the same f64 acceptance floor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolveOptions {
     pub solver: Solver,
@@ -117,7 +117,7 @@ pub async fn solve(
         Solver::CpuDirect => pool.install(|| {
             let mut factored = direct::Direct::factor(k)?;
             let mut x = vec![0.0; k.n];
-            factored.solve(b, &mut x).map(|info| (x, info))
+            factored.solve_with_tolerance(b, &mut x, opts.rel_tol).map(|info| (x, info))
         }),
         // The iterative paths run on rayon's global pool rather than the engine's: `progress` is
         // a `&mut dyn FnMut` and cannot cross into `Pool::install`, which needs `Send`. Every

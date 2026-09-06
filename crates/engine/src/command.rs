@@ -966,6 +966,10 @@ pub enum Command {
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
     /// element quality) and refuses with a suggested fix. Returns extremes and reactions;
     /// always check that reactions balance the applied loads before trusting a stress.
+    /// Direct linear solves verify their residual too: nonfinite or excessive residuals return
+    /// solve.stalled instead of storing a Result. Static/steady direct solves use `tolerance`
+    /// (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
+    /// direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,

@@ -178,9 +178,8 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>) -> Result<Spectrum, 
         sweeps = sweep;
         for c in 0..q {
             m.spmv(&x[c], &mut y);
-            // A factorised direct solve cannot fail; the trait returns a Result for the
-            // iterative solvers, which can run out of iterations.
-            factored.solve(&y, &mut bar[c]).expect("a factorised solve");
+            // A factorization may still produce an unacceptable residual.
+            factored.solve(&y, &mut bar[c])?;
         }
         // K̂ = X̄ᵀ K X̄ and M̂ = X̄ᵀ M X̄, both q × q and symmetric by construction.
         let (k_hat, m_hat) = (project(k, &bar, q, n), project(m, &bar, q, n));
