@@ -1454,6 +1454,37 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
         InverseMap::Failed,
         "a finite request whose Newton update overflows is still a locator failure"
     );
+    let extreme_quad = vec![
+        -f64::MAX,
+        -1.0,
+        0.0,
+        f64::MAX,
+        -1.0,
+        0.0,
+        -f64::MAX,
+        1.0,
+        0.0,
+        f64::MAX,
+        1.0,
+        0.0,
+        0.0,
+        -1.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -1.0,
+        0.0,
+        0.0,
+    ];
+    assert_eq!(
+        element_for(ElementKind::Quad8).inverse_map_status(&extreme_quad, [f64::MAX / 4.0, 0.0, 0.0]),
+        InverseMap::Failed,
+        "finite opposite-sign extrema must not overflow the residual tolerance and accept the centre"
+    );
 }
 
 #[test]

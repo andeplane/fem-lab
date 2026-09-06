@@ -364,12 +364,18 @@ impl Engine {
                 Some(selected_at(source.field, node, source.component))
             } else {
                 let point = target.record.built.mesh.node(node as u32);
-                projected_at(&source.record.built.mesh, source.field, source.component, point)?
+                match projected_at(&source.record.built.mesh, source.field, source.component, point) {
+                    Ok(value) => value,
+                    Err(error) => return Err(error),
+                }
             };
             if let Some(source_value) = source_value {
                 for (component, (target, source)) in target_value.iter().zip(source_value).enumerate() {
                     let (left_value, right_value) = if target_is_left { (*target, source) } else { (source, *target) };
-                    values.push(Some(finite_difference(left_value, right_value, node, component)?));
+                    match finite_difference(left_value, right_value, node, component) {
+                        Ok(value) => values.push(Some(value)),
+                        Err(error) => return Err(error),
+                    }
                 }
             } else {
                 outside_nodes.push(node as u32);
@@ -379,7 +385,8 @@ impl Engine {
         let warnings = if left.name.starts_with("mode:") || right.name.starts_with("mode:") {
             vec![crate::error::Warning {
                 code: "result.mode-uncorrelated".into(),
-                text: "Modal signs and ordering are not correlated; values are raw left minus right without sign alignment".into(),
+                text: "Modal signs and ordering are not correlated; values are raw left minus right without sign alignment"
+                    .into(),
                 where_: Some("left.field/right.field".into()),
             }]
         } else {
@@ -421,6 +428,22 @@ mod tests {
     use super::*;
     use femlab_geometry::{split_to_simplices, ElementKind, Structured};
 
+    fn retain_test_temperature(engine: &mut Engine, step: &str, mesh: femlab_geometry::Mesh, value: f64) {
+        let nodes = mesh.n_nodes();
+        engine.mesh = Some(BuiltMesh { mesh, body_of_block: vec!["body".into()], sets: Default::default() });
+        let mut result = crate::procedure::blank(crate::solve::SolveInfo {
+            solver: "test",
+            iterations: 0,
+            rel_residual: 0.0,
+            time_ms: 0.0,
+        });
+        result.fields.insert(
+            crate::command::Field::Temperature,
+            crate::post::FieldData::new(crate::post::Per::Node, 1, vec![value; nodes]),
+        );
+        engine.retain_result(step.into(), result);
+    }
+
     #[test]
     fn identities_advance_without_a_numeric_wrap_boundary() {
         assert_eq!(next_sequence("0"), "1");
@@ -443,10 +466,26 @@ mod tests {
         assert_eq!(hex.coords, tetrahedra.coords);
         assert!(!same_field_topology(&hex, &tetrahedra));
 
-        let field = crate::post::FieldData::new(crate::post::Per::Node, 1, vec![0.0; hex.n_nodes()]);
-        let mut degenerate = hex;
+        let mut degenerate = hex.clone();
         degenerate.coords.fill(0.0);
-        let error = projected_at(&degenerate, &field, None, [0.0; 3]).expect_err("a singular map cannot be outside");
+        let mut engine = Engine::new(None, Box::new(crate::engine::NoClock), 1);
+        retain_test_temperature(&mut engine, "degenerate", degenerate, 0.0);
+        retain_test_temperature(&mut engine, "valid", hex, 0.0);
+        let error = engine
+            .query_difference(
+                &crate::query::DifferenceOperand {
+                    result_id: "result-1".into(),
+                    field: "temperature".into(),
+                    component: None,
+                },
+                &crate::query::DifferenceOperand {
+                    result_id: "result-2".into(),
+                    field: "temperature".into(),
+                    component: None,
+                },
+                crate::query::DifferenceOnto::Right,
+            )
+            .expect_err("a singular source map cannot be reported as outside coverage");
         assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::Unsupported, Some("onto")));
         assert!(error.cause.contains("element 0"));
     }
@@ -455,21 +494,9 @@ mod tests {
     fn difference_overflow_is_a_structured_error_instead_of_a_null_inside_value() {
         assert_eq!(finite_difference(3.0, 1.0, 0, 0).unwrap(), 2.0);
         let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0; 3]);
-        let built = BuiltMesh { mesh: mesh.clone(), body_of_block: vec!["body".into()], sets: Default::default() };
         let mut engine = Engine::new(None, Box::new(crate::engine::NoClock), 1);
         for (step, value) in [("left", f64::MAX), ("right", -f64::MAX)] {
-            let mut result = crate::procedure::blank(crate::solve::SolveInfo {
-                solver: "test",
-                iterations: 0,
-                rel_residual: 0.0,
-                time_ms: 0.0,
-            });
-            result.fields.insert(
-                crate::command::Field::Temperature,
-                crate::post::FieldData::new(crate::post::Per::Node, 1, vec![value; mesh.n_nodes()]),
-            );
-            engine.mesh = Some(built.clone());
-            engine.retain_result(step.into(), result);
+            retain_test_temperature(&mut engine, step, mesh.clone(), value);
         }
         let error = engine
             .query_difference(

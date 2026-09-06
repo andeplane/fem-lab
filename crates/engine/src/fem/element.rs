@@ -699,7 +699,7 @@ pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
 
 fn inverse_map_status_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> InverseMap {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
-    let mut span = 0.0f64;
+    let mut scaled_span = 0.0f64;
     let mut magnitude = 0.0f64;
     for k in 0..dim {
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
@@ -710,12 +710,14 @@ fn inverse_map_status_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Inve
         if !(lo.is_finite() && hi.is_finite() && x[k].is_finite()) {
             return InverseMap::Failed;
         }
-        span = span.max(hi - lo);
+        // Scale before subtracting: finite opposite-sign extrema can make `hi - lo`
+        // overflow even though the physical-coordinate tolerance remains representable.
+        scaled_span = scaled_span.max(1e-12 * hi - 1e-12 * lo);
         magnitude = magnitude.max(lo.abs()).max(hi.abs()).max(x[k].abs());
     }
     // The relative term follows the physical element size; the epsilon term covers subtraction
     // when a small element is far from the origin. Both are physical-coordinate tolerances.
-    let residual_tolerance = 1e-12 * span + 64.0 * f64::EPSILON * magnitude;
+    let residual_tolerance = scaled_span + 64.0 * f64::EPSILON * magnitude;
     let mut xi = centre_xi(kind);
     let mut sh = vec![0.0; nn];
     let mut dn = vec![[0.0; 3]; nn];
