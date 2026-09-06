@@ -457,7 +457,7 @@
         ]
       },
       {
-        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
         "type": "object",
         "properties": {
           "format": {
@@ -983,7 +983,7 @@
         ]
       },
       {
-        "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps.",
+        "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
         "type": "object",
         "properties": {
           "name": {
@@ -2778,7 +2778,7 @@
         "x-returns": "ResultSummary"
       },
       {
-        "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.",
+        "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nRefuses `result.stale` if the Model changed after solving; re-run `solve.run` first.",
         "type": "object",
         "properties": {
           "step": {
@@ -2820,7 +2820,7 @@
         "x-returns": "ProbeResult"
       },
       {
-        "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.",
+        "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.\nRefuses `result.stale` if the Model changed after solving; re-run `solve.run` first.",
         "type": "object",
         "properties": {
           "step": {
@@ -4874,7 +4874,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
             "type": "object",
             "properties": {
               "format": {
@@ -5400,7 +5400,7 @@
             ]
           },
           {
-            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps.",
+            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
             "type": "object",
             "properties": {
               "name": {
@@ -10190,7 +10190,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
             "type": "object",
             "properties": {
               "format": {
@@ -10716,7 +10716,7 @@
             ]
           },
           {
-            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps.",
+            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
             "type": "object",
             "properties": {
               "name": {

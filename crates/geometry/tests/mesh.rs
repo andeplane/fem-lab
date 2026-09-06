@@ -812,6 +812,84 @@ fn quality_is_perfect_on_a_lattice_and_zero_on_a_degenerate_element() {
     assert_eq!(quality(&empty, 5).worst, []);
 }
 
+#[test]
+fn quality_preserves_orientation_and_scale_in_its_jacobian_ratio() {
+    for scale in [0.25, 2.0, 7.0] {
+        for kind in KINDS {
+            let m = Structured { kind, n: [1, 1, 1] }.box_([scale, scale, scale]);
+            assert_eq!(quality(&m, 1).min_det_j_ratio, 1.0, "{kind:?} at scale {scale}");
+        }
+    }
+
+    // A reflection changes the orientation while preserving the shape, so every corner has the
+    // same negative determinant and the independent geometric oracle is exactly -1.
+    for kind in KINDS {
+        let mut reflected = cube(kind, [1, 1, 1]);
+        for p in reflected.coords.chunks_exact_mut(3) {
+            p[0] = 2.0 * (1.0 - p[0]);
+            p[1] *= 2.0;
+            p[2] *= 2.0;
+        }
+        let q = quality(&reflected, 1);
+        assert_eq!(q.min_det_j_ratio, -1.0, "{kind:?}");
+        assert_eq!(q.worst[0], (0, -1.0), "{kind:?}");
+    }
+
+    // Reversing the corner order is the simplex equivalent of the reflected geometry above.
+    for kind in [ElementKind::Tet4, ElementKind::Tet10, ElementKind::Tri3, ElementKind::Tri6] {
+        let mut reversed = cube(kind, [1, 1, 1]);
+        for conn in reversed.blocks[0].conn.chunks_exact_mut(kind.n_nodes()) {
+            conn.swap(0, 1);
+        }
+        assert_eq!(quality(&reversed, usize::MAX).min_det_j_ratio, -1.0, "{kind:?}");
+    }
+}
+
+#[test]
+fn quality_ranks_mixed_and_inverted_corner_jacobians_as_worst() {
+    let mut mixed = cube(ElementKind::Hex8, [1, 1, 1]);
+    // Reflect first, then restore one corner across the face. The corner determinants now have
+    // both signs; the smallest one must remain negative.
+    for p in mixed.coords.chunks_exact_mut(3) {
+        p[0] = 1.0 - p[0];
+    }
+    mixed.coords[3] = 2.0;
+    assert_eq!(quality(&mixed, 1).min_det_j_ratio, -1.0);
+
+    // Collapsing the reflected element's first edge creates negative and zero corner
+    // determinants. The negative corners must not be hidden by a zero maximum determinant.
+    let mut mixed_zero = cube(ElementKind::Hex8, [1, 1, 1]);
+    for p in mixed_zero.coords.chunks_exact_mut(3) {
+        p[0] = 1.0 - p[0];
+    }
+    let (first, second) = mixed_zero.coords.split_at_mut(3);
+    second[..3].copy_from_slice(first);
+    assert_eq!(quality(&mixed_zero, 1).min_det_j_ratio, -1.0);
+
+    // The reflected copy must be selected ahead of the valid element when only one worst
+    // element is requested.
+    let valid = cube(ElementKind::Hex8, [1, 1, 1]);
+    let mut inverted = valid.clone();
+    for p in inverted.coords.chunks_exact_mut(3) {
+        p[0] = 1.0 - p[0];
+    }
+    let mut coords = valid.coords.clone();
+    coords.extend_from_slice(&inverted.coords);
+    let mut conn = valid.blocks[0].conn.clone();
+    conn.extend(inverted.blocks[0].conn.iter().map(|&n| n + 8));
+    let combined = Mesh {
+        dim: 3,
+        coords,
+        blocks: vec![ElementBlock { kind: ElementKind::Hex8, conn, first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let q = quality(&combined, 1);
+    assert_eq!(q.min_det_j_ratio, -1.0);
+    assert_eq!(q.worst, [(1, -1.0)]);
+}
+
 // ---- mapped quad blocks ----------------------------------------------------------------------
 
 fn block(corners: [[f64; 2]; 4], edges: [Curve; 4], n: [usize; 2], grading: [f64; 2], tags: [&str; 4]) -> QuadBlock {

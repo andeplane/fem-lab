@@ -75,6 +75,26 @@ async function drain(gen: AsyncGenerator<AgentEvent, unknown>): Promise<AgentEve
 const turnOf = (events: AgentEvent[]) => (events.find((e) => e.type === 'turn') as Extract<AgentEvent, { type: 'turn' }>).turn;
 
 describe('the agent loop', () => {
+  it('returns validation diagnostics as a failed script tool result without starting execution', async () => {
+    const transport = fakeTransport();
+    transport.query = vi.fn(async () => ({ entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
+    const host = fakeHost(transport);
+    const invalid = { ok: false, diagnostics: [{ code: 'TS2339', cause: 'unknown API', where: { line: 1, column: 1 }, hint: 'fix the call' }] };
+    host.script.validate = vi.fn(async () => invalid);
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host });
+    const { provider, seen } = fakeProvider([
+      [{ type: 'tool_use', id: 'bad-script', name: 'run_script', input: { code: 'wrong' } }, { type: 'done', stopReason: 'tool_use' }],
+      FINAL_ROUND,
+    ]);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'claude-opus-5', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
+    expect(turn.calls[0]?.ok).toBe(false);
+    expect(host.script.run).not.toHaveBeenCalled();
+    expect(transport.dispatch).not.toHaveBeenCalled();
+    const result = seen[1]!.messages[2]!.content[0] as { isError: boolean; content: string };
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content).diagnostics).toEqual(invalid.diagnostics);
+  });
+
   it('runs every tool call of the turn and returns them in ONE tool_result message', async () => {
     const { registry, dispatched } = fixture();
     const { provider, seen } = fakeProvider([TOOL_ROUND, FINAL_ROUND]);

@@ -90,6 +90,16 @@ while unequal increments are rejected with both Load names and the Body. A8's nu
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
 
+A1 also runs all eight element families at length factors `1e-9`, `1e-6`, `1e-5`, `1e-3`,
+`1`, `1e3`, and `1e6`, with full and incompatible-mode formulations and every applicable
+idealisation. Constant strain/stress, `uᵀKu = V ε:σ`, and the linear-temperature identity
+`TᵀK_T T = kV` use the analytical physical volume (thickness-weighted area in plane stress,
+unit-depth area in plane strain, and Pappus' volume in axisymmetry). Analytical affine
+determinants and inverse-map points are checked at every scale. Inverted, collapsed and
+relatively singular counterparts are rejected independently of size. These are exact patch
+identities across scale, not a mesh convergence rate; Jacobian validity uses a dimensionless
+normalised determinant, with the unused 2D identity padding excluded from the length scale.
+
 Quantity boundary regressions check overflow independently of a solve: decimal `1e999` and
 finite `1e308 kN` must be rejected; `Pa^127`, overflowing products and inversion of `m^-128`
 must report structured errors without wrapping dimensions. Representable boundary exponents
@@ -225,6 +235,11 @@ profile is linear to 1e-10 for all of them, and the heat that enters at the hot 
 the cold one to 1e-9. A volumetric source in a slab held at both faces is checked against its
 own closed form `T = T_s + q(Lx − x²)/2k` in the same commit, which is the oracle for
 `load.heatSource`.
+
+The registry's E1 VTU export is also read, unmodified, by the independent `vtkio` reader.
+Every exported temperature must match `T(x) = 273.15 + 100 x` K within 1e-9 K, with positions
+in metres; the B1 export checks point-field tuple counts and mesh topology through the same
+reader. This catches file-format errors that an encoder-specific test decoder would miss (#186).
 
 **E2's tolerance is 2 %, not 1 %, and the reason is physics.** The published fin formula is
 one-dimensional; the model is the real two-dimensional slab, whose mid-plane has to conduct

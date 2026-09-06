@@ -375,15 +375,15 @@ impl Engine {
     /// The nodal field a probe or a path samples, plus its physical dimension, refusing a Result
     /// whose Mesh is no longer the one it was solved on.
     fn sampled(&mut self, step: Option<&str>, field: Field) -> Result<(FieldData, Dimension), Error> {
+        // Every sampled query must reject a Result from an older Model revision. Keep the
+        // Result's reaction quantity so thermal reaction fields retain their power dimension.
+        let reaction_quantity = self.current_result(step)?.reaction_quantity;
         let f = self.field(step, field)?.clone();
         if f.per != crate::post::Per::Node {
             return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal field"))
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
-        let dim = crate::solve_run::field_dimension(
-            field,
-            self.stored(step).expect("field lookup resolved this Step").2.reaction_quantity,
-        );
+        let dim = crate::solve_run::field_dimension(field, reaction_quantity);
         self.mesh()?;
         let nodes = self.mesh.as_ref().expect("built above").mesh.n_nodes();
         if f.len() != nodes {

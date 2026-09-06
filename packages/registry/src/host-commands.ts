@@ -5,6 +5,7 @@
 // a zod schema, a doc string that is the AI's tool description, and a `run` that makes one call on
 // `HostContext`. Nothing here touches the DOM: the app implements `HostContext`, tests fake it.
 import { z } from 'zod';
+import type { ScriptDiagnostic, ScriptValidation } from './script-validation-types';
 import type { JournalEntry, ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
 import { FemError } from './error';
 import { assertInside } from './project-paths';
@@ -65,6 +66,7 @@ export interface FolderInfo {
   skills: string[];
 }
 export interface ScriptResult {
+  diagnostics?: ScriptDiagnostic[];
   /** Successful engine Commands dispatched by this script, for attributable turn diffs. */
   journalEntries?: JournalEntry[];
   result: unknown;
@@ -122,6 +124,7 @@ export interface HostContext {
   };
   panels: { toggle(panel: string, open?: boolean): void };
   script: {
+    validate(code: string, timeoutMs?: number): Promise<ScriptValidation>;
     run(code: string, timeoutMs?: number): Promise<ScriptResult>;
     stop(): void;
     setSource(code: string, append?: boolean): void;
@@ -316,7 +319,11 @@ export const HOST_COMMANDS: HostDef[] = [
   def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
   def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, the examples gallery, the report, the project folder and the export dialog.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
-  def('script.run', 'Run TypeScript against the `fem` API (see fem.d.ts) in the script Worker with an optional timeout in milliseconds. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.run(code, timeoutMs), false),
+  def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with an optional timeout in milliseconds. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), async ({ code, timeoutMs }, ctx) => {
+    const validation = await ctx.script.validate(code);
+    if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
+    return ctx.script.run(code, timeoutMs);
+  }, false),
   def('script.stop', 'Terminate the script that is currently running in the script Worker. Commands it already dispatched stay in the Journal; use journal.undo to take them back.', none, (_, ctx) => ctx.script.stop()),
   def('script.setSource', 'Put text into the Script editor, replacing its content or appending to it. Use it to hand a script to the person to review and edit rather than running it directly.', z.object({ code: z.string(), append: z.boolean().optional() }), ({ code, append }, ctx) => ctx.script.setSource(code, append)),
   def('chat.send', 'Send a chat turn as the person would; the text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
@@ -386,6 +393,7 @@ export const HOST_COMMANDS: HostDef[] = [
 ];
 
 export const HOST_QUERIES: HostDef[] = [
+  def('query.validateScript', 'Parse and type-check TypeScript against the generated fem API without executing it or changing the Model. Returns { ok, diagnostics: [{ code, cause, where: { line, column } | null, hint }] }. Source locations are one-based. Compilation runs in a worker with a separate default 10000 ms deadline (maximum 30000) and a 64000-character source limit. Passing validates types, not physical correctness or program termination. script.run performs this validation automatically before starting its execution timeout.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.validate(code, timeoutMs)),
   def('query.screenshot', 'Render the current view to a PNG (base64) at the given size, optionally with the legend and a title. Use it to see what the person sees or to put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
   def('query.view', 'The current camera: position, target and up in metres. Save it with the model or hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
   def('query.capabilities', 'What this engine and browser can do: GPU and adapter, thread count, engine and schema versions, WebGPU and cross-origin isolation, and whether the engine runs locally or on a remote server.', none, async (_, ctx) => ({

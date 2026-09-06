@@ -284,5 +284,15 @@ describe('the convergence study, through the same chart', () => {
     expect(bottom.textContent).toContain('Mesh convergence');
     expect(bottom.querySelector('.chart line[stroke-dasharray]')).not.toBeNull();
     expect(bottom.textContent).toContain('rate 2.01');
+    expect(root.querySelector('.stale-banner')).toBeNull();
+    store.set({ result: { ...RESULT, stale: true } });
+    render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    expect(root.querySelector('.stale-banner')?.textContent).toContain('convergence table reports separate study solves');
+    expect(root.querySelector('.stale-banner')?.textContent).toContain('does not refresh these stale contours');
+    expect(root.querySelector('.stale-banner button')?.getAttribute('data-cmd')).toBe('solve.run');
+    store.set({ study: null });
+    render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    expect(root.querySelector('.stale-banner')?.textContent).toContain('Model changed');
+    expect(root.querySelector('.stale-banner')?.textContent).not.toContain('convergence table');
   });
 });
