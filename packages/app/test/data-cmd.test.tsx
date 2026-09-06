@@ -127,6 +127,17 @@ describe('the shell', () => {
     expect(root.querySelector('.bottom-body')!.textContent).toContain('model.new');
   });
 
+  // plan E — the tutorial spotlight finds "the + add material chip" from a Command id alone by
+  // reading `data-opens`, so that attribute is under the same invariant as `data-cmd`.
+  it('names only Commands the registry has on every data-opens, and puts it only on form.open', () => {
+    const { root, registry } = mount();
+    const known = new Set(registry.list().commands.map((d) => d.name));
+    const opens = [...root.querySelectorAll('[data-opens]')];
+    expect(opens.length).toBeGreaterThan(0);
+    expect(opens.filter((el) => el.getAttribute('data-cmd') !== 'form.open').map((el) => el.getAttribute('data-opens'))).toEqual([]);
+    expect([...new Set(opens.map((el) => el.getAttribute('data-opens')!))].filter((c) => !known.has(c))).toEqual([]);
+  });
+
   // Issue #40: the drawer used to be a column of `.workspace`, which only exists once a Model
   // does, so "Ask the Assistant" on the start screen did nothing at all.
   it('mounts the Assistant drawer on the start screen, with no Model at all', async () => {
@@ -175,5 +186,22 @@ describe('the shell', () => {
     const menu = [...root.querySelectorAll('.add-menu [data-cmd]')];
     expect(menu.map((el) => el.textContent)).toEqual(['▭box', '⬭cylinder', '◯sphere', '▱sheet', '⬒extrude', '◑revolve', '⬬union', '⊖subtract', '⊗intersect', '⇲transform', '∖cut']);
     expect(menu.map((el) => el.getAttribute('data-cmd')!).filter((c) => !known.has(c))).toEqual([]);
+  });
+
+  // Issue #211: a menu closes on Escape and gives focus back to the chip that opened it.
+  it('closes the shape menu on Escape and returns focus to the chip', async () => {
+    const { root } = mount();
+    const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
+    chip.click();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(root.querySelector('.add-menu')).toBeTruthy();
+
+    // From inside the menu, which is where the keystroke actually lands.
+    const item = root.querySelector<HTMLElement>('.add-menu [data-cmd]')!;
+    item.focus();
+    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(root.querySelector('.add-menu')).toBeNull();
+    expect(document.activeElement).toBe(chip);
   });
 });

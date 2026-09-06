@@ -58,7 +58,7 @@ type Item =
   | { kind: 'verify'; rows: VerifyRow[] }
   | { kind: 'skill'; name: string; note: string }
   | { kind: 'tool'; call: ToolCall }
-  | { kind: 'diff'; entries: JournalEntry[]; steps: number }
+  | { kind: 'diff'; entries: JournalEntry[]; steps: number; journal: string | null }
   | { kind: 'files'; files: string[] }
   | { kind: 'bad'; text: string };
 
@@ -273,7 +273,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             prose = '';
             const wrote = event.turn.calls.filter((c) => c.ok && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
-            if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps });
+            if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
             setTurn(event.turn);
           }
         }
@@ -631,6 +631,8 @@ function flushProse(text: string, add: (item: Item) => void): void {
 }
 
 function Item({ item, registry, dispatch }: { item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
+  const [undoState, setUndoState] = useState<'ready' | 'pending' | 'done' | 'failed'>('ready');
+  const [undoError, setUndoError] = useState('');
   if (item.kind === 'user') {
     return (
       <div class="bubble">
@@ -691,10 +693,21 @@ function Item({ item, registry, dispatch }: { item: Item; registry: Registry; di
     <div class="card diff">
       <div class="head">
         <span>Journal diff · this turn</span>
-        <Cmd cmd="journal.undo" class="undo" title="Take the whole turn back" run={() => undoTurn(registry, item.steps)}>
-          Undo turn
+        <Cmd cmd="journal.undo" class="undo" title="Take the whole turn back" disabled={undoState !== 'ready' || item.steps === 0} run={async () => {
+          setUndoState('pending');
+          try {
+            await undoTurn(registry, item.steps, item.journal);
+            setUndoState('done');
+          } catch (e) {
+            setUndoState('failed');
+            setUndoError(e instanceof FemError ? e.cause : String(e));
+          }
+        }}>
+          {undoState === 'done' ? 'Turn undone' : undoState === 'pending' ? 'Undoing…' : 'Undo turn'}
         </Cmd>
       </div>
+      {undoError ? <div class="bad-line">{undoError} — inspect the Journal before undoing later changes.</div> : null}
+      {item.journal === null ? <div class="mark">{item.entries.some((entry) => entry.cmd.cmd === 'model.new') ? 'This turn created or reset the Model; the engine cannot undo that boundary.' : 'A complete turn boundary could not be verified. Undo individual Commands in the Journal.'}</div> : null}
       <div class="lines">
         <div class="mark">— turn start —</div>
         {item.entries.map((entry) => (

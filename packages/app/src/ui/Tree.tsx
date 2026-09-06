@@ -389,7 +389,17 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
             {/* Outside the empty branch: a group that already has one thing in it is exactly where
                 a person goes to add the second (issue #43). */}
             {group.add ? (
-              <div class="add-row">
+              <div
+                class="add-row"
+                onKeyDown={(e) => {
+                  // A menu closes on Escape and hands focus back to what opened it (issue #211).
+                  // One handler on the row: keydown bubbles from the chip and every item alike.
+                  if (e.key !== 'Escape' || adding !== group.label) return;
+                  e.stopPropagation();
+                  setAdding(null);
+                  (e.currentTarget as HTMLElement).querySelector<HTMLElement>('.chip-add')?.focus();
+                }}
+              >
                 <Cmd
                   dispatch={dispatch}
                   cmd="form.open"

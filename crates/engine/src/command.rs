@@ -986,11 +986,15 @@ pub enum Command {
     },
 
     /// Undo the last `steps` Commands (default 1), restoring the Model and orphaning any
-    /// Result produced after that point. Not recorded in the Journal.
+    /// Result produced after that point. Not recorded in the Journal. If `expectedJournal` is
+    /// supplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise
+    /// nothing is undone. Use this guard for a saved turn boundary while other callers can edit.
     #[serde(rename = "journal.undo", rename_all = "camelCase")]
     JournalUndo {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_journal: Option<String>,
     },
 
     /// Redo the last `steps` undone Commands (default 1) by re-applying them; a redone solve
@@ -1041,7 +1045,7 @@ mod tests {
         };
         assert_eq!(c.name(), "geometry.addBox");
         assert!(c.is_journaled());
-        assert!(!Command::JournalUndo { steps: None }.is_journaled());
+        assert!(!Command::JournalUndo { steps: None, expected_journal: None }.is_journaled());
         assert!(!Command::JournalRedo { steps: Some(2) }.is_journaled());
         let j = serde_json::to_string(&c).unwrap();
         assert_eq!(j, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);

@@ -39,7 +39,7 @@ describe('the system prompt', () => {
     const text = apiReference(registryWith());
     expect(text).toContain('geometry.addBox(');
     expect(text).toContain('query.model() —');
-    expect(text).toMatch(/journal\.undo\(steps\?\)/);
+    expect(text).toMatch(/journal\.undo\(steps\?, expectedJournal\?\)/);
     expect(text).not.toContain('cmd,');
   });
 

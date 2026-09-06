@@ -3,6 +3,7 @@
 // literally the Command Apply sends — the design's promise that you see it before it happens.
 import type { EngineSchema, JsonSchema, ModelSummary } from '@femlab/registry';
 import { render } from 'preact';
+import { z } from 'zod';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from './wait-for';
 import schema from '../../registry/src/generated/engine.schema.json';
@@ -63,6 +64,34 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('teaches linear mesh accuracy and previews a quadratic fix as one Command', () => {
+    const values = { mesher: { kind: 'free', of: 'plate', size: '10 mm' } };
+    const { root, sent, store } = mount('mesh.set', values);
+    expect(field(root, 'order').querySelector('[role="status"]')!.textContent).toContain('Linear triangles');
+    root.querySelector<HTMLButtonElement>('[role="status"] button')!.click();
+    expect(sent).toEqual([{ cmd: 'form.open', command: 'mesh.set', args: { ...values, order: 2 }, keepInitial: true }]);
+    expect(store.state.form!.initial).toEqual(values);
+    expect(root.querySelector('[role="status"]')).toBeNull();
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('order: 2');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'mesh.set', ...values, order: 2 });
+  });
+
+  it('warns for full linear quad/hex formulations, not quadratic or incompatible modes', () => {
+    for (const kind of ['lattice', 'mapped', 'sweep']) {
+      const { root } = mount('mesh.set', { mesher: { kind }, order: 1, formulation: 'full' });
+      expect(root.querySelector('[role="status"]')!.textContent).toContain('can lock in bending');
+    }
+    for (const values of [
+      { mesher: { kind: 'lattice' } },
+      { mesher: { kind: 'mapped' }, order: 1, formulation: 'incompatible-modes' },
+      { mesher: { kind: 'free' }, order: 2 },
+      { mesher: { kind: 'lattice' }, order: 2, formulation: 'full' },
+    ]) {
+      expect(mount('mesh.set', values).root.querySelector('[role="status"]')).toBeNull();
+    }
+  });
+
   beforeEach(() => {
     document.body.innerHTML = '';
   });
@@ -165,7 +194,41 @@ describe('SchemaForm', () => {
     field(root, 'bodies').querySelector<HTMLButtonElement>('.chip-cand')!.click();
     expect(store.state.form!.values['bodies']).toEqual(['beam']);
     field(root, 'bodies').querySelector<HTMLButtonElement>('.chip-set button')!.click();
-    expect(store.state.form!.values['bodies']).toBeUndefined();
+    expect(store.state.form!.values['bodies']).toEqual([]);
+  });
+
+  it.each(['modal', 'static'])('submits an untouched empty required picker for a %s Step', (procedure) => {
+    const { root, sent } = mount('step.add');
+    type(field(root, 'name').querySelector('input')!, 'free');
+    [...field(root, 'procedure').querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === procedure)!.click();
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    const applied = sent.at(-1)!;
+    expect(applied).toEqual({ cmd: 'step.add', name: 'free', procedure, constraints: [], loads: [] });
+    expect(z.fromJSONSchema(schema.commands as never).safeParse(applied).success).toBe(true);
+    // Optional output remains absent, so the engine can apply its documented defaults.
+    expect(applied).not.toHaveProperty('output');
+  });
+
+  it('preserves required empty arrays after removing the final constraint/load chip', () => {
+    const { root, sent, store } = mount('step.add', { name: 'free', procedure: 'modal', constraints: ['root'], loads: ['tip'] });
+    field(root, 'constraints').querySelector<HTMLButtonElement>('.chip-set button')!.click();
+    field(root, 'loads').querySelector<HTMLButtonElement>('.chip-set button')!.click();
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(store.state.form!.values).toMatchObject({ constraints: [], loads: [] });
+    expect(z.fromJSONSchema(schema.commands as never).safeParse(sent.at(-1)).success).toBe(true);
+  });
+
+  it.each([['model.rename', 'to'], ['model.duplicate', 'as']])('fills the required ObjectKind in %s from empty arguments', (command, target) => {
+    const { root, sent } = mount(command!);
+    const kind = field(root, 'kind');
+    expect(kind.textContent).not.toContain('(optional)');
+    [...kind.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'body')!.click();
+    type(field(root, 'name').querySelector('input')!, 'beam');
+    type(field(root, target!).querySelector('input')!, 'beam-copy');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    const applied = sent.at(-1)!;
+    expect(applied).toEqual({ cmd: command, kind: 'body', name: 'beam', [target!]: 'beam-copy' });
+    expect(z.fromJSONSchema(schema.commands as never).safeParse(applied).success).toBe(true);
   });
 
   it('dispatches the visually selected default kind when its tagged-union sub-form is edited', () => {

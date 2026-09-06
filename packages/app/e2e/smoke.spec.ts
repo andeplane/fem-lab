@@ -204,6 +204,77 @@ test.describe('@cpu the shell', () => {
     expect(list!.y).toBeGreaterThanOrEqual(strip!.y + strip!.height);
     expect(list!.y + list!.height).toBeLessThanOrEqual(composer!.y + 1);
   });
+
+  test('keeps every top-bar action visible and keyboard reachable at supported desktop widths', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+    await page.goto('./');
+    await ready(page);
+    const longName = 'Very_long_structural_model_revision_2026_final';
+    await page.evaluate(async (name) => {
+      const response = await fetch('./examples/cantilever.json');
+      const entries = (await response.json()) as { cmd: Record<string, unknown> }[];
+      for (const entry of entries) {
+        const cmd = entry.cmd['cmd'] === 'model.new' ? { ...entry.cmd, name } : entry.cmd;
+        await window.fem.dispatch(cmd as Parameters<typeof window.fem.dispatch>[0]);
+      }
+    }, longName);
+    await expect(page.locator('.model-name')).toHaveText(longName);
+    await expect(page.locator('.model-name')).toHaveAttribute('title', longName);
+    const solve = page.locator('button.solve');
+    await expect(solve).toHaveText(/Solved/);
+    await expect(solve).toHaveAttribute('title', /Solved · rev 10 — solve\.run static/);
+
+    // Include both sides of each responsive transition as well as the four acceptance widths.
+    const widths = [1180, 1199, 1200, 1280, 1299, 1300, 1440, 1599, 1600];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      const layout = await page.locator('.topbar').evaluate((header) => {
+        const bar = header.getBoundingClientRect();
+        const items = [...header.children]
+          .map((element) => ({ text: element.textContent?.trim() ?? '', rect: element.getBoundingClientRect().toJSON() }))
+          .filter(({ rect }) => rect.width > 0);
+        return { bar: bar.toJSON(), clientWidth: header.clientWidth, scrollWidth: header.scrollWidth, items };
+      });
+      expect(layout.scrollWidth, `top bar overflows at ${width}px`).toBe(layout.clientWidth);
+      for (const item of layout.items) {
+        expect(item.rect.left, `${item.text} starts outside the ${width}px top bar`).toBeGreaterThanOrEqual(layout.bar.left);
+        expect(item.rect.right, `${item.text} ends outside the ${width}px top bar`).toBeLessThanOrEqual(layout.bar.right);
+      }
+      for (let i = 1; i < layout.items.length; i++) {
+        expect(layout.items[i - 1]!.rect.right, `${layout.items[i - 1]!.text} overlaps ${layout.items[i]!.text} at ${width}px`).toBeLessThanOrEqual(
+          layout.items[i]!.rect.left,
+        );
+      }
+
+      const label = page.locator('.palette-field span').first();
+      await expect(label).toBeVisible();
+      expect((await label.boundingBox())!.width, `command label has no useful room at ${width}px`).toBeGreaterThan(18);
+    }
+
+    // Undoing the solve makes Redo an enabled keyboard stop; now every top-bar button can be
+    // reached in DOM order, including actions whose disabled state normally removes them.
+    await page.evaluate(() => window.fem.journal.undo({ steps: 1 }));
+    await expect(page.locator('button[data-cmd="journal.redo"]')).toBeEnabled();
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      const stops = page.locator('.topbar button:not(:disabled)');
+      const stopCount = await stops.count();
+      await stops.first().focus();
+      for (let i = 0; i < stopCount; i++) {
+        const stop = stops.nth(i);
+        await expect(stop).toBeFocused();
+        const focus = await stop.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const bar = element.closest('.topbar')!.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, barLeft: bar.left, barRight: bar.right, outline: getComputedStyle(element).outlineStyle };
+        });
+        expect(focus.left).toBeGreaterThanOrEqual(focus.barLeft);
+        expect(focus.right).toBeLessThanOrEqual(focus.barRight);
+        expect(focus.outline).toBe('solid');
+        if (i + 1 < stopCount) await page.keyboard.press('Tab');
+      }
+    }
+  });
 });
 
 test.describe('@sw without server headers', () => {

@@ -60,12 +60,17 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : s.lastError ? `${s.lastError.code} ${s.lastError.cause}` : '';
   const mm = s.model?.units.length === 'mm';
   const stage = stageOf(s);
+  const solveText = solveLabel(stage, s);
+  const modelName = s.model?.name ?? 'no model';
+  const engineState = s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…';
   return (
     <header class="topbar">
       <div class="logo">
         <i /> FEM Lab
       </div>
-      <span class="mono model-name">{s.model?.name ?? 'no model'}</span>
+      <span class="mono model-name" title={modelName}>
+        {modelName}
+      </span>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">
         <span>Search commands or ask in plain words</span>
         <span class="key">⌘K</span>
@@ -85,12 +90,12 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="journal.redo" class="tbutton" args={{ steps: 1 }} disabled={!s.journal?.canRedo} title="journal.redo (⇧⌘Z)">
         ↷
       </Cmd>
-      <span class="chip" title={s.notes.join('\n') || 'everything available'}>
+      <span class="chip" title={[engineState, ...s.notes].join('\n')}>
         <span class={s.notes.length > 0 ? 'dot warn' : 'dot'} />
-        {s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…'}
+        <span class="engine-state">{engineState}</span>
       </span>
-      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `solve.run ${step}`}>
-        {solveLabel(stage, s)}
+      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `${solveText} — solve.run ${step}`}>
+        {solveText}
       </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'examples' }}>
         Examples
@@ -293,6 +298,20 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
  * than a replay of the history, and the bar's own title says so.
  */
 function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+  const previewStart = useRef<number | null>(null);
+  const preview = (scale: number): void => {
+    previewStart.current ??= store.state.deformScale;
+    // Keep both the legend and slider readout in sync with the drawing during the gesture.
+    store.set({ deformScale: scale });
+    viewer.current?.previewDeformScale(scale);
+  };
+  const cancelPreview = (): void => {
+    if (previewStart.current === null) return;
+    const scale = previewStart.current;
+    previewStart.current = null;
+    store.set({ deformScale: scale });
+    viewer.current?.previewDeformScale(scale);
+  };
   const step = s.result?.step ?? '';
   const mode = choiceOf(s.fieldKey).mode;
   const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
@@ -347,7 +366,12 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         title={exaggerationHelp(s.deformScale)}
         data-cmd="view.setDeformScale"
         value={String(s.deformScale)}
-        onChange={(e) => void dispatch({ cmd: 'view.setDeformScale', scale: Number((e.target as HTMLInputElement).value) }).catch(() => undefined)}
+        onInput={(e) => preview(Number((e.target as HTMLInputElement).value))}
+        onPointerCancel={cancelPreview}
+        onChange={(e) => {
+          const scale = Number((e.target as HTMLInputElement).value);
+          void dispatch({ cmd: 'view.setDeformScale', scale }).then(() => { previewStart.current = null; }, cancelPreview);
+        }}
       />
       <span class="mono">×{formatNumber(s.deformScale)}</span>
       <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} pressed={s.deformScale === 1} title="draw the real displacement">
