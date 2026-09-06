@@ -233,7 +233,7 @@ fn mesh(built: Option<&(MeshSummary, MeshSettings)>, cost: Option<&crate::query:
             "Cost estimate: {} equations, at most {} matrix non-zeros, at least {} MB mandatory assembly storage. {}\n\n",
             c.dofs,
             c.nnz,
-            fmt_sig(c.bytes as f64 / 1.048576e6, 3),
+            fmt_sig(c.assembly_bytes as f64 / 1.048576e6, 3),
             c.note
         );
     }

@@ -13,7 +13,7 @@ byte for byte.
   schema, so it is exactly what the app's buttons dispatch — there is no second surface.
 - **every engine Query**: `query_model`, `query_mesh`, `query_set`, `query_result`, `query_probe`,
   `query_path`, `query_cost`, `query_journal`, `query_script`, `query_report`, `query_convert`,
-  `query_objects`, `query_capabilities`.
+  `query_objects`, `query_capabilities`, `query_materialLibrary`.
 - **`validate_script { code, timeoutMs? }`** — parse and type-check against the generated
   engine API and this host's registered argument schemas, without running code or changing
   the Model. Returns `{ ok, diagnostics }` with codes, causes, one-based source locations and hints.
@@ -82,6 +82,25 @@ node packages/mcp/dist/femlab-mcp.js --project /path/to/your/work
 `packages/mcp/dist/femlab-mcp.js` next to its own binary or in the checkout it was built in, or
 at `FEMLAB_MCP`, and reports setup instructions if it finds none. Point `FEMLAB_WASM` at a
 folder holding `femlab_engine_wasm.js` if the engine lives somewhere unusual.
+
+### Build and verify an npm artifact
+
+Node 22 or newer is required. After the checkout build above, run:
+
+```sh
+npm pack -w packages/mcp
+npm run test:package -w packages/mcp
+```
+
+The packing hook rebuilds the host and copies the generated Node engine into `dist/wasm-node`,
+including a CommonJS package boundary for wasm-bindgen's Node output. The private registry is
+bundled at build time and is not an installation dependency. Worker entry points remain in the
+artifact. Packing fails if the Node WASM engine has not been built.
+
+The package smoke test installs the real tarball into a fresh temporary directory, starts its
+stdio server, lists tools, makes engine calls and executes a worker script. It also checks that
+the installed WASM bytes match the build. No checkout engine override is supplied. Publication
+and tagged platform releases remain tracked by [#27](https://github.com/andeplane/fem-lab/issues/27).
 
 ## Claude Code / Claude Desktop
 

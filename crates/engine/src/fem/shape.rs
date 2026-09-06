@@ -15,7 +15,9 @@
 
 use femlab_geometry::mesh::{ElementKind, FaceKind};
 
-use crate::fem::quadrature::{Rule, HEX_2X2X2, HEX_3X3X3, QUAD_2X2, QUAD_3X3, TET_1, TET_4, TRI_1, TRI_3};
+use crate::fem::quadrature::{
+    Rule, HEX_2X2X2, HEX_3X3X3, QUAD_2X2, QUAD_3X3, TET_1, TET_125, TET_4, TRI_1, TRI_25, TRI_3, TRI_9,
+};
 
 /// 1/√3, the 2-point Gauss–Legendre abscissa (the tests check it against `gauss_legendre(2)`).
 const G2: f64 = 0.577_350_269_189_625_8;
@@ -179,7 +181,7 @@ fn copy_rule(r: &'static Rule) -> Rule {
     Rule { points: r.points, weights: r.weights }
 }
 
-/// The quadrature rule each kind is integrated with: hex8 2×2×2, hex20 3×3×3, tet4 1, tet10 4,
+/// The stiffness/recovery quadrature rule: hex8 2×2×2, hex20 3×3×3, tet4 1, tet10 4,
 /// quad4 2×2, quad8 3×3, tri3 1, tri6 3.
 pub fn rule_of(kind: ElementKind) -> Rule {
     copy_rule(match kind {
@@ -192,6 +194,22 @@ pub fn rule_of(kind: ElementKind) -> Rule {
         ElementKind::Tri3 => &TRI_1,
         ElementKind::Tri6 => &TRI_3,
     })
+}
+
+/// Quadrature for `NᵀN` volume integrals (mass and capacity), independent of the
+/// stiffness/recovery rule. Linear simplex products have degree 2; quadratic ones
+/// degree 4. A quadratic isoparametric Jacobian adds up to degree `dim`, and an
+/// axisymmetric radius adds up to degree 2. These positive rules therefore cover
+/// degree 3/8 for linear/quadratic triangles and degree 2/7 for tetrahedra, including
+/// curved geometry and the physical scale. Tensor elements retain their full rule.
+pub fn product_rule_of(kind: ElementKind) -> Rule {
+    match kind {
+        ElementKind::Tri3 => copy_rule(&TRI_9),
+        ElementKind::Tri6 => copy_rule(&TRI_25),
+        ElementKind::Tet4 => copy_rule(&TET_4),
+        ElementKind::Tet10 => copy_rule(&TET_125),
+        _ => rule_of(kind),
+    }
 }
 
 /// Shape functions at `xi`; `n.len() == kind.n_nodes()`.

@@ -46,6 +46,12 @@ uncaught page errors, including popup pages. The panel lifecycle smoke reopens i
 panels, Assistant disclosures, bottom tabs and viewer modes twice. The Report renderer is
 still tracked separately in [#14](https://github.com/andeplane/fem-lab/issues/14).
 
+The Assistant streams prose and tool arguments as they arrive. Choose a model below its
+composer; the choice is saved in this browser. Enter sends a message, or queues it while a
+response is running. Enter again with an empty composer interrupts that response and starts
+the next queued message after any active tool finishes. Shift+Enter adds a newline. Tool
+arguments and results scroll inside their cards; image payloads are omitted from the display.
+
 **Status: research, plan, engine, and a browser shell. Read in this order:**
 
 1. [`docs/PROPOSAL.md`](docs/PROPOSAL.md): the questions answered (can FEniCS run in a

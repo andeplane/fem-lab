@@ -2560,9 +2560,10 @@ Returns: `Converted`.
 
 ### query.cost
 
-Cost before solving: DOF, matrix non-zero bounds and mandatory assembly memory lower
-bound. Counting uses at most 16 MiB scratch after meshing. Feasibility is false above
-a fixed 1.5 GiB planning budget, otherwise unknown: solver fill/workspace are excluded.
+Cost before solving: DOF, matrix non-zero bounds, exact retained-frame schedule and
+counted peak memory. Counting uses at most 16 MiB scratch after meshing. Feasibility is
+false above a fixed 1.5 GiB planning budget, otherwise unknown because solver fill,
+allocator overhead and host serialization are excluded.
 Use before large solves; this query does not promise that a solve fits the current host.
 
 Returns: `CostEstimate`.
