@@ -250,9 +250,30 @@ function FieldView(props: FieldProps) {
     );
   }
   if (field.kind === 'number') {
+    const mesher = getAt(values, ['mesher', 'kind']);
+    // Only describe elements that this engine can actually produce. Order defaults to one.
+    const linear = value === undefined || value === null || value === 1;
+    const bendingWarning = s.form?.cmd === 'mesh.set' && field.path.join('.') === 'order' && linear
+      ? mesher === 'free'
+        ? 'Linear triangles have constant strain and can be too stiff in bending. Use quadratic elements and check mesh convergence.'
+        : ['lattice', 'mapped', 'sweep'].includes(String(mesher)) && values['formulation'] === 'full'
+          ? 'Fully integrated linear quadrilaterals and hexahedra can lock in bending. Use quadratic elements and check mesh convergence.'
+          : null
+      : null;
     return (
       <Row field={field} error={error}>
         <input class="mono input" type="number" data-cmd="form.open" value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value === '' ? undefined : Number((e.target as HTMLInputElement).value))} />
+        {bendingWarning ? (
+          <div class="surface warn" role="status">
+            <span aria-hidden="true">△</span>
+            <span>
+              {bendingWarning}{' '}
+              <Cmd dispatch={dispatch} cmd="form.open" class="link" args={{ command: 'mesh.set', args: { ...values, order: 2 }, keepInitial: true }}>
+                Switch to quadratic
+              </Cmd>
+            </span>
+          </div>
+        ) : null}
       </Row>
     );
   }
