@@ -4,7 +4,7 @@
 // content agent's; they are dispatched Command by Command exactly as `file.openExample` does.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 const FIXTURES = path.join(import.meta.dirname, 'fixtures');
 const journal = (name: string): Record<string, unknown>[] => JSON.parse(readFileSync(path.join(FIXTURES, `${name}.json`), 'utf8')) as Record<string, unknown>[];
@@ -30,8 +30,6 @@ test.describe('@cpu the Results tab after a modal Step', () => {
   test.setTimeout(240_000);
 
   test('frequencies, the mode picker, and the sweep on the deformation bar', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1440, height: 900 });
     await ready(page);
     await open(page, 'cantilever-modal', 'modes');
@@ -78,7 +76,6 @@ test.describe('@cpu the Results tab after a modal Step', () => {
     await phase.dispatchEvent('input');
     await expect(play).toHaveText('▶');
 
-    expect(errors).toEqual([]);
   });
 });
 
@@ -86,8 +83,6 @@ test.describe('@cpu the Results tab after a transient Step', () => {
   test.setTimeout(240_000);
 
   test('the history plot, its axes in the Step\'s units, and its hover readout', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1440, height: 900 });
     await ready(page);
     await open(page, 'bar-heat-transient', 'warmup');
@@ -115,7 +110,6 @@ test.describe('@cpu the Results tab after a transient Step', () => {
     await expect(chart.locator('.chart-readout')).not.toContainText('hover to read');
     await expect(chart.locator('.chart-readout')).toContainText(' s · max ');
 
-    expect(errors).toEqual([]);
   });
 });
 
@@ -123,8 +117,6 @@ test.describe('@cpu the derived checks and the image resolution', () => {
   test.setTimeout(240_000);
 
   test('safety and utilisation from the Material\'s yield, and 1x / 2x on the PNG row', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1440, height: 900 });
     await ready(page);
     // The modal fixture's Model, solved as a static Step instead: it has the yield.
@@ -166,6 +158,5 @@ test.describe('@cpu the derived checks and the image resolution', () => {
     const shot = await page.evaluate(async () => ((await window.fem.registry.query({ query: 'query.screenshot', width: 800, height: 600 })) as { png: string }).png.slice(0, 22));
     expect(shot).toBe('data:image/png;base64,');
 
-    expect(errors).toEqual([]);
   });
 });

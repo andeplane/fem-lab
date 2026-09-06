@@ -71,6 +71,49 @@ describe('TutorialRunner.advanceIfMatched', () => {
     expect(runner.advanceIfMatched([entry(5, 'solve.run')])).toBe(false);
     expect(runner.step).toBe(2);
   });
+
+  // Issue #87 A: `seq` is an index, and `model.new` / `journal.undo` / `file.restore` re-use it.
+  it('still advances after the Journal is rewritten shorter mid-tutorial', () => {
+    const runner = new TutorialRunner(tutorial, { dispatch: vi.fn() });
+    const long = [entry(0, 'model.new'), entry(1, 'model.setUnits'), entry(2, 'geometry.addBox'), entry(3, 'mesh.set')];
+    expect(runner.advanceIfMatched(long)).toBe(true);
+    expect(runner.step).toBe(1);
+    // `model.new` resets the Journal: one entry again, with seq 0 re-used.
+    const truncated = [entry(0, 'model.new')];
+    expect(runner.advanceIfMatched(truncated)).toBe(false);
+    // The step it is on must still be reachable — under a seq watermark it never was again.
+    expect(runner.advanceIfMatched([...truncated, entry(1, 'material.add', { name: 'steel' })])).toBe(true);
+    expect(runner.step).toBe(2);
+  });
+
+  // Issue #87 B: one call advanced one step, so a resume or an opened example stalled behind.
+  it('walks every satisfied step in one call, and notifies once', () => {
+    const runner = new TutorialRunner(tutorial, { dispatch: vi.fn() });
+    const seen = vi.fn();
+    runner.subscribe(seen);
+    expect(runner.advanceIfMatched([entry(0, 'model.new'), entry(1, 'material.add', { name: 'steel' })])).toBe(true);
+    expect(runner.step).toBe(2); // stops at the read-only step, which only Next advances
+    expect(seen).toHaveBeenCalledOnce();
+  });
+
+  // Issue #87 B: a runner started over an existing Model latched onto that Model's entries.
+  it('never lets entries that predate the runner satisfy a step', () => {
+    const before = [entry(0, 'model.new'), entry(1, 'material.add', { name: 'steel' })];
+    const runner = new TutorialRunner(tutorial, { dispatch: vi.fn() }, 0, before.length);
+    expect(runner.advanceIfMatched(before)).toBe(false);
+    expect(runner.step).toBe(0);
+    expect(runner.advanceIfMatched([...before, entry(2, 'model.new')])).toBe(true);
+    expect(runner.step).toBe(1);
+  });
+
+  it('recognises a step whose Command is already journaled instead of needing it re-issued', async () => {
+    const dispatch = vi.fn(async () => undefined);
+    const runner = new TutorialRunner(tutorial, { dispatch });
+    // The person ran `model.new` themselves, from the palette, before pressing anything here.
+    expect(runner.advanceIfMatched([entry(0, 'model.new')])).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(runner.step).toBe(1);
+  });
 });
 
 describe('TutorialRunner.next / skip', () => {
@@ -126,7 +169,7 @@ describe('persistence', () => {
     expect(parseTutorialHash('')).toBeNull();
   });
 
-  it('resumes no further than the Journal proves, and sets the watermark past the proven entries', () => {
+  it('resumes no further than the Journal proves, and sets the baseline past the proven entries', () => {
     localStorage.setItem('femlab.tutorial.demo', '2');
     // nothing in the Journal: a saved step 2 means nothing, start over
     const empty = TutorialRunner.resume(tutorial, { dispatch: vi.fn() }, [], '');
@@ -155,7 +198,7 @@ describe('persistence', () => {
     expect(fromHash.step).toBe(2);
   });
 
-  it('restart resets both the step and the watermark', () => {
+  it('restart resets the step and puts the baseline back to where the runner started', () => {
     const runner = new TutorialRunner(tutorial, { dispatch: vi.fn() });
     runner.advanceIfMatched([entry(0, 'model.new')]);
     runner.restart();

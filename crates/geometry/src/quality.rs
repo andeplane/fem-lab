@@ -11,8 +11,9 @@ use crate::mesh::{ElementKind, Mesh};
 /// Jacobian ratio, ascending.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Quality {
-    /// Smallest `min(det J) / max(det J)` over the corners of an element; 1 is perfect, a
-    /// negative value means an inverted element and 0 a degenerate one.
+    /// Smallest corner `det J` divided by the largest absolute corner `det J`; 1 is perfect, a
+    /// negative value means an inverted element and 0 a degenerate one. Using the absolute
+    /// denominator keeps reflected elements negative and bounds the ratio to `[-1, 1]`.
     pub min_det_j_ratio: f64,
     /// Largest longest-edge / shortest-edge ratio; 1 is a cube, `f64::MAX` a collapsed edge.
     pub max_aspect: f64,
@@ -32,8 +33,8 @@ pub fn quality(mesh: &Mesh, worst_n: usize) -> Quality {
         let x: Vec<[f64; 3]> = mesh.elem_nodes(e).iter().take(kind.n_corners()).map(|&n| mesh.node(n)).collect();
         let dets = corner_dets(kind, &x);
         let lo = dets.iter().copied().fold(f64::INFINITY, f64::min);
-        let hi = dets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        per_elem.push((e, if hi == 0.0 { 0.0 } else { lo / hi }));
+        let scale = dets.iter().copied().map(f64::abs).fold(0.0f64, f64::max);
+        per_elem.push((e, if scale == 0.0 { 0.0 } else { lo / scale }));
         let mut short = f64::INFINITY;
         let mut long = 0.0f64;
         for &[a, b] in kind.edges() {

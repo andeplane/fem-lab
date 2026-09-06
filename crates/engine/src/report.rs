@@ -10,9 +10,10 @@ use femlab_geometry::Shape;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::command::{Dof, Procedure};
 use crate::engine::{display, Engine};
 use crate::error::Error;
-use crate::model::{LoadKind, MeshSettings};
+use crate::model::{ConstraintKind, Idealisation, LoadKind, MeshSettings, MesherSettings};
 use crate::query::{ConstraintRow, LoadRow, MeshSummary, ModelSummary, ReportText, ResultSummary, StudyReport, Valued};
 use crate::units::{fmt_sig, Dim, Force, Length};
 
@@ -229,11 +230,10 @@ fn mesh(built: Option<&(MeshSummary, MeshSettings)>, cost: Option<&crate::query:
     s += &table(&["Property", "Value"], rows, "unreachable");
     if let Some(c) = cost {
         s += &format!(
-            "Cost estimate: {} equations, {} matrix non-zeros, {} MB, fits this host: {} ({}).\n\n",
+            "Cost estimate: {} equations, at most {} matrix non-zeros, at least {} MB mandatory assembly storage. {}\n\n",
             c.dofs,
             c.nnz,
             fmt_sig(c.bytes as f64 / 1.048576e6, 3),
-            c.feasible,
             c.note
         );
     }
@@ -411,21 +411,47 @@ fn balance_line(balance: f64) -> String {
 
 /// The closed-form estimate a single box under a single force admits, in the Model's own units.
 ///
-/// Deliberately narrow: one Body that is an axis-aligned box, one Load that carries a total
-/// force, one material. That is the shape of the first model anyone builds, and quoting the
+/// Deliberately narrow: a 3D lattice mesh of one uncut axis-aligned box, one assigned material, and a current static
+/// Step with one fully fixed end and one single-component force on the opposite end.
+/// Auto face names prove the end geometry; arbitrary named predicates are not inferred.
+/// That is the shape of the first model anyone builds, and quoting the
 /// beam-theory number next to the FEM one is the habit J1.5 asks for. Anything richer is a
 /// Benchmark, not a hook.
 fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Option<String> {
+    let Some(MeshSettings { mesher: MesherSettings::Lattice { .. }, .. }) = &model.mesh else { return None };
+    if model.idealisation != Idealisation::Solid3d {
+        return None;
+    }
     let [body] = &model.bodies[..] else { return None };
     let Shape::Box { size } = &body.shape else { return None };
     let [mat] = &model.materials[..] else { return None };
-    let [load] = &model.loads[..] else { return None };
-    let total = match &load.kind {
-        LoadKind::Force { total, .. } | LoadKind::Traction { total, .. } => *total,
+    let step = model.step(&r.step)?;
+    let [load_name] = &step.loads[..] else { return None };
+    let load = model.load(load_name)?;
+    let (total, on) = match &load.kind {
+        LoadKind::Force { total, on } | LoadKind::Traction { total, on } => (*total, on),
         _ => return None,
     };
     // The long axis is the beam axis; of the two transverse axes the loaded one bends it.
     let axis = (0..3).max_by(|&i, &j| size[i].total_cmp(&size[j])).expect("three axes");
+    let [support_name] = &step.constraints[..] else { return None };
+    let support = model.constraint(support_name)?;
+    let ConstraintKind::Fix { dofs } = &support.kind else { return None };
+    let axis_name = ["x", "y", "z"][axis];
+    let low = format!("{}.{axis_name}min", body.name);
+    let high = format!("{}.{axis_name}max", body.name);
+    let opposite_ends = (support.on == low && *on == high) || (support.on == high && *on == low);
+    if r.stale
+        || step.procedure != Procedure::Static
+        || step.after.is_some()
+        || !model.cuts.is_empty()
+        || body.material.as_deref() != Some(&mat.name)
+        || !opposite_ends
+        || ![Dof::Ux, Dof::Uy, Dof::Uz].iter().all(|d| dofs.contains(d))
+        || total.iter().filter(|v| **v != 0.0).count() != 1
+    {
+        return None;
+    }
     let bend = (0..3)
         .filter(|&i| i != axis)
         .max_by(|&i, &j| total[i].abs().total_cmp(&total[j].abs()))
@@ -467,7 +493,7 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Option<String> {
     let unit = hand.unit.clone();
     Some(format!(
         "### Hand calculation for step `{}`\n\n\
-         One box Body under one force, clamped at the far end, is a prismatic bar in {} theory:\n\n\
+         One box Body under one end force, verified fully clamped at the opposite end, is a prismatic bar in {} theory:\n\n\
          {}\n\n\
          with {}, E = {}.\n\n\
          | Source | Deflection |\n| --- | --- |\n| Hand calculation | {} {} |\n| This analysis | {} {} |\n\
@@ -505,6 +531,8 @@ fn verification(model: &crate::model::Model, results: &[(ResultSummary, Option<S
     for (r, _) in results {
         if let Some(text) = hand_calc(model, r) {
             s += &text;
+        } else {
+            s += &format!("No applicable automatic hand-calculation reference for step `{}`: the verified end-loaded, fully clamped box assumptions are not satisfied.\n\n", r.step);
         }
     }
     s
@@ -574,6 +602,99 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Applicability is a pure decision over model definitions and solved-result metadata.
+    /// These inputs deliberately include definitions a public Command would normally reject,
+    /// so missing references fail closed rather than turning an estimate into a claim.
+    #[test]
+    fn hand_calculation_checks_geometry_and_every_active_assumption() {
+        use crate::model::{Cut, Load, Model};
+        use crate::query::Extreme;
+        let model: Model = serde_json::from_value(serde_json::json!({
+            "name":"beam", "idealisation":{"kind":"solid3d"}, "units":{"length":"mm"},
+            "bodies":[{"name":"beam","shape":{"kind":"box","size":[1.0,0.1,0.1]},"material":"steel"}],
+            "materials":[{"name":"steel","e":210e9,"nu":0.3}],
+            "constraints":[{"name":"root","on":"beam.xmin","kind":"fix","dofs":["ux","uy","uz"]}],
+            "loads":[{"name":"tip","kind":"traction","on":"beam.xmax","total":[0.0,0.0,-1000.0]}],
+            "steps":[{"name":"static","procedure":"static","constraints":["root"],"loads":["tip"],"output":["displacement"]}],
+            "mesh":{"mesher":{"kind":"lattice","counts":[10,2,2]},"order":1,"formulation":"full"}
+        })).unwrap();
+        let zero = Valued { value: 0.0, unit: "mm".into() };
+        let result = ResultSummary {
+            step: "static".into(),
+            revision: 1,
+            stale: false,
+            solver: "test".into(),
+            iterations: 0,
+            residual: 0.0,
+            time_ms: 0.0,
+            extremes: vec![Extreme {
+                field: "displacement".into(),
+                component: 2,
+                min: Valued { value: -0.19, unit: "mm".into() },
+                max: zero.clone(),
+                min_at: [zero.clone(), zero.clone(), zero.clone()],
+                max_at: [zero.clone(), zero.clone(), zero.clone()],
+            }],
+            reactions: vec![],
+            applied_total: [zero.clone(), zero.clone(), zero],
+            frequencies: vec![],
+            history: vec![],
+            balance: 0.0,
+        };
+        assert!(hand_calc(&model, &result).unwrap().contains("| Hand calculation | 0.19048 mm |"));
+        let mut reversed = model.clone();
+        reversed.constraints[0].on = "beam.xmax".into();
+        reversed.loads[0].kind = LoadKind::Force { on: "beam.xmin".into(), total: [0.0, 0.0, -1000.0] };
+        assert!(hand_calc(&reversed, &result).unwrap().contains("| Hand calculation | 0.19048 mm |"));
+        let mut axial = model.clone();
+        axial.loads[0].kind = LoadKind::Force { on: "beam.xmax".into(), total: [100000.0, 0.0, 0.0] };
+        let mut axial_result = result.clone();
+        axial_result.extremes[0].component = 0;
+        assert!(hand_calc(&axial, &axial_result).unwrap().contains("| Hand calculation | 0.047619 mm |"));
+        let mut unused = model.clone();
+        unused.loads.push(Load { name: "unused".into(), kind: LoadKind::Gravity { g: [0.0, 0.0, -9.81] } });
+        assert_eq!(hand_calc(&unused, &result), hand_calc(&model, &result));
+        type Change = fn(&mut Model, &mut ResultSummary);
+        let inapplicable: &[(&str, Change)] = &[
+            ("no mesh", |m, _| m.mesh = None),
+            ("mapped geometry is independent of the box", |m, _| {
+                m.mesh.as_mut().unwrap().mesher = MesherSettings::Mapped { body: "beam".into(), blocks: vec![] }
+            }),
+            ("2D idealisation", |m, _| m.idealisation = Idealisation::PlaneStrain),
+            ("no body", |m, _| m.bodies.clear()),
+            ("not a box", |m, _| m.bodies[0].shape = Shape::Sphere { radius: 1.0, segments: None }),
+            ("no material", |m, _| m.materials.clear()),
+            ("missing Step", |m, _| m.steps.clear()),
+            ("no active load", |m, _| m.steps[0].loads.clear()),
+            ("missing load", |m, _| m.loads.clear()),
+            ("pressure", |m, _| m.loads[0].kind = LoadKind::Pressure { on: "beam.xmax".into(), value: 1000.0 }),
+            ("no active support", |m, _| m.steps[0].constraints.clear()),
+            ("missing support", |m, _| m.constraints.clear()),
+            ("prescribed support", |m, _| {
+                m.constraints[0].kind = ConstraintKind::Prescribe { dof: Dof::Uz, value: 0.0 }
+            }),
+            ("stale", |_, r| r.stale = true),
+            ("modal", |m, _| m.steps[0].procedure = Procedure::Modal),
+            ("chained thermal strain", |m, _| m.steps[0].after = Some("heat".into())),
+            ("cut box", |m, _| {
+                m.cuts.push(Cut { name: "hole".into(), from: "beam".into(), shape: Shape::Box { size: [0.01; 3] } })
+            }),
+            ("unassigned material", |m, _| m.bodies[0].material = None),
+            ("same loaded and fixed end", |m, _| m.constraints[0].on = "beam.xmax".into()),
+            ("partial clamp", |m, _| m.constraints[0].kind = ConstraintKind::Fix { dofs: vec![Dof::Uy, Dof::Uz] }),
+            ("zero force", |m, _| m.loads[0].kind = LoadKind::Force { on: "beam.xmax".into(), total: [0.0; 3] }),
+            ("mixed force", |m, _| {
+                m.loads[0].kind = LoadKind::Force { on: "beam.xmax".into(), total: [1.0, 0.0, -1000.0] }
+            }),
+            ("no displacement output", |_, r| r.extremes.clear()),
+        ];
+        for (reason, change) in inapplicable {
+            let (mut m, mut r) = (model.clone(), result.clone());
+            change(&mut m, &mut r);
+            assert_eq!(hand_calc(&m, &r), None, "{reason}");
+        }
+    }
 
     #[test]
     fn section_names_are_the_wire_names() {
