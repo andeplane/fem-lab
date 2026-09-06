@@ -85,7 +85,7 @@ test.describe('@cpu the shell', () => {
     await page.goto('./');
 
     // The start screen is up before the engine is.
-    await expect(page.getByText('Open an example')).toBeVisible();
+    await expect(page.locator('.start')).toBeVisible();
     const painted = Date.now() - t0;
     const loadedFonts = await page.evaluate(async () => {
       const specs = ["400 12px 'IBM Plex Sans'", "500 12px 'IBM Plex Sans'", "600 12px 'IBM Plex Sans'", "400 12px 'IBM Plex Mono'", "500 12px 'IBM Plex Mono'", "600 12px 'IBM Plex Mono'"];
@@ -97,9 +97,9 @@ test.describe('@cpu the shell', () => {
       for (const weight of ['400', '500', '600']) expect(loadedFonts).toContain(`${family}:${weight}`);
     }
     await ready(page);
-    // `store.ready` flips the start screen's build control; before it, `model.new` is disabled
+    // `store.ready` flips the start screen's build control; before it, `project.new` is disabled
     // (asserting *that* would be a race against a fast engine, so only the flip is checked).
-    await expect(page.locator('button[title="model.new"]')).toBeEnabled();
+    await expect(page.locator('button[title="project.new"]')).toBeEnabled();
 
     // Reported, never asserted on: CI runners have no timing guarantees (AGENTS.md, ADR 0007).
     // What the budget cares about is the *gap* — the start screen minus the wasm.
@@ -181,14 +181,116 @@ test.describe('@cpu the shell', () => {
     });
     expect(error?.code).toBeTruthy();
   });
+
+  // Issue #39's second half, which happy-dom cannot answer: the picker is a box on a screen, and
+  // it has to sit between the skills row and the composer rather than on top of either.
+  test('the @ picker opens below the skills row and above the composer', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.model.new({ name: 'mentions' }));
+    await page.evaluate(() => window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] }));
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
+
+    const box = page.locator('.assistant textarea');
+    await box.click();
+    await box.pressSequentially('@');
+    const popover = page.locator('.assistant .popover');
+    await expect(popover).toBeVisible();
+    await expect(popover).toContainText('beam');
+
+    const [strip, list, composer] = await Promise.all([page.locator('.assistant .strip').boundingBox(), popover.boundingBox(), page.locator('.assistant .composer').boundingBox()]);
+    expect(list!.y).toBeGreaterThanOrEqual(strip!.y + strip!.height);
+    expect(list!.y + list!.height).toBeLessThanOrEqual(composer!.y + 1);
+  });
+
+  test('keeps every top-bar action visible and keyboard reachable at supported desktop widths', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+    await page.goto('./');
+    await ready(page);
+    const longName = 'Very_long_structural_model_revision_2026_final';
+    await page.evaluate(async (name) => {
+      const response = await fetch('./examples/cantilever.json');
+      const entries = (await response.json()) as { cmd: Record<string, unknown> }[];
+      for (const entry of entries) {
+        const cmd = entry.cmd['cmd'] === 'model.new' ? { ...entry.cmd, name } : entry.cmd;
+        await window.fem.dispatch(cmd as Parameters<typeof window.fem.dispatch>[0]);
+      }
+    }, longName);
+    // The name is the project's, renameable in place, so it is an input rather than a span.
+    await expect(page.locator('.model-name')).toHaveValue(longName);
+    await expect(page.locator('.model-name')).toHaveAttribute('title', longName);
+    const solve = page.locator('button.solve');
+    await expect(solve).toHaveText(/Solved/);
+    await expect(solve).toHaveAttribute('title', /Solved · rev 10 — solve\.run static/);
+
+    // Include both sides of each responsive transition as well as the four acceptance widths.
+    const widths = [1180, 1199, 1200, 1280, 1299, 1300, 1440, 1599, 1600];
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      const layout = await page.locator('.topbar').evaluate((header) => {
+        const bar = header.getBoundingClientRect();
+        const items = [...header.children]
+          .map((element) => ({ text: element.textContent?.trim() ?? '', rect: element.getBoundingClientRect().toJSON() }))
+          .filter(({ rect }) => rect.width > 0);
+        return { bar: bar.toJSON(), clientWidth: header.clientWidth, scrollWidth: header.scrollWidth, items };
+      });
+      expect(layout.scrollWidth, `top bar overflows at ${width}px`).toBe(layout.clientWidth);
+      for (const item of layout.items) {
+        expect(item.rect.left, `${item.text} starts outside the ${width}px top bar`).toBeGreaterThanOrEqual(layout.bar.left);
+        expect(item.rect.right, `${item.text} ends outside the ${width}px top bar`).toBeLessThanOrEqual(layout.bar.right);
+      }
+      for (let i = 1; i < layout.items.length; i++) {
+        expect(layout.items[i - 1]!.rect.right, `${layout.items[i - 1]!.text} overlaps ${layout.items[i]!.text} at ${width}px`).toBeLessThanOrEqual(
+          layout.items[i]!.rect.left,
+        );
+      }
+
+      const label = page.locator('.palette-field span').first();
+      await expect(label).toBeVisible();
+      expect((await label.boundingBox())!.width, `command label has no useful room at ${width}px`).toBeGreaterThan(18);
+    }
+
+    // Undoing the solve makes Redo an enabled keyboard stop; now every top-bar button can be
+    // reached in DOM order, including actions whose disabled state normally removes them.
+    await page.evaluate(() => window.fem.journal.undo({ steps: 1 }));
+    await expect(page.locator('button[data-cmd="journal.redo"]')).toBeEnabled();
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: 900 });
+      const stops = page.locator('.topbar button:not(:disabled)');
+      const stopCount = await stops.count();
+      await stops.first().focus();
+      for (let i = 0; i < stopCount; i++) {
+        const stop = stops.nth(i);
+        await expect(stop).toBeFocused();
+        const focus = await stop.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const bar = element.closest('.topbar')!.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, barLeft: bar.left, barRight: bar.right, outline: getComputedStyle(element).outlineStyle };
+        });
+        expect(focus.left).toBeGreaterThanOrEqual(focus.barLeft);
+        expect(focus.right).toBeLessThanOrEqual(focus.barRight);
+        expect(focus.outline).toBe('solid');
+        if (i + 1 < stopCount) await page.keyboard.press('Tab');
+      }
+    }
+  });
 });
 
 test.describe('@sw without server headers', () => {
   test('the coi service worker makes the page cross-origin isolated after one reload', async ({ page }) => {
+    const navigations: string[] = [];
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.goto('./');
     // The first visit registers the worker and reloads itself once; the guard stops a loop.
     await page.waitForFunction(() => window.crossOriginIsolated === true, undefined, { timeout: 60_000 });
     expect(await page.evaluate(() => window.crossOriginIsolated)).toBe(true);
+    expect(await page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
+    expect(await page.evaluate(() => sessionStorage.getItem('coi-reset'))).toBe('1');
+    expect(navigations.filter((url) => url.endsWith('/fem-lab/'))).toHaveLength(2);
     await ready(page);
     const caps = (await page.evaluate(() => window.fem.query.capabilities())) as unknown as { crossOriginIsolated: boolean; threads: number };
     expect(caps.crossOriginIsolated).toBe(true);

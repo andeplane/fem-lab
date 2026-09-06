@@ -1122,6 +1122,41 @@ fn consistent_and_lumped_mass_both_total_rho_v() {
 }
 
 #[test]
+fn zero_density_element_mass_is_exactly_zero_and_negative_density_is_rejected() {
+    let mut mat = steel();
+    mat.rho = 0.0;
+    for kind in ALL_KINDS {
+        let el = element_for(kind);
+        let (coords, _, _) = simple(kind);
+        let n = el.n_dof();
+        let mut m = vec![f64::NAN; n * n];
+        for id in idealisations(kind) {
+            let c = ctx(&coords, &mat, id, Formulation::Full);
+            for lumped in [false, true] {
+                el.mass(&c, &mut m, lumped).expect("zero density is a valid zero element mass");
+                assert!(m.iter().all(|&v| v == 0.0), "{kind:?}, lumped = {lumped}: {m:?}");
+            }
+            let e = el.omega_max(&c).expect_err("a massless element has no frequency bound");
+            assert_eq!(e.code, ErrorCode::ModelIllPosed);
+            assert_eq!(e.where_.as_deref(), Some("material.rho"));
+        }
+    }
+
+    let kind = ElementKind::Hex8;
+    let el = element_for(kind);
+    let (coords, _, _) = simple(kind);
+    let mut m = vec![0.0; el.n_dof() * el.n_dof()];
+    for rho in [-1.0, f64::NAN] {
+        mat.rho = rho;
+        let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::Full);
+        let e = el.mass(&c, &mut m, true).expect_err("negative or non-finite mass is invalid");
+        assert_eq!(e.code, ErrorCode::ModelIllPosed);
+        assert_eq!(e.where_.as_deref(), Some("material.rho"));
+        assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("rho")));
+    }
+}
+
+#[test]
 fn a_constant_body_force_totals_f_times_volume() {
     let mat = steel();
     let g = [0.0, -9.81 * DENSITY, 0.0];
@@ -1562,9 +1597,9 @@ fn msh_round_trips_annulus_and_elliptic_annulus() {
 #[test]
 fn msh_round_trips_a_two_block_mesh_with_a_block_partial_elem_set() {
     // Two disjoint hex8 blocks. "all" spans both (whole-mesh entities pick it up); "half" spans
-    // only block 0's elements, which the writer can represent (the whole block is covered);
-    // "mixed" covers only element 0 of block 0, which is NOT block-aligned and so is dropped on
-    // write — a documented limitation no mesher in this codebase runs into.
+    // only block 0's elements; "mixed" covers only element 0 of block 0. The latter forces the
+    // writer to split the original element block into physical entities without changing element
+    // order. "pins" is an independent node-only physical group.
     let a = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 1.0, 1.0]);
     let b = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
     let n_nodes_a = a.n_nodes() as u32;
@@ -1578,7 +1613,7 @@ fn msh_round_trips_a_two_block_mesh_with_a_block_partial_elem_set() {
             ElementBlock { kind: ElementKind::Hex8, conn: a.blocks[0].conn.clone(), first_elem: 0 },
             ElementBlock { kind: ElementKind::Hex8, conn: conn_b, first_elem: 2 },
         ],
-        node_sets: BTreeMap::new(),
+        node_sets: BTreeMap::from([("pins".to_string(), vec![0, n_nodes_a])]),
         elem_sets: BTreeMap::from([
             ("all".to_string(), (0..3u32).collect()),
             ("half".to_string(), (0..2u32).collect()),
@@ -1587,18 +1622,15 @@ fn msh_round_trips_a_two_block_mesh_with_a_block_partial_elem_set() {
         face_sets: BTreeMap::new(),
     };
     let text = write_msh(&m);
-    // every set gets a $PhysicalNames entry regardless of whether any entity ends up tagged
-    // with it, so check that "mixed" is unreferenced rather than absent from the text
-    assert!(text.contains("\"all\""));
-    assert!(text.contains("\"half\""));
     let back = read_msh(&text).unwrap();
+    assert_eq!(back.coords, m.coords);
+    for elem in 0..m.n_elems() as u32 {
+        assert_eq!(back.elem_nodes(elem), m.elem_nodes(elem), "element {elem}");
+    }
     assert_eq!(back.elem_sets.get("all"), Some(&(0..3u32).collect::<Vec<_>>()));
     assert_eq!(back.elem_sets.get("half"), Some(&(0..2u32).collect::<Vec<_>>()));
-    assert!(
-        !back.elem_sets.contains_key("mixed"),
-        "a set not aligned to a whole block must be dropped, not partly written: {:?}",
-        back.elem_sets
-    );
+    assert_eq!(back.elem_sets.get("mixed"), Some(&vec![0]));
+    assert_eq!(back.node_sets.get("pins"), Some(&vec![0, n_nodes_a]));
 }
 
 // ---------------------------------------------------------------- msh: read errors
@@ -1710,9 +1742,13 @@ fn read_msh_rejects_a_malformed_entities_header() {
 }
 
 #[test]
-fn read_msh_rejects_point_entities() {
-    let (good, _) = good_msh_text();
-    assert_schema_err(&set_line_after(&good, "$Entities", 1, "1 1 1 0"), "point entities");
+fn read_msh_reports_malformed_point_entities_and_unknown_physical_tags() {
+    let (_, mut m) = good_msh_text();
+    m.node_sets.insert("pin".into(), vec![0]);
+    let good = write_msh(&m);
+    assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0"), "malformed entity line");
+    assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0 x 1"), "expected a number");
+    assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0 1 99"), "physical tag 99");
 }
 
 #[test]
@@ -1731,12 +1767,6 @@ fn read_msh_rejects_an_entity_line_whose_physical_tag_count_overruns_the_line() 
 fn read_msh_rejects_a_malformed_nodes_header() {
     let (good, _) = good_msh_text();
     assert_schema_err(&set_line_after(&good, "$Nodes", 1, "1 3 1"), "malformed $Nodes header");
-}
-
-#[test]
-fn read_msh_rejects_more_than_one_nodes_entity_block() {
-    let (good, _) = good_msh_text();
-    assert_schema_err(&set_line_after(&good, "$Nodes", 1, "2 3 1 3"), "a single $Nodes entity block");
 }
 
 #[test]
@@ -1851,7 +1881,9 @@ fn read_msh_rejects_a_non_numeric_token_at_every_numeric_field() {
         ("$Nodes", 1, "x 3 1 3"),                // $Nodes header n_blocks
         ("$Nodes", 2, "2 1 0 x"),                // node entity-block header n_nodes
         ("$Nodes", 3, "x"),                      // a node tag
-        ("$Nodes", 6, "x 0 0"),                  // a node coordinate
+        ("$Nodes", 6, "x 0 0"),                  // node x coordinate
+        ("$Nodes", 6, "0 x 0"),                  // node y coordinate
+        ("$Nodes", 6, "0 0 x"),                  // node z coordinate
         ("$Elements", 1, "x 2 1 2"),             // $Elements header n_elem_blocks
         ("$Elements", 2, "x 1 2 1"),             // element entity-block header entity_dim
         ("$Elements", 2, "2 x 2 1"),             // element entity-block header entity_tag
@@ -3726,6 +3758,93 @@ fn the_theta_method_converges_at_its_own_order_in_time() {
     }
 }
 
+/// E3 endpoint regression: uniform heating at q/(rho cp) = 1 K/s gives T(x,t) = t exactly.
+/// The held face follows the same ramp, so the free-node solution is independent of mesh
+/// spacing and theta. A final timestamp alone cannot hide an over/under-integrated field.
+#[test]
+fn transient_heat_reaches_the_requested_endpoint_with_the_correct_temperature() {
+    for nx in [2, 4] {
+        let mesh = Structured { kind: ElementKind::Hex8, n: [nx, 1, 1] }.box_([1.0, 0.1, 0.1]);
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(1.0, 2.0, 3.0),
+            vec![hold("left", "xmin", 1.0)],
+            vec![HeatLoad::Source { bodies: one_body(), q: 6.0 }],
+        );
+        for (dt, t_end) in [(0.6, 1.0), (0.4, 0.9), (2.0, 0.25)] {
+            for theta in [0.5, 1.0] {
+                let step = Step::HeatTransient {
+                    dt,
+                    t_end,
+                    theta,
+                    initial: 0.0,
+                    output_every: 2,
+                    amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, t_end], value: vec![0.0, t_end] }),
+                    solver: SolveOptions::default(),
+                };
+                let res = run_step(&p, &step).expect("a uniformly heated transient");
+                assert!(res.scalars["dt"] <= dt);
+                let h = res.history.as_ref().unwrap();
+                assert_eq!(*h.times.last().unwrap(), t_end);
+                for (&time, temperatures) in h.times.iter().zip(&h.values) {
+                    for temperature in temperatures {
+                        assert!(
+                            (temperature - time).abs() < 1e-10,
+                            "nx={nx}, dt={dt}, theta={theta}: T={temperature} at t={time}"
+                        );
+                    }
+                }
+                for temperature in temperature_of(&res) {
+                    assert!((temperature - t_end).abs() < 1e-10);
+                }
+            }
+        }
+    }
+}
+
+/// F2b endpoint regression: rigid free fall has u(t) = v0 t + g t²/2, exactly for leapfrog.
+#[test]
+fn explicit_free_fall_reaches_the_requested_endpoint_without_exceeding_its_step_bound() {
+    let velocity = [0.3, -0.2, 0.1];
+    let gravity = [0.0, 0.0, -9.81];
+    for nx in [1, 2] {
+        let mesh = Structured { kind: ElementKind::Hex8, n: [nx, 1, 1] }.box_([1.0, 0.1, 0.1]);
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+        p.loads = vec![Load::Gravity { g: gravity }];
+        let nominal = 0.9 * critical_step(&p);
+        for ratio in [0.25, 1.6, 2.25] {
+            let t_end = ratio * nominal;
+            let step = Step::Explicit {
+                t_end,
+                dt_factor: 0.9,
+                initial_velocity: Some(velocity.repeat(mesh.n_nodes())),
+                output_every: 2,
+            };
+            let res = run_step(&p, &step).expect("stable rigid free fall");
+            assert!(res.scalars["dt"] <= 0.9 * res.scalars["dt_crit"]);
+            let h = res.history.as_ref().unwrap();
+            assert_eq!(*h.times.last().unwrap(), t_end);
+            for (&time, values) in h.times.iter().zip(&h.values) {
+                for (i, displacement) in values.iter().enumerate() {
+                    let c = i % 3;
+                    let want = velocity[c] * time + 0.5 * gravity[c] * time * time;
+                    assert!(
+                        (displacement - want).abs() <= 1e-10 * t_end,
+                        "nx={nx}, ratio={ratio}: u={displacement} vs {want} at {time}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// One NAFEMS T3 run: the temperature at x = 0.08 m at `t_end`, the step it used, and how many
 /// history rows it kept.
 fn t3_probe(theta: f64, dt: f64, t_end: f64) -> (f64, f64, usize) {
@@ -3930,7 +4049,16 @@ fn a_free_block_has_six_zero_frequencies() {
 #[test]
 fn a_modal_step_without_a_density_names_the_missing_property() {
     let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
-    let sets = sets_of(&mesh);
+    let mut sets = sets_of(&mesh);
+    sets.insert(
+        "all".to_string(),
+        ResolvedSet {
+            kind: SetKind::Node,
+            faces: Vec::new(),
+            nodes: (0..mesh.n_nodes() as u32).collect(),
+            elems: Vec::new(),
+        },
+    );
     let bodies = one_body();
     let mut p = problem(
         &mesh,
@@ -3950,6 +4078,129 @@ fn a_modal_step_without_a_density_names_the_missing_property() {
     let boom = Step::Explicit { t_end: 1e-3, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
     let e = run_step(&p, &boom).expect_err("no density, no time step");
     assert_eq!(e.code, ErrorCode::ModelIllPosed);
+
+    // Holding every DOF removes the per-node error, but a wholly massless model still has no
+    // frequency from which explicit dynamics could choose a time step.
+    p.constraints = vec![fix("all", "all", [true, true, true], 0.0)];
+    let e = run_step(&p, &boom).expect_err("a fully held massless model still has no time scale");
+    assert_eq!(e.where_.as_deref(), Some("materials"));
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("rho")));
+}
+
+/// A massive Body can give the model a finite frequency while a separate massless Body still
+/// leaves zero nodal masses. Explicit dynamics rejects those free DOFs before its first divide;
+/// correcting the material on the same Problem then runs, which proves the failure is recoverable.
+#[test]
+fn explicit_rejects_a_free_massless_body_in_a_mixed_model_and_recovers() {
+    let a = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
+    let b = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
+    let n_a = a.n_nodes() as u32;
+    let mut coords = a.coords.clone();
+    for xyz in b.coords.chunks_exact(3) {
+        coords.extend([xyz[0] + 0.2, xyz[1], xyz[2]]);
+    }
+    let mesh = Mesh {
+        dim: 3,
+        coords,
+        blocks: vec![
+            femlab_geometry::ElementBlock { kind: ElementKind::Hex8, conn: a.blocks[0].conn.clone(), first_elem: 0 },
+            femlab_geometry::ElementBlock {
+                kind: ElementKind::Hex8,
+                conn: b.blocks[0].conn.iter().map(|&node| node + n_a).collect(),
+                first_elem: 1,
+            },
+        ],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let sets = BTreeMap::from([(
+        "massless".to_string(),
+        ResolvedSet {
+            kind: SetKind::Node,
+            faces: Vec::new(),
+            nodes: (n_a..n_a + b.n_nodes() as u32).collect(),
+            elems: Vec::new(),
+        },
+    )]);
+    let bodies = vec!["massive".to_string(), "massless".to_string()];
+    let mut p = Problem {
+        mesh: &mesh,
+        sets: &sets,
+        body_of_block: &bodies,
+        material_of_block: vec![Some(0), Some(1)],
+        materials: vec![steel(), conductor(0.0, 0.0, 0.0)],
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::Full,
+        constraints: Vec::new(),
+        loads: Vec::new(),
+        temperature: None,
+        heat: false,
+        heat_loads: Vec::new(),
+    };
+    let step = Step::Explicit { t_end: 1e-8, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &step).expect_err("the second Body has free DOFs with no mass");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert_eq!(e.where_.as_deref(), Some("node 8.ux"));
+    assert!(e.cause.contains("positive mass at every free DOF"), "{}", e.cause);
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("material.assign")));
+
+    p.materials[1].rho = -1.0;
+    let e = run_step(&p, &step).expect_err("negative density must not enter explicit assembly");
+    assert_eq!(e.where_.as_deref(), Some("material.rho"));
+    assert!(e.cause.contains("non-negative"), "{}", e.cause);
+
+    p.materials[1].rho = 0.0;
+    p.constraints = vec![fix("hold-massless", "massless", [true, true, true], 0.0)];
+    let constrained = run_step(&p, &step).expect("zero mass is supported when all of its DOFs are held");
+    assert!(constrained.fields[&Field::Displacement].data.iter().all(|v| v.is_finite()));
+
+    p.constraints.clear();
+    p.materials[1].rho = DENSITY;
+    let result = run_step(&p, &step).expect("the corrected model remains usable");
+    assert!(result.scalars["dt"].is_finite());
+    assert!(result.fields[&Field::Displacement].data.iter().all(|v| v.is_finite()));
+}
+
+/// Positive assembled nodal mass is not enough to make a zero-density element safe: its
+/// stiffness has no local mass from which to derive the element CFL bound. Two overlapping
+/// blocks make that distinction exact because the massive block supplies mass at every node.
+#[test]
+fn explicit_rejects_massless_stiffness_even_when_shared_nodes_have_mass() {
+    let one = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([0.1, 0.1, 0.1]);
+    let mesh = Mesh {
+        dim: 3,
+        coords: one.coords.clone(),
+        blocks: vec![
+            femlab_geometry::ElementBlock { kind: ElementKind::Hex8, conn: one.blocks[0].conn.clone(), first_elem: 0 },
+            femlab_geometry::ElementBlock { kind: ElementKind::Hex8, conn: one.blocks[0].conn.clone(), first_elem: 1 },
+        ],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let sets = BTreeMap::new();
+    let bodies = vec!["massive".to_string(), "massless-stiffener".to_string()];
+    let p = Problem {
+        mesh: &mesh,
+        sets: &sets,
+        body_of_block: &bodies,
+        material_of_block: vec![Some(0), Some(1)],
+        materials: vec![steel(), conductor(0.0, 0.0, 0.0)],
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::Full,
+        constraints: Vec::new(),
+        loads: Vec::new(),
+        temperature: None,
+        heat: false,
+        heat_loads: Vec::new(),
+    };
+    let step = Step::Explicit { t_end: 1e-8, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &step).expect_err("massless stiffness makes the local CFL bound undefined");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert_eq!(e.where_.as_deref(), Some("element 1"));
+    assert!(e.cause.contains("finite explicit frequency bound is undefined"), "{}", e.cause);
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("constraint.fix")));
 }
 
 /// Benchmark F1: a free block given a rigid-body velocity keeps its momentum and its energy for
@@ -4042,6 +4293,10 @@ fn an_explicit_step_needs_a_positive_end_time() {
     let step = Step::Explicit { t_end: 0.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
     let e = run_step(&p, &step).expect_err("no end time");
     assert_eq!(e.code, ErrorCode::Schema);
+    let step = Step::Explicit { t_end: 1.0, dt_factor: f64::INFINITY, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &step).expect_err("an infinite step factor cannot define a time grid");
+    assert_eq!(e.code, ErrorCode::Schema);
+    assert_eq!(e.where_.as_deref(), Some("dt"));
 }
 
 /// Every heat kernel refuses a folded element, with the same `mesh.inverted` error the elastic

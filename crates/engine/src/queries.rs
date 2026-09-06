@@ -41,6 +41,7 @@ impl Engine {
             Query::Journal { from_seq } => {
                 let from = from_seq.unwrap_or(0);
                 Ok(QueryResult::Journal(JournalDump {
+                    hash: self.journal.hash(),
                     entries: self.journal.entries.iter().filter(|e| e.seq >= from).cloned().collect(),
                     revision: self.revision(),
                     can_undo: self.can_undo(),
@@ -146,6 +147,7 @@ impl Engine {
                 e: display(m, mat.e, Stress::DIM),
                 nu: mat.nu,
                 rho: mat.rho.map(|r| display(m, r, Density::DIM)),
+                yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)),
                 assigned_to: m
                     .bodies
                     .iter()
