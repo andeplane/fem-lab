@@ -6,7 +6,7 @@ import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as anthropic from '../src/ai/anthropic';
 import schema from '../../registry/src/generated/engine.schema.json';
-import { fakeHost, fakeTransport } from '../../registry/test/fakes';
+import { fakeTransport } from '../../registry/test/fakes';
 import { AssistantPanel, ToolCard, chatBridge, resultAssumptions } from '../src/ai/AssistantPanel';
 import { parseVerification } from '../src/ai/context';
 import { Store } from '../src/store';
