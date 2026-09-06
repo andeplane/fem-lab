@@ -14,6 +14,10 @@ export type Command =
       cmd: "model.setUnits";
     }
   | {
+      name: string;
+      cmd: "model.setName";
+    }
+  | {
       idealisation: IdealisationSpec;
       cmd: "model.setIdealisation";
     }
@@ -1669,6 +1673,10 @@ export type ModelFile_Command =
   | {
       units: UnitSet;
       cmd: "model.setUnits";
+    }
+  | {
+      name: string;
+      cmd: "model.setName";
     }
   | {
       idealisation: IdealisationSpec;

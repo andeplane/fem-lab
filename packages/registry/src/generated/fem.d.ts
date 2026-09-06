@@ -17,6 +17,12 @@ export interface Fem {
      */
     setUnits(args: Omit<Extract<Command, { cmd: 'model.setUnits' }>, 'cmd'>): Promise<Ack>;
     /**
+     * Change the Model's display name without resetting geometry, history or solved Results.
+     * A name-only edit is undoable and changes the full Model/Journal identity, but does not
+     * change the Result-validity fingerprint. Whitespace-only names are rejected.
+     */
+    setName(args: Omit<Extract<Command, { cmd: 'model.setName' }>, 'cmd'>): Promise<Ack>;
+    /**
      * Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,
      * or axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs
      * solid bodies; mixing them makes the Model ill-posed.

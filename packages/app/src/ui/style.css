@@ -1827,3 +1827,8 @@ button.solve.stale {
     justify-content: flex-end;
   }
 }
+
+/* The document name is an undoable engine edit; the dot tracks explicit saves, not autosave. */
+.model-title { display: flex; align-items: center; gap: 6px; }
+.topbar input.model-name { width: auto; min-width: 60px; max-width: 190px; padding: 3px 0; border: 0; background: transparent; color: var(--text-high); }
+.unsaved-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #d9a441; }

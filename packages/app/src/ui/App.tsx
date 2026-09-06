@@ -9,7 +9,7 @@ import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
 import { lazy } from '../lazy';
-import { solveLabel, stageOf, type Store, type UiState } from '../store';
+import { solveLabel, stageOf, unsaved, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
@@ -17,6 +17,7 @@ import { ExportModal } from './Export';
 import { Examples, Palette, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
+import { ModelName } from './ModelName';
 import { Cmd, useStore, type Dispatch } from './cmd';
 import { blockers, type Defs } from './schema';
 
@@ -52,6 +53,7 @@ const MM = { length: 'mm', force: 'N', stress: 'MPa' };
 const SI = { length: 'm', force: 'N', stress: 'Pa' };
 
 function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  const dirty = useMemo(() => unsaved(s), [s.journal, s.savedJournal]);
   const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0);
   const step = s.model?.steps[0]?.name ?? '';
   // Design state 7: while an error card stands, Solve is disabled and carries the same code.
@@ -63,7 +65,7 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <div class="logo">
         <i /> FEM Lab
       </div>
-      <span class="mono model-name">{s.model?.name ?? 'no model'}</span>
+      <ModelName name={s.model?.name ?? 'no model'} dirty={dirty} dispatch={dispatch} />
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">
         <span>Search commands or ask in plain words</span>
         <span class="key">⌘K</span>

@@ -152,6 +152,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     skills: () => [],
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
+      markSaved: (journal) => store.markSaved(journal),
       pick: () =>
         new Promise<string>((resolve, reject) => {
           const input = document.createElement('input');

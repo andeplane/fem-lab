@@ -114,6 +114,8 @@ export interface HostContext {
     /** Open a file picker and return the chosen file's text. */
     pick(): Promise<string>;
     download(name: string, mime: string, data: string | Uint8Array): void;
+    /** Establish the explicit save/open baseline from that operation's exact normalized Journal. */
+    markSaved(journal: ModelFile['journal']): void;
     shareLink(file: ModelFile): Promise<{ url: string }>;
     /** Turn the IndexedDB autosave on or off. The choice sticks in this browser. */
     setAutosave(on: boolean): void;
@@ -162,7 +164,9 @@ async function importText(ctx: HostContext, text: string) {
   } catch (e) {
     throw new FemError('schema', `not a femlab/1 JSON file: ${(e as Error).message}`, 'json', 'open a file written by file.save or an example from the gallery');
   }
-  return ctx.transport.importFile(file);
+  const ack = await ctx.transport.importFile(file);
+  ctx.files.markSaved(ack.journal);
+  return ack;
 }
 
 /** One row of the Export dialog (design §Export modal), and what `file.export` accepts. */
@@ -314,7 +318,9 @@ export const HOST_COMMANDS: HostDef[] = [
   }),
   def('file.save', 'Save the Model and its Journal as a `femlab/1` JSON file, into the project folder when one is open (or `to: "project"`) or as a download. `name` defaults to `<model name>.femlab.json`.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
     const file = await ctx.transport.exportFile();
-    return deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', JSON.stringify(file, null, 2));
+    const receipt = await deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', JSON.stringify(file, null, 2));
+    ctx.files.markSaved(file.journal);
+    return receipt;
   }),
   def('file.export', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG, the Journal as a TypeScript script or as a `femlab/1` file. Lands in the project folder when one is open (or `to: "project"`), else downloads.', z.object({ spec: z.looseObject({ format: z.string() }), name: z.string().optional(), to: Destination }), async ({ spec, name, to }, ctx) => {
     const out = await buildExport(spec as ExportSpec, ctx);

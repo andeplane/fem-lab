@@ -1,7 +1,7 @@
 // `EngineTransport` over a Worker. Calls are serialised (the engine is single-instance and
 // `&mut self`), progress is routed back to the caller, and cancel is terminate + recreate +
 // replay of the Journal so far (plan B §4.2, §5.3).
-import type { Ack, Command, EngineTransport, ExportSpec, ExportedFile, Field, FieldData, ModelFile, Progress, Query, QueryResult, Surface } from '@femlab/registry';
+import type { Ack, ImportAck, Command, EngineTransport, ExportSpec, ExportedFile, Field, FieldData, ModelFile, Progress, Query, QueryResult, Surface } from '@femlab/registry';
 import { FemError, decodeBulk } from '@femlab/registry';
 import type { AppOp, AppReq, AppRes } from './protocol';
 
@@ -92,9 +92,9 @@ export class WorkerTransport implements EngineTransport {
     return (await this.call('exportFile')) as ModelFile;
   }
 
-  async importFile(file: ModelFile): Promise<Ack> {
-    const ack = (await this.call('importFile', file)) as Ack;
-    this.shadow = (file.journal?.entries ?? []) as unknown as ShadowEntry[];
+  async importFile(file: ModelFile): Promise<ImportAck> {
+    const ack = (await this.call('importFile', file)) as ImportAck;
+    this.shadow = ack.journal.entries as ShadowEntry[];
     this.revision = ack.revision;
     return ack;
   }
