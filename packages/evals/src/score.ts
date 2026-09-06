@@ -109,7 +109,12 @@ function geometryAndProcedure(spec: EvalCase, evidence: EvalEvidence, entries: R
     && material?.['name'] === bodies[0]?.['material']
     && sameNames(material?.['assignedTo'], [String(bodies[0]?.['name'])]);
   const meshOk = object(model?.['meshSettings']) !== null;
-  const warningsOk = array(model?.['warnings']).length === 0;
+  // The current Model diagnostic calls a heat or modal model "unloaded" because it has no
+  // mechanical Load. That is the required setup for these cases, so keep rejecting every other
+  // warning while accepting that one known, procedure-inapplicable diagnostic.
+  const allowedWarnings = spec.kind === 'heat' || spec.kind === 'modal' ? new Set(['model.unloaded']) : new Set<string>();
+  const warnings = array(model?.['warnings']).map(object);
+  const warningsOk = warnings.every((warning) => warning !== null && typeof warning['code'] === 'string' && allowedWarnings.has(warning['code']));
   const passed = missing.length === 0 && bodies.length === 1 && dimensionsOk && steps.length === 1 && solved && materialOk && meshOk && warningsOk;
   const details = [
     missing.length > 0 ? `missing ${missing.join(', ')}` : '',

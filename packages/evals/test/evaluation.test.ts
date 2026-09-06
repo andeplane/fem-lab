@@ -170,6 +170,19 @@ describe('independent scoring', () => {
     expect(failed(scoreCase(modal, wrongRho), 'model')).toBe(true);
   });
 
+  it('accepts only the procedure-inapplicable unloaded warning for heat and modal cases', () => {
+    for (const id of ['H1', 'M1']) {
+      const spec = EVAL_CASES.find((candidate) => candidate.id === id)!;
+      const expected = complete(spec);
+      (expected.model as { warnings: unknown[] }).warnings = [{ code: 'model.unloaded', text: 'no loads yet' }];
+      expect(failed(scoreCase(spec, expected), 'model')).toBe(false);
+
+      const unexpected = complete(spec);
+      (unexpected.model as { warnings: unknown[] }).warnings = [{ code: 'model.ill-posed', text: 'bad model' }];
+      expect(failed(scoreCase(spec, unexpected), 'model')).toBe(true);
+    }
+  });
+
   it('rejects forbidden direct and script-nested prepared Model routes', () => {
     const spec = EVAL_CASES[0]!;
     const direct = complete(spec);
@@ -276,7 +289,7 @@ describe('lane orchestration and artifacts', () => {
       async *chat(request) {
         expect(request.messages[0]?.content[0]).toMatchObject({ type: 'text', text: EVAL_CASES[18]!.prompt });
         if (round < 2) {
-          yield { type: 'tool_use' as const, id: `validate-${round}`, name: 'query_validateScript', input: { code: round === 0 ? EVAL_CASES[18]!.invalidScript : 'good' } };
+          yield { type: 'tool_use' as const, id: `validate-${round}`, name: 'validate_script', input: { code: round === 0 ? EVAL_CASES[18]!.invalidScript : 'good' } };
         } else {
           yield { type: 'text_delta' as const, text: 'Validation repaired.' };
         }
