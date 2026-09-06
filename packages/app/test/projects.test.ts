@@ -4,6 +4,7 @@
 // code, never to verification).
 import { IDBFactory } from 'fake-indexeddb';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ModelFile } from '@femlab/registry';
 import { DB_NAME, HANDLES, JOURNALS, PROJECTS, openDb, tx, type ProjectMeta } from '../src/db';
 import { indexedDbProjects, makeProjects, memoryProjects, type ProjectStore, type ProjectsOptions } from '../src/projects';
 import { forgetHandle, recallHandle, rememberHandle, type DirHandle } from '../src/ai/project';
@@ -13,6 +14,10 @@ const CMDS: ShareCommand[] = [
   { cmd: 'model.new', name: 'beam' },
   { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '100 mm', '100 mm'] },
 ];
+
+const journalOf = (cmds: ShareCommand[]): ModelFile['journal'] => ({
+  entries: cmds.map((cmd, seq) => ({ seq, cmd: structuredClone(cmd) as never, hashAfter: `hash-${seq}` })),
+});
 
 let factory: IDBFactory;
 beforeEach(() => {
@@ -137,11 +142,11 @@ describe.each([
     expect(projects.current()).toBeNull();
 
     // Boot refreshes before any Command; an empty Journal is not a project yet.
-    projects.note('untitled', [], null);
+    projects.note('untitled', journalOf([]), null);
     expect(projects.list()).toEqual([]);
 
-    projects.note('beam', CMDS.slice(0, 1), 'h1');
-    projects.note('beam', CMDS, 'h2');
+    projects.note('beam', journalOf(CMDS.slice(0, 1)), 'h1');
+    projects.note('beam', journalOf(CMDS), 'h2');
     expect(projects.current()).toMatchObject({ id: 'id-1', name: 'beam', commands: 2, hash: 'h2', saving: true });
     tick();
     await projects.flush();
@@ -154,13 +159,13 @@ describe.each([
   it('forks: a Model-replacing Command starts a second project and leaves the first alone', async () => {
     const store = make();
     const { projects, tick } = harness(store);
-    projects.note('beam', CMDS, 'h');
+    projects.note('beam', journalOf(CMDS), 'h');
     tick();
     await projects.flush();
 
     projects.fork();
     expect(projects.current()).toBeNull();
-    projects.note('plate', [CMDS[0]!], 'h2');
+    projects.note('plate', journalOf([CMDS[0]!]), 'h2');
     tick();
     await projects.flush();
 
@@ -175,7 +180,7 @@ describe.each([
     const first = await projects.new('corbel');
     expect(reset).toHaveBeenCalledWith('corbel');
     expect(projects.current()).toMatchObject({ id: first.id, name: 'corbel', commands: 0 });
-    projects.note('corbel', CMDS, 'h');
+    projects.note('corbel', journalOf(CMDS), 'h');
     tick();
     await projects.flush();
 
@@ -227,7 +232,7 @@ describe.each([
     expect(await projects.save()).toBeNull();
     expect(thumbnail).not.toHaveBeenCalled();
 
-    projects.note('beam', CMDS, 'h');
+    projects.note('beam', journalOf(CMDS), 'h');
     // No tick: `save` is the explicit flush, which is why the e2e can reload without a race.
     const saved = await projects.save();
     expect(saved).toMatchObject({ name: 'beam', commands: 2, thumbnail: 'data:image/webp;base64,AA', saving: false });
@@ -238,37 +243,91 @@ describe.each([
     expect(await projects.save()).toMatchObject({ thumbnail: 'data:image/webp;base64,AA' });
   });
 
+  it('captures one exact save while later edits and a project switch continue', async () => {
+    const backing = make();
+    let finish!: () => void;
+    const calls: { meta: ProjectMeta; cmds: ShareCommand[] }[] = [];
+    const store: ProjectStore = {
+      ...backing,
+      writeJournal: async (meta, cmds) => {
+        calls.push({ meta, cmds });
+        if (calls.length === 1) await new Promise<void>((resolve) => { finish = resolve; });
+        await backing.writeJournal(meta, cmds);
+      },
+    };
+    const { projects } = harness(store, { initiallyOn: false });
+    const captured = journalOf(CMDS);
+    projects.note('beam', captured, 'beam-hash');
+    const saving = projects.save();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    // Neither a caller mutation nor a later Model refresh may change the in-flight payload.
+    (captured.entries[0]!.cmd as { name?: string }).name = 'mutated caller data';
+    projects.note('beam', journalOf([...CMDS, { cmd: 'material.add', name: 'steel' }]), 'later-beam-hash');
+    projects.fork();
+    projects.note('plate', journalOf([{ cmd: 'model.new', name: 'plate' }]), 'plate-hash');
+    finish();
+
+    const receipt = await saving;
+    expect(receipt).toMatchObject({ id: 'id-1', name: 'beam', hash: 'beam-hash' });
+    expect(receipt?.journal).toEqual(journalOf(CMDS));
+    expect(calls[0]).toMatchObject({ meta: { id: 'id-1', name: 'beam', hash: 'beam-hash' }, cmds: CMDS });
+    expect(projects.current()).toMatchObject({ id: 'id-2', name: 'plate', hash: 'plate-hash' });
+    expect(await backing.journal('id-1')).toEqual(CMDS);
+
+    await projects.save();
+    expect(await backing.journal('id-2')).toEqual([{ cmd: 'model.new', name: 'plate' }]);
+  });
+
+  it('rejects an explicit Journal write failure and produces no saved receipt', async () => {
+    const backing = make();
+    const onError = vi.fn();
+    const store: ProjectStore = { ...backing, writeJournal: vi.fn(async () => { throw new Error('quota'); }) };
+    const { projects } = harness(store, { initiallyOn: false, onError });
+    projects.note('beam', journalOf(CMDS), 'h');
+
+    await expect(projects.save()).rejects.toThrow('quota');
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'quota' }));
+    expect(await backing.journal('id-1')).toBeNull();
+    expect(projects.current()).toMatchObject({ id: 'id-1', commands: 2, autosave: false });
+  });
+
   it('file.autosave off stops writing and never deletes what is already saved', async () => {
     const store = make();
     const { projects, tick } = harness(store);
-    projects.note('beam', CMDS, 'h');
+    projects.note('beam', journalOf(CMDS), 'h');
     tick();
     await projects.flush();
 
     projects.setEnabled(false);
     expect(projects.enabled()).toBe(false);
-    projects.note('beam', [...CMDS, { cmd: 'material.add', name: 'steel' }], 'h2');
+    const edited = [...CMDS, { cmd: 'material.add' as const, name: 'steel' }];
+    projects.note('beam', journalOf(edited), 'h2');
     tick();
     await projects.flush();
     expect(await store.journal('id-1')).toEqual(CMDS);
     expect(projects.list().map((p) => p.name)).toEqual(['beam']);
-    expect(projects.current()).toMatchObject({ autosave: false });
+    expect(projects.current()).toMatchObject({ autosave: false, commands: 3, hash: 'h2' });
+
+    const receipt = await projects.save();
+    expect(receipt?.journal).toEqual(journalOf(edited));
+    expect(await store.journal('id-1')).toEqual(edited);
 
     projects.setEnabled(true);
-    projects.note('beam', [...CMDS, { cmd: 'material.add', name: 'steel' }], 'h2');
+    projects.note('beam', journalOf(edited), 'h2');
     tick();
     await projects.flush();
     expect(await store.journal('id-1')).toHaveLength(3);
   });
 
-  it('reports a failed write through onError and keeps the model alive', async () => {
+  it('reports a failed background write through onError and flush rejects it', async () => {
     const store = make();
     const onError = vi.fn();
     store.writeJournal = () => Promise.reject(new Error('quota'));
     const { projects, tick } = harness(store, { onError });
-    projects.note('beam', CMDS, 'h');
+    projects.note('beam', journalOf(CMDS), 'h');
     tick();
-    await projects.flush();
+    await expect(projects.flush()).rejects.toThrow('quota');
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'quota' }));
     expect(projects.current()).toMatchObject({ name: 'beam' });
   });
@@ -276,7 +335,7 @@ describe.each([
   it('tells the app about every change, so the top bar and the Recent list follow', async () => {
     const onChange = vi.fn();
     const { projects, tick } = harness(make(), { onChange });
-    projects.note('beam', CMDS, 'h');
+    projects.note('beam', journalOf(CMDS), 'h');
     expect(onChange).toHaveBeenCalled();
     tick();
     await projects.flush();
@@ -288,7 +347,7 @@ describe('the default timer', () => {
   it('writes on its own, without an injected clock', async () => {
     const store = memoryProjects();
     const projects = makeProjects({ store, replay: async () => undefined, reset: async () => undefined, delayMs: 1 });
-    projects.note('beam', CMDS, 'h');
+    projects.note('beam', journalOf(CMDS), 'h');
     await new Promise((r) => setTimeout(r, 10));
     await projects.flush();
     expect(await store.journal((await store.list())[0]!.id)).toEqual(CMDS);

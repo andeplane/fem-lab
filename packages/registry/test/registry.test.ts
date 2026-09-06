@@ -34,6 +34,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'selection.setPickTarget': { target: 'face' },
   'panel.toggle': { panel: 'palette', open: true },
   'panel.resize': { panel: 'tree', size: 300 },
+  'query.validateScript': { code: '1 + 1' },
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
   'script.setSource': { code: 'fem.model.new({ name: "a" })', append: true },
@@ -152,8 +153,20 @@ describe('Registry', () => {
       await registry.dispatch({ cmd: h.name, ...SAMPLES[h.name] });
     }
     expect(transport.dispatch).not.toHaveBeenCalled();
-    for (const h of HOST_QUERIES) await registry.query({ query: h.name });
+    for (const h of HOST_QUERIES) await registry.query({ query: h.name, ...SAMPLES[h.name] });
     expect(transport.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('validates scripts before execution and returns diagnostics without engine mutation', async () => {
+    const { registry, host, transport } = make();
+    const invalid = { ok: false, diagnostics: [{ code: 'TS2339', cause: 'unknown API', where: { line: 1, column: 1 }, hint: 'fix the call' }] };
+    vi.mocked(host.script.validate).mockResolvedValue(invalid);
+    await expect(registry.query({ query: 'query.validateScript', code: 'wrong', timeoutMs: 200 })).resolves.toEqual(invalid);
+    expect(host.script.validate).toHaveBeenCalledWith('wrong', 200);
+    await expect(registry.dispatch({ cmd: 'script.run', code: 'wrong' })).resolves.toMatchObject({ error: 'script.validation: correct validation diagnostics before running', diagnostics: invalid.diagnostics });
+    expect(host.script.run).not.toHaveBeenCalled();
+    expect(transport.dispatch).not.toHaveBeenCalled();
+    expect(transport.query).not.toHaveBeenCalled();
   });
 
   it('host Queries read the HostContext and query.capabilities merges engine and browser facts', async () => {
@@ -260,7 +273,7 @@ describe('Registry', () => {
     // `id` defaults to the open project, which is what the top bar's inline field sends
     await expect(registry.dispatch({ cmd: 'project.rename', name: 'ULS' })).resolves.toMatchObject({ name: 'ULS' });
     expect(host.projects.rename).toHaveBeenCalledWith(undefined, 'ULS');
-    await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toMatchObject({ id: PROJECT.id, saving: false });
+    await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toMatchObject({ id: PROJECT.id, saving: false, journal: MODEL_FILE.journal });
 
     await registry.dispatch({ cmd: 'project.delete', id: PROJECT.id });
     expect(host.projects.delete).toHaveBeenCalledWith(PROJECT.id);

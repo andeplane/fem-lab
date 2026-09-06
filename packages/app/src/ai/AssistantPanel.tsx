@@ -4,7 +4,7 @@
 // holds this panel against `registry.list()` the same way it holds the shell.
 import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { Store, UiState } from '../store';
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
@@ -12,9 +12,8 @@ import './assistant.css';
 import { buildSystem, buildTurn, downscaleImage, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
 import { defaultProvider, maskKey, MODELS, resolveKey, storedModel, storeKey } from './keys';
 import { openaiProvider } from './openai';
-import { ProjectFolder, pickFolder, projectSkills, watchAgents, type DirHandle } from './project';
+import { ProjectFolder, pickFolder, watchAgents, type DirHandle } from './project';
 import type { ImageBlock, Message, Provider, ProviderId } from './provider';
-import { BUILTIN_SKILLS } from './skills';
 
 export interface AssistantPanelProps {
   registry: Registry;
@@ -181,7 +180,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const [tokens, setTokens] = useState<string[]>([]);
   const [images, setImages] = useState<ImageBlock[]>([]);
   const [index, setIndex] = useState<IndexEntry[]>([]);
-  const [folder, setFolder] = useState<ProjectFolder | null>(null);
+  const { folder, skills } = ui;
   const [provider, setProvider] = useState<ProviderId>(() => defaultProvider());
   const [model, setModel] = useState(() => storedModel(defaultProvider()));
   const [keyDraft, setKeyDraft] = useState('');
@@ -192,13 +191,14 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const openPanel = (name: string, fallback = false) => ui.panels[`assistant.${name}`] ?? fallback;
   const dispatch = useCallback((cmd: { cmd: string } & Record<string, unknown>) => registry.dispatch(cmd), [registry]);
 
-  const skills = useMemo(() => projectSkills(BUILTIN_SKILLS, folder), [folder]);
   const enabled = skills.filter((s) => ui.panels[`skill:${s.name}`] !== false);
 
   const add = (item: Item) => setItems((cur) => [...cur, item]);
 
   // The project folder's AGENTS.md changes under us whenever the person edits it in their editor.
-  useEffect(() => (folder ? watchAgents(folder, () => setFolder(folder)) : undefined), [folder]);
+  useEffect(() => (folder ? watchAgents(folder, () => {
+    if (store.state.folder === folder) store.setFolder(folder);
+  }, undefined, undefined, (error) => store.log('warn', `project refresh failed: ${String(error)}`)) : undefined), [folder, store]);
 
   const openFolder = async () => {
     let handle: DirHandle;
@@ -209,7 +209,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     } catch {
       handle = await pickFolder();
     }
-    setFolder(await ProjectFolder.fromHandle(handle));
+    store.setFolder(await ProjectFolder.fromHandle(handle));
   };
 
   const insert = (ref: string) => {
