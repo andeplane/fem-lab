@@ -88,14 +88,25 @@
   {
     "seq": 5,
     "cmd": {
+      "cmd": "material.assign",
+      "material": "cook",
+      "bodies": [
+        "panel"
+      ]
+    },
+    "hashAfter": "9121818bb657647d13af8fe471739598fe303eb7a170714b9f2abffa9ea21d81"
+  },
+  {
+    "seq": 6,
+    "cmd": {
       "cmd": "constraint.fix",
       "name": "left",
       "on": "panel.left"
     },
-    "hashAfter": "25f3a64d4b54675a3dadf0e9f992409cd77b45dab1ad61de1bde99a512fe1c6d"
+    "hashAfter": "cd1e3e7633d3adb5f23f0bcf48aa83b514ffbc29fed88bdb3e7e0e218f138486"
   },
   {
-    "seq": 6,
+    "seq": 7,
     "cmd": {
       "cmd": "load.traction",
       "name": "shear",
@@ -106,10 +117,10 @@
         "0 N"
       ]
     },
-    "hashAfter": "0fa5e11b8848fbbaf84d9d7e4363518157d725b4de03ec8a9437bc467b71c272"
+    "hashAfter": "dcac57e1ce41e91d0959d8d62e57f061be52e7407d6670087b5dc60927db59a8"
   },
   {
-    "seq": 7,
+    "seq": 8,
     "cmd": {
       "cmd": "step.add",
       "name": "static",
@@ -121,6 +132,6 @@
         "shear"
       ]
     },
-    "hashAfter": "1b9bf03546cb80900f4668c646e48a4c7136543849337d5da908837ffbd8ecec"
+    "hashAfter": "71664b3a412498f19835168ee8f12dec821598ef3c016cdc3148d4a33b38406f"
   }
 ]

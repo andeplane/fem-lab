@@ -111,35 +111,46 @@
   {
     "seq": 5,
     "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "cylinder"
+      ]
+    },
+    "hashAfter": "7934c54b1bada62a48598cf53a7db7e407ba522b3380a6992d28f31658286a23"
+  },
+  {
+    "seq": 6,
+    "cmd": {
       "cmd": "constraint.symmetry",
       "name": "symx",
       "on": "cylinder.xmin",
       "normal": "x"
     },
-    "hashAfter": "c44ca0722b697bd3a799104c8fea284e8a86eef6144d966a5f2cd2f5fa8c627f"
+    "hashAfter": "060d4483f0e41c48f5800107d63e236a14f6f38f9046ecd3e366fa1882dd3d52"
   },
   {
-    "seq": 6,
+    "seq": 7,
     "cmd": {
       "cmd": "constraint.symmetry",
       "name": "symy",
       "on": "cylinder.ymin",
       "normal": "y"
     },
-    "hashAfter": "3e33687bc02d8083e523ee328508b4822ce69d38c246bb9c31451c3a53cb0023"
+    "hashAfter": "28eef82eccebccffbaeee747f22f3b12b73ecb737a712e15621e3e23d0cc6bdd"
   },
   {
-    "seq": 7,
+    "seq": 8,
     "cmd": {
       "cmd": "load.pressure",
       "name": "internal",
       "on": "cylinder.inner",
       "value": "60 MPa"
     },
-    "hashAfter": "78fb08b2fc479c59ef1a5f7302bafd0bd5918c918865ee1aac8e93223213dfd2"
+    "hashAfter": "77226229ae9554ec8233a4548047773c91ad852bef3a1cb93bc9158c0bff18b2"
   },
   {
-    "seq": 8,
+    "seq": 9,
     "cmd": {
       "cmd": "step.add",
       "name": "static",
@@ -152,6 +163,6 @@
         "internal"
       ]
     },
-    "hashAfter": "621b9cd62f2300010ceb20f8cf3afb4233d8af0e72e93c62ec07c88b8fb1ce1e"
+    "hashAfter": "c14410d0737b2d1d516f8135a6ae64fc58a5d298e1c37070cf5e9a17234f06b0"
   }
 ]

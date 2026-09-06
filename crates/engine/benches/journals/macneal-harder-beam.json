@@ -238,14 +238,25 @@
   {
     "seq": 5,
     "cmd": {
+      "cmd": "material.assign",
+      "material": "mh",
+      "bodies": [
+        "beam"
+      ]
+    },
+    "hashAfter": "d7a3973158f4fb2ca994e07903e4dd1c038cc724c43ae41727ccff50b0401454"
+  },
+  {
+    "seq": 6,
+    "cmd": {
       "cmd": "constraint.fix",
       "name": "root",
       "on": "beam.root"
     },
-    "hashAfter": "cfebdd1aa5b21c3c76b9824f747b1addf031d2c02a67baa9e43e6e50e3431d8e"
+    "hashAfter": "12b75a423c56a0494eca93c6801a6e7bd99198d582df11cb7da5445dc1f10343"
   },
   {
-    "seq": 6,
+    "seq": 7,
     "cmd": {
       "cmd": "load.traction",
       "name": "tip",
@@ -256,10 +267,10 @@
         "0 N"
       ]
     },
-    "hashAfter": "09021fb6d0d320d164383314376f8153bfe87f0e61cc232ee351c7f4a99f556c"
+    "hashAfter": "111ad6ce2acac77d6036fbc6d1b11a1fe5b86ba13fa71c87ff14df8d1c6bb209"
   },
   {
-    "seq": 7,
+    "seq": 8,
     "cmd": {
       "cmd": "step.add",
       "name": "static",
@@ -271,6 +282,6 @@
         "tip"
       ]
     },
-    "hashAfter": "8ea5061796c26eacac21bbff9f7a012b5a6c6dbdda0a9b4c0ad9cf2862a02842"
+    "hashAfter": "505364f9186d56e8cd54553e469a4a5cb3c40b1bbbebc9cafa09e9bc429f2728"
   }
 ]

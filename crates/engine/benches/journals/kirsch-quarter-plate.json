@@ -164,25 +164,36 @@
   {
     "seq": 5,
     "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    "hashAfter": "1b98b0ea8faa11f71321dada7b1dc649ebb4d02c660132c80ebf65e6f131e296"
+  },
+  {
+    "seq": 6,
+    "cmd": {
       "cmd": "constraint.symmetry",
       "name": "symx",
       "on": "plate.xmin",
       "normal": "x"
     },
-    "hashAfter": "7a09c1e7f19ff62ae1e799fdf9bfa0f062a76f01ce1db83b5164b65e1edda8ff"
+    "hashAfter": "8518730b35d43d1a7da2611e47d1e68e5e16dea698bda33dfaf4a968cbf57c3c"
   },
   {
-    "seq": 6,
+    "seq": 7,
     "cmd": {
       "cmd": "constraint.symmetry",
       "name": "symy",
       "on": "plate.ymin",
       "normal": "y"
     },
-    "hashAfter": "8f193a887dc3f2b098f175d7c07a8c65e6b06c5603e95c9e5951db74034e4590"
+    "hashAfter": "e95e7cf5210e024975bb5c6c682ed5d8a3e07963050dda4a9f89192efaf34727"
   },
   {
-    "seq": 7,
+    "seq": 8,
     "cmd": {
       "cmd": "load.traction",
       "name": "pull",
@@ -193,10 +204,10 @@
         "0 N"
       ]
     },
-    "hashAfter": "a9ca4c060cc06969f0709178e8e0cee87dbeceb590d38ce7c8643b141a0587e6"
+    "hashAfter": "b40d0d8665ebafbe52cea29da4bad0897ba7fc7a041e52f225fabb5070256bef"
   },
   {
-    "seq": 8,
+    "seq": 9,
     "cmd": {
       "cmd": "step.add",
       "name": "static",
@@ -209,6 +220,6 @@
         "pull"
       ]
     },
-    "hashAfter": "8c1327784e6018f7e3511caa45456d19b656eb28965bab4bd638f9de30aee702"
+    "hashAfter": "a4afac4c6088d0f7c328145b6ced67c6d308bca3b05f6ace71b8563bf1b6f3d3"
   }
 ]

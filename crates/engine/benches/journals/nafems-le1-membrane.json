@@ -118,35 +118,46 @@
   {
     "seq": 5,
     "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "membrane"
+      ]
+    },
+    "hashAfter": "54abcc0548ee83eda88b31baccf6d3ddc3ab8dfdc1fcf41483127aa7ff97035a"
+  },
+  {
+    "seq": 6,
+    "cmd": {
       "cmd": "constraint.symmetry",
       "name": "symx",
       "on": "membrane.x0",
       "normal": "x"
     },
-    "hashAfter": "bf7e96e34af657e6a3702e3a9feb93bd6bd51bfee399ee30caf7ae53ce825a43"
+    "hashAfter": "9a5fac0ce166b44666500b049c573260ff2211f5c68a2a910b6375fcdbd1c457"
   },
   {
-    "seq": 6,
+    "seq": 7,
     "cmd": {
       "cmd": "constraint.symmetry",
       "name": "symy",
       "on": "membrane.y0",
       "normal": "y"
     },
-    "hashAfter": "6e026ee9e34090f8ddef6678bfd8f8e02720f1fdef6900b481eab69186920a6a"
+    "hashAfter": "156150220f183cbf2ac86d15114797d74fd83bc18342080b45adf519a380c861"
   },
   {
-    "seq": 7,
+    "seq": 8,
     "cmd": {
       "cmd": "load.pressure",
       "name": "outer",
       "on": "membrane.outer",
       "value": "-10 MPa"
     },
-    "hashAfter": "a20e91aebf7f9c7d232af985096e4c0551b4c883c62697cef50e5aeda24dc81f"
+    "hashAfter": "380cac6cff7796d9936797bf8d04151833c8d5844099da581f5462d4e92f2456"
   },
   {
-    "seq": 8,
+    "seq": 9,
     "cmd": {
       "cmd": "step.add",
       "name": "static",
@@ -159,6 +170,6 @@
         "outer"
       ]
     },
-    "hashAfter": "3e5cb159aa99a3c2f27816d4540d447ca783934717ac83ebcd928a75c651616b"
+    "hashAfter": "9f958bec21d0fff35e529005f05702259394a9d7a448bf5bb4c60bb50f42cdbd"
   }
 ]

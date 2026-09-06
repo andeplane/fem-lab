@@ -115,6 +115,17 @@
   {
     "seq": 4,
     "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    "hashAfter": "7ee8e243ae14126f67d110aa721ecd6374388b9445d774f3a4a8403330d4ae67"
+  },
+  {
+    "seq": 5,
+    "cmd": {
       "cmd": "constraint.fix",
       "name": "symx",
       "on": "plate.x0",
@@ -122,10 +133,10 @@
         "ux"
       ]
     },
-    "hashAfter": "ed46091203102b962ea1e6598ab76ff63201d29004d778b343e845457ccb8c7d"
+    "hashAfter": "a77aa573c8f093fc37bef5217eff84c2429ab285ece3d25794fdfab533d5245a"
   },
   {
-    "seq": 5,
+    "seq": 6,
     "cmd": {
       "cmd": "constraint.fix",
       "name": "symy",
@@ -134,10 +145,10 @@
         "uy"
       ]
     },
-    "hashAfter": "516402db8d564f55ec06fef4b753750715d77d987ad2639b91104f826704201b"
+    "hashAfter": "6a4a703b5bf758f16388a36802c3e8c5b62d692cab78873b3f1deb62c0024b72"
   },
   {
-    "seq": 6,
+    "seq": 7,
     "cmd": {
       "cmd": "constraint.fix",
       "name": "edge",
@@ -147,10 +158,10 @@
         "uy"
       ]
     },
-    "hashAfter": "5c5ab9ac0a233716d23057df1d33e5d101ad7edc4a50b31729c9b8eb631cd5e1"
+    "hashAfter": "0e05a9a5f2c6e353368202154d64ca91bd00bb243f37a7b201d0c1a4d290b506"
   },
   {
-    "seq": 7,
+    "seq": 8,
     "cmd": {
       "cmd": "geometry.nameRegion",
       "name": "midOuter",
@@ -168,10 +179,10 @@
         ]
       }
     },
-    "hashAfter": "f47d9cf76d0de283b95472aac27f2b520e370ec40b929c941c81f1a3f7349902"
+    "hashAfter": "6b918a8cf4bf07682b43f3c514cff53dba208f3c00331f2fa6343d9443a894da"
   },
   {
-    "seq": 8,
+    "seq": 9,
     "cmd": {
       "cmd": "constraint.fix",
       "name": "midz",
@@ -180,20 +191,20 @@
         "uz"
       ]
     },
-    "hashAfter": "976a93435483d89db1413a443ad6b21848672af1b14eae7a57fd9cd51feff5ec"
+    "hashAfter": "cd2aea001efb2dabeb320525ba36fdc6e8f4350a6e6c8b0d9baa0642c79e40d0"
   },
   {
-    "seq": 9,
+    "seq": 10,
     "cmd": {
       "cmd": "load.pressure",
       "name": "top",
       "on": "plate.top",
       "value": "1 MPa"
     },
-    "hashAfter": "80113ca7a643d1e98bd39784da35f0eab615c4e5862772726b4f36c8925f4edc"
+    "hashAfter": "5c850445de55f91d0bbbd5169e33c6d1eedb3e21a58c30a04065c20442158422"
   },
   {
-    "seq": 10,
+    "seq": 11,
     "cmd": {
       "cmd": "step.add",
       "name": "static",
@@ -208,6 +219,6 @@
         "top"
       ]
     },
-    "hashAfter": "8faff4f96dfd7a79fdc9dd6af30089f0e1fdf67965d0377dd18302e1e90f2a81"
+    "hashAfter": "de60f861fb1944ee50c86326c23fa15b6fa562687a59494ed296086dcffbe37b"
   }
 ]
