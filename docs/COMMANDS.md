@@ -297,7 +297,8 @@ singular stresses near the node; prefer load.traction on a face unless you mean 
 ### load.gravity
 
 Gravity (or any uniform acceleration) as a body force on every Body whose Material has
-a density; Bodies without one are skipped and listed in the warnings.
+a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
+apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
