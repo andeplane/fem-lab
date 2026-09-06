@@ -30,6 +30,19 @@ modal, the palette in the workspace, the Assistant drawer, the tutorial panel, s
 | 15 | At 1024 px the deformation bar's fixed `right: 190px` clipped its left end against the narrower viewer | `style.css` | low | fixed in the narrow block: the bar spans the well and right-aligns |
 | 16 | The design's Results tab has no history plot, no frequencies table and no derived fields; the export dialog offers no 1× / 2× | — | (the missing work, not a defect) | built — see below |
 
+### Found only by driving a modal and a transient Step (`e2e/postprocess.spec.ts`)
+
+Every state above was a static Step, because that is all the gallery had. The two fixtures
+under `e2e/fixtures/` found four more.
+
+| # | What | Where | Severity | Status |
+|---|------|-------|----------|--------|
+| 17 | `ResultsView.refresh` loaded whatever field the *previous* Result was contoured by, so `solve.run` on a modal Step failed outright with `step 'modes' has no vonMises field`, and on a heat Step with `no displacement field`. The whole Command threw, so the Journal reverted and the Result never reached the screen | `results.ts` | **critical** — modal and transient were unusable in the app | fixed: `available()` picks a field the Result actually has (its first mode shape for a modal Step), and the deformed shape is only fetched when the Result has a displacement |
+| 18 | `Viewer.autoScale` rounded to an integer, and a mass-normalised mode shape wants an exaggeration near 0.1, so every mode opened at ×0 — a mode shape that could not be seen | `viewer/viewer.ts` | high | fixed: below 1 the scale keeps two significant figures |
+| 19 | Both derived chips dispatched `view.showField { field: "vonMises" }`, because that is the array they read — clicking `σ/f_y` showed σ_vM | `App.tsx`, `Tree.tsx`, `fields.ts` | high | fixed: `showFieldArgs()` names a derived choice by its own key |
+| 20 | The tree's Results rows put `view.showField` into the Properties form instead of running it, and it has no form (it is a host Command), so the panel went blank | `Tree.tsx` | medium | fixed: a `run` row dispatches its Command; Model rows still fill the form, which is how an edit works |
+| 21 | `form.test.tsx` and `tutorial-panel.test.tsx` waited a fixed `setTimeout(20)` for Preact's effects, which loses about one run in three under a full vitest worker pool | `test/*` | medium (a flaky gate) | fixed: `test/wait-for.ts` — `waitFor` / `waitForText` / `waitForGone` poll for the state the assertion is about (2 s cap), and `afterEffects` waits for Preact's own boundary (a frame *and* the `setTimeout(0)` turn `afterNextFrame` queues behind it) rather than for a number of milliseconds. Five consecutive `npm test -w packages/app` runs green |
+
 ### Checked and found correct
 
 - Every `[data-cmd]` in every state names a Command or Query the registry has (the built-DOM

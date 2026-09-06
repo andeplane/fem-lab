@@ -4,8 +4,8 @@
 import type { ResultSummary, StudyReport } from '@femlab/registry';
 import { render } from 'preact';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, modeChoice, siUnitOf } from '../src/fields';
-import { SAFETY_CAP, derive, derivedRange, extent, fieldKeyOf, magnitude, yieldQuantities } from '../src/results';
+import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, modeChoice, showFieldArgs, siUnitOf } from '../src/fields';
+import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnitude, yieldQuantities } from '../src/results';
 import { Store, initialState, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
 import { Frequencies, History, LineChart, axisTicks, extremeLabel } from '../src/ui/Results';
@@ -31,12 +31,13 @@ const modal = { ...RESULT, frequencies: [v(41.2, 'Hz'), v(258.1, 'Hz'), v(0, 'Hz
 const transient = {
   ...RESULT,
   step: 'heat',
+  extremes: [{ field: 'temperature', component: 0, min: v(293.1, 'K'), minAt: [], max: v(295.1, 'K'), maxAt: [] }],
   history: [
     { time: v(0, 's'), min: v(20, 'degC'), max: v(20, 'degC') },
     { time: v(10, 's'), min: v(20, 'degC'), max: v(48, 'degC') },
     { time: v(20, 's'), min: v(21, 'degC'), max: v(63, 'degC') },
   ],
-} as ResultSummary;
+} as unknown as ResultSummary;
 
 const state = (patch: Partial<UiState>): UiState => ({ ...initialState, ...patch });
 
@@ -62,6 +63,31 @@ describe('the field table, once a Result has modes and a yield', () => {
     expect(DERIVED_CHOICES.every((c) => c.field === 'vonMises')).toBe(true);
     // No von Mises, no check to derive from.
     expect(fieldChoices(['displacement'], 0, true).map((c) => c.key)).toEqual(['umag', 'ux', 'uy', 'uz']);
+  });
+
+  it('names a derived choice by its own key, not by the array it reads', () => {
+    expect(showFieldArgs(choiceOf('utilisation'))).toEqual({ field: 'utilisation' });
+    expect(showFieldArgs(choiceOf('safety'))).toEqual({ field: 'safety' });
+    expect(showFieldArgs(choiceOf('uz'))).toEqual({ field: 'displacement', component: 2 });
+    expect(showFieldArgs(choiceOf('umag'))).toEqual({ field: 'displacement' });
+    expect(showFieldArgs(modeChoice(2))).toEqual({ field: 'mode:2' });
+  });
+
+  it('contours a Result by a field it actually has', () => {
+    // A modal Step computes displacement and no stress at all.
+    const modes = { ...modal, extremes: [{ field: 'displacement', component: 0, min: v(-1, 'mm'), minAt: [], max: v(1, 'mm'), maxAt: [] }] } as unknown as ResultSummary;
+    expect(available('vonMises', modes, false)).toBe('mode:1');
+    expect(available('mode:3', modes, false)).toBe('mode:3');
+    // Beyond the modes it found, back to the first.
+    expect(available('mode:9', modes, false)).toBe('mode:1');
+    // A static Step keeps what was chosen, and falls back to what it did compute.
+    expect(available('vonMises', RESULT, false)).toBe('vonMises');
+    expect(available('uz', RESULT, false)).toBe('vonMises');
+    // A derived choice survives only while a yield is known.
+    expect(available('utilisation', RESULT, true)).toBe('utilisation');
+    expect(available('utilisation', RESULT, false)).toBe('vonMises');
+    // A heat Step has neither.
+    expect(available('vonMises', transient, false)).toBe('temperature');
   });
 
   it('round-trips a showField argument back to a picker key', () => {
@@ -202,6 +228,19 @@ describe('the Results group of the tree', () => {
     expect(rows[1]).toMatchObject({ args: { field: 'mode:1' }, active: true, summary: '41.2 Hz · mode shape' });
     expect(rows[0]!.summary).toBe('0.1 MPa … 12.4 MPa on modal');
     expect(rows[4]!.summary).toContain("Material's yield");
+    // A Result is not edited by re-issuing a Command, so its rows run rather than fill the form.
+    expect(rows.every((r) => r.run === true)).toBe(true);
+    expect(rows[4]!.args).toEqual({ field: 'safety' });
+  });
+
+  it('does not lend one component\'s extremes to a magnitude that has none', () => {
+    const withU = { ...RESULT, extremes: [{ field: 'displacement', component: 0, min: v(-1, 'mm'), minAt: [], max: v(1, 'mm'), maxAt: [] }] } as unknown as ResultSummary;
+    const rows = resultItems(state({ result: withU }));
+    expect(rows.map((r) => r.name)).toEqual(['|u|', 'ux', 'uy', 'uz']);
+    // A magnitude has no extreme of its own, and uy and uz were not among the extremes.
+    expect(rows[0]!.summary).toBe('on modal');
+    expect(rows[1]!.summary).toBe('-1 mm … 1 mm on modal');
+    expect(rows[2]!.summary).toBe('on modal');
   });
 });
 

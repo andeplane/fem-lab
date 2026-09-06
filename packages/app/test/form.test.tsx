@@ -4,6 +4,7 @@
 import type { EngineSchema, JsonSchema, ModelSummary } from '@femlab/registry';
 import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { waitFor } from './wait-for';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { Store } from '../src/store';
 import { SchemaForm, errorFor } from '../src/ui/SchemaForm';
@@ -58,8 +59,8 @@ const type = (input: HTMLInputElement, value: string) => {
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
 };
-/** Preact defers `useEffect` past paint, so the quantity echo needs a turn of the event loop. */
-const flush = () => new Promise((r) => setTimeout(r, 20));
+/** Preact defers `useEffect` past paint, so the quantity echo arrives on its own clock. */
+const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
   beforeEach(() => {
@@ -96,17 +97,15 @@ describe('SchemaForm', () => {
 
   it('echoes the normalised SI value under a quantity field, and steps it by ten per cent', async () => {
     const { root, query, sent } = mount('load.pressure', { name: 'p', value: '2.4 MPa' });
-    await flush();
+    expect(await echoOf(root, 'value')).toContain('2.400e+6 Pa');
     expect(query).toHaveBeenCalledWith({ query: 'query.convert', quantity: '2.4 MPa', to: 'Pa' });
-    expect(field(root, 'value').querySelector('.echo')!.textContent).toContain('2.400e+6 Pa');
     field(root, 'value').querySelector<HTMLButtonElement>('button[title="+10 %"]')!.click();
     expect((sent.at(-1) as unknown as { args: { value: string } }).args.value).toBe('2.64 MPa');
   });
 
   it('flags a quantity that is not a number with a unit before the engine ever sees it', async () => {
     const { root } = mount('load.pressure', { value: 'banana' });
-    await flush();
-    expect(field(root, 'value').querySelector('.echo.bad')!.textContent).toContain('not a number with a unit');
+    expect(await echoOf(root, 'value', '.echo.bad')).toContain('not a number with a unit');
   });
 
   it('puts the engine\'s structured error under the field its `where` names', () => {
