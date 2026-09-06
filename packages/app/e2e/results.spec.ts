@@ -34,11 +34,8 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
     await page.locator('button[data-cmd="panel.toggle"]', { hasText: 'Open an example' }).click();
     await page.locator('button[title="file.openExample cantilever"]').click();
     await expect(page.locator('.workspace')).toBeVisible();
-    await expect(page.locator('button.solve')).toBeEnabled();
-    await expect(page.locator('button.solve')).toHaveText('Solve');
 
-    // 2 · Solve. The button carries the progress, and the card offers the one Command that stops it.
-    await page.locator('button.solve').click();
+    // 2 · the example's Journal ends on solve.run, so it opens solved: the button says so.
     await expect(page.locator('button.solve')).toHaveText(/Solved · rev \d+/, { timeout: 180_000 });
     await expect(page.locator('button.solve')).toHaveClass(/solved/);
 

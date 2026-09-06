@@ -184,7 +184,19 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       restore: async () => {
         const saved = await autosave.read();
         if (!saved) return null;
-        await applyShared({ dispatch: (cmd) => transport.dispatch(cmd as never) }, saved.cmds);
+        // As with an example: a restored Journal that ends on a solve comes back solved on screen.
+        let solved: unknown = null;
+        await applyShared(
+          {
+            dispatch: async (cmd) => {
+              const ack = await transport.dispatch(cmd as never);
+              if (String(cmd.cmd).startsWith('solve.') || cmd.cmd === 'study.converge') solved = ack;
+              return ack;
+            },
+          },
+          saved.cmds,
+        );
+        if (solved) await results?.onAck(solved);
         return { name: saved.name, at: saved.at, commands: saved.cmds.length };
       },
       autosave: () => ({ enabled: autosave.enabled(), saved: lastSaved }),
@@ -214,7 +226,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: WorkerTransport, viewer: ViewerRef, refresh: () => Promise<void>): HostDef[] {
+export function appHostCommands(store: Store, transport: WorkerTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
   return [
     {
       name: 'view.setMode',
@@ -245,10 +257,17 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
       run: async (input) => {
         const { name } = input as { name: string };
         const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
-        for (const e of entries) await transport.dispatch(e.cmd as never);
+        // An example that ends on solve.run opens solved, and a solved Model is shown as one:
+        // the last solve's Ack goes where the Solve button's would (results tab, contours).
+        let solved: unknown = null;
+        for (const e of entries) {
+          const ack = await transport.dispatch(e.cmd as never);
+          if (String(e.cmd.cmd).startsWith('solve.') || e.cmd.cmd === 'study.converge') solved = ack;
+        }
         // The gallery has done its job; leaving it up hides the Model it just opened.
         store.togglePanel('examples', false);
         await refresh();
+        if (solved) await results?.onAck(solved);
         return { name, commands: entries.length };
       },
     },

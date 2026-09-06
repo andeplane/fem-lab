@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
@@ -32,6 +32,8 @@ export interface LastError {
 
 export interface UiState {
   ready: boolean;
+  /** What `query.autosave` last reported, so the start screen can offer `file.restore`. */
+  autosave: AutosaveState['saved'];
   model: ModelSummary | null;
   journal: JournalDump | null;
   script: string;
@@ -122,6 +124,7 @@ export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], ref
 
 export const initialState: UiState = {
   ready: false,
+  autosave: null,
   model: null,
   journal: null,
   script: '',

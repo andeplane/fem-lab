@@ -8,7 +8,10 @@ import { expect, test, type Page } from '@playwright/test';
 
 const SHOTS = path.join(import.meta.dirname, 'screenshots');
 const FIXTURE = path.join(import.meta.dirname, '../../../crates/engine/benches/journals/cantilever.json');
-const journal = JSON.parse(readFileSync(FIXTURE, 'utf8')) as { seq: number; cmd: Record<string, unknown>; hashAfter: string }[];
+const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8')) as { seq: number; cmd: Record<string, unknown>; hashAfter: string }[];
+// The fixture ends on `solve.run` so the gallery opens it solved; the forms build the Model, which
+// is everything before that line (a solve leaves the Model hash unchanged).
+const journal = fixture.filter((e) => !String(e.cmd.cmd).startsWith('solve.'));
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
@@ -152,10 +155,13 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     await expect(page.locator('.gallery')).toBeVisible();
     await shot(page, '06-gallery');
     await page.locator('button[title="file.openExample cantilever"]').click();
-    await expect(page.locator('.jrow')).toHaveCount(journal.length);
+    // The fixture ends on solve.run, so it opens solved and on the Results tab; the Journal is a tab away.
+    await expect(page.locator('button.solve')).toHaveText(/Solved · rev \d+/, { timeout: 60_000 });
+    await page.locator('.tab', { hasText: 'journal' }).click();
+    await expect(page.locator('.jrow')).toHaveCount(fixture.length);
     const model = (await page.evaluate(() => window.fem.query.model())) as unknown as { name: string; hash: string };
     expect(model.name).toBe('cantilever');
-    expect(model.hash).toBe(journal[journal.length - 1]!.hashAfter);
+    expect(model.hash).toBe(fixture[fixture.length - 1]!.hashAfter);
     await shot(page, '07-example-open');
   });
 

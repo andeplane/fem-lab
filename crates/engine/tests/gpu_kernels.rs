@@ -270,6 +270,25 @@ fn the_sixty_six_thousand_dof_cantilever_matches_the_direct_solver() {
     assert_eq!(differing, 0, "{differing} of {} components differ between two identical solves", k.n);
 }
 
+/// Benchmark B1's `[8,2,2]` cantilever through `solve.run { solver: 'gpu-pcg' }`: the whole
+/// scale → upload → f32 CG → f64 refinement path on a solve that finishes in well under a second
+/// on any adapter, so the coverage job sees the converged branch without the 66k-DOF sibling.
+#[test]
+fn the_small_cantilever_solves_on_the_gpu_and_matches_the_direct_solver() {
+    let g = gpu();
+    let (k, f) = cantilever([8, 2, 2]);
+    let pool = Pool::new(2);
+    let direct = SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() };
+    let (want, _) = pollster::block_on(solve(&k, &f, &direct, &pool, None, &mut nop)).expect("direct");
+    let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
+    let (got, info) = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&g), &mut nop)).expect("gpu-pcg");
+    assert_eq!(info.solver, "gpu-pcg");
+    assert!(info.iterations >= 1);
+    let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let diff: Vec<f64> = got.iter().zip(&want).map(|(a, b)| a - b).collect();
+    assert!(norm(&diff) <= 1e-8 * norm(&want), "‖u_gpu − u_direct‖ = {:e}, ‖u‖ = {:e}", norm(&diff), norm(&want));
+}
+
 /// The 800k-DOF run of Benchmark D5, by hand: `cargo test --release --features gpu-tests -- --ignored`.
 ///
 /// It prints what happened and asserts nothing, because what happens is the open question: at

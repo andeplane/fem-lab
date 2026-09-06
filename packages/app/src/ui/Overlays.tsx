@@ -178,9 +178,18 @@ export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         </Cmd>
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" args={{ panel: 'tutorial' }}>
           <b>Start a tutorial</b>
-          <span>A guided cantilever, one Command at a time, with the reason for each.</span>
-          <i class="mono">the runner lands in a later commit</i>
+          <span>Nine guided walks, one Command at a time with the reason for each: a cantilever, a plate with a hole, heat, modes, a convergence study.</span>
+          <i class="mono">tutorials · step by step</i>
         </Cmd>
+        {s.autosave ? (
+          <Cmd dispatch={dispatch} cmd="file.restore" class="card" title="file.restore">
+            <b>Restore the last model</b>
+            <span>
+              {s.autosave.name} · {s.autosave.commands} Commands, autosaved in this browser {new Date(s.autosave.at).toLocaleString()}.
+            </span>
+            <i class="mono">file.restore()</i>
+          </Cmd>
+        ) : null}
       </div>
       <div class="caps mono">
         {s.ready ? '●' : '○'} {s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…'} · {s.hostCaps?.webgpu ? 'WebGPU available' : 'no WebGPU'} ·{' '}

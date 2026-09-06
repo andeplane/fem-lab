@@ -66,7 +66,7 @@ async function boot(): Promise<void> {
   const registry = new Registry({
     schema: schema as unknown as EngineSchema,
     host: ctx,
-    hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh)],
+    hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results)],
   });
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
@@ -80,7 +80,7 @@ async function boot(): Promise<void> {
       store.log('command', cmd.cmd);
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, so the Journal has to be re-read after it too.
-      if (registry.describe(cmd.cmd).provider === 'engine' || cmd.cmd === 'file.export') {
+      if (registry.describe(cmd.cmd).provider === 'engine' || cmd.cmd === 'file.export' || cmd.cmd === 'file.restore') {
         const { seq } = ack as { seq?: number };
         if (typeof seq === 'number' && seq >= 0) store.set({ journalWho: { ...store.state.journalWho, [seq]: { who: store.state.source, at: Date.now() } } });
         await refresh();
@@ -121,7 +121,7 @@ async function boot(): Promise<void> {
   if (devApiKeys()?.anthropic) store.log('engine', 'an ANTHROPIC_API_KEY from the dev shell is available to the assistant');
   await refresh();
 
-  await primeAutosave();
+  store.set({ autosave: await primeAutosave() });
   const example = new URLSearchParams(location.search).get('example');
   if (example) await dispatch({ cmd: 'file.openExample', name: example });
   await openShared({ dispatch }, location.hash);
