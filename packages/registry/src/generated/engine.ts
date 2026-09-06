@@ -546,6 +546,28 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
+       * (default 10). More increments cost proportionally more but start each Newton solve
+       * closer to equilibrium, which is what makes a stiffening or buckling model converge.
+       */
+      increments?: number | null;
+      /**
+       * Halvings a static-nonlinear Step may use when an increment does not converge
+       * (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
+       */
+      maxCutbacks?: number | null;
+      /**
+       * Relative convergence tolerance of the nonlinear iteration, on both the residual
+       * force and the displacement correction in the infinity norm (default 1e-8). This is
+       * not `solve.run`'s `tolerance`, which is the *linear* solver's.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iterations one increment of a nonlinear Step may take before it is cut back
+       * (default 20). Full Newton reaches 1e-8 in four or five from a good starting point.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -1301,7 +1323,7 @@ export type Axis = "x" | "y" | "z";
 /**
  * Analysis procedures.
  */
-export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
+export type Procedure = "static" | "static-nonlinear" | "modal" | "heat-steady" | "heat-transient" | "explicit";
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
@@ -2267,6 +2289,28 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
+       * (default 10). More increments cost proportionally more but start each Newton solve
+       * closer to equilibrium, which is what makes a stiffening or buckling model converge.
+       */
+      increments?: number | null;
+      /**
+       * Halvings a static-nonlinear Step may use when an increment does not converge
+       * (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
+       */
+      maxCutbacks?: number | null;
+      /**
+       * Relative convergence tolerance of the nonlinear iteration, on both the residual
+       * force and the displacement correction in the infinity norm (default 1e-8). This is
+       * not `solve.run`'s `tolerance`, which is the *linear* solver's.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iterations one increment of a nonlinear Step may take before it is cut back
+       * (default 20). Full Newton reaches 1e-8 in four or five from a good starting point.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -3844,7 +3888,8 @@ export interface EngineError {
     | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
-    | "explicit.unstable";
+    | "explicit.unstable"
+    | "newton.diverged";
   /**
    * One line a student understands.
    */
@@ -3997,6 +4042,10 @@ export interface Step {
   dtFactor?: number | null;
   amplitude?: Amplitude | null;
   initial?: number | null;
+  increments?: number | null;
+  maxCutbacks?: number | null;
+  nonlinearTolerance?: number | null;
+  nonlinearMaxIterations?: number | null;
 }
 /**
  * A Plugin used by the Model (phase P).

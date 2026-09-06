@@ -190,6 +190,10 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                         AmplitudeSpec::Table { t: t.iter().map(|v| Q::new(*v, "s")).collect(), value: value.clone() }
                     }
                 }),
+                increments: x.increments,
+                max_cutbacks: x.max_cutbacks,
+                nonlinear_tolerance: x.nonlinear_tolerance,
+                nonlinear_max_iterations: x.nonlinear_max_iterations,
             }
         }
     })

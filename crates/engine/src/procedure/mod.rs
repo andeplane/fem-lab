@@ -1,6 +1,7 @@
 //! Procedures: what a Step *does*. One `run` for every one of them (plan A §6).
 //!
-//! `Step::Static` is the linear static procedure ([`static_`]); [`modal`] finds natural
+//! `Step::Static` is the linear static procedure ([`static_`]); [`nonlinear`] is its
+//! finite-deformation counterpart; [`modal`] finds natural
 //! frequencies by subspace iteration, [`heat`] solves steady and transient conduction, and
 //! [`explicit`] integrates the equations of motion by central differences. Each one takes the
 //! same resolved [`Problem`] and answers the same [`StepResult`], so `solve.run` and every
@@ -9,6 +10,7 @@
 pub mod explicit;
 pub mod heat;
 pub mod modal;
+pub mod nonlinear;
 pub mod static_;
 
 use std::collections::BTreeMap;
@@ -57,6 +59,9 @@ impl Amplitude {
 pub enum Step {
     /// Linear static equilibrium: `K u = f`.
     Static { solver: SolveOptions },
+    /// Static equilibrium with geometric nonlinearity: total Lagrangian, Newton–Raphson,
+    /// load stepping ([`nonlinear`]).
+    StaticNonlinear(nonlinear::Options),
     /// Natural frequencies and mode shapes by subspace iteration (plan A §6).
     Modal { n_modes: usize, shift: Option<f64>, solver: SolveOptions },
     /// Steady conduction with convection and flux boundaries: `(K + H) T = f`.
@@ -92,6 +97,7 @@ impl Step {
     pub fn name(&self) -> &'static str {
         match self {
             Step::Static { .. } => "static",
+            Step::StaticNonlinear(..) => "static-nonlinear",
             Step::Modal { .. } => "modal",
             Step::HeatSteady { .. } => "heat-steady",
             Step::HeatTransient { .. } => "heat-transient",
@@ -198,6 +204,7 @@ pub async fn run(
 ) -> Result<StepResult, Error> {
     match step {
         Step::Static { solver } => static_::run(p, solver, pool, gpu, progress).await,
+        Step::StaticNonlinear(options) => nonlinear::run(p, options, pool, gpu, progress).await,
         Step::Modal { n_modes, shift, solver } => modal::run(p, *n_modes, *shift, solver, pool, progress),
         Step::HeatSteady { solver } => heat::steady(p, solver, pool, gpu, progress).await,
         Step::HeatTransient { dt, t_end, theta, initial, output_every, amplitude, solver } => {

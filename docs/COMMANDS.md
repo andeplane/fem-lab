@@ -604,7 +604,9 @@ Step whose Result this one continues — a static Step after a heat Step picks u
 temperature field and turns it into thermal stress. The remaining fields belong to one
 procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
+`dtFactor` and `outputEvery` to explicit, and `increments`, `maxCutbacks`,
+`nonlinearTolerance`, `nonlinearMaxIterations`, `tEnd` and `amplitude` to
+static-nonlinear. Heat-steady requires a finite positive material
 conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
 `theta` must lie in [0, 1].
 
@@ -625,6 +627,10 @@ conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, a
 | dtFactor | no | <code>{"type":["number","null"],"format":"double"}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
 | amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}]}</code> |  |
 | initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
+| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
+| maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
+| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Relative convergence tolerance of the nonlinear iteration, on both the residual force and the displacement correction in the infinity norm (default 1e-8). This is not &#96;solve.run&#96;'s &#96;tolerance&#96;, which is the *linear* solver's. |
+| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iterations one increment of a nonlinear Step may take before it is cut back (default 20). Full Newton reaches 1e-8 in four or five from a good starting point. |
 | cmd | yes | <code>{"type":"string","const":"step.add"}</code> |  |
 
 <a id="commands-step-remove"></a>
@@ -1491,6 +1497,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Linear static equilibrium.",
       "type": "string",
       "const": "static"
+    },
+    {
+      "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
+      "type": "string",
+      "const": "static-nonlinear"
     },
     {
       "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",

@@ -86,6 +86,16 @@ impl ObjectKind {
 pub enum Procedure {
     /// Linear static equilibrium.
     Static,
+    /// Static equilibrium with geometric nonlinearity: large displacement and large rotation,
+    /// solved by Newton–Raphson over `increments` load increments. The strain measure is
+    /// Green–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so
+    /// the linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**
+    /// stress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.
+    /// Solid and plane-strain idealisations only. Incompatible modes are switched off, so
+    /// hex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not
+    /// follow the deformation (a pressure keeps its reference direction and area) and a
+    /// temperature field is applied in full rather than ramped with the load factor.
+    StaticNonlinear,
     /// Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.
     Modal,
     /// Steady heat conduction with convection, flux and source boundaries; needs `k`.
@@ -944,7 +954,9 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
+    /// `dtFactor` and `outputEvery` to explicit, and `increments`, `maxCutbacks`,
+    /// `nonlinearTolerance`, `nonlinearMaxIterations`, `tEnd` and `amplitude` to
+    /// static-nonlinear. Heat-steady requires a finite positive material
     /// conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
     /// `theta` must lie in [0, 1].
     #[serde(rename = "step.add", rename_all = "camelCase")]
@@ -979,6 +991,24 @@ pub enum Command {
         amplitude: Option<AmplitudeSpec>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initial: Option<Q<Temperature>>,
+        /// Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
+        /// (default 10). More increments cost proportionally more but start each Newton solve
+        /// closer to equilibrium, which is what makes a stiffening or buckling model converge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        increments: Option<u32>,
+        /// Halvings a static-nonlinear Step may use when an increment does not converge
+        /// (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_cutbacks: Option<u32>,
+        /// Relative convergence tolerance of the nonlinear iteration, on both the residual
+        /// force and the displacement correction in the infinity norm (default 1e-8). This is
+        /// not `solve.run`'s `tolerance`, which is the *linear* solver's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nonlinear_tolerance: Option<f64>,
+        /// Iterations one increment of a nonlinear Step may take before it is cut back
+        /// (default 20). Full Newton reaches 1e-8 in four or five from a good starting point.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nonlinear_max_iterations: Option<u32>,
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced

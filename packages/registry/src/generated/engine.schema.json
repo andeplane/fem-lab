@@ -854,7 +854,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `increments`, `maxCutbacks`,\n`nonlinearTolerance`, `nonlinearMaxIterations`, `tEnd` and `amplitude` to\nstatic-nonlinear. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
         "type": "object",
         "properties": {
           "name": {
@@ -968,6 +968,41 @@
                 "type": "null"
               }
             ]
+          },
+          "increments": {
+            "description": "Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxCutbacks": {
+            "description": "Halvings a static-nonlinear Step may use when an increment does not converge\n(default 5, at most 20). After the last one the Step fails with `newton.diverged`.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "nonlinearTolerance": {
+            "description": "Relative convergence tolerance of the nonlinear iteration, on both the residual\nforce and the displacement correction in the infinity norm (default 1e-8). This is\nnot `solve.run`'s `tolerance`, which is the *linear* solver's.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "description": "Iterations one increment of a nonlinear Step may take before it is cut back\n(default 20). Full Newton reaches 1e-8 in four or five from a good starting point.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
           },
           "cmd": {
             "type": "string",
@@ -2455,6 +2490,11 @@
             "const": "static"
           },
           {
+            "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
+            "type": "string",
+            "const": "static-nonlinear"
+          },
+          {
             "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
             "type": "string",
             "const": "modal"
@@ -3162,24 +3202,53 @@
           "step"
         ]
       },
-      "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
-        "type": "string",
-        "enum": [
-          "displacement",
-          "stress",
-          "stressUnaveraged",
-          "vonMises",
-          "principal",
-          "strain",
-          "reaction",
-          "temperature"
+      "FrameSample": {
+        "description": "How to select retained output; there is no temporal interpolation or extrapolation.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "index": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "const": "frame"
+              }
+            },
+            "required": [
+              "kind",
+              "index"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "time": {
+                "$ref": "#/$defs/Q_time"
+              },
+              "sampling": {
+                "$ref": "#/$defs/TimeSampling"
+              },
+              "kind": {
+                "type": "string",
+                "const": "time"
+              }
+            },
+            "required": [
+              "kind",
+              "time",
+              "sampling"
+            ]
+          }
         ]
       },
-      "Q_length": {
-        "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
+      "Q_time": {
+        "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
-        "x-dimension": "length"
+        "x-dimension": "time"
       },
       "Quantity": {
         "description": "A number with a unit, as text or as parts.",
@@ -3206,6 +3275,33 @@
             ]
           }
         ]
+      },
+      "TimeSampling": {
+        "description": "Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.\nNearest explicitly selects a retained time; equal-distance ties (within the same relative\nroundoff bound on the distances) choose the earlier frame.\nBoth reject times outside the retained interval (except endpoint conversion roundoff).",
+        "type": "string",
+        "enum": [
+          "exact",
+          "nearest"
+        ]
+      },
+      "Field": {
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "type": "string",
+        "enum": [
+          "displacement",
+          "stress",
+          "stressUnaveraged",
+          "vonMises",
+          "principal",
+          "strain",
+          "reaction",
+          "temperature"
+        ]
+      },
+      "Q_length": {
+        "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "length"
       },
       "ReportSection": {
         "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
@@ -3255,62 +3351,6 @@
             "type": "string",
             "const": "journal"
           }
-        ]
-      },
-      "FrameSample": {
-        "description": "How to select retained output; there is no temporal interpolation or extrapolation.",
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "index": {
-                "type": "integer",
-                "format": "uint32",
-                "minimum": 0
-              },
-              "kind": {
-                "type": "string",
-                "const": "frame"
-              }
-            },
-            "required": [
-              "kind",
-              "index"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "time": {
-                "$ref": "#/$defs/Q_time"
-              },
-              "sampling": {
-                "$ref": "#/$defs/TimeSampling"
-              },
-              "kind": {
-                "type": "string",
-                "const": "time"
-              }
-            },
-            "required": [
-              "kind",
-              "time",
-              "sampling"
-            ]
-          }
-        ]
-      },
-      "Q_time": {
-        "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
-        "$ref": "#/$defs/Quantity",
-        "x-dimension": "time"
-      },
-      "TimeSampling": {
-        "description": "Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.\nNearest explicitly selects a retained time; equal-distance ties (within the same relative\nroundoff bound on the distances) choose the earlier frame.\nBoth reject times outside the retained interval (except endpoint conversion roundoff).",
-        "type": "string",
-        "enum": [
-          "exact",
-          "nearest"
         ]
       }
     }
@@ -4995,7 +5035,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `increments`, `maxCutbacks`,\n`nonlinearTolerance`, `nonlinearMaxIterations`, `tEnd` and `amplitude` to\nstatic-nonlinear. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
             "type": "object",
             "properties": {
               "name": {
@@ -5109,6 +5149,41 @@
                     "type": "null"
                   }
                 ]
+              },
+              "increments": {
+                "description": "Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "maxCutbacks": {
+                "description": "Halvings a static-nonlinear Step may use when an increment does not converge\n(default 5, at most 20). After the last one the Step fails with `newton.diverged`.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "nonlinearTolerance": {
+                "description": "Relative convergence tolerance of the nonlinear iteration, on both the residual\nforce and the displacement correction in the infinity norm (default 1e-8). This is\nnot `solve.run`'s `tolerance`, which is the *linear* solver's.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iterations one increment of a nonlinear Step may take before it is cut back\n(default 20). Full Newton reaches 1e-8 in four or five from a good starting point.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
               },
               "cmd": {
                 "type": "string",
@@ -6520,6 +6595,11 @@
             "const": "static"
           },
           {
+            "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
+            "type": "string",
+            "const": "static-nonlinear"
+          },
+          {
             "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
             "type": "string",
             "const": "modal"
@@ -7110,6 +7190,147 @@
           "time",
           "min",
           "max"
+        ]
+      },
+      "FramesResult": {
+        "description": "`query.frames` response; stored components describe the unpadded History storage.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "field": {
+            "$ref": "#/$defs/Field"
+          },
+          "components": {
+            "description": "Public field layout, matching final FieldData (three components, zero-padded).",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "storedComponents": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "retainedBytes": {
+            "description": "Logical bytes of retained f64 times and unpadded primary values; excludes allocator\noverhead, spare capacity, final derived fields and temporary Query response copies.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/FrameStamp"
+            }
+          }
+        },
+        "required": [
+          "step",
+          "modelHash",
+          "stale",
+          "nodeCount",
+          "field",
+          "components",
+          "storedComponents",
+          "retainedBytes",
+          "frames"
+        ]
+      },
+      "FrameStamp": {
+        "description": "One retained frame's zero-based index and time in seconds and Model display units.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "timeSi": {
+            "type": "number",
+            "format": "double"
+          },
+          "time": {
+            "$ref": "#/$defs/Valued"
+          }
+        },
+        "required": [
+          "index",
+          "timeSi",
+          "time"
+        ]
+      },
+      "FrameResult": {
+        "description": "`query.frame` response: SI values in the existing component-fastest FieldData layout.",
+        "type": "object",
+        "properties": {
+          "sample": {
+            "$ref": "#/$defs/ResolvedFrame"
+          },
+          "field": {
+            "$ref": "#/$defs/Field"
+          },
+          "components": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "description": "SI unit for values: K for temperature, m for displacement, never a display unit.",
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "required": [
+          "sample",
+          "field",
+          "components",
+          "nodeCount",
+          "unit",
+          "values"
+        ]
+      },
+      "ResolvedFrame": {
+        "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "frame": {
+            "$ref": "#/$defs/FrameStamp"
+          }
+        },
+        "required": [
+          "step",
+          "modelHash",
+          "frame"
         ]
       },
       "ProbeResult": {
@@ -7777,147 +7998,6 @@
           "markdown",
           "sections"
         ]
-      },
-      "FramesResult": {
-        "description": "`query.frames` response; stored components describe the unpadded History storage.",
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string"
-          },
-          "modelHash": {
-            "type": "string"
-          },
-          "stale": {
-            "type": "boolean"
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "field": {
-            "$ref": "#/$defs/Field"
-          },
-          "components": {
-            "description": "Public field layout, matching final FieldData (three components, zero-padded).",
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "storedComponents": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "retainedBytes": {
-            "description": "Logical bytes of retained f64 times and unpadded primary values; excludes allocator\noverhead, spare capacity, final derived fields and temporary Query response copies.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "frames": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/FrameStamp"
-            }
-          }
-        },
-        "required": [
-          "step",
-          "modelHash",
-          "stale",
-          "nodeCount",
-          "field",
-          "components",
-          "storedComponents",
-          "retainedBytes",
-          "frames"
-        ]
-      },
-      "FrameStamp": {
-        "description": "One retained frame's zero-based index and time in seconds and Model display units.",
-        "type": "object",
-        "properties": {
-          "index": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "timeSi": {
-            "type": "number",
-            "format": "double"
-          },
-          "time": {
-            "$ref": "#/$defs/Valued"
-          }
-        },
-        "required": [
-          "index",
-          "timeSi",
-          "time"
-        ]
-      },
-      "FrameResult": {
-        "description": "`query.frame` response: SI values in the existing component-fastest FieldData layout.",
-        "type": "object",
-        "properties": {
-          "sample": {
-            "$ref": "#/$defs/ResolvedFrame"
-          },
-          "field": {
-            "$ref": "#/$defs/Field"
-          },
-          "components": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "unit": {
-            "description": "SI unit for values: K for temperature, m for displacement, never a display unit.",
-            "type": "string"
-          },
-          "values": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "format": "double"
-            }
-          }
-        },
-        "required": [
-          "sample",
-          "field",
-          "components",
-          "nodeCount",
-          "unit",
-          "values"
-        ]
-      },
-      "ResolvedFrame": {
-        "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string"
-          },
-          "modelHash": {
-            "type": "string"
-          },
-          "frame": {
-            "$ref": "#/$defs/FrameStamp"
-          }
-        },
-        "required": [
-          "step",
-          "modelHash",
-          "frame"
-        ]
       }
     }
   },
@@ -8487,7 +8567,8 @@
           "solve.too-large",
           "gpu.shader",
           "gpu.too-large",
-          "explicit.unstable"
+          "explicit.unstable",
+          "newton.diverged"
         ]
       }
     }
@@ -9952,6 +10033,37 @@
               "null"
             ],
             "format": "double"
+          },
+          "increments": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "maxCutbacks": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "nonlinearTolerance": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
           }
         },
         "required": [
@@ -9969,6 +10081,11 @@
             "description": "Linear static equilibrium.",
             "type": "string",
             "const": "static"
+          },
+          {
+            "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
+            "type": "string",
+            "const": "static-nonlinear"
           },
           {
             "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
@@ -11342,7 +11459,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `increments`, `maxCutbacks`,\n`nonlinearTolerance`, `nonlinearMaxIterations`, `tEnd` and `amplitude` to\nstatic-nonlinear. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
             "type": "object",
             "properties": {
               "name": {
@@ -11456,6 +11573,41 @@
                     "type": "null"
                   }
                 ]
+              },
+              "increments": {
+                "description": "Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "maxCutbacks": {
+                "description": "Halvings a static-nonlinear Step may use when an increment does not converge\n(default 5, at most 20). After the last one the Step fails with `newton.diverged`.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "nonlinearTolerance": {
+                "description": "Relative convergence tolerance of the nonlinear iteration, on both the residual\nforce and the displacement correction in the infinity norm (default 1e-8). This is\nnot `solve.run`'s `tolerance`, which is the *linear* solver's.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iterations one increment of a nonlinear Step may take before it is cut back\n(default 20). Full Newton reaches 1e-8 in four or five from a good starting point.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
               },
               "cmd": {
                 "type": "string",
