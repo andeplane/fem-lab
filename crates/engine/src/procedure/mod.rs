@@ -116,11 +116,14 @@ pub struct History {
 /// stay readable — and honest about being stale — after that.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepResult {
+    /// Kept with the solved Result, so later model edits cannot change its reaction units.
+    pub reaction_quantity: crate::units::ReactionQuantity,
     pub fields: BTreeMap<Field, FieldData>,
     pub scalars: BTreeMap<String, f64>,
     /// Per-component extremes of every nodal field, in `Field` order.
     pub extremes: Vec<(Field, Extremum)>,
-    /// The total force each Constraint carries, in Model order.
+    /// Total force (N) or removed thermal power (W) per Constraint, in Model order.
+    /// Thermal power occupies component 0; components 1 and 2 are zero.
     pub reactions: Vec<(String, [f64; 3])>,
     /// Natural frequencies in Hz, ascending; empty unless the Step was modal.
     pub frequencies: Vec<f64>,
@@ -165,6 +168,7 @@ pub async fn run(
 /// rest alone, so adding a field to `StepResult` does not touch five constructors.
 pub(crate) fn blank(solver: SolveInfo) -> StepResult {
     StepResult {
+        reaction_quantity: crate::units::ReactionQuantity::Force,
         fields: BTreeMap::new(),
         scalars: BTreeMap::new(),
         extremes: Vec::new(),

@@ -82,8 +82,8 @@ export class ResultsView {
 
   /** display = SI × factor, asked of the engine once per unit pair rather than tabulated here. */
   private async factor(field: string): Promise<number> {
-    const si = siUnitOf(field);
-    const to = displayUnitOf(field, this.store.state.model?.units);
+    const si = siUnitOf(field, this.store.state.result?.reactionQuantity);
+    const to = displayUnitOf(field, this.store.state.model?.units, this.store.state.result?.reactionQuantity);
     if (si === to) return 1;
     const key = `${si}→${to}`;
     const hit = this.factors.get(key);
@@ -184,7 +184,7 @@ export class ResultsView {
     const values = magnitude(raw, choice.magnitude === true);
     for (let i = 0; i < values.length; i++) values[i] = values[i]! * factor;
     const [min, max] = extent(values);
-    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units) };
+    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units, this.store.state.result?.reactionQuantity) };
   }
 
   /** `view.showField`: `{ field: null }` turns contours off, anything else picks a scalar. */

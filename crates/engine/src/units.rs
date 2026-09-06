@@ -134,6 +134,7 @@ dims! {
     Time, "time", "0.5 s", [0,0,1,0];
     Temperature, "temperature", "20 degC", [0,0,0,1];
     Force, "force", "10 kN", [1,1,-2,0];
+    Power, "power", "1 kW", [2,1,-3,0];
     Stress, "stress", "210 GPa", [-1,1,-2,0];
     Density, "density", "7850 kg/m^3", [-3,1,0,0];
     Acceleration, "acceleration", "9.81 m/s^2", [1,0,-2,0];
@@ -570,6 +571,14 @@ pub fn fmt_sig(v: f64, sig: usize) -> String {
     }
 }
 
+/// The physical quantity carried by a Result's reactions and applied totals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ReactionQuantity {
+    Force,
+    Power,
+}
+
 /// Display units, all optional; SI defaults.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -578,6 +587,9 @@ pub struct UnitSet {
     pub length: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub force: Option<String>,
+    /// Thermal reaction and applied power display unit; defaults to W, independently of force.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stress: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -597,6 +609,7 @@ pub struct UnitSet {
 pub struct ResolvedUnits {
     pub length: String,
     pub force: String,
+    pub power: String,
     pub stress: String,
     pub mass: String,
     pub density: String,
@@ -606,12 +619,13 @@ pub struct ResolvedUnits {
 }
 
 impl UnitSet {
-    /// Fill defaults: m, N, Pa, kg, kg/m^3, s, K, m/s^2.
+    /// Fill defaults: m, N, W, Pa, kg, kg/m^3, s, K, m/s^2.
     pub fn resolve(&self) -> ResolvedUnits {
         let d = |o: &Option<String>, def: &str| o.clone().unwrap_or_else(|| def.to_string());
         ResolvedUnits {
             length: d(&self.length, "m"),
             force: d(&self.force, "N"),
+            power: d(&self.power, "W"),
             stress: d(&self.stress, "Pa"),
             mass: d(&self.mass, "kg"),
             density: d(&self.density, "kg/m^3"),
@@ -622,9 +636,10 @@ impl UnitSet {
     }
     /// Every given unit must parse and have the right dimension.
     pub fn validate(&self) -> Result<(), Error> {
-        let checks: [(&Option<String>, Dimension, &str); 8] = [
+        let checks: [(&Option<String>, Dimension, &str); 9] = [
             (&self.length, Length::DIM, "length"),
             (&self.force, Force::DIM, "force"),
+            (&self.power, Power::DIM, "power"),
             (&self.stress, Stress::DIM, "stress"),
             (&self.mass, Mass::DIM, "mass"),
             (&self.density, Density::DIM, "density"),
@@ -654,6 +669,7 @@ impl ResolvedUnits {
         let unit = match dim {
             d if d == Length::DIM => self.length.as_str(),
             d if d == Force::DIM => self.force.as_str(),
+            d if d == Power::DIM => self.power.as_str(),
             d if d == Stress::DIM => self.stress.as_str(),
             d if d == Mass::DIM => self.mass.as_str(),
             d if d == Density::DIM => self.density.as_str(),
@@ -826,6 +842,12 @@ mod tests {
         assert_eq!(r.fmt(0.001, Length::DIM), (1.0, "mm".to_string()));
         assert_eq!(r.fmt(1e6, Stress::DIM), (1.0, "MPa".to_string()));
         assert_eq!(r.fmt(1.0, Force::DIM), (1.0, "N".to_string()));
+        assert_eq!(r.fmt(1.0, Power::DIM), (1.0, "W".to_string()));
+        let power = UnitSet { power: Some("kW".into()), force: Some("kN".into()), ..Default::default() };
+        power.validate().unwrap();
+        assert_eq!(power.resolve().fmt(1000.0, Power::DIM), (1.0, "kW".to_string()));
+        let bad_power = UnitSet { power: Some("kN".into()), ..Default::default() };
+        assert_eq!(bad_power.validate().unwrap_err().code, ErrorCode::UnitDimension);
         assert_eq!(r.fmt(1.0, Mass::DIM).1, "kg");
         assert_eq!(r.fmt(1.0, Density::DIM).1, "kg/m^3");
         assert_eq!(r.fmt(1.0, Time::DIM).1, "s");

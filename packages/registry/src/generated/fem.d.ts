@@ -11,7 +11,7 @@ export interface Fem {
      */
     "new"(args: Omit<Extract<Command, { cmd: 'model.new' }>, 'cmd'>): Promise<Ack>;
     /**
-     * Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage
+     * Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage
      * stays SI and every input may still use any unit of the right dimension; this only
      * changes how values are reported back.
      */

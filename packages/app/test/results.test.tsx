@@ -16,6 +16,7 @@ const mm = (value: number): Valued => ({ value, unit: 'mm' });
 const kN = (value: number): Valued => ({ value, unit: 'kN' });
 
 const RESULT: ResultSummary = {
+  reactionQuantity: 'force',
   step: 'static',
   revision: 10,
   stale: false,
@@ -106,6 +107,24 @@ describe('the Results tab', () => {
   it('writes the balance as a percentage and passes at zero', () => {
     expect(balanceLine(RESULT)).toEqual({ pass: true, text: 'Σ reactions = −Σ loads · 0.0000 %' });
     expect(balanceLine({ ...RESULT, balance: 0.0123 })).toEqual({ pass: false, text: 'Σ reactions = −Σ loads · 1.2300 %' });
+  });
+
+  it('keeps thermal reactions as power through the legend and reaction table', () => {
+    expect(siUnitOf('reaction', 'power')).toBe('W');
+    expect(displayUnitOf('reaction', { force: 'kN' }, 'power')).toBe('W');
+    expect(displayUnitOf('reaction', { force: 'N', power: 'kW' }, 'power')).toBe('kW');
+    expect(displayUnitOf('reaction', { force: 'kN', power: 'W' }, 'force')).toBe('kN');
+    const kw = (value: number): Valued => ({ value, unit: 'kW' });
+    const result: ResultSummary = { ...RESULT, reactionQuantity: 'power',
+      reactions: [{ constraint: 'cold', total: [kw(0.01), kw(0), kw(0)] }],
+      appliedTotal: [kw(0.01), kw(0), kw(0)], extremes: [] };
+    const root = document.createElement('div');
+    render(<Results s={{ ...initialState, result }} dispatch={vi.fn()} query={vi.fn()} />, root);
+    expect(root.textContent).toContain('Power kW');
+    expect(root.textContent).not.toContain('Fx');
+    const table = [...root.querySelectorAll('table')].find((t) => t.textContent?.includes('Power kW'))!;
+    expect([...table.querySelectorAll('tbody tr')].map((r) => r.children.length)).toEqual([2, 2, 2]);
+    expect(table.textContent).toContain('cold0.01');
   });
 
   it('leads with the extreme of the largest magnitude', () => {

@@ -295,7 +295,10 @@ pub struct ResultSummary {
     pub residual: f64,
     pub time_ms: f64,
     pub extremes: Vec<Extreme>,
+    /// Force for structural Results; power for thermal Results, retained with the solved state.
+    pub reaction_quantity: crate::units::ReactionQuantity,
     pub reactions: Vec<ReactionRow>,
+    /// Applied force vector or thermal power in component 0 (remaining components zero).
     pub applied_total: [Valued; 3],
     /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
     /// shape is the Result field named `mode:k`.
@@ -304,7 +307,7 @@ pub struct ResultSummary {
     /// One row per output time of a transient Step: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
-    /// |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+    /// |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
     /// by a prescribed displacement — where both totals are zero — still reports a meaningful
     /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
     pub balance: f64,

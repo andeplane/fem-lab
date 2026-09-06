@@ -296,3 +296,19 @@ prove is the same either way.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+### Thermal reaction power and display units (#120)
+
+For a `1 × 0.1 × 0.1 m` bar with `k=45 W/(m K)`, a `1000 W/m²` end flux
+removes exactly `10 W` at the held cold end. With convection instead (`h=50 W/(m² K)`,
+`T_inf=100 °C`, cold end `0 °C`), the exact series thermal resistance gives
+`Q=A*(T_inf-T_cold)/(L/k+1/h)=23.6842105263 W`. Both cases run on two and four axial
+elements. Reaction sums and each of four equal cold-node shares match these independent
+power values to `1e-9 W`; positive reaction retains the current removed-heat convention.
+
+Result totals/extremes, probes and paths report W independently of force=N/kN and convert
+to kW when the power display unit changes. The raw field stays SI, the VTU array is labelled
+`ReactionPower_W`, and the report/viewer label its scalar as power. Mechanical reactions
+retain force units and their vector components. [Issue #208](https://github.com/andeplane/fem-lab/issues/208)
+separately tracks the existing balance diagnostic sign, net-convection and transient-storage
+defects; the physical reaction checks here do not treat that diagnostic as an oracle.

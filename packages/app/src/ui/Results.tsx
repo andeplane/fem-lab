@@ -14,7 +14,7 @@ const num = (v: Valued | undefined): string => (v ? formatNumber(v.value) : '—
 const at = (p: [Valued, Valued, Valued]): string => p.map((v) => formatNumber(v.value)).join(' ');
 const fieldUnit = (field: string, v: Valued): string => (dimensionOf(field) === 'dimensionless' && v.unit === 'SI' ? '(1)' : v.unit);
 
-/** `balance` is a ratio of forces; the design writes it as a percentage with four decimals. */
+/** `balance` is a dimensionless ratio; the design writes it as a percentage with four decimals. */
 export function balanceLine(r: ResultSummary): { pass: boolean; text: string } {
   const percent = r.balance * 100;
   return { pass: Math.abs(r.balance) < 1e-6, text: `Σ reactions = −Σ loads · ${percent.toFixed(4)} %` };
@@ -97,6 +97,8 @@ export function extremeLabel(e: { field: string; component: number }): string {
 function Reactions({ s }: { s: UiState }) {
   const r = s.result!;
   const sum = [0, 1, 2].map((c) => r.reactions.reduce((a, x) => a + x.total[c]!.value, 0));
+  const power = r.reactionQuantity === 'power';
+  const components = power ? 1 : 3;
   const unit = r.appliedTotal[0]!.unit;
   const balance = balanceLine(r);
   return (
@@ -105,16 +107,14 @@ function Reactions({ s }: { s: UiState }) {
         <thead>
           <tr>
             <th>constraint</th>
-            <th>Fx</th>
-            <th>Fy</th>
-            <th>Fz {unit}</th>
+            {power ? <th>Power {unit}</th> : <><th>Fx</th><th>Fy</th><th>Fz {unit}</th></>}
           </tr>
         </thead>
         <tbody>
           {r.reactions.map((x) => (
             <tr key={x.constraint}>
               <td class="mono">{x.constraint}</td>
-              {x.total.map((v, i) => (
+              {x.total.slice(0, components).map((v, i) => (
                 <td key={i} class="mono n">
                   {num(v)}
                 </td>
@@ -123,7 +123,7 @@ function Reactions({ s }: { s: UiState }) {
           ))}
           <tr class="total">
             <td>Σ reactions</td>
-            {sum.map((v, i) => (
+            {sum.slice(0, components).map((v, i) => (
               <td key={i} class="mono n">
                 {formatNumber(v)}
               </td>
@@ -131,7 +131,7 @@ function Reactions({ s }: { s: UiState }) {
           </tr>
           <tr class="total">
             <td>Σ applied</td>
-            {r.appliedTotal.map((v, i) => (
+            {r.appliedTotal.slice(0, components).map((v, i) => (
               <td key={i} class="mono n">
                 {num(v)}
               </td>

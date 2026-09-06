@@ -193,6 +193,7 @@ fn finish(
         flow[dof as usize] = -(kt[dof as usize] - sys.f[dof as usize]);
     }
     let mut res = blank(solver);
+    res.reaction_quantity = crate::units::ReactionQuantity::Power;
     res.fields.insert(Field::Temperature, vector_field(t, 1));
     res.fields.insert(Field::Reaction, vector_field(&flow, 1));
     res.scalars.insert("min_det_j".to_string(), sys.min_det_j);

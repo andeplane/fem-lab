@@ -29,7 +29,7 @@
         ]
       },
       {
-        "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+        "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
         "type": "object",
         "properties": {
           "units": {
@@ -1179,6 +1179,13 @@
             ]
           },
           "force": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "power": {
+            "description": "Thermal reaction and applied power display unit; defaults to W, independently of force.",
             "type": [
               "string",
               "null"
@@ -2462,7 +2469,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
         "type": "string",
         "enum": [
           "displacement",
@@ -3006,7 +3013,7 @@
     ],
     "$defs": {
       "Field": {
-        "description": "Result fields.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
         "type": "string",
         "enum": [
           "displacement",
@@ -3260,6 +3267,13 @@
             ]
           },
           "force": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "power": {
+            "description": "Thermal reaction and applied power display unit; defaults to W, independently of force.",
             "type": [
               "string",
               "null"
@@ -4096,6 +4110,10 @@
               "$ref": "#/$defs/Extreme"
             }
           },
+          "reactionQuantity": {
+            "description": "Force for structural Results; power for thermal Results, retained with the solved state.",
+            "$ref": "#/$defs/ReactionQuantity"
+          },
           "reactions": {
             "type": "array",
             "items": {
@@ -4103,6 +4121,7 @@
             }
           },
           "appliedTotal": {
+            "description": "Applied force vector or thermal power in component 0 (remaining components zero).",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
@@ -4125,7 +4144,7 @@
             }
           },
           "balance": {
-            "description": "|Σ reactions + Σ applied| over the largest single force in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
+            "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
             "type": "number",
             "format": "double"
           }
@@ -4139,6 +4158,7 @@
           "residual",
           "timeMs",
           "extremes",
+          "reactionQuantity",
           "reactions",
           "appliedTotal",
           "balance"
@@ -4187,6 +4207,14 @@
           "minAt",
           "max",
           "maxAt"
+        ]
+      },
+      "ReactionQuantity": {
+        "description": "The physical quantity carried by a Result's reactions and applied totals.",
+        "type": "string",
+        "enum": [
+          "force",
+          "power"
         ]
       },
       "ReactionRow": {
@@ -4394,7 +4422,7 @@
             ]
           },
           {
-            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
             "type": "object",
             "properties": {
               "units": {
@@ -6758,7 +6786,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
         "type": "string",
         "enum": [
           "displacement",
@@ -7353,6 +7381,10 @@
               "$ref": "#/$defs/Extreme"
             }
           },
+          "reactionQuantity": {
+            "description": "Force for structural Results; power for thermal Results, retained with the solved state.",
+            "$ref": "#/$defs/ReactionQuantity"
+          },
           "reactions": {
             "type": "array",
             "items": {
@@ -7360,6 +7392,7 @@
             }
           },
           "appliedTotal": {
+            "description": "Applied force vector or thermal power in component 0 (remaining components zero).",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
@@ -7382,7 +7415,7 @@
             }
           },
           "balance": {
-            "description": "|Σ reactions + Σ applied| over the largest single force in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
+            "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
             "type": "number",
             "format": "double"
           }
@@ -7396,6 +7429,7 @@
           "residual",
           "timeMs",
           "extremes",
+          "reactionQuantity",
           "reactions",
           "appliedTotal",
           "balance"
@@ -7461,6 +7495,14 @@
         "required": [
           "value",
           "unit"
+        ]
+      },
+      "ReactionQuantity": {
+        "description": "The physical quantity carried by a Result's reactions and applied totals.",
+        "type": "string",
+        "enum": [
+          "force",
+          "power"
         ]
       },
       "ReactionRow": {
@@ -7799,6 +7841,13 @@
             ]
           },
           "force": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "power": {
+            "description": "Thermal reaction and applied power display unit; defaults to W, independently of force.",
             "type": [
               "string",
               "null"
@@ -9156,7 +9205,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
         "type": "string",
         "enum": [
           "displacement",
@@ -9680,7 +9729,7 @@
             ]
           },
           {
-            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
+            "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
             "type": "object",
             "properties": {
               "units": {
