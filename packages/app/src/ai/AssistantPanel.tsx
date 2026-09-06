@@ -425,7 +425,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         <Cmd cmd="panel.toggle" title="Settings" run={() => store.togglePanel('assistant.settings')}>
           ⚙
         </Cmd>
-        <Cmd cmd="chat.clear" title="Start a new conversation" run={() => chatBridge.clear()}>
+        <Cmd cmd="chat.clear" disabled={busy !== ''} title="Start a new conversation" run={() => chatBridge.clear()}>
           ⟲
         </Cmd>
         <Cmd cmd="panel.toggle" title="Close the assistant" run={() => store.togglePanel('assistant', false)}>
@@ -654,6 +654,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
           <label>
             <span>Provider</span>
             <select
+              data-cmd="ai.setModel"
               value={provider}
               onChange={(e) => {
                 const next = (e.target as HTMLSelectElement).value as ProviderId;
