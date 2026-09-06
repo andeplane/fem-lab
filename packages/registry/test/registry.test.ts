@@ -257,7 +257,7 @@ describe('Registry', () => {
     // `id` defaults to the open project, which is what the top bar's inline field sends
     await expect(registry.dispatch({ cmd: 'project.rename', name: 'ULS' })).resolves.toMatchObject({ name: 'ULS' });
     expect(host.projects.rename).toHaveBeenCalledWith(undefined, 'ULS');
-    await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toMatchObject({ id: PROJECT.id, saving: false });
+    await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toMatchObject({ id: PROJECT.id, saving: false, journal: MODEL_FILE.journal });
 
     await registry.dispatch({ cmd: 'project.delete', id: PROJECT.id });
     expect(host.projects.delete).toHaveBeenCalledWith(PROJECT.id);

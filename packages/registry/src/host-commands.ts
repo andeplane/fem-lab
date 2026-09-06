@@ -94,6 +94,12 @@ export interface OpenProject extends ProjectMeta {
   autosave: boolean;
 }
 
+/** The exact browser-project payload written by one successful explicit `project.save`. */
+export interface ProjectSaveReceipt extends OpenProject {
+  /** Normalized Journal captured when Save began, before the thumbnail or storage write awaited. */
+  journal: ModelFile['journal'];
+}
+
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
   transport: EngineTransport;
@@ -147,7 +153,7 @@ export interface HostContext {
     open(id: string): Promise<ProjectMeta>;
     rename(id: string | undefined, name: string): Promise<ProjectMeta>;
     delete(id: string): Promise<void>;
-    save(): Promise<OpenProject | null>;
+    save(): Promise<ProjectSaveReceipt | null>;
     list(): ProjectMeta[];
     current(): OpenProject | null;
   };
@@ -377,7 +383,7 @@ export const HOST_COMMANDS: HostDef[] = [
     'Delete a saved project and its Journal from this browser for good. There is no undo and nothing was ever uploaded anywhere, so use file.save first if the model might be wanted again. Not a tool: deleting a person\u2019s work is theirs to do.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.delete(id), false),
   def('project.save',
-    'Write the open project now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the open project, or `null` when there is none yet. Use file.save to write a `femlab/1` file instead.',
+    'Write the open project\'s current Journal now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the project and the exact normalized Journal that was written, or `null` when there is none yet. Use file.save to write a `femlab/1` file instead.',
     none, (_, ctx) => ctx.projects.save()),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
