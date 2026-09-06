@@ -111,6 +111,21 @@ pub enum Query {
         kinds: Option<Vec<ObjectKind>>,
     },
 
+    /// The whole analysis as one Markdown calculation note: assumptions, geometry, materials,
+    /// mesh and quality, loads with totals, results with the reaction balance, the verification
+    /// checks with a hand calculation where one applies, and the Journal as an appendix. Nothing
+    /// in it depends on the clock or the machine, so two runs of the same Journal produce
+    /// byte-identical text. `step` reports one Step instead of every solved one; `include` picks
+    /// sections. Formulas are `$$…$$` for KaTeX.
+    #[serde(rename = "query.report", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "ReportText"))]
+    Report {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include: Option<Vec<crate::report::ReportSection>>,
+    },
+
     /// What this engine can do here: GPU presence and adapter name, thread count, engine and
     /// schema versions. Hosts add browser facts (cross-origin isolation, local or remote engine).
     #[serde(rename = "query.capabilities")]
@@ -381,6 +396,14 @@ pub struct ObjectList {
     pub objects: Vec<ObjectRef>,
 }
 
+/// `query.report` response: the Markdown document and the sections it actually contains.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportText {
+    pub markdown: String,
+    pub sections: Vec<String>,
+}
+
 /// `query.capabilities` response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -409,6 +432,7 @@ pub enum QueryResult {
     Converted(Converted),
     Objects(ObjectList),
     Capabilities(Capabilities),
+    Report(ReportText),
 }
 
 /// Acknowledgement of a dispatched Command.

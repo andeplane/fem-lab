@@ -135,6 +135,9 @@ jobs:
       - run: npm run codegen:check
       - run: npm run typecheck
       - run: npm run test -w packages/registry
+      # The MCP server runs the Node wasm build from the `wasm-hash` job's artifact.
+      - run: npm run test -w packages/mcp
+      - run: npm run build -w packages/mcp
       - run: npm run test -w packages/app
       # `postbuild` fails the job if an API key ever reaches dist/.
       - run: npm run build -w packages/app

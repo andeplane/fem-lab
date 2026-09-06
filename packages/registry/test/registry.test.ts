@@ -269,7 +269,9 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv', table: 'path', path: { field: 'vonMises', from: ['0 m', '0 m', '0 m'], to: ['1 m', '0 m', '0 m'], n: 3 } } });
     expect(wrote()).toEqual(['beam-path.csv', 'text/csv', pathCsv(PATH)]);
 
-    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'report' } })).rejects.toMatchObject({ code: 'unsupported', where: 'report' });
+    // the calculation note is an engine export like the mesh ones: `query.report` writes it
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'report' } });
+    expect(transport.export).toHaveBeenCalledWith({ format: 'report' });
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'msh' } });
     expect(transport.export).toHaveBeenCalledWith({ format: 'msh' });
   });

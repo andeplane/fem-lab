@@ -22,6 +22,11 @@ console, `fem` is the whole registry: `await fem.dispatch({ cmd: 'model.new', na
 `await fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] })`,
 `await fem.query.model()`, `fem.registry.list()`.
 
+Without a browser, `cargo run -p femlab --` replays a Journal (`run`), runs the Benchmarks
+(`bench`), writes an export (`export <file> --format vtu|msh|inp|stl|report|script|journal`), and
+serves the whole registry to an editor over MCP (`mcp --project <dir>`; see
+[`packages/mcp/README.md`](packages/mcp/README.md) for the `mcpServers` snippet).
+
 Tests: `npm test` (vitest), `npm run typecheck`, and in `packages/app`,
 `npx playwright install chromium && npx playwright test` for the browser smokes.
 

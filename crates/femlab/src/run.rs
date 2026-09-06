@@ -80,22 +80,26 @@ pub fn entries_of(input: Input) -> (Vec<JournalEntry>, bool) {
     }
 }
 
+/// Read a `femlab/1` file, a Journal or a Command list as entries, plus whether those entries
+/// carry recorded hashes (a bare Command list does not, so `--verify` has nothing to compare).
+/// The `Err` is the exit code the caller should return.
+pub fn read_entries(file: &Path) -> Result<(Vec<JournalEntry>, bool), i32> {
+    let text = std::fs::read_to_string(file).map_err(|e| {
+        eprintln!("cannot read {}: {e}", file.display());
+        1
+    })?;
+    let input = parse_input(&text).map_err(|e| {
+        eprintln!("{}: {e}", file.display());
+        1
+    })?;
+    Ok(entries_of(input))
+}
+
 pub fn run(file: &Path, opts: RunOptions) -> i32 {
-    let text = match std::fs::read_to_string(file) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("cannot read {}: {e}", file.display());
-            return 1;
-        }
+    let (entries, has_hashes) = match read_entries(file) {
+        Ok(x) => x,
+        Err(code) => return code,
     };
-    let input = match parse_input(&text) {
-        Ok(i) => i,
-        Err(e) => {
-            eprintln!("{}: {e}", file.display());
-            return 1;
-        }
-    };
-    let (entries, has_hashes) = entries_of(input);
     let verify = opts.verify && has_hashes;
     let mut engine = new_engine(opts.threads, opts.cpu);
     let hashes = match pollster::block_on(engine.replay(&entries, opts.skip_solves, verify)) {

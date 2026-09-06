@@ -1280,7 +1280,7 @@ export type Formulation = "incompatible-modes" | "full";
 /**
  * A file format `mesh.export` writes.
  */
-export type ExportFormat = "vtu" | "msh" | "inp" | "stl";
+export type ExportFormat = "vtu" | "msh" | "inp" | "stl" | "report";
 /**
  * A displacement component.
  */
@@ -1546,6 +1546,11 @@ export type Query =
       query: "query.objects";
     }
   | {
+      step?: string | null;
+      include?: ReportSection[] | null;
+      query: "query.report";
+    }
+  | {
       query: "query.capabilities";
     };
 /**
@@ -1557,6 +1562,11 @@ export type Quantity =
       value: number;
       unit: string;
     };
+/**
+ * One section of the Markdown report. `query.report` writes the ones asked for in this order.
+ */
+export type ReportSection =
+  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
 /**
  * Any Query response.
  */
@@ -1572,7 +1582,8 @@ export type QueryResult =
   | ScriptText
   | Converted
   | ObjectList
-  | Capabilities;
+  | Capabilities
+  | ReportText;
 /**
  * Mesher settings, SI.
  */
@@ -3386,6 +3397,13 @@ export interface Capabilities {
   threads: number;
   engineVersion: string;
   schemaVersion: string;
+}
+/**
+ * `query.report` response: the Markdown document and the sections it actually contains.
+ */
+export interface ReportText {
+  markdown: string;
+  sections: string[];
 }
 /**
  * Acknowledgement of a dispatched Command.

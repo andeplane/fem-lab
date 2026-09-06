@@ -297,6 +297,11 @@ pub enum ExportFormat {
     /// ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a
     /// `step` is ignored.
     Stl,
+    /// The calculation note `query.report` writes: assumptions, geometry, materials, mesh and
+    /// quality, loads with their totals, results with the reaction balance, the verification
+    /// checks with a hand calculation, and the Journal as an appendix, as one Markdown file.
+    /// Deterministic, so two exports of the same Journal are byte-identical.
+    Report,
 }
 
 impl ExportFormat {
@@ -307,6 +312,7 @@ impl ExportFormat {
             ExportFormat::Msh => ("msh", "model/mesh"),
             ExportFormat::Inp => ("inp", "text/plain"),
             ExportFormat::Stl => ("stl", "model/stl"),
+            ExportFormat::Report => ("md", "text/markdown"),
         }
     }
 }

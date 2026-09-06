@@ -172,7 +172,7 @@ export const EXPORT_FORMATS: ExportFormatRow[] = [
   { format: 'png', ext: 'png', name: 'Viewer image', note: 'Exactly what the viewer shows, with the legend burned in.', group: 'Results', needs: 'none' },
   { format: 'script', ext: 'ts', name: 'TypeScript script', note: 'The Journal, typed: run it back and the Model rebuilds.', group: 'Document & model file', needs: 'none' },
   { format: 'journal', ext: 'json', name: 'Model file (femlab/1)', note: 'The Model and its Journal, what file.open reads back.', group: 'Document & model file', needs: 'none' },
-  { format: 'report', ext: 'md', name: 'Calculation note', note: 'Assumptions, mesh, loads and results as Markdown. Not written yet.', group: 'Document & model file', needs: 'soon' },
+  { format: 'report', ext: 'md', name: 'Calculation note', note: 'Assumptions, mesh, loads, results and the Journal as Markdown.', group: 'Document & model file', needs: 'none' },
 ];
 
 /** A CSV cell: quoted only when it has to be, so a diff of two exports stays readable. */
@@ -250,9 +250,6 @@ async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built> {
     const step = spec['step'] === undefined ? {} : { step: spec['step'] };
     const result = (await ctx.transport.query({ query: 'query.result', ...step } as never)) as ResultSummary;
     return { filename: `${name}-${table}.csv`, mime: 'text/csv', data: table === 'reactions' ? reactionsCsv(result) : extremesCsv(result) };
-  }
-  if (spec.format === 'report') {
-    throw new FemError('unsupported', 'the calculation note is not written yet', 'report', 'export the script or the femlab/1 file, or ask the Assistant for a summary');
   }
   const out = await ctx.transport.export(spec);
   return { filename: out.filename, mime: out.mime, data: out.bytes };

@@ -76,6 +76,9 @@ impl Engine {
                 self.query_path(step.as_deref(), field, component, from, to, n).map(QueryResult::Path)
             }
             Query::Cost { step } => self.query_cost(&step).map(QueryResult::Cost),
+            Query::Report { step, include } => {
+                self.report(step.as_deref(), include.as_deref()).map(QueryResult::Report)
+            }
         }
     }
 
@@ -103,7 +106,7 @@ impl Engine {
         })
     }
 
-    fn query_model(&mut self) -> Result<ModelSummary, Error> {
+    pub(crate) fn query_model(&mut self) -> Result<ModelSummary, Error> {
         let names: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
         let implicit = self.implicit_body_row();
         let mut bodies = Vec::with_capacity(names.len() + usize::from(implicit.is_some()));
@@ -283,7 +286,7 @@ impl Engine {
     }
 
     /// `query.mesh`: counts, extents, Sets and quality of the current Mesh, building it if stale.
-    fn query_mesh(&mut self) -> Result<MeshSummary, Error> {
+    pub(crate) fn query_mesh(&mut self) -> Result<MeshSummary, Error> {
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
         let mesh = &built.mesh;
@@ -440,7 +443,7 @@ impl Engine {
     }
 
     /// `query.cost`: what solving this Step would take, from the sparsity alone.
-    fn query_cost(&mut self, step: &str) -> Result<CostEstimate, Error> {
+    pub(crate) fn query_cost(&mut self, step: &str) -> Result<CostEstimate, Error> {
         self.model.step(step).ok_or_else(|| Error::not_found("step", step, &self.model.names(ObjectKind::Step)))?;
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");

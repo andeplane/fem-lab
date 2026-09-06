@@ -2375,6 +2375,11 @@
             "description": "ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a\n`step` is ignored.",
             "type": "string",
             "const": "stl"
+          },
+          {
+            "description": "The calculation note `query.report` writes: assumptions, geometry, materials, mesh and\nquality, loads with their totals, results with the reaction balance, the verification\nchecks with a hand calculation, and the Journal as an appendix, as one Markdown file.\nDeterministic, so two exports of the same Journal are byte-identical.",
+            "type": "string",
+            "const": "report"
           }
         ]
       },
@@ -2956,6 +2961,35 @@
         "x-returns": "ObjectList"
       },
       {
+        "description": "The whole analysis as one Markdown calculation note: assumptions, geometry, materials,\nmesh and quality, loads with totals, results with the reaction balance, the verification\nchecks with a hand calculation where one applies, and the Journal as an appendix. Nothing\nin it depends on the clock or the machine, so two runs of the same Journal produce\nbyte-identical text. `step` reports one Step instead of every solved one; `include` picks\nsections. Formulas are `$$…$$` for KaTeX.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "include": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/ReportSection"
+            }
+          },
+          "query": {
+            "type": "string",
+            "const": "query.report"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "x-returns": "ReportText"
+      },
+      {
         "description": "What this engine can do here: GPU presence and adapter name, thread count, engine and\nschema versions. Hosts add browser facts (cross-origin isolation, local or remote engine).",
         "type": "object",
         "properties": {
@@ -3027,6 +3061,56 @@
           "load",
           "step"
         ]
+      },
+      "ReportSection": {
+        "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
+        "oneOf": [
+          {
+            "description": "Title, model name, units, idealisation, revision and the Model hash.",
+            "type": "string",
+            "const": "header"
+          },
+          {
+            "description": "What the numbers rest on: linear elasticity, small strain, the idealisation, the element\nformulation, and every warning the Model carries.",
+            "type": "string",
+            "const": "assumptions"
+          },
+          {
+            "description": "Bodies with their extent, volume and mass, their faces, and the named Sets.",
+            "type": "string",
+            "const": "geometry"
+          },
+          {
+            "description": "Every material in the Model's display units, with its literature source.",
+            "type": "string",
+            "const": "materials"
+          },
+          {
+            "description": "Mesher settings, element kind and order, counts, quality and the cost estimate.",
+            "type": "string",
+            "const": "mesh"
+          },
+          {
+            "description": "Constraints and Loads as tables, with the total applied force.",
+            "type": "string",
+            "const": "loads"
+          },
+          {
+            "description": "Per solved Step: solver, extremes with locations, reactions against the applied total,\nfrequencies, transient history and the convergence study.",
+            "type": "string",
+            "const": "results"
+          },
+          {
+            "description": "The checks that ran, the reaction-balance verdict and the hand calculation.",
+            "type": "string",
+            "const": "verification"
+          },
+          {
+            "description": "The Journal as JSON and as the script that replays it.",
+            "type": "string",
+            "const": "journal"
+          }
+        ]
       }
     }
   },
@@ -3070,6 +3154,9 @@
       },
       {
         "$ref": "#/$defs/Capabilities"
+      },
+      {
+        "$ref": "#/$defs/ReportText"
       }
     ],
     "$defs": {
@@ -6584,6 +6671,11 @@
             "description": "ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a\n`step` is ignored.",
             "type": "string",
             "const": "stl"
+          },
+          {
+            "description": "The calculation note `query.report` writes: assumptions, geometry, materials, mesh and\nquality, loads with their totals, results with the reaction balance, the verification\nchecks with a hand calculation, and the Journal as an appendix, as one Markdown file.\nDeterministic, so two exports of the same Journal are byte-identical.",
+            "type": "string",
+            "const": "report"
           }
         ]
       },
@@ -6992,6 +7084,25 @@
           "threads",
           "engineVersion",
           "schemaVersion"
+        ]
+      },
+      "ReportText": {
+        "description": "`query.report` response: the Markdown document and the sections it actually contains.",
+        "type": "object",
+        "properties": {
+          "markdown": {
+            "type": "string"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "markdown",
+          "sections"
         ]
       }
     }
@@ -7474,6 +7585,11 @@
             "description": "ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a\n`step` is ignored.",
             "type": "string",
             "const": "stl"
+          },
+          {
+            "description": "The calculation note `query.report` writes: assumptions, geometry, materials, mesh and\nquality, loads with their totals, results with the reaction balance, the verification\nchecks with a hand calculation, and the Journal as an appendix, as one Markdown file.\nDeterministic, so two exports of the same Journal are byte-identical.",
+            "type": "string",
+            "const": "report"
           }
         ]
       }
@@ -11841,6 +11957,11 @@
             "description": "ASCII STL of the mesh boundary surface, for a 3D viewer or a printer. Mesh only; a\n`step` is ignored.",
             "type": "string",
             "const": "stl"
+          },
+          {
+            "description": "The calculation note `query.report` writes: assumptions, geometry, materials, mesh and\nquality, loads with their totals, results with the reaction balance, the verification\nchecks with a hand calculation, and the Journal as an appendix, as one Markdown file.\nDeterministic, so two exports of the same Journal are byte-identical.",
+            "type": "string",
+            "const": "report"
           }
         ]
       },
