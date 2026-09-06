@@ -3803,6 +3803,36 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
+      "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "on": {
+          "type": "string"
+        },
+        "emissivity": {
+          "type": "number",
+          "format": "double"
+        },
+        "tInf": {
+          "$ref": "#/$defs/Q_temperature"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "load.radiation"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "on",
+        "emissivity",
+        "tInf"
+      ]
+    },
+    {
       "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
       "type": "object",
       "properties": {
@@ -3848,7 +3878,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
       "type": "object",
       "properties": {
         "name": {
@@ -3962,6 +3992,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
               "type": "null"
             }
           ]
+        },
+        "nonlinearTolerance": {
+          "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "nonlinearMaxIterations": {
+          "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         },
         "cmd": {
           "type": "string",
