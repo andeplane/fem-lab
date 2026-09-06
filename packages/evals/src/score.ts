@@ -12,6 +12,11 @@ const FACTOR: Record<string, number> = {
   s: 1, ms: 1e-3,
   Hz: 1, kHz: 1e3,
   K: 1,
+  'kg/m^3': 1, 'g/cm^3': 1e3,
+  '1/K': 1,
+  'W/(m K)': 1,
+  'J/(kg K)': 1,
+  'm/s^2': 1,
 };
 
 /** Convert an engine `{ value, unit }` boundary value to the SI basis used by the fixed oracles. */
@@ -33,6 +38,23 @@ function commandEntries(journal: unknown): Record<string, unknown>[] {
 
 function cmdName(cmd: Record<string, unknown>): string {
   return typeof cmd['cmd'] === 'string' ? cmd['cmd'] : '';
+}
+
+function lastCommand(entries: Record<string, unknown>[], name: string, objectName?: string): Record<string, unknown> | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (cmdName(entry) === name && (objectName === undefined || entry['name'] === objectName)) return entry;
+  }
+  return undefined;
+}
+
+function strings(value: unknown): string[] {
+  return array(value).filter((item): item is string => typeof item === 'string');
+}
+
+function sameNames(actual: unknown, expected: string[]): boolean {
+  const names = strings(actual);
+  return names.length === expected.length && names.every((name) => expected.includes(name));
 }
 
 function close(actual: number, expected: number, relative = 1e-9, absolute = 1e-12): boolean {
@@ -61,7 +83,6 @@ function resultValue(spec: EvalCase, evidence: EvalEvidence): number | null {
 }
 
 function geometryAndProcedure(spec: EvalCase, evidence: EvalEvidence, entries: Record<string, unknown>[]): CheckResult {
-  const forbidden = entries.find((entry) => ['example.open', 'file.open'].includes(cmdName(entry)));
   const names = new Set(entries.map(cmdName));
   const required = ['model.new', 'geometry.addBox', 'material.add', 'material.assign', 'mesh.set', 'step.add', 'solve.run'];
   const missing = required.filter((name) => !names.has(name));
@@ -73,75 +94,149 @@ function geometryAndProcedure(spec: EvalCase, evidence: EvalEvidence, entries: R
     : [];
   const dimensionsOk = extents.length === 3 && extents.every((n, i) => close(n, spec.dimensionsM[i]!, 1e-8));
   const steps = array(model?.['steps']).map(object).filter((row): row is Record<string, unknown> => row !== null);
-  const solved = steps.some((step) => step['procedure'] === spec.procedure && step['solved'] === true);
-  const material = array(model?.['materials']).map(object).find((row) => row !== null);
+  const solvedSteps = steps.filter((step) => step['procedure'] === spec.procedure && step['solved'] === true);
+  const solved = solvedSteps.length === 1 && object(evidence.result)?.['step'] === solvedSteps[0]?.['name']
+    && object(evidence.result)?.['stale'] !== true;
+  const materials = array(model?.['materials']).map(object).filter((row): row is Record<string, unknown> => row !== null);
+  const material = materials[0];
   const e = valuedSi(material?.['E']);
-  const materialOk = spec.materialE === undefined || (e !== null && close(e, spec.materialE, 1e-8));
-  const passed = forbidden === undefined && missing.length === 0 && bodies.length === 1 && dimensionsOk && solved && materialOk;
+  const nu = finite(material?.['nu']);
+  const rho = valuedSi(material?.['rho']);
+  const materialOk = materials.length === 1 && e !== null && close(e, spec.materialE, 1e-8)
+    && nu !== null && close(nu, spec.materialNu, 1e-10)
+    && (spec.materialRho === undefined || (rho !== null && close(rho, spec.materialRho, 1e-8)))
+    && material?.['name'] === bodies[0]?.['material']
+    && sameNames(material?.['assignedTo'], [String(bodies[0]?.['name'])]);
+  const meshOk = object(model?.['meshSettings']) !== null;
+  const warningsOk = array(model?.['warnings']).length === 0;
+  const passed = missing.length === 0 && bodies.length === 1 && dimensionsOk && steps.length === 1 && solved && materialOk && meshOk && warningsOk;
   const details = [
-    forbidden ? `forbidden ${cmdName(forbidden)}` : '',
     missing.length > 0 ? `missing ${missing.join(', ')}` : '',
     bodies.length !== 1 ? `expected one body, got ${bodies.length}` : '',
     dimensionsOk ? '' : 'body dimensions differ',
     solved ? '' : `no solved ${spec.procedure} Step`,
-    materialOk ? '' : 'elastic modulus differs',
+    materialOk ? '' : 'material values or assignment differ',
+    meshOk ? '' : 'mesh settings are missing',
+    warningsOk ? '' : 'final Model has warnings',
   ].filter(Boolean);
   return check('model', passed, passed ? 'final Model matches the fixed problem' : details.join('; '));
 }
 
-function staticOrHeatSemantics(spec: EvalCase, result: Record<string, unknown> | null, entries: Record<string, unknown>[]): CheckResult {
-  if (spec.kind === 'modal' || spec.kind === 'explicit') return check('physics', true, 'procedure-specific invariant checked separately');
+function procedureSemantics(spec: EvalCase, evidence: EvalEvidence, entries: Record<string, unknown>[]): CheckResult {
+  const model = object(evidence.model);
+  const steps = array(model?.['steps']).map(object).filter((row): row is Record<string, unknown> => row !== null);
+  const step = steps.find((row) => row['procedure'] === spec.procedure && row['solved'] === true);
+  const stepName = typeof step?.['name'] === 'string' ? step['name'] : '';
+  const stepCommand = lastCommand(entries, 'step.add', stepName);
+  const constraints = array(model?.['constraints']).map(object).filter((row): row is Record<string, unknown> => row !== null);
+  const loads = array(model?.['loads']).map(object).filter((row): row is Record<string, unknown> => row !== null);
+  const result = object(evidence.result);
   if (spec.kind === 'heat') {
-    const material = entries.find((entry) => cmdName(entry) === 'material.add');
+    const materialName = object(array(model?.['materials'])[0])?.['name'];
+    const material = lastCommand(entries, 'material.add', typeof materialName === 'string' ? materialName : undefined);
     const conductivity = quantity(material?.['k']);
-    const temperatures = entries.filter((entry) => cmdName(entry) === 'constraint.temperature');
-    const left = temperatures.find((entry) => String(entry['on']).endsWith('.xmin'));
-    const right = temperatures.find((entry) => String(entry['on']).endsWith('.xmax'));
+    const leftRow = constraints.find((entry) => String(entry['on']).endsWith('.xmin'));
+    const rightRow = constraints.find((entry) => String(entry['on']).endsWith('.xmax'));
+    const left = lastCommand(entries, 'constraint.temperature', typeof leftRow?.['name'] === 'string' ? leftRow['name'] : undefined);
+    const right = lastCommand(entries, 'constraint.temperature', typeof rightRow?.['name'] === 'string' ? rightRow['name'] : undefined);
     const ok = conductivity !== null && close(conductivity, spec.thermal!.conductivity, 1e-9)
       && close(quantity(left?.['value']) ?? NaN, spec.thermal!.leftK, 1e-9)
-      && close(quantity(right?.['value']) ?? NaN, spec.thermal!.rightK, 1e-9);
-    return check('physics', ok, ok ? 'conductivity and both end temperatures match' : 'heat material or boundary values differ');
+      && close(quantity(right?.['value']) ?? NaN, spec.thermal!.rightK, 1e-9)
+      && constraints.length === 2 && loads.length === 0
+      && sameNames(step?.['constraints'], [String(leftRow?.['name']), String(rightRow?.['name'])])
+      && sameNames(step?.['loads'], [])
+      && sameNames(stepCommand?.['constraints'], [String(leftRow?.['name']), String(rightRow?.['name'])])
+      && sameNames(stepCommand?.['loads'], []);
+    return check('physics', ok, ok ? 'conductivity, two end temperatures and no heat loads match' : 'heat material, boundary or selected Step inputs differ');
   }
-  const fixed = entries.some((entry) => cmdName(entry) === 'constraint.fix' && String(entry['on']).endsWith('.xmin'));
-  const actual = array(result?.['appliedTotal']).map(valuedSi);
+  if (spec.kind === 'explicit') {
+    const gravityRow = loads[0];
+    const gravity = lastCommand(entries, 'load.gravity', typeof gravityRow?.['name'] === 'string' ? gravityRow['name'] : undefined);
+    const actualG = array(gravity?.['g']).map(quantity);
+    const measure = spec.measure;
+    const expectedG = measure.kind === 'frames'
+      ? [0, 0, 0].map((value, index) => index === measure.component ? measure.acceleration : value)
+      : [];
+    const tEnd = quantity(stepCommand?.['tEnd']);
+    const ok = constraints.length === 0 && loads.length === 1 && gravityRow?.['kind'] === 'gravity'
+      && sameNames(step?.['constraints'], []) && sameNames(step?.['loads'], [String(gravityRow?.['name'])])
+      && sameNames(stepCommand?.['constraints'], []) && sameNames(stepCommand?.['loads'], [String(gravityRow?.['name'])])
+      && actualG.length === 3 && actualG.every((value, index) => value !== null && close(value, expectedG[index]!, 1e-10))
+      && tEnd !== null && close(tEnd, spec.explicit!.endS, 1e-10) && stepCommand?.['after'] === undefined;
+    return check('physics', ok, ok ? 'gravity, unconstrained start-from-rest Step and end time match' : 'explicit gravity, constraints, predecessor or end time differ');
+  }
+  const fixedRow = constraints.find((row) => String(row['on']).endsWith('.xmin'));
+  const fixed = lastCommand(entries, 'constraint.fix', typeof fixedRow?.['name'] === 'string' ? fixedRow['name'] : undefined);
+  const dofs = fixed?.['dofs'];
+  const fullFix = dofs === undefined || sameNames(dofs, ['ux', 'uy', 'uz']);
+  if (spec.kind === 'modal') {
+    const ok = constraints.length === 1 && loads.length === 0 && fixed !== undefined && fullFix
+      && sameNames(step?.['constraints'], [String(fixedRow?.['name'])]) && sameNames(step?.['loads'], [])
+      && sameNames(stepCommand?.['constraints'], [String(fixedRow?.['name'])]) && sameNames(stepCommand?.['loads'], []);
+    return check('physics', ok, ok ? 'the modal Step selects one full xmin support and no loads' : 'modal support or selected Step inputs differ');
+  }
+  const loadRow = loads[0];
+  const load = lastCommand(entries, 'load.traction', typeof loadRow?.['name'] === 'string' ? loadRow['name'] : undefined);
+  const total = array(load?.['total']).map(quantity);
   const applied = spec.appliedN!;
-  const loadOk = actual.length === 3 && actual.every((n, i) => n !== null && close(n, applied[i]!, 1e-8, 1e-7));
-  return check('physics', fixed && loadOk, fixed && loadOk ? 'xmin is fixed and applied total matches' : 'support or applied total differs');
+  const actual = array(result?.['appliedTotal']).map(valuedSi);
+  const loadOk = total.length === 3 && total.every((value, index) => value !== null && close(value, applied[index]!, 1e-8, 1e-7))
+    && actual.length === 3 && actual.every((value, index) => value !== null && close(value, applied[index]!, 1e-8, 1e-7));
+  const ok = constraints.length === 1 && loads.length === 1 && loadRow?.['kind'] === 'traction'
+    && String(loadRow?.['on']).endsWith('.xmax') && fixed !== undefined && fullFix && loadOk
+    && sameNames(step?.['constraints'], [String(fixedRow?.['name'])]) && sameNames(step?.['loads'], [String(loadRow?.['name'])])
+    && sameNames(stepCommand?.['constraints'], [String(fixedRow?.['name'])]) && sameNames(stepCommand?.['loads'], [String(loadRow?.['name'])]);
+  return check('physics', ok, ok ? 'the solved Step selects the exact support and traction' : 'support, traction or selected Step inputs differ');
 }
 
 /** Numeric prefix and supported unit from a Command quantity. */
 function quantity(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const row = object(value);
+  if (row !== null && typeof row['unit'] === 'string') {
+    const n = finite(row['value']);
+    const factor = FACTOR[row['unit']];
+    return n === null || factor === undefined ? null : n * factor;
+  }
   if (typeof value !== 'string') return null;
   const match = /^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.*?)\s*$/i.exec(value);
   if (!match) return null;
   const n = Number(match[1]);
   const unit = match[2]!;
   if (!Number.isFinite(n)) return null;
-  if (unit === 'W/(m K)' || unit === 'm/s^2' || unit === '1') return n;
+  if (unit === '' || unit === '1') return n;
   const factor = FACTOR[unit];
   return factor === undefined ? null : n * factor;
 }
 
-function modalInvariant(evidence: EvalEvidence, entries: Record<string, unknown>[]): CheckResult {
-  const model = object(evidence.model);
-  const steps = array(model?.['steps']).map(object).filter((row): row is Record<string, unknown> => row !== null);
-  const modal = steps.find((step) => step['procedure'] === 'modal');
-  const noLoads = array(modal?.['loads']).length === 0;
-  const fixed = entries.some((entry) => cmdName(entry) === 'constraint.fix' && String(entry['on']).endsWith('.xmin'));
+function modalInvariant(evidence: EvalEvidence): CheckResult {
   const frequencies = array(object(evidence.result)?.['frequencies']).map(valuedSi);
   const ordered = frequencies.length > 0 && frequencies.every((f, i) => f !== null && f > 0 && (i === 0 || f > frequencies[i - 1]!));
-  return check('balance', fixed && noLoads && ordered, fixed && noLoads && ordered ? 'fixed support, no load, positive ordered modes' : 'modal support/load/frequency invariant failed');
+  return check('balance', ordered, ordered ? 'frequencies are positive and strictly ordered' : 'modal frequency invariant failed');
 }
 
 function explicitInvariant(spec: EvalCase, evidence: EvalEvidence): CheckResult {
+  const catalogue = object(evidence.framesCatalogue);
+  const stamps = array(catalogue?.['frames']).map(object);
   const frames = evidence.frames ?? [];
-  let ok = frames.length > 1;
-  for (const raw of frames) {
-    const frame = object(raw);
-    const time = finite(frame?.['timeSi']);
+  const nodeCount = finite(catalogue?.['nodeCount']);
+  const expectedValues = nodeCount === null ? -1 : nodeCount * 3;
+  const modelHash = typeof object(evidence.model)?.['hash'] === 'string' ? object(evidence.model)!['hash'] : null;
+  let ok = stamps.length > 1 && frames.length === stamps.length && nodeCount !== null && nodeCount > 0
+    && catalogue?.['field'] === 'displacement' && catalogue?.['components'] === 3 && catalogue?.['storedComponents'] === 3
+    && catalogue?.['stale'] === false && typeof catalogue?.['modelHash'] === 'string' && catalogue['modelHash'] === modelHash;
+  for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+    const stamp = stamps[frameIndex];
+    const frame = object(frames[frameIndex]);
+    const resolved = object(frame?.['sample']);
+    const resolvedStamp = object(resolved?.['frame']);
+    const time = finite(resolvedStamp?.['timeSi']);
     const values = array(frame?.['values']).map(finite);
-    if (time === null || values.length === 0 || values.length % 3 !== 0 || values.some((v) => v === null)) {
+    if (stamp === null || time === null || frame?.['field'] !== 'displacement' || frame?.['components'] !== 3
+      || frame?.['nodeCount'] !== nodeCount || frame?.['unit'] !== 'm'
+      || resolved?.['modelHash'] !== catalogue?.['modelHash'] || resolved?.['step'] !== catalogue?.['step']
+      || resolvedStamp?.['index'] !== stamp?.['index'] || time !== stamp?.['timeSi']
+      || values.length !== expectedValues || values.some((v) => v === null)) {
       ok = false;
       continue;
     }
@@ -153,6 +248,13 @@ function explicitInvariant(spec: EvalCase, evidence: EvalEvidence): CheckResult 
       }
     }
   }
+  const first = stamps[0];
+  const last = stamps[stamps.length - 1];
+  const end = spec.explicit?.endS;
+  ok = ok && first?.['index'] === 0 && first['timeSi'] === 0
+    && typeof last?.['timeSi'] === 'number' && end !== undefined && close(last['timeSi'], end, 1e-12)
+    && stamps.every((stamp, index) => stamp !== null && stamp !== undefined && stamp['index'] === index
+      && typeof stamp['timeSi'] === 'number' && (index === 0 || stamp['timeSi']! > (stamps[index - 1]?.['timeSi'] as number)));
   return check('balance', ok, ok ? 'every retained frame follows uniform u = g t²/2' : 'explicit retained frames violate constant acceleration');
 }
 
@@ -160,33 +262,65 @@ function traceRequirement(spec: EvalCase, evidence: EvalEvidence, entries: Recor
   if (spec.requires === undefined) return check('trace', true, 'no extra trace requirement');
   if (spec.requires === 'material-library') {
     const lookup = evidence.trace.find((call) => call.name.replaceAll('_', '.') === 'query.materialLibrary');
-    const source = entries.find((entry) => cmdName(entry) === 'material.add')?.['source'];
+    const material = object(array(object(evidence.model)?.['materials'])[0]);
+    const command = lastCommand(entries, 'material.add', typeof material?.['name'] === 'string' ? material['name'] : undefined);
+    const source = command?.['source'];
     const output = object(lookup?.output);
-    const cited = array(output?.['entries']).map(object).some((entry) => entry?.['materialAddSource'] === source);
-    return check('trace', lookup !== undefined && typeof source === 'string' && source.length > 0 && cited,
-      cited ? 'catalogue lookup provenance copied exactly' : 'missing catalogue lookup or exact provenance');
+    const selected = array(output?.['entries']).map(object).find((entry) => entry?.['materialAddSource'] === source);
+    const properties = ['E', 'nu', 'rho', 'alpha', 'k', 'cp', 'yield'];
+    const copied = selected !== undefined && properties.every((property) => {
+      const sourced = object(selected?.[property]);
+      const expected = sourced?.['value'];
+      const actual = command?.[property];
+      if (expected === undefined) return actual === undefined;
+      const a = quantity(actual);
+      const b = quantity(expected);
+      return a !== null && b !== null && close(a, b, 1e-10);
+    });
+    return check('trace', lookup !== undefined && typeof source === 'string' && source.length > 0 && copied,
+      copied ? 'all reported catalogue values and provenance were copied exactly' : 'catalogue values, lookup or exact provenance differ');
   }
-  const calls = evidence.trace.filter((call) => call.name === 'validate_script' || call.name === 'query.validateScript');
-  const bad = calls.find((call) => object(call.output)?.['ok'] === false);
-  const good = calls.find((call) => object(call.output)?.['ok'] === true);
-  const unchanged = bad !== undefined && bad.journalBefore !== undefined && bad.journalBefore === bad.journalAfter;
-  return check('trace', bad !== undefined && good !== undefined && unchanged,
-    bad !== undefined && good !== undefined && unchanged ? 'invalid and corrected scripts validated without mutation' : 'script validation trace is incomplete or mutated the Journal');
+  const calls = evidence.trace;
+  const isValidation = (call: ToolTrace) => call.command === 'query.validateScript' || call.name === 'validate_script';
+  const sourceOf = (call: ToolTrace): string => typeof object(call.input)?.['code'] === 'string' ? object(call.input)!['code'] as string : '';
+  const badIndex = calls.findIndex((call) => isValidation(call) && object(call.output)?.['ok'] === false && sourceOf(call).includes(spec.invalidScript ?? '\0'));
+  const goodIndex = calls.findIndex((call, index) => index > badIndex && isValidation(call) && object(call.output)?.['ok'] === true
+    && !sourceOf(call).includes(spec.invalidScript ?? '\0'));
+  const executionIndex = calls.findIndex((call) => {
+    const command = call.command ?? call.name.replaceAll('_', '.');
+    return command === 'script.run' || !['query.', 'view.', 'selection.', 'panel.', 'export.', 'skill.'].some((prefix) => command.startsWith(prefix));
+  });
+  const stable = [calls[badIndex], calls[goodIndex]].every((call) => typeof call?.journalBefore === 'string'
+    && call.journalBefore.length > 0 && call.journalBefore === call.journalAfter);
+  const ordered = badIndex >= 0 && goodIndex > badIndex && executionIndex > goodIndex;
+  return check('trace', stable && ordered,
+    stable && ordered ? 'supplied invalid source and correction validated before execution without mutation' : 'validation source, hash stability or invalid→corrected→execution order failed');
+}
+
+function replayCheck(evidence: EvalEvidence): CheckResult {
+  const forbidden = new Set(['example.open', 'file.open', 'file.openExample', 'project.open']);
+  const direct = evidence.trace.find((call) => forbidden.has(call.command ?? call.name.replaceAll('_', '.')));
+  const nested = evidence.trace.find((call) => {
+    if ((call.command ?? call.name) !== 'script.run') return false;
+    const code = typeof object(call.input)?.['code'] === 'string' ? object(call.input)!['code'] as string : '';
+    return /fem\.(?:example\.open|file\.(?:open|openExample)|project\.open)\s*\(/.test(code);
+  });
+  const passed = direct === undefined && nested === undefined;
+  return check('journal', passed, passed ? 'no prepared Model or replay route was used' : `used ${direct?.command ?? nested?.command ?? 'a replay route in script.run'}`);
 }
 
 export function scoreCase(spec: EvalCase, evidence: EvalEvidence): CaseScore {
   const entries = commandEntries(evidence.journal);
   const result = object(evidence.result);
   const status = check('status', evidence.status === 'completed', evidence.status === 'completed' ? 'attempt completed' : evidence.reason ?? evidence.status);
-  const forbidden = entries.find((entry) => ['example.open', 'file.open'].includes(cmdName(entry)));
-  const journal = check('journal', forbidden === undefined, forbidden === undefined ? 'no prepared Model or example replay' : `used ${cmdName(forbidden)}`);
+  const journal = replayCheck(evidence);
   const model = geometryAndProcedure(spec, evidence, entries);
-  const semantics = staticOrHeatSemantics(spec, result, entries);
+  const semantics = procedureSemantics(spec, evidence, entries);
   const observed = resultValue(spec, evidence);
   const tolerance = Math.max(spec.absoluteTolerance ?? 0, Math.abs(spec.expected) * (spec.relativeTolerance ?? 0));
   const value = check('value', observed !== null && Math.abs(observed - spec.expected) <= tolerance,
     observed === null ? 'scored value is missing or non-finite' : `observed ${observed}, expected ${spec.expected} ± ${tolerance}`);
-  const balance = spec.kind === 'modal' ? modalInvariant(evidence, entries)
+  const balance = spec.kind === 'modal' ? modalInvariant(evidence)
     : spec.kind === 'explicit' ? explicitInvariant(spec, evidence)
       : check('balance', finite(result?.['balance']) !== null && finite(result?.['balance'])! <= 1e-9,
         `balance ${String(result?.['balance'])}, limit 1e-9`);

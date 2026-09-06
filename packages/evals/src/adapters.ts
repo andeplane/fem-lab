@@ -31,7 +31,19 @@ class BrowserRemote implements RemoteEngine {
   async definitions(): Promise<RemoteDefinitionSet> {
     return await this.page.evaluate(() => {
       const fem = (window as unknown as { fem: { registry: { list(): BrowserDefinitionSnapshot; defs: Record<string, unknown> } } }).fem;
-      return { ...fem.registry.list(), defs: fem.registry.defs };
+      const serializable = (definition: CommandDef | QueryDef) => ({
+        name: definition.name,
+        description: definition.description,
+        schema: definition.schema,
+        provider: definition.provider,
+        tool: definition.tool,
+      });
+      const listed = fem.registry.list();
+      return {
+        commands: listed.commands.map((definition) => ({ ...serializable(definition), journaled: definition.journaled })),
+        queries: listed.queries.map(serializable),
+        defs: fem.registry.defs,
+      };
     });
   }
 

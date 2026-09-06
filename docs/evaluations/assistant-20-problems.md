@@ -75,16 +75,15 @@ parameters are independent formula variants rather than copies of saved example 
 
 ## Harness and artifacts
 
-One checked-in runner owns orchestration and scoring. Host adapters expose only `startFresh`,
-`toolDefinitions`, `callTool`, `journal`, `result`, `probe`/`frame`, and `close`. The browser adapter
-uses the built app and its real `window.fem` registry in Chromium. The MCP adapter starts the packed
+One checked-in runner owns orchestration and scoring. The browser adapter starts a loopback server
+over the hashed app directory and uses its real `window.fem` registry in Chromium. The MCP adapter starts the packed
 `femlab-mcp` executable over stdio and uses the MCP SDK client. Both feed the same provider loop,
 prompt text and scorer; host-specific shortcuts are forbidden.
 
 The frozen manifest records:
 
 - git commit and dirty state, engine/schema version, SHA-256 of the app assets, Node wasm and MCP
-  package, plus the twenty-case specification hash;
+  package before and after the run, their stability, plus the twenty-case specification hash;
 - host (`browser` or `mcp`), OS/runtime/Chromium versions, CPU/GPU mode and engine thread count;
 - provider, exact model identifier, service tier/reasoning controls, maximum tokens/rounds and
   timeout, with start/end timestamps;
@@ -102,6 +101,14 @@ The dependencies remain explicit in the manifest: `query.validateScript`/#294, s
 runner may be developed against their public contracts, but a live report is produced only from one
 frozen commit containing all reviewed prerequisites. No pending branch is silently copied into the
 evaluation branch.
+
+Run the live lane from a clean commit. The runner builds its wasm and app, packs MCP, installs that
+tarball in a temporary directory, refuses an MCP entry or wasm outside the installed tree, serves
+the built app itself, and fails if any artifact hash changes during the run:
+
+```sh
+npm run live -w packages/evals
+```
 
 Unit tests must prove at least: a correct value and balanced reactions pass; an independently wrong
 value fails while balance passes; an otherwise correct value fails when reaction balance is above

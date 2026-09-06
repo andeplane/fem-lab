@@ -19,9 +19,12 @@ export interface EvalCase {
   thermal?: { leftK: number; rightK: number; conductivity: number };
   explicit?: { endS: number };
 
-  materialE?: number;
+  materialE: number;
+  materialNu: number;
+  materialRho?: number;
   appliedN?: [number, number, number];
   requires?: 'material-library' | 'script-validation';
+  invalidScript?: string;
 }
 
 export interface ToolTrace {
@@ -46,6 +49,7 @@ export interface EvalEvidence {
   model?: unknown;
   result?: unknown;
   probe?: unknown;
+  framesCatalogue?: unknown;
   frames?: unknown[];
   journal?: unknown;
   trace: ToolTrace[];

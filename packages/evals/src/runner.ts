@@ -41,7 +41,17 @@ export interface FrozenManifest {
   engineVersion: string;
   schemaVersion: string;
   specificationSha256: string;
-  artifacts: { app: string; nodeWasm: string; mcpPackage: string };
+  artifacts: {
+    before: { app: string; nodeWasm: string; mcpPackage: string; mcpTarball: string };
+    after: { app: string; nodeWasm: string; mcpPackage: string; mcpTarball: string };
+    stable: boolean;
+  };
+  provenance: {
+    source: 'built-from-clean-HEAD' | 'not-run';
+    buildCommands: string[];
+    appServer: 'runner-loopback' | 'not-run';
+    mcp: 'isolated-tarball-install' | 'not-run';
+  };
   hosts: {
     browser: { capabilities: unknown };
     mcp: { node: string; platform: string; arch: string; capabilities: unknown };

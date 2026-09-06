@@ -114,13 +114,18 @@ export async function evaluateCase(remote: RemoteEngine, provider: Provider, mod
       ? await optional(remote, 'query.probe', { field: spec.measure.field, ...(spec.measure.component === undefined ? {} : { component: spec.measure.component }), at: spec.measure.atM.map((n) => `${n} m`) })
       : undefined;
     let frames: unknown[] | undefined;
+    let framesCatalogue: unknown;
     if (spec.measure.kind === 'frames') {
       const catalogue = await optional(remote, 'query.frames', {}) as { frames?: { index?: number }[] } | undefined;
+      framesCatalogue = catalogue;
       frames = [];
       for (const stamp of catalogue?.frames ?? []) {
         if (typeof stamp.index !== 'number') continue;
-        const frame = await optional(remote, 'query.frame', { index: stamp.index }) as { sample?: { frame?: { timeSi?: number } }; values?: number[] } | undefined;
-        if (frame?.values !== undefined) frames.push({ timeSi: frame.sample?.frame?.timeSi, values: frame.values });
+        try {
+          frames.push(await remote.invoke('query.frame', { index: stamp.index }));
+        } catch (error) {
+          frames.push({ requested: stamp, error: error instanceof Error ? error.message : String(error) });
+        }
       }
     }
     return {
@@ -133,6 +138,7 @@ export async function evaluateCase(remote: RemoteEngine, provider: Provider, mod
       model: modelResult,
       result,
       probe,
+      framesCatalogue,
       frames,
       journal,
       trace: traces(turn?.calls ?? [], registry.validation),

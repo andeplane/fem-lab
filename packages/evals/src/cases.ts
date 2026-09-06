@@ -13,6 +13,7 @@ const axial = (id: string, L: number, widthMm: number, heightMm: number, E: numb
   relativeTolerance: 0.02,
   measure: { kind: 'extreme', field: 'displacement', component: 0, side: loadKn < 0 ? 'min' : 'max' },
   materialE: E,
+  materialNu: nu,
   appliedN: [loadKn * 1000, 0, 0],
 });
 const bend = (id: string, L: number, widthMm: number, heightMm: number, E: number, nu: number, loadKn: number, expectedMm: number): EvalCase => ({
@@ -26,6 +27,7 @@ const bend = (id: string, L: number, widthMm: number, heightMm: number, E: numbe
   relativeTolerance: 0.05,
   measure: { kind: 'extreme', field: 'displacement', component: 2, side: loadKn < 0 ? 'min' : 'max' },
   materialE: E,
+  materialNu: nu,
   appliedN: [0, 0, loadKn * 1000],
 });
 const heat = (id: string, L: number, leftK: number, rightK: number, k: number): EvalCase => ({
@@ -39,6 +41,7 @@ const heat = (id: string, L: number, leftK: number, rightK: number, k: number): 
   absoluteTolerance: 1e-8,
   measure: { kind: 'probe', field: 'temperature', atM: [L / 2, 0.01, 0.01] },
   materialE: 1e9,
+  materialNu: 0.25,
   thermal: { leftK, rightK, conductivity: k },
 });
 const modal = (id: string, L: number, widthMm: number, heightMm: number, E: number, nu: number, rho: number, expectedHz: number): EvalCase => ({
@@ -52,6 +55,8 @@ const modal = (id: string, L: number, widthMm: number, heightMm: number, E: numb
   relativeTolerance: 0.05,
   measure: { kind: 'frequency', index: 0 },
   materialE: E,
+  materialNu: nu,
+  materialRho: rho,
 });
 const drop = (id: string, sizeMm: number, axis: 1 | 2, g: number, endMs: number, expectedMm: number, E: number, nu: number, rho: number): EvalCase => ({
   id,
@@ -64,6 +69,8 @@ const drop = (id: string, sizeMm: number, axis: 1 | 2, g: number, endMs: number,
   relativeTolerance: 0.005,
   measure: { kind: 'frames', component: axis, acceleration: g },
   materialE: E,
+  materialNu: nu,
+  materialRho: rho,
   explicit: { endS: endMs / 1000 },
 });
 
@@ -88,21 +95,25 @@ const cases: EvalCase[] = [
     ...axial('N1', 1.0, 40, 10, 210e9, 0.30, 42, 0.500),
     prompt: 'Use the sourced material catalogue to model an S355J2 structural-steel plate bar 1.0 m long in x, 40 mm wide and 10 mm thick. The prompt intentionally supplies no material properties. Fully fix xmin, apply +42 kN axial traction at xmax, solve static, report signed ux, and preserve the catalogue provenance in material.add.' + balanced + ending,
     requires: 'material-library',
+    materialRho: 7850,
   },
   {
     ...axial('N2', 0.5, 20, 5, 68.3e9, 0.33, 6.83, 0.500),
     prompt: 'Use the sourced material catalogue to model a 6061-T6 aluminium sheet bar 0.5 m long in x, 20 mm wide and 5 mm thick. The prompt intentionally supplies no material properties. Fully fix xmin, apply +6.83 kN axial traction at xmax, solve static, report signed ux, and preserve the catalogue condition and provenance in material.add.' + balanced + ending,
     requires: 'material-library',
+    materialRho: 2710,
   },
   {
     ...axial('V1', 0.9, 30, 20, 90e9, 0.30, 12, 0.200),
     prompt: 'Repair and complete this axial-bar model. The starter script must be validated and must not execute as written because its x length is a boolean: `await fem.geometry.addBox({name: "bar", size: [false, "30 mm", "20 mm"]});`. The correct bar has L = 0.9 m, E = 90 GPa, nu = 0.30, xmin fixed and +12 kN total axial traction at xmax. Validate the corrected script before running it, solve static and report signed ux.' + balanced + ending,
     requires: 'script-validation',
+    invalidScript: 'await fem.geometry.addBox({name: "bar", size: [false, "30 mm", "20 mm"]});',
   },
   {
     ...axial('V2', 1.1, 25, 25, 160e9, 0.30, -20, -0.220),
     prompt: 'Repair and complete this axial-bar model. The starter script must be validated and must not execute as written because `fem.loads.forceTotal({on: "bar.xmax", value: "-20 kN"})` is not a FEM Lab API call. The correct bar has L = 1.1 m, 25 mm square section, E = 160 GPa, nu = 0.30, xmin fixed and -20 kN total axial traction at xmax. Validate the corrected script before running it, solve static and report signed ux.' + balanced + ending,
     requires: 'script-validation',
+    invalidScript: 'fem.loads.forceTotal({on: "bar.xmax", value: "-20 kN"})',
   },
 ];
 
