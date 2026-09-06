@@ -368,6 +368,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
     // a Model exists this `import()` is already in the module cache.
     let v: Viewer | null = null;
     let gone = false;
+    let observer: ResizeObserver | null = null;
     const onResize = () => v?.resize();
     void import('../viewer/viewer').then(({ Viewer }) => {
       if (gone) return;
@@ -385,11 +386,16 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
       });
       addEventListener('resize', onResize);
+      if (typeof ResizeObserver !== 'undefined') {
+        observer = new ResizeObserver(onResize);
+        observer.observe(el);
+      }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);
     return () => {
       gone = true;
       removeEventListener('resize', onResize);
+      observer?.disconnect();
       if (!v) return;
       viewer.current = null;
       v.dispose();
@@ -464,6 +470,9 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
 
 export function App({ store, dispatch, viewer, query, commands = [], registry }: AppProps) {
   const s = useStore(store);
+  // Collapse hides the drawer, but keeps the conversation and any running turn alive.
+  const assistantOpened = useRef(false);
+  assistantOpened.current ||= s.panels['assistant'] === true;
   const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
 
@@ -494,7 +503,7 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       {started ? (
         <div class="shell">
           <TopBar s={s} dispatch={dispatch} />
-          <div class="under-bar">
+          <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
               <ModelTree s={s} dispatch={dispatch} />
@@ -503,7 +512,6 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
               </div>
               <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
-              {registry && s.panels['assistant'] ? <AssistantPanel registry={registry} store={store} /> : null}
             </div>
           </div>
         </div>
@@ -514,6 +522,12 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
+      {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
+          opens on the start screen and keeps its conversation when the workspace comes up around
+          it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
+          layout of the design while the top bar stays full-width. Collapsing only hides the
+          drawer, preserving the conversation and any running turn. */}
+      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}
     </>
