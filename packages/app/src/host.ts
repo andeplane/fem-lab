@@ -3,7 +3,7 @@
 // except through the transport, and nothing in the registry knows the DOM exists.
 import { FemError, type AutosaveState, type HostContext, type HostDef, type Selection } from '@femlab/registry';
 import { z } from 'zod';
-import { attachComparison, type ActiveBenchmark, type ExampleEntry } from './benchmark';
+import { attachComparison, benchmarkProvenance, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import type { HostCaps } from './capabilities';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
@@ -306,7 +306,7 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         store.togglePanel('examples', false);
         await refresh();
         if (solved) await results?.onAck(solved);
-        store.set({ benchmark: { ...benchmark, modelRevision: store.state.revision } });
+        store.set({ benchmark: { ...benchmark, ...benchmarkProvenance(store.state.model, store.state.journal, store.state.revision) } });
         return { name, commands: entries.length };
       },
     },

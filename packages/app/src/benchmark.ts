@@ -1,4 +1,4 @@
-import type { ProbeResult, ResultSummary, Valued } from '@femlab/registry';
+import type { JournalDump, ModelSummary, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { FemError } from '@femlab/registry';
 
 export interface ExampleEntry {
@@ -27,9 +27,10 @@ export interface BenchmarkComparison {
 }
 
 /**
- * The explicit bridge from bundled examples to Result observables. `null` means the reference is
- * local, ambiguous or not represented by ResultSummary; adding an example without deciding here
- * fails the fixture test. LE10 stays null until #183 matches the published support condition.
+ * The explicit bridge from bundled examples to Result observables. `null` means the cited theory
+ * and the Result's available observable are not the same quantity; the companion reason names the
+ * mismatch. Adding an example without deciding here fails the fixture test. LE10 stays null until
+ * #183 matches the published support condition.
  */
 export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> = {
   'bar-transient-heat': {
@@ -85,7 +86,12 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
     tolerance: { kind: 'absolute', value: 0.5, unit: 'degC' },
     source: 'One-dimensional convection fin solution · bundled benchmark metadata',
   },
-  'heated-fin': null,
+  'heated-fin': {
+    locator: { kind: 'extreme', field: 'displacement', component: 0, pick: 'max' },
+    reference: { values: [0.1656], unit: 'mm', label: 'uˣ at the free tip' },
+    tolerance: { kind: 'percent', value: 2 },
+    source: 'Uniform thermal-strain closed form u = αΔTL · bundled dimensions and material data',
+  },
   'kirsch-quarter-plate': {
     locator: { kind: 'extreme', field: 'stress', component: 0, pick: 'max' },
     reference: { values: [300], unit: 'MPa', label: 'σₓₓ at the hole edge' },
@@ -124,10 +130,29 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
   'tube-under-pressure': null,
 };
 
-export interface ActiveBenchmark extends ExampleEntry {
-  comparison: BenchmarkComparison | null;
-  /** Model revision immediately after the bundled Journal finished replaying. */
+/** Why a bundled reference cannot honestly be presented as a live pass/fail comparison. */
+export const BENCHMARK_UNMAPPED_REASONS: Record<string, string> = {
+  'bolt-flange': 'No live comparison: the quoted peak is a stair-stepped bolt-hole stress with only two or three elements across the hole. The metadata explicitly treats it as a load-path picture, not a converged stress oracle.',
+  'bracket-L': 'No live comparison: the Result peak lies at the sharp re-entrant corner, where linear-elastic stress is singular and rises with refinement. There is no finite corner-stress reference to pass.',
+  'mesh-convergence-cantilever': 'No live comparison: −0.19073 mm is the Richardson estimate calculated from all three study meshes. A single Result exposes one mesh solution; the convergence table, rather than an extreme or point probe, is the matching observable.',
+  'nafems-le10-plate': 'Live comparison withheld: this model clamps the full outer face, unlike the published LE10 line support. Issue #183 tracks the matching variant.',
+  'plate-with-hole-2d': 'No live comparison: 3σ is the local hoop stress of an infinite plate, while this finite-width full model reports global Cartesian and von Mises extrema. Those are different stress quantities and locations.',
+  'simply-supported-beam': 'No live comparison: the textbook formulas assume ideal line supports at the neutral axis, but this solid model restrains translation over both complete end faces. Its bundled expected value is the resulting global von Mises peak at a support, not the mid-span beam quantity.',
+  'slab-strip': 'No live comparison: 6M/bh² is longitudinal stress at the mid-span extreme fibre for ideal line supports, but this solid model restrains both complete end faces. Its bundled expected value is the resulting global von Mises peak near a support.',
+  'tube-under-pressure': 'No live comparison: pr/t is circumferential membrane stress away from the welded base, while the Result summary peak is von Mises stress in the restrained base boundary layer. A cylindrical hoop-stress probe away from the base is required.',
+};
+
+export interface BenchmarkProvenance {
+  /** Model identity, separate from the display title stored in the example metadata. */
+  modelName: string | null;
+  modelHash: string | null;
   modelRevision: number;
+  /** Complete Journal-history identity at the end of the bundled replay. */
+  journalHash: string | null;
+}
+
+export interface ActiveBenchmark extends ExampleEntry, BenchmarkProvenance {
+  comparison: BenchmarkComparison | null;
 }
 
 export interface BenchmarkReading {
@@ -141,9 +166,28 @@ export interface BenchmarkReading {
 
 export type BenchmarkQuery = (q: Record<string, unknown> & { query: string }) => Promise<unknown>;
 
-export function attachComparison(entry: ExampleEntry, modelRevision = 0): ActiveBenchmark {
+/**
+ * Use the engine's complete-history hash when available. Older engines expose the exact history
+ * instead, so the serialized entry sequence remains an unambiguous fallback across undo/branch.
+ */
+export function completeJournalHash(journal: JournalDump | null): string | null {
+  if (!journal) return null;
+  const supplied = (journal as JournalDump & { hash?: unknown }).hash;
+  return typeof supplied === 'string' ? supplied : JSON.stringify(journal.entries.map(({ seq, cmd, hashAfter }) => [seq, cmd, hashAfter]));
+}
+
+export function benchmarkProvenance(model: ModelSummary | null, journal: JournalDump | null, revision: number): BenchmarkProvenance {
+  return { modelName: model?.name ?? null, modelHash: model?.hash ?? null, modelRevision: revision, journalHash: completeJournalHash(journal) };
+}
+
+/** True once a different Model or a different Journal history occupies the same revision. */
+export function benchmarkChanged(benchmark: BenchmarkProvenance, current: BenchmarkProvenance): boolean {
+  return !benchmark.modelHash || !benchmark.journalHash || benchmark.modelName !== current.modelName || benchmark.modelHash !== current.modelHash || benchmark.modelRevision !== current.modelRevision || benchmark.journalHash !== current.journalHash;
+}
+
+export function attachComparison(entry: ExampleEntry, provenance: BenchmarkProvenance = { modelName: null, modelHash: null, modelRevision: 0, journalHash: null }): ActiveBenchmark {
   if (!Object.hasOwn(BENCHMARK_COMPARISONS, entry.name)) throw new FemError('file.not-found', `example '${entry.name}' has no comparison decision`, entry.name, 'add it to BENCHMARK_COMPARISONS');
-  return { ...entry, comparison: BENCHMARK_COMPARISONS[entry.name]!, modelRevision };
+  return { ...entry, comparison: BENCHMARK_COMPARISONS[entry.name]!, ...provenance };
 }
 
 /** Read the exact Result observable named by the example, including point probes when needed. */

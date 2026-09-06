@@ -1,12 +1,15 @@
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { useEffect, useState } from 'preact/hooks';
-import { readBenchmark, type ActiveBenchmark, type BenchmarkReading } from '../benchmark';
+import { BENCHMARK_UNMAPPED_REASONS, benchmarkChanged, readBenchmark, type ActiveBenchmark, type BenchmarkProvenance, type BenchmarkReading } from '../benchmark';
 import { formatNumber } from '../fields';
 import type { ResultSummary } from '@femlab/registry';
 import type { Query } from './SchemaForm';
 
-type ReadingState = { kind: 'loading' } | { kind: 'ready'; reading: BenchmarkReading } | { kind: 'error'; message: string };
+type ReadingState =
+  | { kind: 'loading'; benchmark: string; result: ResultSummary; stale: boolean }
+  | { kind: 'ready'; benchmark: string; result: ResultSummary; stale: boolean; reading: BenchmarkReading }
+  | { kind: 'error'; benchmark: string; result: ResultSummary; stale: boolean; message: string };
 
 /** Render only the inline TeX delimited by `$`; every other metadata byte stays text. */
 export function TheoryText({ text }: { text: string }) {
@@ -27,23 +30,26 @@ export function toleranceText(benchmark: ActiveBenchmark): string {
   return tolerance.kind === 'percent' ? `≤ ${formatNumber(tolerance.value)} %` : `≤ ${formatNumber(tolerance.value)} ${tolerance.unit}`;
 }
 
-export function Theory({ benchmark, result, currentRevision, query }: { benchmark: ActiveBenchmark; result: ResultSummary; currentRevision: number; query: Query }) {
+export function Theory({ benchmark, result, current, query }: { benchmark: ActiveBenchmark; result: ResultSummary; current: BenchmarkProvenance; query: Query }) {
   const comparison = benchmark.comparison;
-  const modified = benchmark.modelRevision !== currentRevision;
+  const modified = benchmarkChanged(benchmark, current);
   const stale = result.stale || modified;
-  const [state, setState] = useState<ReadingState>({ kind: 'loading' });
+  const [state, setState] = useState<ReadingState>({ kind: 'loading', benchmark: benchmark.name, result, stale: result.stale });
+  // Effects start after paint. Hide a reading from the previous Result immediately rather than
+  // briefly presenting it as the value of a newly selected Step or replacement Result.
+  const visible = state.benchmark === benchmark.name && state.result === result && state.stale === result.stale ? state : { kind: 'loading' as const };
   useEffect(() => {
     if (!comparison) return;
     let live = true;
-    setState({ kind: 'loading' });
+    setState({ kind: 'loading', benchmark: benchmark.name, result, stale: result.stale });
     void readBenchmark(comparison, result, query).then(
-      (reading) => live && setState({ kind: 'ready', reading }),
-      (error: unknown) => live && setState({ kind: 'error', message: error instanceof Error ? error.message : String(error) }),
+      (reading) => live && setState({ kind: 'ready', benchmark: benchmark.name, result, stale: result.stale, reading }),
+      (error: unknown) => live && setState({ kind: 'error', benchmark: benchmark.name, result, stale: result.stale, message: error instanceof Error ? error.message : String(error) }),
     );
     return () => {
       live = false;
     };
-  }, [benchmark.name, comparison, query, result.revision]);
+  }, [benchmark.name, comparison, query, result, result.step, result.revision, result.stale]);
 
   return (
     <section class={stale ? 'theory-panel stale' : 'theory-panel'} aria-label={`Theory for ${benchmark.title}`}>
@@ -56,33 +62,29 @@ export function Theory({ benchmark, result, currentRevision, query }: { benchmar
       {comparison === null ? (
         <div class="surface info theory-unmapped">
           <span>i</span>
-          <span>
-            {benchmark.name === 'nafems-le10-plate'
-              ? 'Live comparison withheld: this model clamps the full outer face, unlike the published LE10 line support. Issue #183 tracks the matching variant.'
-              : 'This reference needs a local probe or interpretation that is not represented by the current Result summary, so no live pass/fail is claimed.'}
-          </span>
+          <span>{BENCHMARK_UNMAPPED_REASONS[benchmark.name]}</span>
         </div>
-      ) : state.kind === 'loading' ? (
+      ) : visible.kind === 'loading' ? (
         <div class="empty-note">Reading {comparison.reference.label} from this Result…</div>
-      ) : state.kind === 'error' ? (
+      ) : visible.kind === 'error' ? (
         <div class="surface warn">
           <span>!</span>
-          <span>Comparison unavailable: {state.message}</span>
+          <span>Comparison unavailable: {visible.message}</span>
         </div>
       ) : (
         <>
           <div class="theory-values">
             <span>current FEM</span>
-            <strong class="mono">{values(state.reading.actual, state.reading.unit)}</strong>
+            <strong class="mono">{values(visible.reading.actual, visible.reading.unit)}</strong>
             <span>reference</span>
-            <strong class="mono">{values(state.reading.reference, state.reading.unit)}</strong>
+            <strong class="mono">{values(visible.reading.reference, visible.reading.unit)}</strong>
             <span>difference</span>
-            <strong class="mono">{formatNumber(state.reading.percent)} %</strong>
+            <strong class="mono">{formatNumber(visible.reading.percent)} %</strong>
           </div>
-          <div class={state.reading.pass && !modified ? 'surface pass' : 'surface warn'}>
-            <span>{state.reading.pass && !modified ? '✓' : '!'}</span>
+          <div class={visible.reading.pass && !stale ? 'surface pass' : 'surface warn'}>
+            <span>{visible.reading.pass && !stale ? '✓' : '!'}</span>
             <span class="mono">
-              {modified ? 'Model differs from the bundled benchmark · comparison is informative' : `${comparison.reference.label} · tolerance ${toleranceText(benchmark)}`}
+              {modified ? 'Model differs from the bundled benchmark · comparison is informative' : result.stale ? 'Result is stale · re-solve before claiming this comparison' : `${comparison.reference.label} · tolerance ${toleranceText(benchmark)}`}
             </span>
           </div>
         </>

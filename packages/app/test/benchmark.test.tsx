@@ -3,7 +3,18 @@ import { render } from 'preact';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { BENCHMARK_COMPARISONS, attachComparison, clearsBenchmark, readBenchmark, type BenchmarkComparison, type ExampleEntry } from '../src/benchmark';
+import {
+  BENCHMARK_COMPARISONS,
+  BENCHMARK_UNMAPPED_REASONS,
+  attachComparison,
+  benchmarkChanged,
+  clearsBenchmark,
+  completeJournalHash,
+  readBenchmark,
+  type BenchmarkComparison,
+  type BenchmarkProvenance,
+  type ExampleEntry,
+} from '../src/benchmark';
 import { appHostCommands } from '../src/host';
 import { Store, initialState } from '../src/store';
 import { Theory } from '../src/ui/Theory';
@@ -23,6 +34,7 @@ const example = (name = 'cantilever'): ExampleEntry => ({
   theory: 'Beam theory gives $\\delta = PL^3/(3EI)$.',
   expected: { quantity: 'tip deflection', value: -0.1901, unit: 'mm', reference: 'Timoshenko: 0.1919619 mm' },
 });
+const provenance = (patch: Partial<BenchmarkProvenance> = {}): BenchmarkProvenance => ({ modelName: 'cantilever', modelHash: 'model-a', modelRevision: 9, journalHash: 'journal-a', ...patch });
 
 describe('benchmark comparison registry', () => {
   it('makes an explicit comparison-or-null decision for every bundled example', () => {
@@ -33,6 +45,10 @@ describe('benchmark comparison registry', () => {
     expect(Object.keys(BENCHMARK_COMPARISONS).sort()).toEqual(names);
     expect(Object.values(BENCHMARK_COMPARISONS).filter(Boolean).length).toBeGreaterThanOrEqual(11);
     expect(BENCHMARK_COMPARISONS['nafems-le10-plate']).toBeNull();
+    expect(BENCHMARK_COMPARISONS['heated-fin']).toMatchObject({ reference: { values: [0.1656], unit: 'mm' } });
+    const unmapped = Object.entries(BENCHMARK_COMPARISONS).filter(([, comparison]) => comparison === null).map(([name]) => name).sort();
+    expect(Object.keys(BENCHMARK_UNMAPPED_REASONS).sort()).toEqual(unmapped);
+    for (const reason of Object.values(BENCHMARK_UNMAPPED_REASONS)) expect(reason.length).toBeGreaterThan(80);
   });
 
   it('reads an extreme by field/component and compares magnitudes', async () => {
@@ -44,6 +60,18 @@ describe('benchmark comparison registry', () => {
     );
     expect(reading.actual).toEqual([-0.19012475]);
     expect(reading.percent).toBeCloseTo(0.957, 2);
+    expect(reading.pass).toBe(true);
+  });
+
+  it('compares the heated fin tip expansion with the free thermal-strain solution', async () => {
+    const comparison = BENCHMARK_COMPARISONS['heated-fin']!;
+    const reading = await readBenchmark(
+      comparison,
+      result([{ field: 'displacement', component: 0, min: mm(0), minAt: [mm(0), mm(0), mm(0)], max: mm(0.168386), maxAt: [mm(120), mm(20), mm(0)] }]),
+      async () => undefined,
+    );
+    expect(reading.reference).toEqual([0.1656]);
+    expect(reading.percent).toBeCloseTo(1.682, 2);
     expect(reading.pass).toBe(true);
   });
 
@@ -88,6 +116,16 @@ describe('benchmark comparison registry', () => {
   it('rejects an example omitted from the explicit registry', () => {
     expect(() => attachComparison(example('surprise-example'))).toThrow("has no comparison decision");
   });
+
+  it('detects a replacement Journal at the same model revision', () => {
+    const journalA = { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'a' }, hashAfter: 'same-model' }], revision: 1, canUndo: true, canRedo: false } as never;
+    const journalB = { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'b' }, hashAfter: 'same-model' }], revision: 1, canUndo: true, canRedo: false } as never;
+    expect(completeJournalHash(journalA)).not.toBe(completeJournalHash(journalB));
+    const original = provenance({ journalHash: completeJournalHash(journalA) });
+    const replacement = provenance({ journalHash: completeJournalHash(journalB) });
+    expect(benchmarkChanged(original, replacement)).toBe(true);
+    expect(benchmarkChanged(original, original)).toBe(false);
+  });
 });
 
 describe('example provenance lifecycle', () => {
@@ -101,7 +139,14 @@ describe('example provenance lifecycle', () => {
     );
     vi.stubGlobal('fetch', fetch);
     const transport = { dispatch: vi.fn(async (cmd: { cmd: string }) => (cmd.cmd === 'solve.run' ? { output: { type: 'solve' } } : { output: { type: 'none' } })) } as unknown as WorkerTransport;
-    const refresh = vi.fn(async () => expect(store.state.benchmark).toBeNull());
+    const refresh = vi.fn(async () => {
+      expect(store.state.benchmark).toBeNull();
+      store.set({
+        model: { name: 'cantilever', hash: 'model-a' } as never,
+        journal: { entries: [{ seq: 0, cmd: journal[0]!.cmd, hashAfter: 'model-a' }], revision: 2, canUndo: true, canRedo: false } as never,
+        revision: 2,
+      });
+    });
     const results = { onAck: vi.fn(async () => expect(store.state.benchmark).toBeNull()) };
     const command = appHostCommands(store, transport, { current: null }, refresh, results as never).find((item) => item.name === 'file.openExample')!;
 
@@ -109,6 +154,8 @@ describe('example provenance lifecycle', () => {
 
     expect(transport.dispatch).toHaveBeenCalledTimes(2);
     expect(store.state.benchmark?.name).toBe('cantilever');
+    expect(store.state.benchmark).toMatchObject({ modelName: 'cantilever', modelHash: 'model-a', modelRevision: 2 });
+    expect(store.state.benchmark?.journalHash).toBe(completeJournalHash(store.state.journal));
     expect(store.state.panels['examples']).toBe(false);
     vi.unstubAllGlobals();
   });
@@ -116,26 +163,27 @@ describe('example provenance lifecycle', () => {
 
 describe('Theory panel', () => {
   it('typesets theory and shows the actual/reference comparison with stale provenance', async () => {
-    const benchmark = attachComparison(example());
+    const benchmark = attachComparison(example(), provenance());
     const solved = {
       ...result([{ field: 'displacement', component: 2, min: mm(-0.19012475), minAt: [mm(0), mm(0), mm(0)], max: mm(0), maxAt: [mm(0), mm(0), mm(0)] }]),
       stale: true,
     };
     const root = document.createElement('div');
-    render(<Theory benchmark={benchmark} result={solved} currentRevision={0} query={async () => undefined} />, root);
+    render(<Theory benchmark={benchmark} result={solved} current={provenance()} query={async () => undefined} />, root);
     await waitFor(() => root.querySelector('.theory-values'), 'benchmark values');
     expect(root.querySelector('.katex')).not.toBeNull();
     expect(root.textContent).toContain('current FEM-0.1901 mm');
     expect(root.textContent).toContain('reference0.192 mm');
     expect(root.textContent).toContain('stale Result');
-    expect(root.querySelector('.surface.pass')).not.toBeNull();
+    expect(root.textContent).toContain('re-solve before claiming');
+    expect(root.querySelector('.surface.pass')).toBeNull();
   });
 
   it('keeps provenance visible after a modified example is re-solved', async () => {
-    const benchmark = attachComparison(example(), 9);
+    const benchmark = attachComparison(example(), provenance());
     const solved = result([{ field: 'displacement', component: 2, min: mm(-0.2), minAt: [mm(0), mm(0), mm(0)], max: mm(0), maxAt: [mm(0), mm(0), mm(0)] }]);
     const root = document.createElement('div');
-    render(<Theory benchmark={benchmark} result={{ ...solved, revision: 10 }} currentRevision={10} query={async () => undefined} />, root);
+    render(<Theory benchmark={benchmark} result={{ ...solved, revision: 10 }} current={provenance({ modelRevision: 10, modelHash: 'model-b', journalHash: 'journal-b' })} query={async () => undefined} />, root);
     await waitFor(() => root.querySelector('.theory-values'), 'modified comparison');
     expect(root.textContent).toContain('modified example');
     expect(root.textContent).toContain('comparison is informative');
@@ -144,9 +192,30 @@ describe('Theory panel', () => {
 
   it('explains why LE10 makes no live verification claim', () => {
     const root = document.createElement('div');
-    render(<Theory benchmark={attachComparison(example('nafems-le10-plate'))} result={result()} currentRevision={0} query={async () => undefined} />, root);
+    render(<Theory benchmark={attachComparison(example('nafems-le10-plate'), provenance())} result={result()} current={provenance()} query={async () => undefined} />, root);
     expect(root.textContent).toContain('published LE10 line support');
     expect(root.textContent).toContain('Issue #183');
     expect(root.querySelector('.theory-values')).toBeNull();
+  });
+
+  it('hides an old reading while a different Result at the same revision is being queried', async () => {
+    const benchmark = attachComparison(example('bar-transient-heat'), provenance());
+    const pending: Array<(value: unknown) => void> = [];
+    const query = vi.fn(() => new Promise<unknown>((resolve) => pending.push(resolve)));
+    const first = result();
+    const root = document.createElement('div');
+    render(<Theory benchmark={benchmark} result={first} current={provenance()} query={query} />, root);
+    await waitFor(() => pending.length === 1, 'first probe');
+    pending.shift()!({ value: { value: 36.6, unit: 'K' } });
+    await waitFor(() => root.querySelector('.theory-values'), 'first reading');
+    expect(root.textContent).toContain('36.6 K');
+
+    const second = { ...first, step: 'thermal-later' };
+    render(<Theory benchmark={benchmark} result={second} current={provenance()} query={query} />, root);
+    expect(root.textContent).toContain('Reading T at x = 80 mm, t = 32 s');
+    expect(root.querySelector('.theory-values')).toBeNull();
+    await waitFor(() => pending.length === 1, 'second probe');
+    pending.shift()!({ value: { value: 36.8, unit: 'K' } });
+    await waitFor(() => root.textContent?.includes('36.8 K'), 'replacement reading');
   });
 });
