@@ -41,7 +41,7 @@ were inspected at 1600 × 1000. A screenshot of one state does not verify the ot
 | Export groups and functioning supported formats | Export modal lists supported and unavailable formats; screenshot dimensions have a known host gap. | [#11](https://github.com/andeplane/fem-lab/issues/11): export actual bytes, verify selected dimensions, errors and round-trip where supported. Unsupported engine formats must remain explicit. |
 | Gallery thumbnails, reference values and theory beside Results | Blank gradient thumbnails and Command-count footer; no rendered theory panel. | [#30](https://github.com/andeplane/fem-lab/issues/30), [#109](https://github.com/andeplane/fem-lab/issues/109): real thumbnails, independently sourced values, typeset theory and actual Result comparisons with provenance. |
 | Full-screen report, rendered calculation note and PDF | Report toggle has no report component. Markdown export exists. | [#14](https://github.com/andeplane/fem-lab/issues/14): real report from current Result, designed paper layout, copy Markdown, print/PDF and pre-result explanation. |
-| Linear/quadratic tetrahedral mesh choices | The current MesherSpec has no tetrahedral mesher; the prototype's Tet4 state cannot be produced. | [#157](https://github.com/andeplane/fem-lab/issues/157) tracks the capability gap. #102 supplies teaching guidance for supported element families without claiming Tet4/Tet10 support. |
+| Linear/quadratic tetrahedral mesh choices | The current MesherSpec has no tetrahedral mesher; the prototype's Tet4 state cannot be produced. | [#4](https://github.com/andeplane/fem-lab/issues/4) tracks simplex exposure and [#22](https://github.com/andeplane/fem-lab/issues/22) tracks free tetrahedral meshing; #157 was closed as a duplicate. #102 supplies teaching guidance for supported element families without claiming Tet4/Tet10 support. |
 
 ## Reviewed deliveries
 
@@ -65,3 +65,12 @@ all filed fixes have been reviewed and merged, and any unresolved capability or 
 gap is identified explicitly. Merely filing issues does not complete the requested work.
 Items expressly not designed in this handoff (light-theme tokens, panel presets, settings
 layout and member idealisations) must not be presented as implemented reference designs.
+
+## Additional audit findings and delivery evidence
+
+- [#94 / PR #104](https://github.com/andeplane/fem-lab/pull/104): Assistant collapse persistence merged at `34ac4330dad6de7574686c5b49c3f75b521ad9e8` after independent review and all seven CI checks passed.
+- [#172](https://github.com/andeplane/fem-lab/issues/172): Journal rows need selection and hover behavior; copying remains a separate action.
+- [#173](https://github.com/andeplane/fem-lab/issues/173): editable Script needs line numbers and syntax highlighting.
+- [#174](https://github.com/andeplane/fem-lab/issues/174): panels need resize controls with keyboard and cancellation support.
+- [#175](https://github.com/andeplane/fem-lab/issues/175): Assistant background must use the viewer-well token; PR #181 is reviewed but not yet merged.
+- [#183](https://github.com/andeplane/fem-lab/issues/183): the LE10 support definition and reference must agree before using it to validate the tetrahedral capability. Numerical completion remains unproven.
