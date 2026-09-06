@@ -74,7 +74,8 @@ export interface Fem {
     nameRegion(args: Omit<Extract<Command, { cmd: 'geometry.nameRegion' }>, 'cmd'>): Promise<Ack>;
     /**
      * Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-     * and material assignments that still reference it; remove or retarget those first.
+     * (including temperature and volumetric heat sources), and named Sets that still reference
+     * it; remove or retarget those first.
      */
     remove(args: Omit<Extract<Command, { cmd: 'geometry.remove' }>, 'cmd'>): Promise<Ack>;
   };
@@ -236,7 +237,9 @@ export interface Fem {
   journal: {
     /**
      * Undo the last `steps` Commands (default 1), restoring the Model and orphaning any
-     * Result produced after that point. Not recorded in the Journal.
+     * Result produced after that point. Not recorded in the Journal. If `expectedJournal` is
+     * supplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise
+     * nothing is undone. Use this guard for a saved turn boundary while other callers can edit.
      */
     undo(args?: Omit<Extract<Command, { cmd: 'journal.undo' }>, 'cmd'>): Promise<Ack>;
     /**

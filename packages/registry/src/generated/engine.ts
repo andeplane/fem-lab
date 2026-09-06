@@ -507,6 +507,10 @@ export type Command =
       after?: string | null;
       nModes?: number | null;
       shift?: number | null;
+      /**
+       * Maximum heat-transient time increment. A uniform increment no larger than dt is
+       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       */
       dt?:
         | (
             | string
@@ -527,6 +531,10 @@ export type Command =
         | null;
       theta?: number | null;
       outputEvery?: number | null;
+      /**
+       * Maximum fraction of the explicit critical time step (usually 0.9). The increment
+       * may be reduced uniformly to finish exactly at tEnd.
+       */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
       initial?:
@@ -573,6 +581,7 @@ export type Command =
     }
   | {
       steps?: number | null;
+      expectedJournal?: string | null;
       cmd: "journal.undo";
     }
   | {
@@ -2163,6 +2172,10 @@ export type ModelFile_Command =
       after?: string | null;
       nModes?: number | null;
       shift?: number | null;
+      /**
+       * Maximum heat-transient time increment. A uniform increment no larger than dt is
+       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       */
       dt?:
         | (
             | string
@@ -2183,6 +2196,10 @@ export type ModelFile_Command =
         | null;
       theta?: number | null;
       outputEvery?: number | null;
+      /**
+       * Maximum fraction of the explicit critical time step (usually 0.9). The increment
+       * may be reduced uniformly to finish exactly at tEnd.
+       */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
       initial?:
@@ -2229,6 +2246,7 @@ export type ModelFile_Command =
     }
   | {
       steps?: number | null;
+      expectedJournal?: string | null;
       cmd: "journal.undo";
     }
   | {
@@ -3344,6 +3362,10 @@ export interface CostEstimate {
  * `query.journal` response.
  */
 export interface JournalDump {
+  /**
+   * Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
+   */
+  hash: string;
   entries: JournalEntry[];
   revision: number;
   canUndo: boolean;

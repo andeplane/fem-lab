@@ -3,7 +3,7 @@
 // here is still one Command — this is only where the Command lands.
 //
 // Values arrive from the engine in SI and are shown in the Model's own units, so the array the
-// viewer colours by is scaled once, here, with the factor `query.convert` gives; the deformed
+// viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
 import type { JournalDump, ResultSummary, StudyReport, Warning } from '@femlab/registry';
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
@@ -72,7 +72,11 @@ export class ResultsView {
   /** Nodal displacement in SI for the shown Step, and what it was loaded for. */
   private displacement: Float32Array | null = null;
   private loadedFor = '';
-  private factors = new Map<string, number>();
+  private conversions = new Map<string, { scale: number; offset: number }>();
+  /** What was *asked* for, not what it resolved to: an `"auto"` that could not be computed while
+   *  the Viewer or the displacement was missing is recomputed on the next `load`, and a person
+   *  who typed ×200 keeps ×200 across a field switch and a re-solve. */
+  private requested: DeformScale = 'auto';
 
   constructor(
     private readonly store: Store,
@@ -80,17 +84,20 @@ export class ResultsView {
     private readonly viewer: ViewerRef,
   ) {}
 
-  /** display = SI × factor, asked of the engine once per unit pair rather than tabulated here. */
-  private async factor(field: string): Promise<number> {
+  /** display = SI × scale + offset, derived from the engine once per unit pair. */
+  private async conversion(field: string): Promise<{ scale: number; offset: number }> {
     const si = siUnitOf(field);
     const to = displayUnitOf(field, this.store.state.model?.units);
-    if (si === to) return 1;
+    if (si === to) return { scale: 1, offset: 0 };
     const key = `${si}→${to}`;
-    const hit = this.factors.get(key);
+    const hit = this.conversions.get(key);
     if (hit !== undefined) return hit;
-    const { value } = (await this.transport.query({ query: 'query.convert', quantity: { value: 1, unit: si }, to } as never)) as { value: number };
-    this.factors.set(key, value);
-    return value;
+    const [zero, one] = await Promise.all([0, 1].map(async (value) =>
+      (await this.transport.query({ query: 'query.convert', quantity: { value, unit: si }, to } as never)) as { value: number },
+    ));
+    const conversion = { scale: one!.value - zero!.value, offset: zero!.value };
+    this.conversions.set(key, conversion);
+    return conversion;
   }
 
   /** The Journal's smallest `yield` in pascals — the conservative one — or `null`. */
@@ -150,9 +157,11 @@ export class ResultsView {
   /** Fetch the contoured scalar and the displacement, and hand both to the viewer. */
   private async load(result: ResultSummary): Promise<void> {
     const v = this.viewer.current;
-    // No Viewer yet (its chunk is still arriving): forget the key, so the refresh the Viewer
-    // asks for on arrival loads the arrays instead of finding them "already loaded".
-    if (!v) {
+    // No Viewer yet (its chunk is still arriving), or one that has not been handed a surface:
+    // its bounding box is still the placeholder, so an `"auto"` computed here would exaggerate
+    // against the wrong model size — the ×1311 of the report. Forget the key either way, so the
+    // refresh that follows the surface push loads the arrays instead of finding them "loaded".
+    if (!v?.hasSurface) {
       this.loadedFor = '';
       return;
     }
@@ -166,10 +175,12 @@ export class ResultsView {
     // which a heat Step does not have — there the mesh simply stays where it is.
     const moves = choice.mode !== undefined || result.extremes.some((e) => e.field === 'displacement');
     this.displacement = !moves ? null : choice.mode === undefined ? (await this.transport.field(result.step, 'displacement')).values : scalar.values;
-    this.store.set({ lengthFactor: await this.factor('displacement') });
-    v.setDeformed(this.displacement, this.store.state.deformScale);
+    this.store.set({ lengthFactor: (await this.conversion('displacement')).scale });
     // A mode's amplitude is arbitrary, so it opens at a visible one rather than at ×1.
-    if (choice.mode !== undefined) this.setDeformScale('auto');
+    if (choice.mode !== undefined) this.requested = 'auto';
+    // The one code path: the field and the deformation are pushed by the same function, in the
+    // same order, every time — so every field shows the same shape at the same scale (#42).
+    this.setDeformScale(this.requested);
   }
 
   /** The array the viewer colours by, in display units, and the range and unit for the legend. */
@@ -180,9 +191,9 @@ export class ResultsView {
       const [, max] = extent(values);
       return { values, range: this.store.state.clamp ?? derivedRange(choice.derived, max), unit: '' };
     }
-    const factor = await this.factor(choice.field);
+    const { scale, offset } = await this.conversion(choice.field);
     const values = magnitude(raw, choice.magnitude === true);
-    for (let i = 0; i < values.length; i++) values[i] = values[i]! * factor;
+    for (let i = 0; i < values.length; i++) values[i] = values[i]! * scale + offset;
     const [min, max] = extent(values);
     return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units) };
   }
@@ -216,6 +227,7 @@ export class ResultsView {
   /** `view.setDeformScale`: `"true"` is ×1, `"auto"` makes the largest displacement visible. */
   setDeformScale(s: DeformScale): void {
     const v = this.viewer.current;
+    this.requested = s;
     const scale = typeof s === 'number' ? s : s === 'true' ? 1 : this.displacement && v ? v.autoScale(this.displacement) : 1;
     this.store.set({ deformScale: scale });
     v?.setDeformed(this.displacement, scale);
@@ -239,9 +251,9 @@ export class ResultsView {
     const warnings = (ack as { warnings?: Warning[] }).warnings ?? [];
     this.store.set({ tab: 'results', viewMode: 'results', assumptions: warnings });
     this.viewer.current?.setMode('results');
+    // A real displacement is invisible at ×1, so a fresh Result opens exaggerated (design §5) —
+    // which `load` does through `requested`, defaulting to `"auto"`.
     await this.refresh(true);
-    // A real displacement is invisible at ×1, so a fresh Result opens exaggerated (design §5).
-    this.setDeformScale('auto');
   }
 }
 

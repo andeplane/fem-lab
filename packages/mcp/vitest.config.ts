@@ -8,8 +8,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**'],
-      // The process entry point: six lines of wiring that only running the binary exercises.
-      exclude: ['src/femlab-mcp.ts'],
+      // CLI and worker entrypoints are wiring exercised by built-process tests.
+      // QuickJS guest source is tested through QuickJS; V8 measures its host bridge only.
+      exclude: ['src/femlab-mcp.ts', 'src/script-worker.ts'],
       thresholds: { lines: 100, functions: 100, branches: 100, statements: 100 },
     },
   },

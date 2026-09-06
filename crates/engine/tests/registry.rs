@@ -539,6 +539,32 @@ fn rename_and_duplicate_follow_references() {
 }
 
 #[test]
+fn body_removal_preserves_volumetric_load_targets() {
+    for load in [
+        r#"{"cmd":"load.heatSource","name":"source","bodies":["heated"],"q":"100 W/m^3"}"#,
+        r#"{"cmd":"load.temperature","name":"source","bodies":["heated"],"value":"320 K","reference":"300 K"}"#,
+    ] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"two-bodies"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"heated","size":["1 m","1 m","1 m"]}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"],"at":["2 m","0 m","0 m"]}"#);
+        ok(&mut e, load);
+        let before = e.model().clone();
+        let failure = err(&mut e, r#"{"cmd":"geometry.remove","name":"heated"}"#);
+        assert_eq!(failure.code, ErrorCode::InUse);
+        assert_eq!(failure.where_.as_deref(), Some("body 'heated'"));
+        assert!(failure.cause.contains("load 'source'"));
+        assert!(failure.suggestion.as_deref().is_some_and(|s| s.contains("remove or retarget")));
+        assert_eq!(e.model(), &before);
+        // An unrelated Body remains removable while the load is present.
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"other"}"#);
+        ok(&mut e, r#"{"cmd":"load.remove","name":"source"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"heated"}"#);
+        assert!(e.model().bodies.is_empty());
+    }
+}
+
+#[test]
 fn geometry_add_and_subtract_shapes_and_sheets() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"g"}"#);
@@ -685,6 +711,33 @@ fn convert_query() {
             .code,
         ErrorCode::UnitUnknown
     );
+}
+
+/// Shared with the Node wasm regression: rejected inputs cannot change the saved Model or
+/// Journal. The expected errors cover numeric, factor and dimension overflow independently.
+#[test]
+fn invalid_quantities_preserve_the_model_and_journal() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!("fixtures/invalid-quantities.json")).unwrap();
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"quantity validation"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let hash = e.model_hash();
+    for case in fixture["commands"].as_array().unwrap() {
+        let error = run(&mut e, &case["input"].to_string()).unwrap_err();
+        assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
+        assert!(error.where_.is_some());
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+    for case in fixture["queries"].as_array().unwrap() {
+        let query: Query = serde_json::from_value(case["input"].clone()).unwrap();
+        let error = e.query(query).unwrap_err();
+        assert_eq!(serde_json::to_value(error.code).unwrap(), case["code"], "{case}");
+        assert!(error.where_.is_some());
+        assert_eq!(e.model_hash(), hash);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
 }
 
 #[test]
@@ -1685,6 +1738,23 @@ fn the_free_mesher_validates_its_body_its_size_and_its_boxes() {
     let er = e.query(Query::Mesh {}).unwrap_err();
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("mesher.size")));
     assert!(er.cause.contains("produced no triangle"), "{}", er.cause);
+    // the plate-with-hole sketch that panicked weka: the hole's fourth arc ends where its first
+    // one does, so the loop closes with a full circle. It fails at the segment, not at the size.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+          {"kind":"line","to":["100 mm","0 mm"],"tag":"xmax0"},{"kind":"line","to":["100 mm","80 mm"],"tag":"ymax"},
+          {"kind":"line","to":["0 mm","80 mm"],"tag":"xmin0"},{"kind":"line","to":["0 mm","0 mm"],"tag":"ymin"}],
+          "holes":[[{"kind":"arc","center":["50 mm","40 mm"],"to":["35 mm","40 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["50 mm","25 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["65 mm","40 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["35 mm","40 mm"],"ccw":true,"tag":"hole"}]]}}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"5 mm"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(er.cause.contains("a full circle"), "{}", er.cause);
+    assert!(er.suggestion.unwrap().contains("split the full-circle arc into two arcs"));
 }
 
 #[test]
@@ -2396,6 +2466,52 @@ fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
     assert_eq!(missing.code, ErrorCode::NotFound);
     let bad = e.field_named(Some("modes"), "wobble").expect_err("not a field");
     assert_eq!(bad.code, ErrorCode::Schema);
+}
+
+/// A modal model with every displacement DOF constrained has no reduced system to solve. The
+/// failed solve must be a structured model error, and the Engine must remain usable afterwards.
+#[test]
+fn a_modal_solve_with_no_free_dofs_returns_an_error_and_recovers() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"fully-fixed-modal"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    for (name, face) in [
+        ("xmin", "block.xmin"),
+        ("xmax", "block.xmax"),
+        ("ymin", "block.ymin"),
+        ("ymax", "block.ymax"),
+        ("zmin", "block.zmin"),
+        ("zmax", "block.zmax"),
+    ] {
+        ok(&mut e, &format!(r#"{{"cmd":"constraint.fix","name":"{name}","on":"{face}"}}"#));
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmin","xmax","ymin","ymax","zmin","zmax"],"loads":[],"nModes":2}"#,
+    );
+
+    let failure = err(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(failure.code, ErrorCode::ModelIllPosed);
+    assert_eq!(failure.where_.as_deref(), Some("constraints"));
+    assert!(failure.cause.contains("no free displacement DOF"), "{}", failure.cause);
+    assert_eq!(
+        failure.suggestion.as_deref(),
+        Some("constraint.remove on an over-constraining displacement constraint")
+    );
+
+    // The failed solve is transactional: reissuing the Step with five faces released and solving
+    // again works on the same Engine, so the worker did not abort or retain broken state.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmax"],"loads":[],"nModes":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(result_of(&mut e, Some("modes")).frequencies.len(), 2);
 }
 
 /// A Step that names an earlier one with `after` reads its temperature field: the
@@ -3631,4 +3747,47 @@ fn a_stale_result_is_labelled_in_the_report() {
     ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
     let md = report(&mut e, Some("static"), None).markdown;
     assert!(md.contains("| Up to date | no: the Model changed after the solve |"), "{md}");
+}
+
+#[test]
+fn guarded_undo_checks_the_whole_history_at_execution() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"guarded"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    let boundary = e.journal().entries.clone();
+    let guarded = serde_json::json!({"cmd":"journal.undo","steps":1,"expectedJournal":e.journal().hash()}).to_string();
+    ok(&mut e, &guarded);
+    assert_eq!(e.revision(), 1);
+    assert_eq!(run(&mut e, &guarded).unwrap_err().code, ErrorCode::InUse);
+    assert_eq!(e.revision(), 1);
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    ok(&mut e, &guarded);
+    // A rewrite with the same length and final model is a different Journal boundary.
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1000 mm","1 m","1 m"]}"#);
+    assert_eq!(e.model_hash(), boundary[1].hash_after);
+    let unchanged = e.journal().clone();
+    assert_eq!(run(&mut e, &guarded).unwrap_err().code, ErrorCode::InUse);
+    assert_eq!(e.journal(), &unchanged);
+    // A later human Command queued before the guarded undo cannot be removed by it.
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"human","size":["1 m","1 m","1 m"]}"#);
+    assert_eq!(run(&mut e, &guarded).unwrap_err().code, ErrorCode::InUse);
+    assert_eq!(e.revision(), 3);
+}
+
+#[test]
+fn journal_guard_uses_full_history_even_for_filtered_queries() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"hash"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"],"at":null}"#);
+    let QueryResult::Journal(full) = e.query(Query::Journal { from_seq: None }).unwrap() else { panic!() };
+    let QueryResult::Journal(tail) = e.query(Query::Journal { from_seq: Some(1) }).unwrap() else { panic!() };
+    assert_eq!(full.hash, tail.hash);
+    assert_eq!(tail.entries.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&tail.entries[0].cmd).unwrap(),
+        serde_json::json!({"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]})
+    );
+    let guarded = serde_json::json!({"cmd":"journal.undo","expectedJournal":tail.hash}).to_string();
+    ok(&mut e, &guarded);
+    assert_eq!(e.revision(), 1);
 }

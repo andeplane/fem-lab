@@ -58,16 +58,27 @@ export interface RunnerDeps {
 export class TutorialRunner {
   readonly tutorial: Tutorial;
   private stepIndex: number;
-  /** Journal `seq` of the entry that completed the current step; entries at or before it are
-   * from an earlier step (or from before the tutorial started) and cannot re-satisfy it. */
-  private watermark = -1;
+  /**
+   * How far into `entries` the tutorial has already been satisfied, as an **index**, not a
+   * `seq`. `Journal::append` sets `seq = entries.len()`, so a `seq` is an index too — but one
+   * that `model.new`, `journal.undo` and `file.restore` re-use when they rewrite the Journal.
+   * A watermark kept across such a rewrite becomes unreachable and the step stalls for good
+   * (issue #87). An index is clamped to the Journal's current length instead, and seeding it
+   * from the Journal length at construction is what stops entries that predate the tutorial
+   * from satisfying its steps.
+   */
+  private baseline: number;
+  /** What `restart` puts `baseline` back to: where this runner started reading. */
+  private readonly seed: number;
   private readonly deps: RunnerDeps;
   private readonly listeners = new Set<() => void>();
 
-  constructor(tutorial: Tutorial, deps: RunnerDeps, startAt = 0) {
+  constructor(tutorial: Tutorial, deps: RunnerDeps, startAt = 0, baseline = 0) {
     this.tutorial = tutorial;
     this.deps = deps;
     this.stepIndex = Math.min(Math.max(startAt, 0), tutorial.steps.length);
+    this.seed = Math.max(baseline, 0);
+    this.baseline = this.seed;
   }
 
   /**
@@ -75,7 +86,7 @@ export class TutorialRunner {
    * the Journal actually got. A saved position is a claim about the Model; the Journal is the
    * proof. Every earlier step that expects a Command must have it, in order, or the tutorial
    * starts over (issue #47: a stale `#tutorial=cantilever/3` over an empty Model put "Define
-   * the material" on screen with no beam to assign it to). The watermark lands on the last
+   * the material" on screen with no beam to assign it to). The baseline lands just past the last
    * matched entry, so those entries cannot satisfy a later step either.
    */
   static resume(
@@ -86,25 +97,25 @@ export class TutorialRunner {
   ): TutorialRunner {
     const fromHash = parseTutorialHash(hash);
     const wanted = fromHash && fromHash.id === tutorial.id ? fromHash.step : (savedStep(tutorial.id) ?? 0);
-    const { step, watermark } = TutorialRunner.provenStep(tutorial, entries, wanted);
-    const runner = new TutorialRunner(tutorial, deps, step);
-    runner.watermark = watermark;
+    const { step, baseline } = TutorialRunner.provenStep(tutorial, entries, wanted);
+    const runner = new TutorialRunner(tutorial, deps, step, baseline);
     if (step !== wanted) save(tutorial.id, step);
     return runner;
   }
 
-  /** The furthest step ≤ `wanted` whose predecessors all have their Command in the Journal. */
-  static provenStep(tutorial: Tutorial, entries: JournalEntry[], wanted: number): { step: number; watermark: number } {
-    let watermark = -1;
+  /** The furthest step ≤ `wanted` whose predecessors all have their Command in the Journal, and
+   * the index just past the entry that proved the last of them. */
+  static provenStep(tutorial: Tutorial, entries: JournalEntry[], wanted: number): { step: number; baseline: number } {
+    let baseline = 0;
     const limit = Math.min(Math.max(wanted, 0), tutorial.steps.length);
     for (let i = 0; i < limit; i++) {
       const expect = tutorial.steps[i]?.expect;
       if (!expect) continue;
-      const hit = entries.find((e) => e.seq > watermark && matches(e.cmd as { cmd: string } & Record<string, unknown>, expect));
-      if (!hit) return { step: i, watermark };
-      watermark = hit.seq;
+      const at = entries.findIndex((e, k) => k >= baseline && matches(e.cmd as { cmd: string } & Record<string, unknown>, expect));
+      if (at < 0) return { step: i, baseline };
+      baseline = at + 1;
     }
-    return { step: limit, watermark };
+    return { step: limit, baseline };
   }
 
   get step(): number {
@@ -131,19 +142,29 @@ export class TutorialRunner {
   }
 
   /**
-   * Feed the current Journal in; advances one step (and returns `true`) if a fresh entry (one
-   * whose `seq` is newer than the watermark) satisfies the current step's `expect`. A step
-   * without `expect` never advances here — see `next`.
+   * Feed the current Journal in; advances (and returns `true`) for every step whose `expect` is
+   * satisfied by an entry at or after the baseline. It loops, so a Journal that already answers
+   * three steps — a resume, an opened example, a replayed share link — walks through all three
+   * and notifies once; and a step whose Command is already journaled is *recognised* rather
+   * than re-issued, which is idempotence for free. A step without `expect` stops the walk —
+   * see `next`.
    */
   advanceIfMatched(entries: JournalEntry[]): boolean {
-    const step = this.currentStep;
-    if (!step?.expect) return false;
-    const hit = entries.find((e) => e.seq > this.watermark && matches(e.cmd as { cmd: string } & Record<string, unknown>, step.expect!));
-    if (!hit) return false;
-    this.watermark = hit.seq;
-    this.stepIndex += 1;
-    this.notify();
-    return true;
+    let moved = false;
+    for (;;) {
+      const step = this.currentStep;
+      if (!step?.expect) break;
+      // The Journal was rewritten (model.new, journal.undo, file.restore): indices at or beyond
+      // its new length no longer name anything, so the baseline follows it down (issue #87).
+      if (this.baseline > entries.length) this.baseline = entries.length;
+      const at = entries.findIndex((e, k) => k >= this.baseline && matches(e.cmd as { cmd: string } & Record<string, unknown>, step.expect!));
+      if (at < 0) break;
+      this.baseline = at + 1;
+      this.stepIndex += 1;
+      moved = true;
+    }
+    if (moved) this.notify();
+    return moved;
   }
 
   /** For a read-only step (`expect: null`): advance on the person's own "Next". */
@@ -163,7 +184,7 @@ export class TutorialRunner {
 
   restart(): void {
     this.stepIndex = 0;
-    this.watermark = -1;
+    this.baseline = this.seed;
     this.notify();
   }
 
