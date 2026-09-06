@@ -1,13 +1,19 @@
 {
   "name": "fem-lab",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "codegen": "node tools/codegen.mjs",
     "codegen:check": "node tools/codegen.mjs --check",
     "dev": "npm run dev -w packages/app",
     "build": "npm run build -w packages/app",
+    "size": "node tools/size-check.mjs",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "binaryen": "^132.0.0"
   }
 }

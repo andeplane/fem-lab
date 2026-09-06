@@ -3,11 +3,13 @@
 //   cargo build -p femlab-engine-wasm --target wasm32-unknown-unknown --profile wasm
 //   wasm-bindgen --target web    → packages/app/src/generated/wasm
 //   wasm-bindgen --target nodejs → tools/wasm-node
+//   wasm-opt -Oz on both outputs  (binaryen from node_modules, skipped when it is not there)
 // The wasm-bindgen CLI must match the crate version in Cargo.lock; a mismatch is a hard error
 // with the install command printed. Windows-safe: no shell, paths via node:path.
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, mkdirSync } from "node:fs";
+import { readFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -44,4 +46,31 @@ mkdirSync(webOut, { recursive: true });
 mkdirSync(nodeOut, { recursive: true });
 run("wasm-bindgen", ["--target", "web", "--out-dir", webOut, artifact]);
 run("wasm-bindgen", ["--target", "nodejs", "--out-dir", nodeOut, artifact]);
+
+// Shrink both outputs, never one: `tools/replay-wasm.mjs` hashes the Node module in CI, so the
+// module the browser ships is the module whose Journal hashes are checked against native.
+// `binaryen` is a devDependency; when it is absent (a Rust-only checkout, a `--dev` build) the
+// build still produces a working module and says which one you got.
+const OPT = ["-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"];
+const wasmOpt = (() => {
+  try {
+    return path.join(path.dirname(createRequire(import.meta.url).resolve("binaryen/package.json")), "bin", "wasm-opt");
+  } catch {
+    return "wasm-opt"; // whatever is on PATH; a missing one is reported below, not fatal
+  }
+})();
+const kb = (n) => `${(n / 1024).toFixed(0)} kB`;
+if (profile !== "dev") {
+  for (const out of [webOut, nodeOut]) {
+    const file = path.join(out, "femlab_engine_wasm_bg.wasm");
+    const before = statSync(file).size;
+    const r = spawnSync(wasmOpt, [...OPT, file, "-o", `${file}.opt`], { stdio: "inherit", cwd: root });
+    if (r.error || r.status !== 0) {
+      console.warn(`wasm-opt did not run (${r.error?.code ?? `exit ${r.status}`}); shipping the unoptimised module. \`npm i\` installs binaryen.`);
+      break;
+    }
+    renameSync(`${file}.opt`, file);
+    console.log(`wasm-opt -Oz ${path.basename(out)}: ${kb(before)} → ${kb(statSync(file).size)}`);
+  }
+}
 console.log(`built ${artifact}\n  web:  ${webOut}\n  node: ${nodeOut}`);

@@ -3,7 +3,6 @@
 // except through the transport, and nothing in the registry knows the DOM exists.
 import { FemError, type HostContext, type HostDef, type Selection } from '@femlab/registry';
 import { z } from 'zod';
-import { chatBridge } from './ai';
 import type { HostCaps } from './capabilities';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
@@ -100,8 +99,14 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       setSource: (code, append) => store.set({ scriptDraft: append === true ? `${store.state.scriptDraft ?? store.state.script}${code}` : code, tab: 'script' }),
     },
     // The drawer rebinds these the moment it mounts; until then they are no-ops, so a
-    // `chat.send` from a script or the palette never throws at a person.
-    chat: chatBridge,
+    // `chat.send` from a script or the palette never throws at a person. The `import()` keeps
+    // the two AI SDKs off the boot path: a static `chatBridge` import would drag `src/ai/**`,
+    // and with it @anthropic-ai/sdk and openai, into the landing chunk.
+    chat: {
+      send: (text) => void import('./ai').then((m) => m.chatBridge.send(text)),
+      insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
+      clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
+    },
     skills: () => [],
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {

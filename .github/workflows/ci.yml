@@ -75,6 +75,9 @@ jobs:
         run: |
           V=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | tail -1 | cut -d'"' -f2)
           cargo install --locked wasm-bindgen-cli --version "$V"
+      # `npm ci` first: `build-wasm.mjs` shrinks both outputs with binaryen's `wasm-opt`, and the
+      # `web` job's size budget is measured on the module this job uploads.
+      - run: npm ci
       - run: node tools/build-wasm.mjs
       - run: cargo build -p femlab --release
       - run: ./target/release/femlab schema --out engine.schema.json
@@ -128,9 +131,11 @@ jobs:
       - run: npm run typecheck
       - run: npm run test -w packages/registry
       - run: npm run test -w packages/app
-      # `postbuild` fails the job if an API key ever reaches dist/; the build prints the gzipped
-      # size of every chunk, which is the budget size-limit will gate on later.
+      # `postbuild` fails the job if an API key ever reaches dist/.
       - run: npm run build -w packages/app
+      # The bundle budget (plan C row 37): landing JS ≤ 1 MB gz, cold boot ≤ 3 MB gz. The table
+      # of every chunk with its raw and gzipped size goes in the log either way.
+      - run: npm run size
       - uses: actions/upload-artifact@v4
         with:
           name: dist

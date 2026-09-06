@@ -5,23 +5,28 @@
 import type { CommandDef, EngineSchema, JsonSchema, Registry } from '@femlab/registry';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/engine.schema.json';
-import { AssistantPanel } from '../ai';
 import { engineChip } from '../capabilities';
 import { fieldChoices, formatNumber, legendTicks } from '../fields';
 import type { ViewerRef } from '../host';
+import { lazy } from '../lazy';
 import { solveLabel, stageOf, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
-import { Viewer } from '../viewer/viewer';
+import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
 import { ExportModal } from './Export';
 import { Examples, Palette, Start } from './Overlays';
-import { Tour, TutorialPanel } from '../tutorial';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
 import { Cmd, useStore, type Dispatch } from './cmd';
 import { blockers, type Defs } from './schema';
 
 export type { Dispatch } from './cmd';
+
+// Three chunks that must not be on the boot path: the two AI SDKs, the tutorial runner and (in
+// `ViewerPane` below) three.js. Same import sites as before, one `import()` later.
+const AssistantPanel = lazy(() => import('../ai').then((m) => m.AssistantPanel));
+const TutorialPanel = lazy(() => import('../tutorial').then((m) => m.TutorialPanel));
+const Tour = lazy(() => import('../tutorial').then((m) => m.Tour));
 
 export interface AppProps {
   store: Store;
@@ -304,24 +309,34 @@ function ViewerPane({ s, dispatch, viewer }: { s: UiState; dispatch: Dispatch; v
   const [broken, setBroken] = useState('');
   const results = s.viewMode === 'results' && s.result !== null;
   useEffect(() => {
-    if (!canvas.current) return;
-    let v: Viewer;
-    try {
-      v = new Viewer(canvas.current);
-    } catch (e) {
-      // No WebGL2 is a fact about the browser, not a crash: say so and keep the rest usable.
-      setBroken(`This browser could not open a WebGL2 context: ${(e as Error).message}`);
-      return;
-    }
-    viewer.current = v;
-    v.onPick((p) => {
-      setProbe(probeLine(p));
-      if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
-    });
-    const onResize = () => v.resize();
-    addEventListener('resize', onResize);
+    const el = canvas.current;
+    if (!el) return;
+    // three.js is a lazy chunk, warmed by `main.tsx` the moment the shell paints, so by the time
+    // a Model exists this `import()` is already in the module cache.
+    let v: Viewer | null = null;
+    let gone = false;
+    const onResize = () => v?.resize();
+    void import('../viewer/viewer').then(({ Viewer }) => {
+      if (gone) return;
+      try {
+        v = new Viewer(el);
+      } catch (e) {
+        // No WebGL2 is a fact about the browser, not a crash: say so and keep the rest usable.
+        setBroken(`This browser could not open a WebGL2 context: ${(e as Error).message}`);
+        return;
+      }
+      viewer.current = v;
+      v.onPick((p) => {
+        setProbe(probeLine(p));
+        if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
+      });
+      addEventListener('resize', onResize);
+      // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
+    }, () => undefined);
     return () => {
+      gone = true;
       removeEventListener('resize', onResize);
+      if (!v) return;
       viewer.current = null;
       v.dispose();
     };
