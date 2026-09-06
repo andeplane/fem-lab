@@ -2817,8 +2817,8 @@ fn the_nafems_le1_membrane_reaches_its_target_stress() {
     }
 }
 
-/// NAFEMS LE10 at one in-plane mesh: `sigma_yy(D)` in MPa on the loaded surface above D.
-fn le10_stress(n: usize) -> f64 {
+/// ESRD full-face-support LE10 variant at one mesh: `sigma_yy(D)` in MPa on the loaded surface above D.
+fn le10_stress(n: usize, layers: usize) -> f64 {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"le10"}"#);
     ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"MPa","force":"N"}}"#);
@@ -2827,7 +2827,7 @@ fn le10_stress(n: usize) -> f64 {
         &mut e,
         &format!(
             r#"{{"cmd":"mesh.set","mesher":{{"kind":"sweep","base":{{"kind":"mapped","body":"plate","blocks":[{}]}},
-               "sweep":{{"kind":"extrude","layers":4,"height":"0.6 m"}}}},"order":2}}"#,
+               "sweep":{{"kind":"extrude","layers":{layers},"height":"0.6 m"}}}},"order":2}}"#,
             le1_block(n)
         ),
     );
@@ -2844,12 +2844,13 @@ fn le10_stress(n: usize) -> f64 {
     probe_value(&mut e, Field::Stress, 1, ["2 m", "0 m", "0.6 m"])
 }
 
-/// D1: the thick plate's −5.38 MPa, hex20, by the same point-value rule over two meshes.
+/// D1: ESRD's full-face-support variant (Benchmarks Guide pp. 29–31), −5.25 MPa.
+/// The original NAFEMS mid-plane-line support is a different problem (−5.38 MPa).
 #[test]
-fn the_nafems_le10_thick_plate_reaches_its_target_stress() {
-    let coarse = rel(le10_stress(6), -5.38);
-    let fine = rel(le10_stress(12), -5.38);
-    assert!(fine < 0.02, "hex20 at n = 12 is {:.2} % from -5.38 MPa", fine * 100.0);
+fn the_le10_full_face_variant_reaches_its_independent_target_stress() {
+    let coarse = rel(le10_stress(6, 2), -5.25);
+    let fine = rel(le10_stress(12, 8), -5.25);
+    assert!(fine < 0.02, "hex20 at 12 x 12 x 8 is {:.2} % from ESRD -5.25 MPa", fine * 100.0);
     assert!(fine < coarse, "the error must fall with the mesh: {coarse} then {fine}");
 }
 

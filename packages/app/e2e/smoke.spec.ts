@@ -11,7 +11,73 @@ async function ready(page: Page): Promise<void> {
   await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
+async function expectCanvasSized(page: Page): Promise<void> {
+  await expect
+    .poll(() =>
+      page.locator('.viewer canvas').evaluate((el) => {
+        const canvas = el as HTMLCanvasElement;
+        const scale = Math.min(devicePixelRatio, 2);
+        return [canvas.width - Math.round(canvas.clientWidth * scale), canvas.height - Math.round(canvas.clientHeight * scale)];
+      }),
+    )
+    .toEqual([0, 0]);
+}
+
 test.describe('@cpu the shell', () => {
+  test('Assistant stays on the right and spans the workspace when toggled', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.model.new({ name: 'assistant-layout' }));
+    for (const width of [1600, 1494, 1280, 1180, 1100]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expectCanvasSized(page);
+      for (let cycle = 0; cycle < 2; cycle++) {
+        await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
+        const assistant = page.locator('.assistant');
+        await expect(assistant).toBeVisible();
+        const drawer = (await assistant.boundingBox())!;
+        const workspace = (await page.locator('.workspace').boundingBox())!;
+        const properties = (await page.locator('.workspace > .panel').last().boundingBox())!;
+        const banner = (await page.locator('.banner').boundingBox())!;
+        expect(drawer.width).toBe(392);
+        expect(drawer.y).toBe(workspace.y);
+        expect(drawer.height).toBe(workspace.height);
+        expect(drawer.x + drawer.width).toBe(width);
+        expect(banner.x + banner.width).toBe(width);
+        if (width >= 1494) {
+          expect(drawer.x).toBe(properties.x + properties.width);
+        } else {
+          expect(properties.x + properties.width).toBe(width);
+        }
+        expect(drawer.x).toBeGreaterThanOrEqual(workspace.x);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+        await expectCanvasSized(page);
+        await assistant.getByTitle('Close the assistant', { exact: true }).click();
+        await expect(assistant).toBeHidden();
+        const centre = (await page.locator('.centre').boundingBox())!;
+        expect(centre.y).toBe(workspace.y);
+        expect(centre.height).toBe(workspace.height);
+        await expectCanvasSized(page);
+      }
+    }
+
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
+    await expect(page.locator('.banner')).toHaveCount(0);
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await expectCanvasSized(page);
+    await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
+    const assistant = page.locator('.assistant');
+    await expect(assistant).toBeVisible();
+    const drawer = (await assistant.boundingBox())!;
+    const workspace = (await page.locator('.workspace').boundingBox())!;
+    expect(drawer.y).toBe(workspace.y);
+    expect(drawer.height).toBe(workspace.height);
+    await expectCanvasSized(page);
+    await assistant.getByTitle('Close the assistant', { exact: true }).click();
+    await expect(assistant).toBeHidden();
+    await expectCanvasSized(page);
+  });
+
   test('boots, builds a Model from window.fem, and shows it', async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
@@ -69,6 +135,28 @@ test.describe('@cpu the shell', () => {
 
     await testInfo.attach('shell.png', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
     expect(errors).toEqual([]);
+  });
+
+  test('collapsing the Assistant preserves its draft, references and transcript', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.model.new({ name: 'assistant-collapse' }));
+    await page.evaluate(() => window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] }));
+    await expect(page.locator('.assistant')).toHaveCount(0);
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
+    const drawer = page.locator('.assistant');
+    await expect(drawer).toBeVisible();
+    await drawer.locator('textarea').fill('Check the beam');
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'chat.insertMention', ref: 'body:beam' }));
+    await expect(drawer.locator('.token')).toContainText('@body:beam');
+    await drawer.locator('button.send').click();
+    await expect(drawer.locator('.bad-line')).toContainText('API key');
+    await drawer.locator('button[title="Close the assistant"]').click();
+    await expect(drawer).toBeHidden();
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
+    await expect(drawer.locator('.bad-line')).toContainText('API key');
+    await expect(drawer.locator('textarea')).toHaveValue('Check the beam');
+    await expect(drawer.locator('.token')).toContainText('@body:beam');
   });
 
   test('opens the bundled cantilever example as its own Journal', async ({ page }) => {
