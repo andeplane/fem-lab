@@ -22,7 +22,7 @@ vi.mock('../src/viewer/viewer', () => ({
 // their modules directly, not through these index files, and are unaffected.
 vi.mock('../src/ai', () => ({
   AssistantPanel: () => null,
-  chatBridge: { send: () => undefined, insertMention: () => undefined, clear: () => undefined },
+  chatBridge: { send: () => undefined, insertMention: () => undefined, setDraft: () => undefined, clear: () => undefined },
 }));
 vi.mock('../src/tutorial', () => ({
   TutorialPanel: () => null,
