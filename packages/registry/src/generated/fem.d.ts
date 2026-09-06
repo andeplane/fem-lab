@@ -216,7 +216,8 @@ export interface Fem {
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**
      * Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
-     * stay in the Model and can be reused by other Steps.
+     * stay in the Model and can be reused by other Steps. Fails with `in-use` while another
+     * Step names it in `after`; re-issue that dependent Step without the reference first.
      */
     remove(args: Omit<Extract<Command, { cmd: 'step.remove' }>, 'cmd'>): Promise<Ack>;
     /**
