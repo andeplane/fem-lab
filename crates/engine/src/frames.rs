@@ -115,10 +115,20 @@ impl Engine {
     pub(crate) fn query_frame(
         &self,
         step: Option<&str>,
-        index: u32,
+        index: Option<u32>,
+        sample: Option<FrameSample>,
         field: Option<Field>,
     ) -> Result<FrameResult, Error> {
-        let (values, sample, field) = self.sampled_frame(step, field, &FrameSample::Frame { index })?;
+        let selected = match (index, sample) {
+            (Some(index), None) => FrameSample::Frame { index },
+            (None, Some(sample)) => sample,
+            _ => {
+                return Err(Error::new(ErrorCode::Schema, "query.frame requires exactly one of index or sample")
+                    .at("sample")
+                    .suggest("query.frames, then query.frame with index or a physical-time sample"));
+            }
+        };
+        let (values, sample, field) = self.sampled_frame(step, field, &selected)?;
         Ok(FrameResult {
             sample,
             field,

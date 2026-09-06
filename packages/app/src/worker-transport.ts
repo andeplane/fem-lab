@@ -1,7 +1,7 @@
 // `EngineTransport` over a Worker. Calls are serialised (the engine is single-instance and
 // `&mut self`), progress is routed back to the caller, and cancel is terminate + recreate +
 // replay of the Journal so far (plan B §4.2, §5.3).
-import type { Ack, Command, EngineTransport, ExportSpec, ExportedFile, Field, FieldData, ModelFile, Progress, Query, QueryResult, Surface } from '@femlab/registry';
+import type { Ack, Command, EngineTransport, ExportSpec, ExportedFile, Field, FieldData, FrameResult, ModelFile, Progress, Query, QueryResult, Surface } from '@femlab/registry';
 import { FemError, decodeBulk } from '@femlab/registry';
 import type { AppOp, AppReq, AppRes } from './protocol';
 
@@ -75,7 +75,14 @@ export class WorkerTransport implements EngineTransport {
   }
 
   async query(q: Query): Promise<QueryResult> {
-    return (await this.call('query', q)) as QueryResult;
+    const value = await this.call('query', q);
+    if (q.query === 'query.frame') {
+      const frame = value as Omit<FrameResult, 'values'> & { values: Float64Array };
+      // The public schema is JSON (number[]), in every host. The wire uses an f64 staging
+      // buffer only; converting here preserves scientific precision and the registry type.
+      return { ...frame, values: Array.from(frame.values) };
+    }
+    return value as QueryResult;
   }
 
   async surface(): Promise<AppSurface> {

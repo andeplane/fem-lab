@@ -4296,3 +4296,50 @@ fn retained_frames_sample_selection_errors_and_staleness_are_read_only() {
         }
     }
 }
+
+#[test]
+fn frame_payload_time_selection_uses_the_same_resolver_as_sampled_probes() {
+    let mut e = engine();
+    frame_ramp(&mut e, 2, 2, 0.1, 0.35, 2);
+    let before = e.journal().clone();
+    let indexed = frame_query(&mut e, serde_json::json!({"query":"query.frame","index":1})).unwrap();
+    for sample in [
+        serde_json::json!({"kind":"frame","index":1}),
+        serde_json::json!({"kind":"time","time":"175 ms","sampling":"exact"}),
+        serde_json::json!({"kind":"time","time":"180 ms","sampling":"nearest"}),
+        // Exact midpoint between retained 0.175 and 0.35 s resolves to the earlier frame.
+        serde_json::json!({"kind":"time","time":"262.5 ms","sampling":"nearest"}),
+    ] {
+        let frame = frame_query(&mut e, serde_json::json!({"query":"query.frame","sample":sample})).unwrap();
+        assert_eq!(frame, indexed);
+        for node in frame["values"].as_array().unwrap().chunks_exact(3) {
+            assert!((node[0].as_f64().unwrap() - 0.175).abs() < 1e-10);
+        }
+    }
+    for query in [
+        serde_json::json!({"query":"query.frame"}),
+        serde_json::json!({"query":"query.frame","index":0,"sample":{"kind":"frame","index":0}}),
+    ] {
+        assert_eq!(frame_query(&mut e, query).unwrap_err().code, ErrorCode::Schema);
+    }
+    for sample in [
+        serde_json::json!({"kind":"time","time":"180 ms","sampling":"exact"}),
+        serde_json::json!({"kind":"time","time":"400 ms","sampling":"nearest"}),
+        serde_json::json!({"kind":"frame","index":999}),
+    ] {
+        assert_eq!(
+            frame_query(&mut e, serde_json::json!({"query":"query.frame","sample":sample})).unwrap_err().code,
+            ErrorCode::NotFound
+        );
+    }
+    assert_eq!(
+        frame_query(
+            &mut e,
+            serde_json::json!({"query":"query.frame","sample":{"kind":"time","time":"1 m","sampling":"exact"}})
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::UnitDimension
+    );
+    assert_eq!(e.journal(), &before);
+}

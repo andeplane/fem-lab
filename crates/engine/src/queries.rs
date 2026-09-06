@@ -71,8 +71,8 @@ impl Engine {
                 Ok(QueryResult::Result(self.result_summary(&name)))
             }
             Query::Frames { step } => self.query_frames(step.as_deref()).map(QueryResult::Frames),
-            Query::Frame { step, index, field } => {
-                self.query_frame(step.as_deref(), index, field).map(QueryResult::Frame)
+            Query::Frame { step, index, sample, field } => {
+                self.query_frame(step.as_deref(), index, sample, field).map(QueryResult::Frame)
             }
             Query::Probe { step, field, component, sample, at } => {
                 self.query_probe(step.as_deref(), field, component, sample.as_ref(), at).map(QueryResult::Probe)
