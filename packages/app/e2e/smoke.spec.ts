@@ -21,6 +21,15 @@ test.describe('@cpu the shell', () => {
     // The start screen is up before the engine is.
     await expect(page.getByText('Open an example')).toBeVisible();
     const painted = Date.now() - t0;
+    const loadedFonts = await page.evaluate(async () => {
+      const specs = ["400 12px 'IBM Plex Sans'", "500 12px 'IBM Plex Sans'", "600 12px 'IBM Plex Sans'", "400 12px 'IBM Plex Mono'", "500 12px 'IBM Plex Mono'", "600 12px 'IBM Plex Mono'"];
+      await Promise.all(specs.map((spec) => document.fonts.load(spec)));
+      await document.fonts.ready;
+      return [...document.fonts].filter((font) => font.status === 'loaded').map((font) => `${font.family}:${font.weight}`);
+    });
+    for (const family of ['IBM Plex Sans', 'IBM Plex Mono']) {
+      for (const weight of ['400', '500', '600']) expect(loadedFonts).toContain(`${family}:${weight}`);
+    }
     await ready(page);
     // `store.ready` flips the start screen's build control; before it, `model.new` is disabled
     // (asserting *that* would be a race against a fast engine, so only the flip is checked).

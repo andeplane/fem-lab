@@ -1,5 +1,5 @@
-/* The design tokens of docs/design/README.md as CSS variables. IBM Plex if the machine has it,
-   otherwise the system stack: nothing is fetched at runtime (no Google Fonts). */
+/* The design tokens of docs/design/README.md as CSS variables. IBM Plex is bundled by main.tsx;
+   the system stacks below cover the brief interval while its local font files load. */
 :root {
   --bg-page: #0a0b0e;
   --bg-panel: #101218;
