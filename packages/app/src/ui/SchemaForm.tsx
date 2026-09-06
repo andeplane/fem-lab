@@ -291,13 +291,18 @@ export function SchemaForm(props: FormProps) {
   const cmd = { cmd: form.cmd, ...form.values };
   const name = String(form.values['name'] ?? '—');
   const label = applyLabel(form.cmd);
+  const apply = (): void => {
+    store.set({ formError: null });
+    void dispatch(cmd as { cmd: string }).catch(() => store.set({ formError: store.state.lastError }));
+  };
   return (
     <aside class="panel props">
       <div class="panel-head">
         <span class="section-label">Properties</span>
         <span class="mono panel-sub">{form.cmd}</span>
       </div>
-      <div class="props-body">
+      {/* A real form, so ↵ in any field is Apply — the design's "one Apply = one Command". */}
+      <form class="props-body" onSubmit={(e) => (e.preventDefault(), apply())}>
         <div class="prop-name">
           <span class="mono">{name}</span>
           <Cmd dispatch={dispatch} cmd="clipboard.copy" class="link" args={{ what: { kind: 'mention', ref: `${form.cmd.split('.')[0]}:${name}` } }}>
@@ -327,10 +332,7 @@ export function SchemaForm(props: FormProps) {
               class="apply"
               args={form.values}
               title={form.cmd}
-              onRun={() => {
-                store.set({ formError: null });
-                void dispatch(cmd as { cmd: string }).catch(() => store.set({ formError: store.state.lastError }));
-              }}
+              onRun={apply}
             >
               {label}
             </Cmd>
@@ -339,7 +341,7 @@ export function SchemaForm(props: FormProps) {
             </Cmd>
           </div>
         </div>
-      </div>
+      </form>
     </aside>
   );
 }

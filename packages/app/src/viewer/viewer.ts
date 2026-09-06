@@ -54,6 +54,8 @@ export interface LegendBurn {
   min: number;
   max: number;
   colormap: ColormapName;
+  /** Pixels per CSS pixel for a saved image: the export dialog's 1× / 2×. */
+  scale?: number;
 }
 
 const GREY_GEOMETRY = 0.58;
@@ -118,6 +120,10 @@ export class Viewer {
   private box = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
   private pickCb: ((p: Pick | null) => void) | null = null;
   private frame = 0;
+  /** The last displacement handed to `setDeformed`, and the scale it was drawn at, so the
+   *  animation can sweep the same array without the host re-fetching it every frame. */
+  private deformation: Float32Array | null = null;
+  private deformScale = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
@@ -319,6 +325,12 @@ export class Viewer {
 
   /** `position = X + scale·u`, on the CPU; the Result never changes, only the drawing. */
   setDeformed(displacement: Float32Array | null, scale: number): void {
+    this.deformation = displacement;
+    this.deformScale = scale;
+    this.drawDeformed(displacement, scale);
+  }
+
+  private drawDeformed(displacement: Float32Array | null, scale: number): void {
     const geom = this.mesh?.geometry;
     if (!geom) return;
     const pos = geom.getAttribute('position') as BufferAttribute;
@@ -366,15 +378,31 @@ export class Viewer {
     this.render();
   }
 
-  /** Keeps rendering while something moves; the Command exists so the play button is callable. */
-  animate(playing: boolean): void {
+  /**
+   * The design's ▶ on the deformation bar: sweep the drawn deformation through
+   * `A·sin(2π f t)` and back, one second a cycle at `speed` 1. That is exactly right for a
+   * mode shape, which is defined only up to an amplitude; a transient Result keeps only its
+   * final field (the engine stores no per-frame arrays), so there the sweep is the amplitude
+   * growing and shrinking, not a replay of the history — the bar says so.
+   *
+   * Pausing puts the shape back where `setDeformed` left it, so a paused viewer and a viewer
+   * that never played show the same picture.
+   */
+  animate(playing: boolean, speed = 1): void {
     cancelAnimationFrame(this.frame);
-    if (!playing) return;
+    if (!playing) return void this.drawDeformed(this.deformation, this.deformScale);
+    const t0 = performance.now();
     const step = () => {
-      this.render();
+      this.drawDeformed(this.deformation, this.deformScale * Math.sin(((performance.now() - t0) / 1000) * speed * 2 * Math.PI));
       this.frame = requestAnimationFrame(step);
     };
     this.frame = requestAnimationFrame(step);
+  }
+
+  /** Where in one sweep the shape sits, as a phase in turns: what the scrub slider sets. */
+  setPhase(turns: number): void {
+    cancelAnimationFrame(this.frame);
+    this.drawDeformed(this.deformation, this.deformScale * Math.sin(turns * 2 * Math.PI));
   }
 
   fit(): void {
@@ -412,7 +440,24 @@ export class Viewer {
    * its own, and the HTML legend is not part of the WebGL canvas.
    */
   screenshot(legend?: LegendBurn): string {
+    const scale = Math.max(1, Math.min(4, legend?.scale ?? 1));
+    // ponytail: 2× re-renders at double the drawing-buffer size and puts it back. Enough for a
+    // report figure; a genuinely large plate (4× of a 4k canvas) wants an offscreen target.
+    const restore = scale === 1 ? null : this.renderer.getPixelRatio();
+    if (restore !== null) {
+      this.renderer.setPixelRatio(restore * scale);
+      this.renderer.setSize(this.canvas.clientWidth || 640, this.canvas.clientHeight || 480, false);
+    }
     this.render();
+    const png = this.burn(legend);
+    if (restore !== null) {
+      this.renderer.setPixelRatio(restore);
+      this.resize();
+    }
+    return png;
+  }
+
+  private burn(legend?: LegendBurn): string {
     if (!legend) return this.canvas.toDataURL('image/png');
     const out = document.createElement('canvas');
     out.width = this.canvas.width;

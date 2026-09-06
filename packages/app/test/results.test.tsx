@@ -127,9 +127,11 @@ describe('the Results tab', () => {
     const root = document.createElement('div');
     const path: PathResult = { s: [0, 1, 2], values: [0, 1, 2], unit: 'MPa' };
     render(<PathPlot path={path} />, root);
-    expect(root.querySelector('polyline')?.getAttribute('points')).toBe('0,60 110,32 220,4');
+    // Left axis at x = 46, right margin 8, top 10, bottom 20 of a 260 x 108 viewBox.
+    expect(root.querySelector('polyline')?.getAttribute('points')).toBe('46,88 149,49 252,10');
+    expect(root.textContent).toContain('hover to read a point');
     render(<PathPlot path={{ s: [0, 1], values: [null, null], unit: 'MPa' }} />, root);
-    expect(root.textContent).toContain('left the mesh');
+    expect(root.textContent).toContain('Not enough points to plot');
   });
 });
 

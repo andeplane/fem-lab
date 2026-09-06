@@ -21,6 +21,9 @@ export interface CmdProps {
   title?: string;
   disabled?: boolean;
   pressed?: boolean;
+  /** `role="tab"` with `selected`, for the bottom panel's strip; anything else is a button. */
+  role?: 'tab';
+  selected?: boolean;
   /** Runs instead of `dispatch` when the click needs a fallback (the `@` button's copy). */
   onRun?: () => void;
   children: ComponentChildren;
@@ -34,6 +37,8 @@ export function Cmd({ dispatch, cmd, args, children, onRun, ...rest }: CmdProps)
       class={rest.class}
       title={rest.title ?? cmd}
       disabled={rest.disabled ?? false}
+      {...(rest.role === undefined ? {} : { role: rest.role })}
+      {...(rest.selected === undefined ? {} : { 'aria-selected': rest.selected })}
       {...(rest.pressed === undefined ? {} : { 'aria-pressed': rest.pressed })}
       onClick={(e) => {
         e.stopPropagation();

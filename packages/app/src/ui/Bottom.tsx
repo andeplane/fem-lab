@@ -110,9 +110,9 @@ export function Bottom({ s, store, dispatch, query }: { s: UiState; store: Store
   };
   return (
     <section class="bottom">
-      <div class="tabs" role="tablist">
+      <div class="tabs" role="tablist" aria-label="results panel">
         {TABS.map((t) => (
-          <Cmd key={t} dispatch={dispatch} cmd="panel.toggle" class={s.tab === t ? 'tab active' : 'tab'} args={{ panel: t, open: true }} title={`panel.toggle ${t}`} pressed={s.tab === t}>
+          <Cmd key={t} dispatch={dispatch} cmd="panel.toggle" class={s.tab === t ? 'tab active' : 'tab'} args={{ panel: t, open: true }} title={`panel.toggle ${t}`} role="tab" selected={s.tab === t}>
             {t}
             <span class="count mono">{counts[t]}</span>
           </Cmd>

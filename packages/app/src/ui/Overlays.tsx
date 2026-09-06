@@ -58,7 +58,7 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
     void (requiredOf(def).length === 0 ? dispatch({ cmd: def.name }).then(() => dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })) : Promise.resolve(fill(def))).catch(() => undefined);
   return (
     <div class="overlay" onClick={() => void dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })}>
-      <div class="palette" onClick={(e) => e.stopPropagation()}>
+      <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette" onClick={(e) => e.stopPropagation()}>
         <div class="palette-head">
           <span class="mono prompt">›</span>
           <input
@@ -116,7 +116,7 @@ export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (!open) return null;
   return (
     <div class="overlay wide" onClick={() => void dispatch({ cmd: 'panel.toggle', panel: 'examples', open: false })}>
-      <div class="gallery" onClick={(e) => e.stopPropagation()}>
+      <div class="gallery" role="dialog" aria-modal="true" aria-label="Examples and benchmarks" onClick={(e) => e.stopPropagation()}>
         <div class="gallery-head">
           <span class="gallery-title">Examples &amp; benchmarks</span>
           <span class="gallery-sub">Each one opens as a Journal you can read, edit and rerun. Reference values ship with the app.</span>

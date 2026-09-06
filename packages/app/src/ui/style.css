@@ -82,6 +82,12 @@ textarea:focus {
   outline: none;
   border-color: var(--cyan-border);
 }
+/* A visible focus ring on every keyboard stop: the design's borders alone are below 3:1. */
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+  border-radius: var(--radius);
+}
 
 .mono {
   font-family: var(--mono);
@@ -134,11 +140,13 @@ textarea:focus {
   display: grid;
   grid-template-rows: auto 1fr;
   min-height: 0;
+  min-width: 0;
 }
 .workspace {
   display: grid;
   grid-template-columns: 274px minmax(520px, 1fr) 308px;
   min-height: 0;
+  min-width: 0;
 }
 .panel {
   display: flex;
@@ -172,6 +180,16 @@ textarea:focus {
   padding: 0 12px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-panel);
+  /* A grid item's `min-width: auto` is its min-content, which would let the bar widen the
+     whole shell instead of giving way; the search field is what gives way instead. */
+  min-width: 0;
+  overflow: hidden;
+}
+/* Flex's default `shrink: 1` squeezed the logo, the Solve button and the undo glyphs to
+   nothing at 1440 px. Nothing in a 46 px bar may wrap; only the search field gives way. */
+.topbar > * {
+  flex: none;
+  white-space: nowrap;
 }
 .logo {
   display: flex;
@@ -198,7 +216,8 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 330px;
+  flex: 0 1 330px;
+  min-width: 96px;
   height: 28px;
   padding: 0 9px;
   background: var(--bg-page);
@@ -210,6 +229,9 @@ textarea:focus {
 }
 .palette-field span:first-child {
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chip {
   display: inline-flex;
@@ -420,6 +442,7 @@ textarea:focus {
 }
 .chip-add {
   display: inline-block;
+  flex: none;
   white-space: nowrap;
   font-size: 11px;
   color: var(--cyan);
@@ -476,21 +499,27 @@ textarea:focus {
   width: 100%;
   height: 100%;
 }
+/* The legend starts at top 56, below the 28 px toolbar, so the toolbar may use the full width;
+   only the selection chip under it has to keep clear of the legend. */
 .viewer-chrome {
   position: absolute;
   top: 10px;
   left: 10px;
-  right: 190px;
+  right: 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   align-items: flex-start;
+  max-width: calc(100% - 20px);
 }
 .viewer-toolbar {
   display: flex;
   gap: 6px;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
   padding: 4px 6px;
   background: #101218cc;
   backdrop-filter: blur(6px);
@@ -506,11 +535,17 @@ textarea:focus {
 .toggle:hover {
   color: var(--cyan);
 }
+.viewer-toolbar > * {
+  flex: none;
+}
 .selection-chip {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 100%;
+  max-width: calc(100% - 180px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 4px 8px;
   background: var(--cyan-bg);
   border: 1px solid var(--cyan-border);
@@ -545,7 +580,8 @@ textarea:focus {
   gap: 6px;
   margin-top: 8px;
 }
-.legend .swatches button {
+/* The colour-map swatches are fixed 34 x 12 chips; the two clamp chips beside them are not. */
+.legend .swatches button:not(.chip-add) {
   width: 34px;
   height: 12px;
   border: 1px solid transparent;
@@ -1541,6 +1577,24 @@ button.solve.stale {
 .rtable td.n {
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The action column is as wide as its chip and no wider; without this the table squeezed the
+   chip below its own text and "go to" spilled out of its dashed border. */
+.rtable td:last-child {
+  width: 1%;
+  white-space: nowrap;
+}
+/* The one cell allowed to wrap: three coordinates and a unit, which is what gives the
+   "go to" chip beside it room to stay on screen in a 409 px column. */
+.rtable td.loc {
+  text-align: right;
+  white-space: normal;
+}
+/* A wide table scrolls inside its own column rather than pushing the panel wider. */
+.rtable-wrap {
+  overflow-x: auto;
+  max-width: 100%;
 }
 .rtable tr.peak td {
   color: var(--accent-bright);
@@ -1605,14 +1659,29 @@ button.solve.stale {
   font-size: 11.5px;
   color: var(--cyan-text);
 }
+.chart {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 300px;
+}
 .plot {
   width: 100%;
-  max-width: 260px;
-  height: 76px;
+  max-width: 300px;
+  height: 118px;
 }
 .plot text {
   fill: var(--text-faint);
-  font-size: 9px;
+  font-size: 8px;
+}
+.chart-readout {
+  font-size: 10.5px;
+  color: var(--text-low);
+  min-height: 15px;
+}
+.deform-bar input[type='range'].phase {
+  width: 72px;
+  accent-color: var(--cyan);
 }
 .kv {
   display: grid;
@@ -1684,4 +1753,63 @@ button.solve.stale {
   display: flex;
   justify-content: flex-end;
   padding: 10px 16px 0;
+}
+
+/* ── narrow desktops ───────────────────────────────────────────────────────────────────── */
+/* The design is drawn for ≥ 1180 px. Below that the panels give way rather than the page
+   growing a horizontal scrollbar: the tree and Properties narrow, the viewer keeps its
+   minimum, and the assistant drawer floats over the workspace instead of taking a column. */
+@media (max-width: 1179px) {
+  .shell {
+    min-width: 0;
+  }
+  /* The search field becomes its own ⌘K chip, which is the ~290 px the right-hand cluster
+     needs to stay on screen; the bar still scrolls if a longer model name eats that too. */
+  .topbar {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .palette-field {
+    flex: none;
+    min-width: 0;
+  }
+  .palette-field span:first-child {
+    display: none;
+  }
+  /* The two read-only passengers stand down so every button stays clickable: the engine chip
+     repeats the start screen's capability line, and the units are `model.setUnits` in ⌘K. */
+  .topbar > .chip,
+  .topbar > .segmented {
+    display: none;
+  }
+  .workspace {
+    grid-template-columns: 210px minmax(360px, 1fr) 260px;
+  }
+  .centre {
+    grid-template-rows: minmax(320px, 1fr) 220px;
+  }
+  .assistant {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    box-shadow: 0 0 40px #000000cc;
+  }
+  .workspace {
+    position: relative;
+  }
+  .results {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .export-cmd {
+    display: none;
+  }
+  /* The legend clears the bottom of a 700 px viewer, so the bar takes the full width. */
+  .deform-bar {
+    right: 10px;
+    left: 10px;
+    justify-content: flex-end;
+  }
 }

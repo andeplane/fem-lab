@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import schema from '../../../registry/src/generated/engine.schema.json';
 import { AssistantPanel } from '../ai';
 import { engineChip } from '../capabilities';
-import { fieldChoices, formatNumber, legendTicks } from '../fields';
+import { choiceOf, fieldChoices, formatNumber, legendTicks } from '../fields';
 import type { ViewerRef } from '../host';
 import { solveLabel, stageOf, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
@@ -49,7 +49,8 @@ const SI = { length: 'm', force: 'N', stress: 'Pa' };
 function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0);
   const step = s.model?.steps[0]?.name ?? '';
-  const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : '';
+  // Design state 7: while an error card stands, Solve is disabled and carries the same code.
+  const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : s.lastError ? `${s.lastError.code} ${s.lastError.cause}` : '';
   const mm = s.model?.units.length === 'mm';
   const stage = stageOf(s);
   return (
@@ -216,12 +217,12 @@ async function sendToAssistant(dispatch: Dispatch, text: string): Promise<void> 
 function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const l = s.legend;
   if (!l) return null;
-  const choices = fieldChoices(s.result?.extremes.map((e) => e.field) ?? []);
+  const choices = fieldChoices(s.result?.extremes.map((e) => e.field) ?? [], s.result?.frequencies?.length ?? 0, s.yieldStress !== null);
   const ticks = legendTicks(l.min, l.max);
   return (
     <div class="legend">
       <div class="legend-head">
-        <span class="legend-field mono">{s.fieldKey}</span>
+        <span class="legend-field mono">{choiceOf(s.fieldKey).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
         <span class="legend-sub mono">
           {s.result?.step} · deformed ×{formatNumber(s.deformScale)}
@@ -269,13 +270,53 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
-/** The deformation bar: play, the scale slider, true scale, and the screenshot. */
-function DeformBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+/**
+ * The deformation bar: play / pause, the phase scrub, the scale slider, true scale and the
+ * screenshot. ▶ sweeps the drawn shape through `A·sin(2πt)`, which is what a mode shape means;
+ * a transient Result keeps only its final field, so the sweep there is the amplitude rather
+ * than a replay of the history, and the bar's own title says so.
+ */
+function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+  const step = s.result?.step ?? '';
+  const mode = choiceOf(s.fieldKey).mode;
+  const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
+  const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
   return (
     <div class="deform-bar">
-      <Cmd dispatch={dispatch} cmd="view.animate" class="tbutton" args={{ step: s.result?.step ?? '', playing: true }} title="animate the deformation">
-        ▶
+      <Cmd
+        dispatch={dispatch}
+        cmd="view.animate"
+        class="tbutton"
+        args={{ step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }}
+        pressed={s.playing}
+        title={s.playing ? 'pause' : `sweep ${what}`}
+        onRun={() => {
+          store.set({ playing: !s.playing });
+          void dispatch({ cmd: 'view.animate', step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
+        }}
+      >
+        {s.playing ? '❚❚' : '▶'}
       </Cmd>
+      {sweeps ? (
+        <input
+          type="range"
+          class="phase"
+          min="0"
+          max="100"
+          step="2"
+          aria-label="animation phase"
+          data-cmd="view.animate"
+          value={String(Math.round(s.phase * 100))}
+          onInput={(e) => {
+            const turns = Number((e.target as HTMLInputElement).value) / 100;
+            // The Command carries the frame so a script and the AI can scrub too; the local
+            // call is what makes it visible until the host forwards `frame` to the viewer.
+            store.set({ phase: turns, playing: false });
+            viewer.current?.setPhase(turns);
+            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
+          }}
+        />
+      ) : null}
       <span class="faint">deformation</span>
       <input
         type="range"
@@ -298,7 +339,7 @@ function DeformBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
-function ViewerPane({ s, dispatch, viewer }: { s: UiState; dispatch: Dispatch; viewer: ViewerRef }) {
+function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [probe, setProbe] = useState('');
   const [broken, setBroken] = useState('');
@@ -377,7 +418,7 @@ function ViewerPane({ s, dispatch, viewer }: { s: UiState; dispatch: Dispatch; v
         </div>
       ) : null}
       {results ? <Legend s={s} dispatch={dispatch} /> : null}
-      {results ? <DeformBar s={s} dispatch={dispatch} /> : null}
+      {results ? <DeformBar s={s} store={store} dispatch={dispatch} viewer={viewer} /> : null}
       <SolvingCard s={s} dispatch={dispatch} />
       <ErrorCard s={s} dispatch={dispatch} />
       <div class="probe mono">{probe}</div>
@@ -409,11 +450,11 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       if (meta && e.key.toLowerCase() === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
       else if (meta && e.key.toLowerCase() === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
       else if (meta && e.key.toLowerCase() === 'c' && s.selection.refs.length > 0) void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined);
-      else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report']) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
+      else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial']) if (s.panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
-  }, [dispatch, s.selection.refs.length]);
+  }, [dispatch, s.selection.refs.length, s.panels]);
 
   // One fragment for both states, with the overlays at fixed positions: the start screen
   // offers "Start a tutorial", and a tutorial that begins there has to survive the switch to
@@ -428,7 +469,7 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
             <div class="workspace">
               <ModelTree s={s} dispatch={dispatch} />
               <div class="centre">
-                <ViewerPane s={s} dispatch={dispatch} viewer={viewer} />
+                <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
               </div>
               <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
@@ -440,7 +481,7 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
         <Start s={s} dispatch={dispatch} />
       )}
       <Examples s={s} dispatch={dispatch} />
-      <ExportModal s={s} dispatch={dispatch} />
+      <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}

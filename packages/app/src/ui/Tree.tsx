@@ -4,6 +4,7 @@
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
 import type { ModelSummary } from '@femlab/registry';
 import { useState } from 'preact/hooks';
+import { fieldChoices } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 
@@ -20,6 +21,8 @@ export interface TreeItem {
   select: Record<string, unknown>;
   /** The `*.remove` Command for this kind, if it has one. */
   remove: string | null;
+  /** Rows that are not edited in a form (Results) say for themselves when they are current. */
+  active?: boolean;
 }
 export interface TreeGroup {
   label: string;
@@ -50,6 +53,38 @@ function boxArgs(b: ModelSummary['bodies'][number]): Record<string, unknown> {
   const [x0, y0, z0, x1, y1, z1] = b.bbox as unknown as Valued[];
   const span = (a: Valued, c: Valued) => (a && c ? `${Number((c.value - a.value).toPrecision(6))} ${c.unit}` : '');
   return { name: b.name, size: [span(x0, x1), span(y0, y1), span(z0, z1)], at: [q(x0), q(y0), q(z0)] };
+}
+
+/**
+ * The design's Results group: one row per scalar the Result can be contoured by — the fields
+ * the Step computed, then its mode shapes, then the two derived checks once a Material names a
+ * yield. Clicking a row is `view.showField`, which is exactly what the legend's chips do, so
+ * the tree and the legend cannot disagree about what is on screen.
+ */
+export function resultItems(s: UiState): TreeItem[] {
+  const r = s.result;
+  if (!r) return [];
+  const extreme = (c: { field: string; component: number | null }) => r.extremes.find((e) => e.field === c.field && (c.component === null || e.component === c.component));
+  return fieldChoices(
+    r.extremes.map((e) => e.field),
+    r.frequencies?.length ?? 0,
+    s.yieldStress !== null,
+  ).map((c) => {
+    const e = extreme(c);
+    const hz = c.mode === undefined ? undefined : r.frequencies?.[c.mode - 1];
+    return {
+      cmd: 'view.showField',
+      args: { field: c.field, ...(c.component === null ? {} : { component: c.component }) },
+      kind: 'result',
+      glyph: '◧',
+      glyphClass: s.fieldKey === c.key ? 'glyph green' : 'glyph low',
+      name: c.label,
+      summary: hz ? `${q(hz)} · mode shape` : c.derived ? `from σ_vM and the Material's yield` : e ? `${q(e.min)} … ${q(e.max)} on ${r.step}` : `on ${r.step}`,
+      select: {},
+      remove: null,
+      active: s.fieldKey === c.key,
+    };
+  });
 }
 
 export function treeGroups(s: UiState): TreeGroup[] {
@@ -186,7 +221,7 @@ export function treeGroups(s: UiState): TreeGroup[] {
         remove: 'step.remove',
       })),
     ),
-    group('Results', 'A Result appears when a Step finishes, tied to the revision it came from.', null, [], (m?.steps ?? []).some((x) => x.solved) ? 'ok' : '—'),
+    group('Results', 'A Result appears when a Step finishes, tied to the revision it came from.', null, resultItems(s), s.result ? (s.result.stale ? 'stale' : 'ok') : '—'),
     group('Plugins', 'Material laws, elements, meshers and checks, loaded by Command and recorded by hash.', null, [], '—'),
   ];
 }
@@ -254,7 +289,7 @@ export function ModelTree({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
               <span class={`mono ${group.badgeClass}`}>{group.badge}</span>
             </div>
             {group.items.map((item, i) => (
-              <div key={`${item.kind}:${item.name}`} class={selected === item.name ? 'row selected' : 'row'} onContextMenu={(e) => (e.preventDefault(), setMenu(`${item.kind}:${item.name}`))}>
+              <div key={`${item.kind}:${item.name}`} class={(item.active ?? selected === item.name) ? 'row selected' : 'row'} onContextMenu={(e) => (e.preventDefault(), setMenu(`${item.kind}:${item.name}`))}>
                 <Cmd dispatch={dispatch} cmd="form.open" class="row-main" args={{ command: item.cmd, args: item.args }} title={`${item.cmd} — ${item.name}`}>
                   <span class={item.glyphClass}>{item.glyph}</span>
                   <span class="row-text">
