@@ -539,6 +539,32 @@ fn rename_and_duplicate_follow_references() {
 }
 
 #[test]
+fn body_removal_preserves_volumetric_load_targets() {
+    for load in [
+        r#"{"cmd":"load.heatSource","name":"source","bodies":["heated"],"q":"100 W/m^3"}"#,
+        r#"{"cmd":"load.temperature","name":"source","bodies":["heated"],"value":"320 K","reference":"300 K"}"#,
+    ] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"two-bodies"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"heated","size":["1 m","1 m","1 m"]}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"],"at":["2 m","0 m","0 m"]}"#);
+        ok(&mut e, load);
+        let before = e.model().clone();
+        let failure = err(&mut e, r#"{"cmd":"geometry.remove","name":"heated"}"#);
+        assert_eq!(failure.code, ErrorCode::InUse);
+        assert_eq!(failure.where_.as_deref(), Some("body 'heated'"));
+        assert!(failure.cause.contains("load 'source'"));
+        assert!(failure.suggestion.as_deref().is_some_and(|s| s.contains("remove or retarget")));
+        assert_eq!(e.model(), &before);
+        // An unrelated Body remains removable while the load is present.
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"other"}"#);
+        ok(&mut e, r#"{"cmd":"load.remove","name":"source"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"heated"}"#);
+        assert!(e.model().bodies.is_empty());
+    }
+}
+
+#[test]
 fn geometry_add_and_subtract_shapes_and_sheets() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"g"}"#);

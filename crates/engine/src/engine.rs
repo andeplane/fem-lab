@@ -844,13 +844,10 @@ impl Engine {
                 }
             }
             for l in &m.loads {
-                if l.kind.set().is_some_and(|s| set_refers_to(s, name)) {
+                if l.kind.set().is_some_and(|s| set_refers_to(s, name))
+                    || l.kind.bodies().iter().any(|body| body == name)
+                {
                     users.push(format!("load '{}'", l.name));
-                }
-                if let LoadKind::Temperature { bodies, .. } = &l.kind {
-                    if bodies.iter().any(|b| b == name) {
-                        users.push(format!("load '{}'", l.name));
-                    }
                 }
             }
             for s in &m.sets {
