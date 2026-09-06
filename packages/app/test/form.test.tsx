@@ -63,6 +63,34 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('teaches linear mesh accuracy and previews a quadratic fix as one Command', () => {
+    const values = { mesher: { kind: 'free', of: 'plate', size: '10 mm' } };
+    const { root, sent, store } = mount('mesh.set', values);
+    expect(field(root, 'order').querySelector('[role="status"]')!.textContent).toContain('Linear triangles');
+    root.querySelector<HTMLButtonElement>('[role="status"] button')!.click();
+    expect(sent).toEqual([{ cmd: 'form.open', command: 'mesh.set', args: { ...values, order: 2 }, keepInitial: true }]);
+    expect(store.state.form!.initial).toEqual(values);
+    expect(root.querySelector('[role="status"]')).toBeNull();
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('order: 2');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'mesh.set', ...values, order: 2 });
+  });
+
+  it('warns for full linear quad/hex formulations, not quadratic or incompatible modes', () => {
+    for (const kind of ['lattice', 'mapped', 'sweep']) {
+      const { root } = mount('mesh.set', { mesher: { kind }, order: 1, formulation: 'full' });
+      expect(root.querySelector('[role="status"]')!.textContent).toContain('can lock in bending');
+    }
+    for (const values of [
+      { mesher: { kind: 'lattice' } },
+      { mesher: { kind: 'mapped' }, order: 1, formulation: 'incompatible-modes' },
+      { mesher: { kind: 'free' }, order: 2 },
+      { mesher: { kind: 'lattice' }, order: 2, formulation: 'full' },
+    ]) {
+      expect(mount('mesh.set', values).root.querySelector('[role="status"]')).toBeNull();
+    }
+  });
+
   beforeEach(() => {
     document.body.innerHTML = '';
   });
