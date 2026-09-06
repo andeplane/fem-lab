@@ -2517,6 +2517,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.capabilities](#queries-query-capabilities)
 - [query.convert](#queries-query-convert)
 - [query.cost](#queries-query-cost)
+- [query.definition](#queries-query-definition)
 - [query.journal](#queries-query-journal)
 - [query.materialLibrary](#queries-query-materialLibrary)
 - [query.mesh](#queries-query-mesh)
@@ -2573,6 +2574,23 @@ Returns: `CostEstimate`.
 | --- | --- | --- | --- |
 | step | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.cost"}</code> |  |
+
+<a id="queries-query-definition"></a>
+
+### query.definition
+
+The complete upsert Command for an existing object's current definition, with exact
+SI quantities. Use it to populate an edit form; change its arguments and dispatch it
+to apply. Display summaries are rounded and must never be used to reconstruct edits.
+Auto-generated Sets and mesher-owned Bodies have no editable object definition.
+
+Returns: `ObjectDefinition`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| kind | yes | <code>{"$ref":"#/$defs/ObjectKind"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.definition"}</code> |  |
 
 <a id="queries-query-journal"></a>
 

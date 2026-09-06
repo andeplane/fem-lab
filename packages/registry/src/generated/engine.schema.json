@@ -2719,6 +2719,28 @@
         "x-returns": "ModelSummary"
       },
       {
+        "description": "The complete upsert Command for an existing object's current definition, with exact\nSI quantities. Use it to populate an edit form; change its arguments and dispatch it\nto apply. Display summaries are rounded and must never be used to reconstruct edits.\nAuto-generated Sets and mesher-owned Bodies have no editable object definition.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ObjectKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "const": "query.definition"
+          }
+        },
+        "required": [
+          "query",
+          "kind",
+          "name"
+        ],
+        "x-returns": "ObjectDefinition"
+      },
+      {
         "description": "Counts and sanity of the current Mesh (nodes, elements, element kind, DOF, bounding box,\nedge lengths, Sets with their resolved sizes, quality). Builds the Mesh if needed.",
         "type": "object",
         "properties": {
@@ -3033,6 +3055,18 @@
       }
     ],
     "$defs": {
+      "ObjectKind": {
+        "description": "Kinds of nameable objects in a Model.",
+        "type": "string",
+        "enum": [
+          "body",
+          "material",
+          "set",
+          "constraint",
+          "load",
+          "step"
+        ]
+      },
       "Field": {
         "description": "Result fields.",
         "type": "string",
@@ -3076,18 +3110,6 @@
               "unit"
             ]
           }
-        ]
-      },
-      "ObjectKind": {
-        "description": "Kinds of nameable objects in a Model.",
-        "type": "string",
-        "enum": [
-          "body",
-          "material",
-          "set",
-          "constraint",
-          "load",
-          "step"
         ]
       },
       "ReportSection": {
@@ -3149,6 +3171,9 @@
     "anyOf": [
       {
         "$ref": "#/$defs/ModelSummary"
+      },
+      {
+        "$ref": "#/$defs/ObjectDefinition"
       },
       {
         "$ref": "#/$defs/MeshSummary"
@@ -3942,542 +3967,16 @@
           "text"
         ]
       },
-      "MeshSummary": {
-        "description": "`query.mesh` response.",
+      "ObjectDefinition": {
+        "description": "Lossless input for editing one Model object through the same Command used to create it.",
         "type": "object",
         "properties": {
-          "nodes": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "elements": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "elementKind": {
-            "type": "string"
-          },
-          "dofs": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "bbox": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 6,
-            "maxItems": 6
-          },
-          "minEdge": {
-            "$ref": "#/$defs/Valued"
-          },
-          "maxEdge": {
-            "$ref": "#/$defs/Valued"
-          },
-          "sets": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/SetRow"
-            }
-          },
-          "quality": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/QualitySummary"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "nodes",
-          "elements",
-          "elementKind",
-          "dofs",
-          "bbox",
-          "minEdge",
-          "maxEdge",
-          "sets"
-        ]
-      },
-      "QualitySummary": {
-        "description": "Mesh quality inside `query.mesh`: worst-case ratios and the elements that set them.",
-        "type": "object",
-        "properties": {
-          "minDetJRatio": {
-            "description": "Smallest corner `min(det J) / max(det J)`; 1 is perfect, 0 degenerate, negative inverted.",
-            "type": "number",
-            "format": "double"
-          },
-          "maxAspect": {
-            "description": "Largest longest-edge over shortest-edge ratio.",
-            "type": "number",
-            "format": "double"
-          },
-          "minAngleDeg": {
-            "description": "Smallest angle at any element corner, in degrees.",
-            "type": "number",
-            "format": "double"
-          },
-          "worst": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/QualityRow"
-            }
-          }
-        },
-        "required": [
-          "minDetJRatio",
-          "maxAspect",
-          "minAngleDeg",
-          "worst"
-        ]
-      },
-      "QualityRow": {
-        "type": "object",
-        "properties": {
-          "element": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "value": {
-            "type": "number",
-            "format": "double"
-          }
-        },
-        "required": [
-          "element",
-          "value"
-        ]
-      },
-      "SetInfo": {
-        "description": "`query.set` response.",
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "count": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "bbox": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 6,
-            "maxItems": 6
-          },
-          "measure": {
-            "$ref": "#/$defs/Valued"
-          },
-          "centroid": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          }
-        },
-        "required": [
-          "name",
-          "kind",
-          "count",
-          "bbox",
-          "measure",
-          "centroid"
-        ]
-      },
-      "ResultSummary": {
-        "description": "`query.result` response.",
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "stale": {
-            "type": "boolean"
-          },
-          "solver": {
-            "type": "string"
-          },
-          "iterations": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "residual": {
-            "type": "number",
-            "format": "double"
-          },
-          "timeMs": {
-            "type": "number",
-            "format": "double"
-          },
-          "extremes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Extreme"
-            }
-          },
-          "reactions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/ReactionRow"
-            }
-          },
-          "appliedTotal": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          },
-          "frequencies": {
-            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            }
-          },
-          "history": {
-            "description": "One row per output time of a transient Step: when, and the range the field covered.",
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/HistoryRow"
-            }
-          },
-          "balance": {
-            "description": "|Σ reactions + Σ applied| over the largest single force in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
-            "type": "number",
-            "format": "double"
-          }
-        },
-        "required": [
-          "step",
-          "revision",
-          "stale",
-          "solver",
-          "iterations",
-          "residual",
-          "timeMs",
-          "extremes",
-          "reactions",
-          "appliedTotal",
-          "balance"
-        ]
-      },
-      "Extreme": {
-        "description": "One extreme of a field component.",
-        "type": "object",
-        "properties": {
-          "field": {
-            "type": "string"
-          },
-          "component": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          },
-          "min": {
-            "$ref": "#/$defs/Valued"
-          },
-          "minAt": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          },
-          "max": {
-            "$ref": "#/$defs/Valued"
-          },
-          "maxAt": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          }
-        },
-        "required": [
-          "field",
-          "component",
-          "min",
-          "minAt",
-          "max",
-          "maxAt"
-        ]
-      },
-      "ReactionRow": {
-        "type": "object",
-        "properties": {
-          "constraint": {
-            "type": "string"
-          },
-          "total": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          }
-        },
-        "required": [
-          "constraint",
-          "total"
-        ]
-      },
-      "HistoryRow": {
-        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
-        "type": "object",
-        "properties": {
-          "time": {
-            "$ref": "#/$defs/Valued"
-          },
-          "min": {
-            "$ref": "#/$defs/Valued"
-          },
-          "max": {
-            "$ref": "#/$defs/Valued"
-          }
-        },
-        "required": [
-          "time",
-          "min",
-          "max"
-        ]
-      },
-      "ProbeResult": {
-        "description": "`query.probe` response.",
-        "type": "object",
-        "properties": {
-          "value": {
-            "$ref": "#/$defs/Valued"
-          },
-          "element": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "interpolated": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "value",
-          "element",
-          "interpolated"
-        ]
-      },
-      "PathResult": {
-        "description": "`query.path` response.",
-        "type": "object",
-        "properties": {
-          "s": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "format": "double"
-            }
-          },
-          "values": {
-            "type": "array",
-            "items": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "format": "double"
-            }
-          },
-          "unit": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "s",
-          "values",
-          "unit"
-        ]
-      },
-      "CostEstimate": {
-        "description": "`query.cost` response.",
-        "type": "object",
-        "properties": {
-          "dofs": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "nnz": {
-            "description": "Upper bound on matrix non-zeros; exact when equal to nnzLower.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "nnzLower": {
-            "description": "Lower bound on matrix non-zeros.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "bytes": {
-            "description": "Estimated peak of the counted solve and frame-read phases. It includes mandatory\nassembly storage, retained primary values, a conservative transient f64 working-vector\nallowance and known native/browser frame-response storage. It is incomplete because\nsolver fill, JSON and allocator overhead are not known before solving.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "assemblyBytes": {
-            "description": "Mandatory assembly storage before transient-specific values are added.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "retainedFrames": {
-            "description": "Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "retainedBytes": {
-            "description": "Logical f64 bytes for retained times and unpadded primary values.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "transientWorkBytes": {
-            "description": "Conservative full-field allowance for procedure working f64 vectors live with History.\nFree-DOF vectors are charged at the full nodal length.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "transportStagingBytes": {
-            "description": "One normalized three-component f64 frame owned by a native Query result.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "wasmTransportStagingBytes": {
-            "description": "Known lower bound for the WASM/Worker frame route while two normalized three-component\nnumeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "wasmTransportStagingComplete": {
-            "description": "False while the generic JSON route has value- and runtime-dependent allocation overhead.",
-            "type": "boolean"
-          },
-          "budgetBytes": {
-            "description": "Fixed 1.5 GiB planning budget; not measured free memory on the current host.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "feasible": {
-            "description": "False if the counted conservative estimate exceeds the planning budget; null means\nfeasibility is unknown. Fitting it does not establish that assembly or factorisation fits.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "note": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "dofs",
-          "nnz",
-          "nnzLower",
-          "bytes",
-          "assemblyBytes",
-          "retainedFrames",
-          "retainedBytes",
-          "transientWorkBytes",
-          "transportStagingBytes",
-          "wasmTransportStagingBytes",
-          "wasmTransportStagingComplete",
-          "budgetBytes",
-          "note"
-        ]
-      },
-      "JournalDump": {
-        "description": "`query.journal` response.",
-        "type": "object",
-        "properties": {
-          "hash": {
-            "description": "Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.",
-            "type": "string"
-          },
-          "entries": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/JournalEntry"
-            }
-          },
-          "revision": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "canUndo": {
-            "type": "boolean"
-          },
-          "canRedo": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "hash",
-          "entries",
-          "revision",
-          "canUndo",
-          "canRedo"
-        ]
-      },
-      "JournalEntry": {
-        "description": "One applied Command and the Model hash after it.",
-        "type": "object",
-        "properties": {
-          "seq": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "cmd": {
+          "command": {
             "$ref": "#/$defs/Command"
-          },
-          "hashAfter": {
-            "type": "string"
           }
         },
         "required": [
-          "seq",
-          "cmd",
-          "hashAfter"
+          "command"
         ]
       },
       "Command": {
@@ -7104,6 +6603,544 @@
               "sha256"
             ]
           }
+        ]
+      },
+      "MeshSummary": {
+        "description": "`query.mesh` response.",
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "elements": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "elementKind": {
+            "type": "string"
+          },
+          "dofs": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "bbox": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 6,
+            "maxItems": 6
+          },
+          "minEdge": {
+            "$ref": "#/$defs/Valued"
+          },
+          "maxEdge": {
+            "$ref": "#/$defs/Valued"
+          },
+          "sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SetRow"
+            }
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QualitySummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "nodes",
+          "elements",
+          "elementKind",
+          "dofs",
+          "bbox",
+          "minEdge",
+          "maxEdge",
+          "sets"
+        ]
+      },
+      "QualitySummary": {
+        "description": "Mesh quality inside `query.mesh`: worst-case ratios and the elements that set them.",
+        "type": "object",
+        "properties": {
+          "minDetJRatio": {
+            "description": "Smallest corner `min(det J) / max(det J)`; 1 is perfect, 0 degenerate, negative inverted.",
+            "type": "number",
+            "format": "double"
+          },
+          "maxAspect": {
+            "description": "Largest longest-edge over shortest-edge ratio.",
+            "type": "number",
+            "format": "double"
+          },
+          "minAngleDeg": {
+            "description": "Smallest angle at any element corner, in degrees.",
+            "type": "number",
+            "format": "double"
+          },
+          "worst": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/QualityRow"
+            }
+          }
+        },
+        "required": [
+          "minDetJRatio",
+          "maxAspect",
+          "minAngleDeg",
+          "worst"
+        ]
+      },
+      "QualityRow": {
+        "type": "object",
+        "properties": {
+          "element": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "element",
+          "value"
+        ]
+      },
+      "SetInfo": {
+        "description": "`query.set` response.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "bbox": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 6,
+            "maxItems": 6
+          },
+          "measure": {
+            "$ref": "#/$defs/Valued"
+          },
+          "centroid": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "count",
+          "bbox",
+          "measure",
+          "centroid"
+        ]
+      },
+      "ResultSummary": {
+        "description": "`query.result` response.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "solver": {
+            "type": "string"
+          },
+          "iterations": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "residual": {
+            "type": "number",
+            "format": "double"
+          },
+          "timeMs": {
+            "type": "number",
+            "format": "double"
+          },
+          "extremes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Extreme"
+            }
+          },
+          "reactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ReactionRow"
+            }
+          },
+          "appliedTotal": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "frequencies": {
+            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            }
+          },
+          "history": {
+            "description": "One row per output time of a transient Step: when, and the range the field covered.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/HistoryRow"
+            }
+          },
+          "balance": {
+            "description": "|Σ reactions + Σ applied| over the largest single force in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "step",
+          "revision",
+          "stale",
+          "solver",
+          "iterations",
+          "residual",
+          "timeMs",
+          "extremes",
+          "reactions",
+          "appliedTotal",
+          "balance"
+        ]
+      },
+      "Extreme": {
+        "description": "One extreme of a field component.",
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "component": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "min": {
+            "$ref": "#/$defs/Valued"
+          },
+          "minAt": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "max": {
+            "$ref": "#/$defs/Valued"
+          },
+          "maxAt": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "field",
+          "component",
+          "min",
+          "minAt",
+          "max",
+          "maxAt"
+        ]
+      },
+      "ReactionRow": {
+        "type": "object",
+        "properties": {
+          "constraint": {
+            "type": "string"
+          },
+          "total": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "constraint",
+          "total"
+        ]
+      },
+      "HistoryRow": {
+        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
+        "type": "object",
+        "properties": {
+          "time": {
+            "$ref": "#/$defs/Valued"
+          },
+          "min": {
+            "$ref": "#/$defs/Valued"
+          },
+          "max": {
+            "$ref": "#/$defs/Valued"
+          }
+        },
+        "required": [
+          "time",
+          "min",
+          "max"
+        ]
+      },
+      "ProbeResult": {
+        "description": "`query.probe` response.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Valued"
+          },
+          "element": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "interpolated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value",
+          "element",
+          "interpolated"
+        ]
+      },
+      "PathResult": {
+        "description": "`query.path` response.",
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "s",
+          "values",
+          "unit"
+        ]
+      },
+      "CostEstimate": {
+        "description": "`query.cost` response.",
+        "type": "object",
+        "properties": {
+          "dofs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "nnz": {
+            "description": "Upper bound on matrix non-zeros; exact when equal to nnzLower.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "nnzLower": {
+            "description": "Lower bound on matrix non-zeros.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "bytes": {
+            "description": "Estimated peak of the counted solve and frame-read phases. It includes mandatory\nassembly storage, retained primary values, a conservative transient f64 working-vector\nallowance and known native/browser frame-response storage. It is incomplete because\nsolver fill, JSON and allocator overhead are not known before solving.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "assemblyBytes": {
+            "description": "Mandatory assembly storage before transient-specific values are added.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "retainedFrames": {
+            "description": "Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "retainedBytes": {
+            "description": "Logical f64 bytes for retained times and unpadded primary values.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transientWorkBytes": {
+            "description": "Conservative full-field allowance for procedure working f64 vectors live with History.\nFree-DOF vectors are charged at the full nodal length.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transportStagingBytes": {
+            "description": "One normalized three-component f64 frame owned by a native Query result.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "wasmTransportStagingBytes": {
+            "description": "Known lower bound for the WASM/Worker frame route while two normalized three-component\nnumeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "wasmTransportStagingComplete": {
+            "description": "False while the generic JSON route has value- and runtime-dependent allocation overhead.",
+            "type": "boolean"
+          },
+          "budgetBytes": {
+            "description": "Fixed 1.5 GiB planning budget; not measured free memory on the current host.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "feasible": {
+            "description": "False if the counted conservative estimate exceeds the planning budget; null means\nfeasibility is unknown. Fitting it does not establish that assembly or factorisation fits.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dofs",
+          "nnz",
+          "nnzLower",
+          "bytes",
+          "assemblyBytes",
+          "retainedFrames",
+          "retainedBytes",
+          "transientWorkBytes",
+          "transportStagingBytes",
+          "wasmTransportStagingBytes",
+          "wasmTransportStagingComplete",
+          "budgetBytes",
+          "note"
+        ]
+      },
+      "JournalDump": {
+        "description": "`query.journal` response.",
+        "type": "object",
+        "properties": {
+          "hash": {
+            "description": "Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.",
+            "type": "string"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JournalEntry"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "canUndo": {
+            "type": "boolean"
+          },
+          "canRedo": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hash",
+          "entries",
+          "revision",
+          "canUndo",
+          "canRedo"
+        ]
+      },
+      "JournalEntry": {
+        "description": "One applied Command and the Model hash after it.",
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "cmd": {
+            "$ref": "#/$defs/Command"
+          },
+          "hashAfter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "cmd",
+          "hashAfter"
         ]
       },
       "ScriptText": {
