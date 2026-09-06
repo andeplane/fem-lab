@@ -329,8 +329,7 @@ describe('the shell', () => {
     const known = new Set(registry.list().commands.map((d) => d.name));
     const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
     expect(chip).toBeTruthy();
-    chip.click();
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => chip.click());
     const menu = [...root.querySelectorAll('.add-menu [data-cmd]')];
     expect(menu.map((el) => el.textContent)).toEqual(['▭box', '⬭cylinder', '◯sphere', '▱sheet', '⬒extrude', '◑revolve', '⬬union', '⊖subtract', '⊗intersect', '⇲transform', '∖cut']);
     expect(menu.map((el) => el.getAttribute('data-cmd')!).filter((c) => !known.has(c))).toEqual([]);
@@ -340,15 +339,15 @@ describe('the shell', () => {
   it('closes the shape menu on Escape and returns focus to the chip', async () => {
     const { root } = mount();
     const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
-    chip.click();
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => chip.click());
     expect(root.querySelector('.add-menu')).toBeTruthy();
 
     // From inside the menu, which is where the keystroke actually lands.
     const item = root.querySelector<HTMLElement>('.add-menu [data-cmd]')!;
-    item.focus();
-    item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => {
+      item.focus();
+      item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
     expect(root.querySelector('.add-menu')).toBeNull();
     expect(document.activeElement).toBe(chip);
   });

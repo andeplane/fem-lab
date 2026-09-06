@@ -11,6 +11,20 @@ import type { ColormapName } from './viewer/colormap';
 export type ViewMode = 'geometry' | 'mesh' | 'results';
 export type Tab = 'journal' | 'script' | 'results' | 'checks' | 'console';
 export const TABS: Tab[] = ['journal', 'script', 'results', 'checks', 'console'];
+export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
+export type PanelSizes = Record<ResizablePanel, number>;
+export const DEFAULT_PANEL_SIZES: PanelSizes = { tree: 274, properties: 308, bottom: 252, assistant: 392 };
+export const PANEL_SIZE_LIMITS: Record<ResizablePanel, { min: number; max: number }> = {
+  tree: { min: 180, max: 420 },
+  properties: { min: 240, max: 440 },
+  bottom: { min: 184, max: 480 },
+  assistant: { min: 320, max: 520 },
+};
+
+export function clampPanelSize(panel: ResizablePanel, size: number): number {
+  const limits = PANEL_SIZE_LIMITS[panel];
+  return Math.round(Math.min(limits.max, Math.max(limits.min, size)));
+}
 
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
@@ -50,6 +64,8 @@ export interface UiState {
   deformScale: number;
   /** Panel id → open. Panels absent from the map are closed. */
   panels: Record<string, boolean>;
+  /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
+  panelSizes: PanelSizes;
   tab: Tab;
   /** Every `@`-mentionable object, for the picker chips and the palette. */
   objects: ObjectRef[];
@@ -152,6 +168,7 @@ export const initialState: UiState = {
   colormap: 'viridis',
   deformScale: 1,
   panels: { assistant: false, examples: false, export: false, report: false, palette: false },
+  panelSizes: { ...DEFAULT_PANEL_SIZES },
   tab: 'journal',
   objects: [],
   form: null,
@@ -279,6 +296,10 @@ export class Store {
   togglePanel(panel: string, open?: boolean): void {
     if ((TABS as string[]).includes(panel)) return this.set({ tab: panel as Tab });
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
+  }
+
+  resizePanel(panel: ResizablePanel, size: number): void {
+    this.set({ panelSizes: { ...this.state.panelSizes, [panel]: clampPanelSize(panel, size) } });
   }
 
   fail(e: unknown): void {
