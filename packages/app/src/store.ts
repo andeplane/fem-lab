@@ -5,12 +5,12 @@ import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, P
 import type { HostCaps } from './capabilities';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
+import { TABS, type Tab } from './tabs';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
-export type Tab = 'journal' | 'script' | 'results' | 'checks' | 'console';
-export const TABS: Tab[] = ['journal', 'script', 'results', 'checks', 'console'];
+export { TABS, type Tab } from './tabs';
 export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
 export type PanelSizes = Record<ResizablePanel, number>;
 export const DEFAULT_PANEL_SIZES: PanelSizes = { tree: 274, properties: 308, bottom: 252, assistant: 392 };
@@ -25,7 +25,6 @@ export function clampPanelSize(panel: ResizablePanel, size: number): number {
   const limits = PANEL_SIZE_LIMITS[panel];
   return Math.round(Math.min(limits.max, Math.max(limits.min, size)));
 }
-
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
   cmd: string;
