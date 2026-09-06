@@ -21,7 +21,15 @@ const examples = readdirSync(from)
     const name = path.basename(f, ".json");
     const metaPath = path.join(from, `${name}.meta.json`);
     const meta = existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, "utf8")) : {};
-    return { name, commands: entries.length, summary: meta.sentence ?? `${name}: ${entries.length} Commands`, ...meta };
+    const thumbnail = path.join(to, "thumbnails", `${name}.png`);
+    return {
+      name,
+      commands: entries.length,
+      summary: meta.sentence ?? `${name}: ${entries.length} Commands`,
+      ...meta,
+      // The browser generator runs between the preliminary and final app builds in CI.
+      thumbnail: existsSync(thumbnail) ? `thumbnails/${name}.png` : null,
+    };
   })
   // gallery order: easiest first, then alphabetical, so the first card is a model to start on
   .sort((a, b) => (a.difficulty ?? 9) - (b.difficulty ?? 9) || a.name.localeCompare(b.name));
