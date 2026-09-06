@@ -12,8 +12,26 @@ conflicting published values and must be settled before the number is hard-coded
 
 The **Status** column has three states. `engine test` means a Rust test in
 `crates/engine/tests/` asserts it; `green` means the Command-level form in
-`crates/engine/benches/cases/*.json` passes under `femlab bench`, which is what makes a row a
+`crates/femlab/benches/cases/*.json` passes under `femlab bench`, which is what makes a row a
 Benchmark in the sense of PLAN rule 8; blank means not implemented yet.
+
+## Installed CLI cases (#306)
+
+`femlab bench` embeds every canonical `crates/femlab/benches/cases/*.json` file in filename
+order at build time. A copied release executable needs no checkout or adjacent data directory.
+The JSON Journals, published reference values and tolerances are unchanged. New case files are
+picked up automatically by the build and included in the Cargo source package.
+
+`--filter` still selects by case-name substring; text, `--json`, `--markdown` and
+`--update-docs <path>` keep their existing report interfaces. Explicit `--cases <directory>`
+uses only that directory, including an empty directory; a missing or malformed custom directory
+reports an error and never falls back to built-ins.
+
+Packaging verification copies a release executable out of a disposable build checkout, removes
+that owned checkout, and runs its embedded cases plus a custom case. The CLI regression also
+checks the installed-style heat bar against the independent linear conduction values
+25 °C at x/L = 1/4 and 50 °C at x/L = 1/2, and compares the complete embedded reports against
+those from the canonical JSON directory (excluding elapsed times).
 
 ## Measured status
 
@@ -381,6 +399,25 @@ and Journal on rejection. Free and swept-free source references follow explicit 
 and block removal until the mesher changes. See ADR 0016 and
 [#251](https://github.com/andeplane/fem-lab/issues/251).
 
+## Thermal Body loads on mapped and swept meshers (#260)
+
+The registry regressions use a 2 × 1 m mapped rectangle with 0.25 m plane-stress thickness
+and its 3 m solid extrusion, at both element orders and 1, 2 and 4 axial subdivisions.
+`load.temperature` with ΔT = 50 K and α = 1e-5/K gives exact free strain 5e-4 in every
+direction and zero stress. Fixing both x ends instead gives σxx = −EαΔT = −100 MPa for
+E = 200 GPa and ν = 0.25; the free transverse strain is (1+ν)αΔT = 6.25e-4. Every node's
+displacement agrees within 1e-12 m and every stress component within 1e-3 Pa.
+
+For `load.heatSource`, q = 100 W/m³ and k = 10 W/(m·K), with both x ends held at 300 K,
+give `T(x) = 300 + 5x(2−x)` K. The assembled source power agrees with the independent
+prescribed-volume values qV = 50 W (Sheet including thickness) and 600 W (solid) within
+1e-9 W. All nodal temperatures agree with the parabola within 1e-9 K. At the first element's
+midpoint, linear interpolation has the exact error `5/n²` K, decreasing by four under each
+refinement; quadratic interpolation reproduces the parabola within 1e-9 K.
+
+The same Commands and analytical solutions survive undo/redo and verified exported Journal
+replay. Unknown Body names, including a bad name after a valid implicit target in the same
+list, report the indexed argument and preserve the previous Model and Journal.
 
 ## Where the reference values are published
 

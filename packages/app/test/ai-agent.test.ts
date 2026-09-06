@@ -133,6 +133,16 @@ describe('the agent loop', () => {
     expect(turn.cost).toBeCloseTo((300 * 5 + 30 * 25 + 4 * 5) / 1e6, 9);
   });
 
+  it('sums request prices without treating separate short contexts as one long context', async () => {
+    const { registry } = fixture();
+    const rounds = [TOOL_ROUND, FINAL_ROUND].map((round) => round.map((event): ChatEvent =>
+      event.type === 'usage' ? { type: 'usage', usage: { input: 150_000, cacheRead: 25_000, output: 1_000 } } : event));
+    const { provider } = fakeProvider(rounds);
+    const turn = turnOf(await drain(runTurn({ provider, registry, model: 'gpt-6-astra', system: '', tools: [], messages: [{ role: 'user', content: [] }] })));
+    expect(turn.usage).toEqual({ input: 300_000, cacheRead: 50_000, output: 2_000 });
+    expect(turn.cost).toBeCloseTo(3.15, 12);
+  });
+
   it('undoes the whole turn with one journal.undo, and does nothing when it changed nothing', async () => {
     const { registry, dispatched } = fixture();
     await undoTurn(registry, 1, JOURNALS[1]!.hash);

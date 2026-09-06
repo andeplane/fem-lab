@@ -185,6 +185,7 @@ export interface Fem {
     /**
      * A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
      * producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
+     * Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.
      * Disjoint Bodies compose independently, each using its own reference. Overlapping
      * assignments must produce exactly the same increment; otherwise `solve.run` returns
      * `model.ill-posed` naming both Loads and the Body. Equal increments are not added.
@@ -206,6 +207,8 @@ export interface Fem {
     /**
      * A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
      * It is a density, not a total: the heat delivered is `q` times each Body's volume.
+     * Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
+     * for a plane-stress Sheet, the volume includes its specified thickness.
      */
     heatSource(args: Omit<Extract<Command, { cmd: 'load.heatSource' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -223,7 +226,9 @@ export interface Fem {
      * temperature field and turns it into thermal stress. The remaining fields belong to one
      * procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-     * `dtFactor` and `outputEvery` to explicit.
+     * `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
+     * conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
+     * `theta` must lie in [0, 1].
      */
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**

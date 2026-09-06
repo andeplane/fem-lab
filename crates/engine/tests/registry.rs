@@ -3028,6 +3028,129 @@ fn a_heat_step_says_what_it_is_missing() {
     assert_eq!(bad.where_.as_deref(), Some("tEnd"));
 }
 
+/// Heat procedures reject transport properties at the point where they become required. A
+/// steady Step only needs conductivity, while a transient also needs density and specific
+/// heat. Every refusal is recoverable: the same Engine accepts a corrected material and runs.
+#[test]
+fn heat_steps_validate_transport_properties_and_theta_without_panicking() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"steady","procedure":"heat-steady","constraints":["cold"],"loads":[]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"transient","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"0.1 s","tEnd":"0.1 s","theta":0.5}"#,
+    );
+
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","cp":"460 J/(kg K)"}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"steady"}"#);
+    assert_eq!(bad.code, ErrorCode::ModelIllPosed);
+    assert!(bad.cause.contains("conductivity k"), "{bad:?}");
+
+    let bad_materials = [
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","cp":"460 J/(kg K)"}"#,
+            "conductivity k",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"0 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "conductivity k",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"-1 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "conductivity k",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "density rho",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"0 kg/m^3","k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "density rho",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"-1 kg/m^3","k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+            "density rho",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"45 W/(m K)"}"#,
+            "specific heat cp",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"45 W/(m K)","cp":"0 J/(kg K)"}"#,
+            "specific heat cp",
+        ),
+        (
+            r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"45 W/(m K)","cp":"-1 J/(kg K)"}"#,
+            "specific heat cp",
+        ),
+    ];
+    for (material, property) in bad_materials {
+        ok(&mut e, material);
+        let bad = err(&mut e, r#"{"cmd":"solve.run","step":"transient"}"#);
+        assert_eq!(bad.code, ErrorCode::ModelIllPosed, "{bad:?}");
+        assert_eq!(bad.where_.as_deref(), Some("body 'bar'"));
+        assert!(bad.cause.contains(property), "{bad:?}");
+        assert!(bad.suggestion.as_deref().is_some_and(|s| s.starts_with("material.add with")));
+    }
+
+    // Capacity is irrelevant to steady conduction, so omitted rho and cp remain valid there.
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"k":"45 W/(m K)"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"steady"}"#);
+
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+            "k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+    );
+    for theta in [-0.1, 1.1] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"bad-theta","procedure":"heat-transient","constraints":["cold"],
+                    "loads":[],"dt":"0.1 s","tEnd":"0.1 s","theta":{theta}}}"#
+            ),
+        );
+        let bad = err(&mut e, r#"{"cmd":"solve.run","step":"bad-theta"}"#);
+        assert_eq!(bad.code, ErrorCode::Schema);
+        assert_eq!(bad.where_.as_deref(), Some("theta"));
+    }
+    // The lower endpoint is a valid forward-Euler Step; theta = 0.5 and 1 are covered by the
+    // transient history and NAFEMS benchmark tests.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"forward","procedure":"heat-transient","constraints":["cold"],"loads":[],
+            "dt":"0.1 s","tEnd":"0.1 s","theta":0}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"forward"}"#);
+}
+
+/// Even after physical validation, a bad extension or boundary may produce an indefinite
+/// matrix. The direct factorisation error crosses the procedure boundary and the Engine stays
+/// alive to solve the corrected model.
+#[test]
+fn transient_heat_propagates_factorisation_failure_and_recovers() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"bar.xmax","h":"-1e12 W/(m^2 K)","tInf":"0 K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"cool","procedure":"heat-transient","constraints":["cold"],"loads":["film"],
+            "dt":"1 s","tEnd":"1 s","theta":1}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"cool"}"#);
+    assert_eq!(bad.code, ErrorCode::SolveNotPositiveDefinite, "{bad:?}");
+
+    ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"cool"}"#);
+    assert_eq!(result_of(&mut e, Some("cool")).history.len(), 2);
+}
+
 /// A transient Step keeps a history the Result summary reports, and its amplitude may be a sine
 /// or a table; a malformed table is refused when the Command is dispatched, not when it is run.
 #[test]
@@ -3441,7 +3564,7 @@ fn the_heat_commands_validate_their_names_sets_and_units() {
 
 // ------------------------------------------------------------------ phase 3: the 2D, axisymmetric and 3D Benchmarks
 //
-// Every case below also exists as a Journal with checks in `benches/cases`, which is what
+// Every case below also exists as a Journal with checks in `crates/femlab/benches/cases`, which is what
 // `femlab bench` runs; the tests here are the half a case file cannot hold — the mesh
 // sequences, the Richardson extrapolations and the two models that must agree with each other.
 
@@ -5146,4 +5269,183 @@ fn body_removal_reports_volumetric_heat_dependencies() {
     assert_eq!(error.code, ErrorCode::InUse);
     assert!(error.cause.contains("source"));
     assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+}
+
+const IMPLICIT_TEMPERATURE: &str =
+    r#"{"cmd":"load.temperature","name":"heated","bodies":["sheet"],"value":"343.15 K","reference":"293.15 K"}"#;
+const IMPLICIT_SOURCE: &str = r#"{"cmd":"load.heatSource","name":"power","bodies":["sheet"],"q":"100 W/m^3"}"#;
+
+fn implicit_thermal_mesh(e: &mut Engine, n: u32, order: u32, swept: bool) {
+    ok(e, r#"{"cmd":"model.new","name":"implicit-thermal"}"#);
+    if !swept {
+        ok(e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"0.25 m"}}"#);
+    }
+    let base = serde_json::json!({"kind":"mapped","body":"sheet","blocks":[{
+        "corners":[["0 m","0 m"],["2 m","0 m"],["2 m","1 m"],["0 m","1 m"]],
+        "n":[n,1],"tags":["floor","right","ceiling","left"]
+    }]});
+    let mesher = if swept {
+        serde_json::json!({"kind":"sweep","base":base,"sweep":{"kind":"extrude","layers":1,"height":"3 m"}})
+    } else {
+        base
+    };
+    ok(e, &serde_json::json!({"cmd":"mesh.set","mesher":mesher,"order":order}).to_string());
+    ok(e, r#"{"cmd":"material.add","name":"solid","E":"200 GPa","nu":0.25,"alpha":"1e-5 1/K","k":"10 W/(m*K)"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"solid","bodies":["sheet"]}"#);
+}
+
+fn implicit_temperature_steps(e: &mut Engine, swept: bool) {
+    ok(e, r#"{"cmd":"constraint.fix","name":"sx","on":"sheet.left","dofs":["ux"]}"#);
+    ok(e, r#"{"cmd":"constraint.fix","name":"sy","on":"sheet.floor","dofs":["uy"]}"#);
+    let mut constraints = vec!["sx", "sy"];
+    if swept {
+        ok(e, r#"{"cmd":"constraint.fix","name":"sz","on":"sheet.bottom","dofs":["uz"]}"#);
+        constraints.push("sz");
+    }
+    ok(e, &serde_json::json!({"cmd":"step.add","name":"free","procedure":"static","constraints":constraints,"loads":["heated"]}).to_string());
+    ok(e, r#"{"cmd":"constraint.fix","name":"end","on":"sheet.right","dofs":["ux"]}"#);
+    constraints.push("end");
+    ok(e, &serde_json::json!({"cmd":"step.add","name":"restrained","procedure":"static","constraints":constraints,"loads":["heated"]}).to_string());
+}
+
+fn assert_implicit_expansion(e: &mut Engine, step: &str, restrained: bool) {
+    let u = e.field(Some(step), Field::Displacement).unwrap().clone();
+    let stress = e.field(Some(step), Field::Stress).unwrap().clone();
+    let mesh = &e.mesh().unwrap().mesh;
+    for node in 0..mesh.n_nodes() {
+        for (component, &x) in mesh.node(node as u32).iter().take(mesh.dim).enumerate() {
+            let strain = if restrained {
+                if component == 0 {
+                    0.0
+                } else {
+                    6.25e-4
+                }
+            } else {
+                5e-4
+            };
+            assert!((u.data[node * u.comps + component] - strain * x).abs() < 1e-12);
+        }
+        for component in 0..stress.comps {
+            let expected = if restrained && component == 0 { -100e6 } else { 0.0 };
+            assert!((stress.data[node * stress.comps + component] - expected).abs() < 1e-3);
+        }
+    }
+}
+
+fn implicit_source_step(e: &mut Engine) {
+    ok(e, r#"{"cmd":"constraint.temperature","name":"coldLeft","on":"sheet.left","value":"300 K"}"#);
+    ok(e, r#"{"cmd":"constraint.temperature","name":"coldRight","on":"sheet.right","value":"300 K"}"#);
+    ok(
+        e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["coldLeft","coldRight"],"loads":["power"]}"#,
+    );
+}
+
+fn assert_implicit_source(e: &mut Engine, n: u32, order: u32, swept: bool) -> f64 {
+    let temperature = e.field(Some("conduct"), Field::Temperature).unwrap().clone();
+    let model = e.model().clone();
+    let built = e.mesh().unwrap();
+    assert_eq!(temperature.len(), built.mesh.n_nodes());
+    for (node, values) in temperature.data.chunks_exact(temperature.comps).enumerate() {
+        let x = built.mesh.node(node as u32)[0];
+        assert!((values[0] - (300.0 + 5.0 * x * (2.0 - x))).abs() < 1e-9);
+    }
+    // HeatSystem::applied is in watts, independent of host display-unit metadata. The oracle
+    // uses the prescribed volume (2*1*0.25 or 2*1*3), not the mesher's measured volume.
+    let problem = femlab_engine::solve_run::build_problem(&model, built, model.step("conduct").unwrap()).unwrap();
+    let pattern = femlab_engine::fem::assembly::pattern(&built.mesh, 1);
+    let system = femlab_engine::procedure::heat::assemble(&problem, &pattern).unwrap();
+    let watts = if swept { 600.0 } else { 50.0 };
+    assert!((system.applied - watts).abs() < 1e-9);
+    let x = 1.0 / n as f64;
+    let x_text = format!("{x} m");
+    let at = [x_text.as_str(), "0.5 m", if swept { "1.5 m" } else { "0 m" }];
+    let value = probe_at(e, "conduct", Field::Temperature, None, at);
+    let error = (300.0 + 5.0 * x * (2.0 - x)) - value;
+    let expected = if order == 1 { 5.0 / (n * n) as f64 } else { 0.0 };
+    assert!((error - expected).abs() < 1e-9, "error={error}, expected={expected}");
+    error
+}
+
+#[test]
+fn implicit_body_temperature_gives_exact_expansion_and_restrained_stress() {
+    for swept in [false, true] {
+        for order in [1, 2] {
+            for n in [1, 2, 4] {
+                let mut e = engine();
+                implicit_thermal_mesh(&mut e, n, order, swept);
+                ok(&mut e, IMPLICIT_TEMPERATURE);
+                implicit_temperature_steps(&mut e, swept);
+                ok(&mut e, r#"{"cmd":"solve.run","step":"free"}"#);
+                assert_implicit_expansion(&mut e, "free", false);
+                ok(&mut e, r#"{"cmd":"solve.run","step":"restrained"}"#);
+                assert_implicit_expansion(&mut e, "restrained", true);
+            }
+        }
+    }
+}
+
+#[test]
+fn implicit_body_heat_source_has_exact_power_and_convergent_temperature() {
+    for swept in [false, true] {
+        for order in [1, 2] {
+            let mut errors = Vec::new();
+            for n in [1, 2, 4] {
+                let mut e = engine();
+                implicit_thermal_mesh(&mut e, n, order, swept);
+                ok(&mut e, IMPLICIT_SOURCE);
+                implicit_source_step(&mut e);
+                ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+                errors.push(assert_implicit_source(&mut e, n, order, swept));
+            }
+            if order == 1 {
+                for pair in errors.windows(2) {
+                    assert!((pair[0] / pair[1] - 4.0).abs() < 1e-8);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn implicit_body_thermal_loads_are_transactional_and_survive_undo_and_replay() {
+    for swept in [false, true] {
+        let mut e = engine();
+        implicit_thermal_mesh(&mut e, 2, 2, swept);
+        let before = e.export_file();
+        ok(&mut e, IMPLICIT_TEMPERATURE);
+        ok(&mut e, IMPLICIT_SOURCE);
+        let loaded = e.export_file();
+        for cmd in [IMPLICIT_TEMPERATURE, IMPLICIT_SOURCE] {
+            for bodies in [serde_json::json!(["missing"]), serde_json::json!(["sheet", "missing"])] {
+                let mut bad: serde_json::Value = serde_json::from_str(cmd).unwrap();
+                bad["bodies"] = bodies;
+                let error = err(&mut e, &bad.to_string());
+                assert_eq!(error.code, ErrorCode::NotFound);
+                let expected = format!("bodies[{}]", bad["bodies"].as_array().unwrap().len() - 1);
+                assert_eq!(error.where_.as_deref(), Some(expected.as_str()));
+                let suggestion = error.suggestion.unwrap();
+                assert!(suggestion.contains("sheet") && suggestion.contains("query.model"));
+                assert_eq!(e.model(), &loaded.model);
+                assert_eq!(e.journal(), &loaded.journal);
+            }
+        }
+        ok(&mut e, r#"{"cmd":"journal.undo","steps":2}"#);
+        assert_eq!(e.model(), &before.model);
+        assert_eq!(e.journal(), &before.journal);
+        ok(&mut e, r#"{"cmd":"journal.redo","steps":2}"#);
+        assert_eq!(e.model(), &loaded.model);
+        assert_eq!(e.journal(), &loaded.journal);
+        implicit_temperature_steps(&mut e, swept);
+        implicit_source_step(&mut e);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"free"}"#);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+        let source = e.export_file();
+        let mut replay = engine();
+        pollster::block_on(replay.replay(&source.journal.entries, false, true)).unwrap();
+        assert_eq!(replay.model(), &source.model);
+        assert_eq!(replay.journal(), &source.journal);
+        assert_implicit_expansion(&mut replay, "free", false);
+        assert_implicit_source(&mut replay, 2, 2, swept);
+    }
 }

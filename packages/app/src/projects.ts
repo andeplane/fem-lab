@@ -12,7 +12,7 @@
 // only, so a project's Journal is byte-identical to what `file.save` writes and replays on a
 // server unchanged. Storage, the engine and the clock all arrive as injected interfaces, so
 // every unit is testable with a fake (AGENTS: dependency injection everywhere a boundary exists).
-import { FemError, type OpenProject, type ProjectMeta } from '@femlab/registry';
+import { FemError, type ModelFile, type OpenProject, type ProjectMeta, type ProjectSaveReceipt } from '@femlab/registry';
 import { JOURNALS, PROJECTS, done, openDb, tx, type JournalRecord } from './db';
 import type { ShareCommand } from './share';
 
@@ -95,9 +95,9 @@ export interface Projects {
   open(id: string): Promise<ProjectMeta>;
   rename(id: string | undefined, name: string): Promise<ProjectMeta>;
   delete(id: string): Promise<void>;
-  save(): Promise<OpenProject | null>;
+  save(): Promise<ProjectSaveReceipt | null>;
   /** Called at the end of every `refresh()`: creates the project, or debounces its write. */
-  note(name: string, cmds: ShareCommand[], hash: string | null): void;
+  note(name: string, journal: ModelFile['journal'], hash: string | null): void;
   /** The Model is about to be replaced, so the next `note` starts a project instead of writing. */
   fork(): void;
   /** `file.autosave { on }`. Off stops writing; it never deletes what is already saved. */
@@ -130,6 +130,18 @@ export interface ProjectsOptions {
 
 const newest = (a: ProjectMeta, b: ProjectMeta): number => b.at - a.at;
 
+interface Snapshot {
+  meta: ProjectMeta;
+  journal: ModelFile['journal'];
+  cmds: ShareCommand[];
+}
+
+/** A query result is fresh data, but copy it so an awaited save owns an immutable payload. */
+function snapshotOf(meta: ProjectMeta, journal: ModelFile['journal']): Snapshot {
+  const captured = structuredClone(journal);
+  return { meta, journal: captured, cmds: captured.entries.map((entry) => entry.cmd as ShareCommand) };
+}
+
 export function makeProjects({
   store,
   replay,
@@ -149,25 +161,65 @@ export function makeProjects({
   let current: ProjectMeta | null = null;
   let on = initiallyOn;
   let timer: unknown = null;
-  let pending: ShareCommand[] | null = null;
-  let writing: Promise<void> = Promise.resolve();
+  let latest: Snapshot | null = null;
+  const pending = new Map<string, Snapshot>();
+  const writes = new Map<number, { id: string; promise: Promise<unknown> }>();
+  const failures: { id: string; seq: number; error: unknown }[] = [];
+  const thumbnails = new Map<string, string | null>();
+  const writing = new Map<string, number>();
+  let tail: Promise<void> = Promise.resolve();
+  let writeSeq = 0;
 
   const changed = (): void => onChange?.();
   const put = (meta: ProjectMeta): void => {
     cache = [meta, ...cache.filter((p) => p.id !== meta.id)].sort(newest);
   };
 
-  const write = (): void => {
-    const cmds = pending;
-    const meta = current;
-    timer = null;
-    pending = null;
-    if (!cmds || !meta) return;
-    writing = store
-      .writeJournal(meta, cmds)
-      .catch((e: unknown) => onError?.(e))
-      .finally(changed);
+  const saving = (id: string): boolean => pending.has(id) || (writing.get(id) ?? 0) > 0;
+  const countWrite = (id: string, delta: number): void => {
+    const count = (writing.get(id) ?? 0) + delta;
+    if (count === 0) writing.delete(id);
+    else writing.set(id, count);
+  };
+
+  const enqueue = <T>(id: string, operation: () => Promise<T>): Promise<T> => {
+    const seq = ++writeSeq;
+    countWrite(id, 1);
+    const queued = tail.then(operation);
+    tail = queued.then(() => undefined, () => undefined);
+    const promise = queued.finally(() => {
+      countWrite(id, -1);
+      writes.delete(seq);
+      changed();
+    });
+    writes.set(seq, { id, promise });
+    void promise.then(
+      () => {
+        // A later exact write for this project supersedes any earlier failed attempt.
+        for (let i = failures.length - 1; i >= 0; --i) {
+          if (failures[i]!.id === id && failures[i]!.seq <= seq) failures.splice(i, 1);
+        }
+      },
+      (error: unknown) => {
+        failures.push({ id, seq, error });
+        onError?.(error);
+      },
+    );
     changed();
+    return promise;
+  };
+
+  const persist = (snapshot: Snapshot): Promise<ProjectMeta> => {
+    const thumbnail = thumbnails.get(snapshot.meta.id);
+    const meta = thumbnail === undefined ? snapshot.meta : { ...snapshot.meta, thumbnail };
+    return store.writeJournal(meta, snapshot.cmds).then(() => meta);
+  };
+
+  const write = (): void => {
+    const snapshots = [...pending.values()];
+    timer = null;
+    pending.clear();
+    for (const snapshot of snapshots) enqueue(snapshot.meta.id, () => persist(snapshot));
   };
 
   const flush = async (): Promise<void> => {
@@ -175,7 +227,13 @@ export function makeProjects({
       clearTimer(timer);
       write();
     }
-    await writing;
+    const through = writeSeq;
+    await Promise.allSettled([...writes].filter(([seq]) => seq <= through).map(([, active]) => active.promise));
+    const failed = failures.find((failure) => failure.seq <= through);
+    if (failed) {
+      for (let i = failures.length - 1; i >= 0; --i) if (failures[i]!.seq <= through) failures.splice(i, 1);
+      throw failed.error;
+    }
   };
 
   const create = (name: string): ProjectMeta => {
@@ -199,20 +257,24 @@ export function makeProjects({
       return cache;
     },
     list: () => cache,
-    current: () => (current === null ? null : { ...current, saving: timer !== null || pending !== null, autosave: on }),
+    current: () => (current === null ? null : { ...current, saving: saving(current.id), autosave: on }),
 
-    note(name, cmds, hash) {
-      if (!on || cmds.length === 0) return;
+    note(name, journal, hash) {
+      if (journal.entries.length === 0) return;
       const meta = current ?? create(name);
-      current = { ...meta, at: now(), commands: cmds.length, hash };
+      current = { ...meta, at: now(), commands: journal.entries.length, hash };
       put(current);
-      pending = cmds;
-      if (timer === null) timer = setTimer(write, delayMs);
+      latest = snapshotOf(current, journal);
+      if (on) {
+        pending.set(current.id, latest);
+        if (timer === null) timer = setTimer(write, delayMs);
+      }
       changed();
     },
 
     fork() {
       current = null;
+      latest = null;
       changed();
     },
 
@@ -234,6 +296,7 @@ export function makeProjects({
       // `current` stays null across the replay so a half-replayed Model cannot be written back
       // over the record it came from; the refresh that follows `project.open` notes it instead.
       current = null;
+      latest = null;
       await replay(cmds);
       current = meta;
       changed();
@@ -241,8 +304,10 @@ export function makeProjects({
     },
 
     async rename(id, name) {
+      await flush();
       const meta = { ...find(id ?? current?.id ?? ''), name };
       if (current?.id === meta.id) current = meta;
+      if (latest?.meta.id === meta.id) latest = { ...latest, meta };
       put(meta);
       await store.writeMeta(meta);
       changed();
@@ -250,22 +315,45 @@ export function makeProjects({
     },
 
     async delete(id) {
+      await flush();
       const meta = find(id);
       cache = cache.filter((p) => p.id !== meta.id);
-      if (current?.id === meta.id) current = null;
+      if (current?.id === meta.id) {
+        current = null;
+        latest = null;
+      }
       await store.remove(meta.id);
       changed();
     },
 
     async save() {
-      await flush();
-      if (!current) return null;
-      const shot = await thumbnail?.().catch(() => null);
-      current = { ...current, at: now(), thumbnail: shot ?? current.thumbnail };
-      put(current);
-      await store.writeMeta(current);
+      if (!current || !latest || latest.meta.id !== current.id) return null;
+      // Capture both identity and payload before the first await. A refresh may note another
+      // edit, or a Model-replacing Command may fork, while the thumbnail decodes or IDB writes.
+      const captured = latest;
+      pending.delete(captured.meta.id);
+      if (pending.size === 0 && timer !== null) {
+        clearTimer(timer);
+        timer = null;
+      }
+      const at = now();
+      const shot = thumbnail?.().catch(() => null) ?? Promise.resolve(null);
+      const explicit = enqueue(captured.meta.id, async () => {
+        const thumbnail = (await shot) ?? thumbnails.get(captured.meta.id) ?? captured.meta.thumbnail;
+        const meta = { ...captured.meta, at, thumbnail };
+        await store.writeJournal(meta, captured.cmds);
+        thumbnails.set(meta.id, meta.thumbnail);
+        return meta;
+      });
+      const saved = await explicit;
+      const sameVersion = (meta: ProjectMeta): boolean => meta.id === captured.meta.id && meta.at === captured.meta.at && meta.commands === captured.meta.commands && meta.hash === captured.meta.hash;
+      cache = cache.map((meta) => sameVersion(meta) ? saved : meta.id === saved.id ? { ...meta, thumbnail: saved.thumbnail } : meta).sort(newest);
+      if (current?.id === saved.id) current = sameVersion(current) ? saved : { ...current, thumbnail: saved.thumbnail };
+      if (latest?.meta.id === saved.id) latest = { ...latest, meta: sameVersion(latest.meta) ? saved : { ...latest.meta, thumbnail: saved.thumbnail } };
+      const waiting = pending.get(saved.id);
+      if (waiting) pending.set(saved.id, { ...waiting, meta: { ...waiting.meta, thumbnail: saved.thumbnail } });
       changed();
-      return { ...current, saving: false, autosave: on };
+      return { ...saved, saving: false, autosave: on, journal: captured.journal };
     },
 
     setEnabled(next) {
@@ -275,7 +363,7 @@ export function makeProjects({
       // and clearing the store the way the old autosave did would now be data loss.
       if (timer !== null) clearTimer(timer);
       timer = null;
-      pending = null;
+      pending.clear();
       changed();
     },
     enabled: () => on,
