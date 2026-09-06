@@ -18,7 +18,7 @@ export async function serveFrozenApp(directory: string): Promise<FrozenAppServer
   const root = await realpath(directory);
   if (!(await stat(root)).isDirectory()) throw new Error(`frozen app path is not a directory: ${directory}`);
   const server = createServer((request, response) => {
-    void (async () => {
+    const respond = async () => {
       const pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
       const relative = pathname === '/' || pathname === '/fem-lab/' ? 'index.html' : pathname.replace(/^\/fem-lab\//, '');
       const target = path.resolve(root, relative);
@@ -36,7 +36,8 @@ export async function serveFrozenApp(directory: string): Promise<FrozenAppServer
       } catch {
         response.writeHead(404).end();
       }
-    })();
+    };
+    void respond().catch(() => response.writeHead(400).end());
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);

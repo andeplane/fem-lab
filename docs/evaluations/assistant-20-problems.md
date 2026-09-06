@@ -7,6 +7,9 @@ This is the fixed evaluation specification. The prompts, answers and tolerances 
 before any live run. A failing run does not change them. Every problem starts from a fresh Model and
 must be attempted once through the browser host and once through the MCP host, in this order.
 Opening an example or replaying a prepared Journal invalidates the attempt.
+The scorer rejects direct replay tools and their canonical `fem.file.open`, `fem.file.openExample`,
+`fem.example.open` and `fem.project.open` spellings inside `run_script`; this is a source check of
+ordinary generated calls, not a general proof about aliased JavaScript.
 
 ## Pass rule
 

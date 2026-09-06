@@ -18,9 +18,9 @@ function complete(spec: EvalCase): EvalEvidence {
   const source = 'catalogue provenance';
   const catalogue = {
     materialAddSource: source,
-    E: { value: `${spec.materialE} Pa` },
-    nu: { value: spec.materialNu },
-    rho: spec.materialRho === undefined ? null : { value: `${spec.materialRho} kg/m^3` },
+    E: { value: valued(spec.materialE, 'Pa') },
+    nu: { value: valued(spec.materialNu, '1') },
+    rho: spec.materialRho === undefined ? null : { value: valued(spec.materialRho, 'kg/m^3') },
     alpha: null, k: null, cp: null, yield: null,
   };
   const commands: Record<string, unknown>[] = [
@@ -364,6 +364,7 @@ describe('lane orchestration and artifacts', () => {
       expect(response.headers.get('cross-origin-opener-policy')).toBe('same-origin');
       expect(response.headers.get('cross-origin-embedder-policy')).toBe('credentialless');
       expect((await fetch(`${server.url}..%2Foutside`)).status).toBe(404);
+      expect((await fetch(`${server.url}%E0%A4%A`)).status).toBe(400);
     } finally {
       await server.close();
       await rm(directory, { recursive: true });

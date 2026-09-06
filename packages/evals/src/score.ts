@@ -12,6 +12,7 @@ const FACTOR: Record<string, number> = {
   s: 1, ms: 1e-3,
   Hz: 1, kHz: 1e3,
   K: 1,
+  '1': 1,
   'kg/m^3': 1, 'g/cm^3': 1e3,
   '1/K': 1,
   'W/(m K)': 1,
@@ -306,7 +307,7 @@ function replayCheck(evidence: EvalEvidence): CheckResult {
     return /fem\.(?:example\.open|file\.(?:open|openExample)|project\.open)\s*\(/.test(code);
   });
   const passed = direct === undefined && nested === undefined;
-  return check('journal', passed, passed ? 'no prepared Model or replay route was used' : `used ${direct?.command ?? nested?.command ?? 'a replay route in script.run'}`);
+  return check('journal', passed, passed ? 'no direct or canonical scripted prepared-Model route was used' : `used ${direct?.command ?? nested?.command ?? 'a canonical replay route in script.run'}`);
 }
 
 export function scoreCase(spec: EvalCase, evidence: EvalEvidence): CaseScore {
