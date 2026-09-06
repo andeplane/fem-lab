@@ -13,7 +13,7 @@ import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { devApiKeys } from './dev-keys';
-import { appHostCommands, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
+import { appHostCommands, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
 import { ResultsView } from './results';
 import { ScriptHost } from './script-host';
 import { openShared } from './share';
@@ -79,6 +79,8 @@ async function boot(): Promise<void> {
     await results.refresh();
     // Where a project comes from: with none open and a non-empty Journal this creates one named
     // after the Model, and otherwise it debounces a write into the one that is open (issue #41).
+    noteAutosave(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? []);
+    store.set({ autosaves: autosaveHistory() });
     noteProject(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? [], (model as { hash: string | null }).hash);
   };
   const registry = new Registry({
@@ -100,7 +102,7 @@ async function boot(): Promise<void> {
    * transport, so without this the tree, the Journal and the new project all lag a Command
    * behind; `file.openExample` refreshes on its own way out and needs no row here.
    */
-  const REFRESHES = new Set(['file.export', 'file.open', 'example.open', 'project.new', 'project.open']);
+  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'example.open', 'project.new', 'project.open']);
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
   const dispatch: Registry['dispatch'] = async (cmd) => {
@@ -149,6 +151,7 @@ async function boot(): Promise<void> {
 
   // The Recent projects list is what the start screen leads with, so it is read before the
   // 3.2 MB wasm module rather than after it.
+  void primeAutosave().then(() => store.set({ autosaves: autosaveHistory() })).catch((e: unknown) => store.fail(e));
   void primeProjects().catch((e: unknown) => store.fail(e));
 
   // Lazy, but not late: three.js is the chunk the very next click needs, so it is fetched now,

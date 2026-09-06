@@ -8,6 +8,12 @@ export const MODEL_FILE = { format: 'femlab/1', engineVersion: '0', model: { nam
 export const FOLDER: FolderInfo = { name: 'proj', files: [], agentsMd: 'AGENTS.md', skills: [] };
 export const PROJECT: ProjectMeta = { id: 'p1', name: 'beam', at: 1_700_000_000_000, createdAt: 1_700_000_000_000, commands: 9, hash: 'h', thumbnail: null };
 
+export const SAVED = { name: 'beam', at: 1_700_000_000_000, commands: 9 };
+export const AUTOSAVES = [
+  { id: 'newest', name: 'beam', at: 1_700_000_000_000, commands: 9 },
+  { id: 'older', name: 'beam', at: 1_699_999_000_000, commands: 7 },
+];
+
 const kN = (value: number) => ({ value, unit: 'kN' });
 const mm = (value: number) => ({ value, unit: 'mm' });
 
@@ -83,6 +89,9 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       pick: vi.fn(async () => JSON.stringify(MODEL_FILE)),
       download: vi.fn(),
       shareLink: vi.fn(async () => ({ url: 'https://x/#j' })),
+      restore: vi.fn(async (id?: string) => id === undefined ? SAVED : AUTOSAVES.find(x => x.id === id) ?? null),
+      autosave: vi.fn(() => ({ enabled: autosaveOn, saved: SAVED })),
+      autosaves: vi.fn(() => AUTOSAVES),
       setAutosave: vi.fn((on: boolean) => {
         autosaveOn = on;
       }),

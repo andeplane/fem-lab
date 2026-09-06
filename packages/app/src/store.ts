@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, AutosaveVersion, Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
@@ -46,6 +46,8 @@ export interface LastError {
 }
 
 export interface UiState {
+  autosave: AutosaveState['saved'];
+  autosaves: AutosaveVersion[];
   /** Session mirror of the ai.setModel host Command, shared with the Assistant. */
   assistantModel: string | null;
   /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
@@ -158,6 +160,8 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
+  autosave: null,
+  autosaves: [],
   assistantModel: null,
   folder: null,
   skills: BUILTIN_SKILLS,
