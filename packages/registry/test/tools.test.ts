@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import schema from '../src/generated/engine.schema.json';
 import { Registry, type EngineSchema } from '../src/registry';
-import { RUN_SCRIPT, TOOL_NAME, commandNameFor, inlineDefs, stripDiscriminator, toToolDefinitions, toolNameFor } from '../src/tools';
+import { RUN_SCRIPT, TOOL_NAME, commandNameFor, inlineDefs, stripDiscriminator, toToolDefinitions, toolInputSchema, toolNameFor } from '../src/tools';
 import { fakeHost } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
@@ -37,6 +37,8 @@ describe('toToolDefinitions', () => {
 
   it('input schemas have no discriminator, and $refs only to carried recursive defs', () => {
     for (const t of tools) {
+      expect(t.input_schema['type'], t.name).toBe('object');
+      for (const key of ['anyOf', 'oneOf', 'allOf']) expect(t.input_schema, t.name).not.toHaveProperty(key);
       const props = t.input_schema['properties'] as Record<string, unknown> | undefined;
       if (props) {
         expect(props).not.toHaveProperty('cmd');
@@ -88,5 +90,28 @@ describe('inlineDefs / stripDiscriminator', () => {
   it('strips cmd and query and tolerates a schema without properties', () => {
     expect(stripDiscriminator({ type: 'object', properties: { cmd: { const: 'a.b' }, n: { type: 'number' } }, required: ['cmd', 'n'] })).toEqual({ type: 'object', properties: { n: { type: 'number' } }, required: ['n'] });
     expect(stripDiscriminator({ anyOf: [] })).toEqual({ anyOf: [], properties: {}, required: [] });
+  });
+});
+
+
+describe('provider object unions', () => {
+  it('exports every field choice and keeps the original runtime validation', async () => {
+    const field = toToolDefinitions(registry).find((t) => t.name === 'view_showField')!.input_schema;
+    expect(field).toEqual({ type: 'object', properties: {
+      field: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      component: expect.objectContaining({ type: 'integer' }), step: { type: 'string' },
+    }, required: ['field'] });
+    await registry.dispatch({ cmd: 'view.showField', field: null });
+    await registry.dispatch({ cmd: 'view.showField', field: 'displacement', component: 2, step: 'static' });
+    await expect(registry.dispatch({ cmd: 'view.showField', field: 123 })).rejects.toMatchObject({ code: 'schema' });
+  });
+
+  it('projects oneOf branches, removes discriminators and deduplicates shared types', () => {
+    expect(toolInputSchema({ description: 'choice', oneOf: [
+      { type: 'object', properties: { cmd: { const: 'x' }, common: { type: 'string' }, a: { type: 'number' } }, required: ['cmd', 'common', 'a'] },
+      { type: 'object', properties: { cmd: { const: 'x' }, common: { type: 'string' }, b: { type: 'boolean' } }, required: ['cmd', 'common'] },
+    ] })).toEqual({ description: 'choice', type: 'object', properties: {
+      common: { type: 'string' }, a: { type: 'number' }, b: { type: 'boolean' },
+    }, required: ['common'] });
   });
 });

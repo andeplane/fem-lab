@@ -85,12 +85,34 @@ export function stripDiscriminator(schema: JsonSchema): JsonSchema {
   return { ...rest, properties: props, required: required.filter((r) => r !== 'cmd' && r !== 'query') };
 }
 
+/**
+ * Providers require an object root and Anthropic rejects root combinators. Project an object
+ * union onto its properties: shared required fields stay required, branch-only fields become
+ * optional, and differing property types become nested unions. The registry still validates
+ * branch relationships against the original schema before dispatching a call.
+ */
+export function toolInputSchema(schema: JsonSchema): JsonSchema {
+  const { anyOf, oneOf, ...rest } = schema;
+  const variants = (anyOf ?? oneOf) as JsonSchema[] | undefined;
+  if (!variants) return stripDiscriminator(schema);
+  const branches = variants.map(toolInputSchema);
+  const properties: Record<string, unknown> = {};
+  const names = new Set(branches.flatMap((b) => Object.keys(b['properties'] as object)));
+  for (const name of names) {
+    const choices = branches.map((b) => (b['properties'] as Record<string, unknown>)[name]).filter((v) => v !== undefined);
+    const unique = [...new Map(choices.map((v) => [JSON.stringify(v), v])).values()];
+    properties[name] = unique.length === 1 ? unique[0] : { anyOf: unique };
+  }
+  const required = [...names].filter((name) => branches.every((b) => (b['required'] as string[]).includes(name)));
+  return { ...rest, type: 'object', properties, required };
+}
+
 /** The AI's tool list: every `tool: true` Command and Query, plus `run_script` for `script.run`. */
 export function toToolDefinitions(registry: Registry): ToolDefinition[] {
   const { commands, queries } = registry.list();
   const script = commands.find((d) => d.name === 'script.run');
   return [...commands, ...queries]
     .filter((d) => d.tool)
-    .map((d) => ({ name: toolNameFor(d.name), description: d.description, input_schema: stripDiscriminator(inlineDefs(d.schema, registry.defs)) }))
+    .map((d) => ({ name: toolNameFor(d.name), description: d.description, input_schema: toolInputSchema(inlineDefs(d.schema, registry.defs)) }))
     .concat(script ? [{ name: RUN_SCRIPT, description: script.description, input_schema: script.schema }] : []);
 }
