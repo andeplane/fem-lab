@@ -704,7 +704,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
         </div> : null}
         <div class="cost">
           <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
-          <span>{key.source === 'stored' ? 'key stored in this browser' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
+          <span>{key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
         </div>
       </div>
 
@@ -741,7 +741,7 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             </Cmd>
           </label>
           <span class="source">
-            {key.source === 'stored' ? 'from localStorage in this browser' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
+            {key.source === 'stored' ? 'from sessionStorage in this tab' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
           </span>
         </div>
       ) : null}

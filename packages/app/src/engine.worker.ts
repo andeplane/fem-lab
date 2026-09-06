@@ -5,6 +5,7 @@
 import init, { Engine, version } from './generated/wasm/femlab_engine_wasm.js';
 import wasmUrl from './generated/wasm/femlab_engine_wasm_bg.wasm?url';
 import { siUnitOf } from './fields';
+import type { ResultSummary } from '@femlab/registry';
 import type { AppReq, AppRes } from './protocol';
 import { toStructured } from './protocol';
 import { restoreHistory } from './recovery';
@@ -38,6 +39,9 @@ function surface(): Bulk {
     indices: Uint32Array;
     triSet: Uint32Array;
     triBody: Uint32Array;
+    edges: Uint32Array;
+    edgeSet: Uint32Array;
+    edgeBody: Uint32Array;
     setNames: string[];
     bodyNames: string[];
     source: string;
@@ -47,6 +51,9 @@ function surface(): Bulk {
     { name: 'indices', dtype: 'u32' as const, view: s.indices.slice() },
     { name: 'triFace', dtype: 'u32' as const, view: s.triSet.slice() },
     { name: 'triBody', dtype: 'u32' as const, view: s.triBody.slice() },
+    { name: 'edges', dtype: 'u32' as const, view: s.edges.slice() },
+    { name: 'edgeFace', dtype: 'u32' as const, view: s.edgeSet.slice() },
+    { name: 'edgeBody', dtype: 'u32' as const, view: s.edgeBody.slice() },
   ];
   return {
     value: { faceNames: s.setNames, bodyNames: s.bodyNames, source: s.source },
@@ -82,8 +89,11 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
         if (i === 0 || v < min) min = v;
         if (i === 0 || v > max) max = v;
       }
+      const reactionQuantity = field === 'reaction'
+        ? (JSON.parse(need().query(JSON.stringify({ query: 'query.result', step }))) as ResultSummary).reactionQuantity
+        : 'force';
       return {
-        value: { min, max, unit: siUnitOf(field as never) },
+        value: { min, max, unit: siUnitOf(field, reactionQuantity) },
         buffers: [{ name: 'values', dtype: 'f32' as const, length: values.length }],
         raw: [values.buffer as ArrayBuffer],
       };

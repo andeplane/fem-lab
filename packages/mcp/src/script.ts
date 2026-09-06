@@ -5,6 +5,8 @@ import { z } from 'zod';
 export const SCRIPT_TIMEOUT_MS = 30_000;
 const MAX_MESSAGES = 10_000;
 const MAX_OUTPUT = 1024 * 1024;
+const encoder = new TextEncoder();
+const messageTooLarge = (text: string): boolean => text.length > MAX_OUTPUT || encoder.encode(text).byteLength > MAX_OUTPUT;
 
 export interface ScriptOutcome {
   result?: unknown;
@@ -91,13 +93,20 @@ export async function runScript(
       if (active && deps.now() >= deadline) timeout();
       return active;
     };
-    const reply = (value: unknown) => { if (open()) worker.postMessage(JSON.stringify(value)); };
+    const reply = (value: { id: number; value?: unknown; error?: string; timer?: true }) => {
+      if (!open()) return;
+      let text: string;
+      try { text = JSON.stringify(value); }
+      catch (error) { text = JSON.stringify({ id: value.id, error: `script RPC reply is not JSON: ${describe(error)}` }); }
+      if (messageTooLarge(text)) text = JSON.stringify({ id: value.id, error: 'script RPC reply exceeds 1 MiB' });
+      worker.postMessage(text);
+    };
     timers.push(deps.later(timeout, Math.max(0, deadline - deps.now())));
     worker.on('error', (error) => finish({ console: lines, error: describe(error) }));
     worker.on('exit', (code) => finish({ console: lines, error: `script runtime exited (${code})` }));
     worker.on('message', (text: unknown) => {
       if (!open()) return;
-      if (++messages > MAX_MESSAGES || typeof text !== 'string' || text.length > MAX_OUTPUT) {
+      if (++messages > MAX_MESSAGES || typeof text !== 'string' || messageTooLarge(text)) {
         finish({ console: lines, error: 'script exceeded its message limit' });
         return;
       }
@@ -108,7 +117,7 @@ export async function runScript(
       if (kind === 'done') finish({ console: lines, result: value });
       else if (kind === 'failed') finish({ console: lines, error: describe(value) });
       else if (kind === 'log') {
-        output += String(value).length;
+        output += encoder.encode(String(value)).byteLength;
         if (output > MAX_OUTPUT) finish({ console: lines, error: 'script exceeded its console limit' });
         else lines.push(String(value));
       } else if (kind === 'timer') {

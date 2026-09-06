@@ -73,6 +73,7 @@ pub async fn run(
         .collect();
     let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
     Ok(StepResult {
+        reaction_quantity: crate::units::ReactionQuantity::Force,
         fields,
         scalars,
         extremes: ex,

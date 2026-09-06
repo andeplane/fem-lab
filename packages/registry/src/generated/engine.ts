@@ -1303,7 +1303,9 @@ export type Axis = "x" | "y" | "z";
  */
 export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
 /**
- * Result fields.
+ * Result fields. Reaction is support force in N for structural Results and removed heat
+ * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
+ * display units.
  */
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
@@ -1422,6 +1424,11 @@ export type PluginSource =
 export type Query =
   | {
       query: "query.model";
+    }
+  | {
+      kind: ObjectKind;
+      name: string;
+      query: "query.definition";
     }
   | {
       query: "query.mesh";
@@ -1585,6 +1592,7 @@ export type ReportSection =
  */
 export type QueryResult =
   | ModelSummary
+  | ObjectDefinition
   | MeshSummary
   | SetInfo
   | ResultSummary
@@ -2849,6 +2857,10 @@ export interface Engine {
 export interface UnitSet {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;
@@ -3220,6 +3232,12 @@ export interface Warning {
   where?: string | null;
 }
 /**
+ * Lossless input for editing one Model object through the same Command used to create it.
+ */
+export interface ObjectDefinition {
+  command: Command;
+}
+/**
  * `query.mesh` response.
  */
 export interface MeshSummary {
@@ -3290,8 +3308,14 @@ export interface ResultSummary {
   residual: number;
   timeMs: number;
   extremes: Extreme[];
+  /**
+   * Force for structural Results; power for thermal Results, retained with the solved state.
+   */
+  reactionQuantity: "force" | "power";
   reactions: ReactionRow[];
   /**
+   * Applied force vector or thermal power in component 0 (remaining components zero).
+   *
    * @minItems 3
    * @maxItems 3
    */
@@ -3311,7 +3335,7 @@ export interface ResultSummary {
    */
   history?: HistoryRow[];
   /**
-   * |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+   * |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
    * by a prescribed displacement — where both totals are zero — still reports a meaningful
    * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
    */
@@ -3805,6 +3829,10 @@ export interface Model {
 export interface UnitSet1 {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;

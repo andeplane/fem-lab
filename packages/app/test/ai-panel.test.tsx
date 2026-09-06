@@ -69,6 +69,7 @@ describe('the assistant drawer', () => {
     chatBridge.pending = null;
     chatBridge.pendingDraft = null;
     localStorage.clear();
+    sessionStorage.clear();
   });
 
   it('names only Commands the registry has on every clickable', async () => {
@@ -111,7 +112,7 @@ describe('the assistant drawer', () => {
   });
 
   it('keeps a real conversation and an in-flight tool call alive while hidden', async () => {
-    localStorage.setItem('femlab.ai.key', 'test-key');
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
     let finishTool!: (value: unknown) => void;
     const pending = new Promise((resolve) => { finishTool = resolve; });
     let round = 0;
@@ -194,7 +195,7 @@ describe('the assistant drawer', () => {
   });
 
   it('shows a script error as a failed tool card with its partial console output', async () => {
-    localStorage.setItem('femlab.ai.key', 'test-key');
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
     let round = 0;
     const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
       id: 'anthropic', models: ['test'],
@@ -223,7 +224,7 @@ describe('the assistant drawer', () => {
   });
 
   it('renders deltas before completion and finalizes prose and verification without duplicates', async () => {
-    localStorage.setItem('femlab.ai.key', 'test-key');
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
     let resumeFirst!: () => void;
     let resumeVerification!: () => void;
     const first = new Promise<void>((resolve) => { resumeFirst = resolve; });
@@ -271,9 +272,9 @@ describe('the assistant drawer', () => {
   });
 
   it('shows the key source and the model in the settings sub-panel', async () => {
-    localStorage.setItem('femlab.ai.key', 'sk-ant-api03-abcdefgh7f2a');
+    sessionStorage.setItem('femlab.ai.key', 'sk-ant-api03-abcdefgh7f2a');
     const { root } = await mount({ panels: { 'assistant.settings': true } });
-    expect(root.textContent).toContain('from localStorage in this browser');
+    expect(root.textContent).toContain('from sessionStorage in this tab');
     expect(root.querySelector<HTMLInputElement>('.settings input[type=password]')!.placeholder).toBe('sk-ant-a…7f2a');
     expect([...root.querySelectorAll('.model-row option')].map((o) => o.textContent)).toContain('claude-opus-5');
     expect(root.querySelector('[data-cmd="ai.setModel"]')).not.toBeNull();
@@ -353,7 +354,7 @@ describe('the assistant drawer', () => {
   });
 
   it('loads the same built-in through the production host, slash picker and sent turn', async () => {
-    localStorage.setItem('femlab.ai.key', 'test-key');
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
     const requests: ChatRequest[] = [];
     const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
       id: 'anthropic', models: ['test'],
@@ -499,11 +500,13 @@ describe('Assistant queue and model controls', () => {
     document.body.innerHTML = '';
     chatBridge.pending = null;
     localStorage.clear();
-    localStorage.setItem('femlab.ai.key', 'test-key');
+    sessionStorage.clear();
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
   });
 
   it('preserves a missing-key draft and image until the key is saved and the person retries', async () => {
     localStorage.clear();
+    sessionStorage.clear();
     const image = { type: 'image' as const, mediaType: 'image/png' as const, base64: 'AAAA', caption: 'reference' };
     const screenshot = vi.spyOn(context, 'screenshotBlock').mockResolvedValue(image);
     const seen: import('../src/ai/provider').Message[][] = [];

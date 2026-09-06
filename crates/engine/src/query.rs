@@ -28,6 +28,14 @@ pub enum Query {
     #[schemars(extend("x-returns" = "ModelSummary"))]
     Model {},
 
+    /// The complete upsert Command for an existing object's current definition, with exact
+    /// SI quantities. Use it to populate an edit form; change its arguments and dispatch it
+    /// to apply. Display summaries are rounded and must never be used to reconstruct edits.
+    /// Auto-generated Sets and mesher-owned Bodies have no editable object definition.
+    #[serde(rename = "query.definition", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "ObjectDefinition"))]
+    Definition { kind: ObjectKind, name: String },
+
     /// Counts and sanity of the current Mesh (nodes, elements, element kind, DOF, bounding box,
     /// edge lengths, Sets with their resolved sizes, quality). Builds the Mesh if needed.
     #[serde(rename = "query.mesh")]
@@ -412,7 +420,10 @@ pub struct ResultSummary {
     pub residual: f64,
     pub time_ms: f64,
     pub extremes: Vec<Extreme>,
+    /// Force for structural Results; power for thermal Results, retained with the solved state.
+    pub reaction_quantity: crate::units::ReactionQuantity,
     pub reactions: Vec<ReactionRow>,
+    /// Applied force vector or thermal power in component 0 (remaining components zero).
     pub applied_total: [Valued; 3],
     /// Optional material properties the successful procedure actually read as zero because the
     /// Material omitted them. Empty when every solver-used property was explicit.
@@ -425,7 +436,7 @@ pub struct ResultSummary {
     /// One row per output time of a transient Step: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
-    /// |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+    /// |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
     /// by a prescribed displacement — where both totals are zero — still reports a meaningful
     /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
     pub balance: f64,
@@ -571,6 +582,7 @@ pub struct Capabilities {
 #[serde(untagged)]
 pub enum QueryResult {
     Model(ModelSummary),
+    Definition(ObjectDefinition),
     Mesh(MeshSummary),
     Set(SetInfo),
     Result(ResultSummary),
@@ -584,6 +596,12 @@ pub enum QueryResult {
     Objects(ObjectList),
     Capabilities(Capabilities),
     Report(ReportText),
+}
+
+/// Lossless input for editing one Model object through the same Command used to create it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ObjectDefinition {
+    pub command: Command,
 }
 
 /// Acknowledgement of a dispatched Command.
