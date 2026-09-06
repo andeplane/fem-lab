@@ -95,10 +95,10 @@ pub trait Element: Send + Sync {
     /// Newton inversion of the isoparametric map.
     fn inverse_map(&self, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]>;
     /// Rich point-location status. Existing implementations that only provide `inverse_map`
-    /// still classify a missing reference point as outside; implementations able to detect a
-    /// numerical failure override this method.
+    /// conservatively classify a missing reference point as a failure; implementations must
+    /// override this method before they can report positive outside coverage.
     fn inverse_map_status(&self, coords: &[f64], x: [f64; 3]) -> InverseMap {
-        self.inverse_map(coords, x).map_or(InverseMap::Outside, InverseMap::Inside)
+        self.inverse_map(coords, x).map_or(InverseMap::Failed, InverseMap::Inside)
     }
     /// `√λ_max` of `M_lumped⁻¹ K_e`: the element bound on the global `ω_max` for `Δt_crit`.
     fn omega_max(&self, c: &ElementCtx<'_>) -> Result<f64, Error>;
