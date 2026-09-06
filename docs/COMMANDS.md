@@ -2900,7 +2900,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "A scalar `g(t)` that scales every prescribed temperature of a transient Step.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
+  "description": "A scalar `g(t)` that scales the driven part of a Step over time: every prescribed\ntemperature of a heat-transient Step, and every Load and prescribed displacement of a\nstatic one.\n\nCommands are replayed from the Journal, so a time function is data, never a closure: it is\neither a sine or a piecewise-linear table, and nothing else.",
   "oneOf": [
     {
       "description": "`amplitude · sin(2π t / period)`. NAFEMS T3's `100 sin(π t / 40)` is a prescribed\ntemperature of \"100 K\" with `amplitude: 1` and `period: \"80 s\"`.",
@@ -3861,7 +3861,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.",
       "type": "object",
       "properties": {
         "name": {
@@ -3913,7 +3913,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "format": "double"
         },
         "dt": {
-          "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
+          "description": "Maximum time increment of a heat-transient Step, or of a static Step with an\namplitude. A uniform increment no larger than dt is chosen to finish exactly at\ntEnd; the Result reports the increment actually used.",
           "anyOf": [
             {
               "$ref": "#/$defs/Q_time"
@@ -4044,7 +4044,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.",
+      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
       "type": "object",
       "properties": {
         "step": {
