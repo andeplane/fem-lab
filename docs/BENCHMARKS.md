@@ -195,6 +195,13 @@ its existing `nafems-le10-plate` identifier for compatibility, but its visible t
 reference explicitly identify the full-face variant. Correction: #183; command-reachable
 Tet10 validation follows under #4.
 
+The command-reachable Tet10 row (#4) uses the same full-face variant and the unchanged
+2% tolerance. Splitting 6 × 6 × 4, 12 × 12 × 8 and 18 × 18 × 8 parent cells gives
+−5.014643, −5.101429 and −5.163953 MPa respectively; reference error decreases to 1.64%.
+The fixture also gates reaction balance and Result freshness. Separate simplex tests verify
+the exact linear heat profile at both orders over three refinements, body-scoped face areas,
+and named edge preservation and deterministic replay for Tri3/Tri6.
+
 ## E. Heat transfer (phase 2)
 
 | # | Case | Reference | Tolerance | Proves | Status |

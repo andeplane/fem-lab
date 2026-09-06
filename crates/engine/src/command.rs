@@ -803,6 +803,9 @@ pub enum Command {
     /// 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
     /// `formulation: full` is the textbook linear element that locks in bending: keep the
     /// default incompatible modes or use order 2 when bending matters.
+    /// `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+    /// (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+    /// geometry: the selected mesher still determines the boundary approximation.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     MeshSet {
         mesher: MesherSpec,
@@ -810,6 +813,8 @@ pub enum Command {
         order: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         formulation: Option<Formulation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplices: Option<bool>,
     },
 
     /// Write the current Mesh out as text the host saves; the Mesh is built first if it is
