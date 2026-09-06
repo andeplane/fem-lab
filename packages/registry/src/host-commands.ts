@@ -105,6 +105,19 @@ export interface ProjectSaveReceipt extends OpenProject {
   journal: ModelFile['journal'];
 }
 
+/** The autosave state exposed through `query.autosave`. */
+export interface AutosaveState {
+  enabled: boolean;
+  /** The model name, when it was written, and how many Commands it holds; `null` if none. */
+  saved: { name: string; at: number; commands: number } | null;
+}
+export interface AutosaveVersion {
+  id: string;
+  name: string;
+  at: number;
+  commands: number;
+}
+
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
   transport: EngineTransport;
@@ -148,6 +161,12 @@ export interface HostContext {
     shareLink(file: ModelFile): Promise<{ url: string }>;
     /** Turn the background save into the open project on or off. The choice sticks in this browser. */
     setAutosave(on: boolean): void;
+    /** Replay one saved revision, or the newest revision when no id is supplied. */
+    restore(id?: string): Promise<AutosaveState['saved']>;
+    /** Whether autosave is on and the latest known revision, for `query.autosave`. */
+    autosave(): AutosaveState;
+    /** Bounded saved Journal revisions, newest first, for the history view. */
+    autosaves(): AutosaveVersion[];
   };
   /**
    * Projects in this browser's storage. `list` and `current` are **synchronous**: both answer
@@ -378,6 +397,7 @@ export const HOST_COMMANDS: HostDef[] = [
     ctx.files.setAutosave(on);
     return { enabled: on };
   }),
+  def('file.restore', 'Reopen an autosaved Journal revision as a separate project without overwriting the currently saved project. Pass the `id` from query.autosaveHistory to reopen an earlier revision; omit it for the newest. Returns `{ name, at, commands }`, or `null` when this browser has nothing saved.', z.object({ id: z.string().optional() }), ({ id }, ctx) => ctx.files.restore(id)),
   def('file.read', 'Read a text file from the open project folder by relative path (AGENTS.md, a script, a report, a skill). Paths outside the folder are refused; files over 2 MB are not read.', z.object({ path: z.string() }), async ({ path }, ctx) => {
     const text = await ctx.folder.readText(assertInside(path).join('/'));
     if (text.length > MAX_TEXT) throw new FemError('unsupported', `'${path}' is larger than 2 MB`, `path '${path}'`, 'read a smaller file or export a summary instead');
@@ -423,6 +443,8 @@ export const HOST_QUERIES: HostDef[] = [
   def('query.projects',
     'Every project saved in this browser, most recently edited first: id, name, when it was last written, how many Commands its Journal holds, and a small thumbnail. The start screen\u2019s Recent projects list is a view of this Query.',
     none, (_, ctx) => ({ projects: ctx.projects.list() })),
+  def('query.autosave', 'Whether background autosave is on, and the latest locally known revision (`{ name, at, commands }` or `null`), including pending writes; file.restore reopens it.', none, (_, ctx) => ctx.files.autosave()),
+  def('query.autosaveHistory', 'List up to 20 locally known Journal revisions, newest first, including pending writes and retryable storage failures. Each `id` stays restorable through file.restore until history eviction or autosave clearing, including when model names and times tie. Pending revisions are not durable until their write commits and are discarded when autosave is disabled. Saved revisions remain available while autosave is off.', none, (_, ctx) => ({ enabled: ctx.files.autosave().enabled, revisions: ctx.files.autosaves() })),
   def('query.project',
     'The open project \u2014 id, name, when it was last written, how many Commands it holds and whether a write is in flight \u2014 or `null` when the Model is still empty and no project has been made yet. The top bar reads this.',
     none, (_, ctx) => ctx.projects.current()),
