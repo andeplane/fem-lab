@@ -233,6 +233,18 @@ impl Engine {
                             ),
                         )
                     }
+                    LoadKind::Radiation { emissivity, t_inf, .. } => {
+                        let t = display(m, *t_inf, Temperature::DIM);
+                        (
+                            "radiation",
+                            format!(
+                                "emissivity = {}, tInf = {} {}",
+                                units::fmt_sig(*emissivity, 4),
+                                units::fmt_sig(t.value, 4),
+                                t.unit
+                            ),
+                        )
+                    }
                     LoadKind::HeatFlux { q, .. } => {
                         let v = display(m, *q, crate::units::HeatFlux::DIM);
                         ("heatFlux", format!("{} {}", units::fmt_sig(v.value, 4), v.unit))
