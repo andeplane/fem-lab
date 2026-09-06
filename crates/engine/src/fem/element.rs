@@ -60,6 +60,15 @@ pub enum FaceLoad {
     Traction([f64; 3]),
 }
 
+/// Outcome of isoparametric point location. `Outside` is a converged reference coordinate
+/// outside the element; `Failed` means the map could not be inverted numerically.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InverseMap {
+    Inside([f64; 3]),
+    Outside,
+    Failed,
+}
+
 /// One element formulation. Every matrix is row-major and every vector is node-major
 /// (`dim * node + component`).
 pub trait Element: Send + Sync {
@@ -83,9 +92,14 @@ pub trait Element: Send + Sync {
     /// Parametric coordinates of Gauss point `i`, for extrapolation and probes.
     fn gp_xi(&self, i: usize) -> [f64; 3];
     fn shape_at(&self, xi: [f64; 3], n: &mut [f64]);
-    /// Newton inversion of the isoparametric map, at most 20 iterations; `None` when `x` is
-    /// outside the element (tolerance 1e-8 in reference coordinates) or the map is degenerate.
+    /// Newton inversion of the isoparametric map.
     fn inverse_map(&self, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]>;
+    /// Rich point-location status. Existing implementations that only provide `inverse_map`
+    /// still classify a missing reference point as outside; implementations able to detect a
+    /// numerical failure override this method.
+    fn inverse_map_status(&self, coords: &[f64], x: [f64; 3]) -> InverseMap {
+        self.inverse_map(coords, x).map_or(InverseMap::Outside, InverseMap::Inside)
+    }
     /// `√λ_max` of `M_lumped⁻¹ K_e`: the element bound on the global `ω_max` for `Δt_crit`.
     fn omega_max(&self, c: &ElementCtx<'_>) -> Result<f64, Error>;
 }
@@ -683,7 +697,7 @@ pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
     Some(min)
 }
 
-fn inverse_map_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]> {
+fn inverse_map_status_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> InverseMap {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
     let mut xi = centre_xi(kind);
     let mut sh = vec![0.0; nn];
@@ -691,7 +705,9 @@ fn inverse_map_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Option<[f64
     for _ in 0..20 {
         shape_of(kind, xi, &mut sh);
         dshape_of(kind, xi, &mut dn);
-        let (inv, _) = jac_inv(dim, coords, &dn)?;
+        let Some((inv, _)) = jac_inv(dim, coords, &dn) else {
+            return InverseMap::Failed;
+        };
         let mut r = [0.0; 3];
         for (i, ri) in r.iter_mut().enumerate().take(dim) {
             *ri = x[i] - (0..nn).map(|a| sh[a] * coords[3 * a + i]).sum::<f64>();
@@ -701,9 +717,9 @@ fn inverse_map_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Option<[f64
         }
     }
     if in_reference(kind, xi, 1e-8) {
-        Some(xi)
+        InverseMap::Inside(xi)
     } else {
-        None
+        InverseMap::Outside
     }
 }
 
@@ -772,7 +788,13 @@ impl<R: RefElement> Element for Iso<R> {
         shape_of(R::KIND, xi, n)
     }
     fn inverse_map(&self, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]> {
-        inverse_map_of(R::KIND, coords, x)
+        match inverse_map_status_of(R::KIND, coords, x) {
+            InverseMap::Inside(xi) => Some(xi),
+            InverseMap::Outside | InverseMap::Failed => None,
+        }
+    }
+    fn inverse_map_status(&self, coords: &[f64], x: [f64; 3]) -> InverseMap {
+        inverse_map_status_of(R::KIND, coords, x)
     }
     fn omega_max(&self, c: &ElementCtx<'_>) -> Result<f64, Error> {
         omega_max_of(R::KIND, c)

@@ -1454,6 +1454,12 @@ export type Query =
       query: "query.field";
     }
   | {
+      left: DifferenceOperand;
+      right: DifferenceOperand;
+      onto: DifferenceOnto;
+      query: "query.difference";
+    }
+  | {
       /**
        * Omit for the current per-Step selection; an explicit id uses its solved context.
        */
@@ -1615,6 +1621,10 @@ export type Query =
       query: "query.capabilities";
     };
 /**
+ * The retained Result whose Mesh receives the difference values.
+ */
+export type DifferenceOnto = "left" | "right";
+/**
  * How to select retained output; there is no temporal interpolation or extrapolation.
  */
 export type FrameSample =
@@ -1666,6 +1676,7 @@ export type QueryResult =
   | ResultSummary
   | RetainedResults
   | ResultField
+  | DifferenceField
   | FramesResult
   | FrameResult
   | ProbeResult
@@ -3153,6 +3164,14 @@ export interface RefineBoxSpec {
       };
 }
 /**
+ * One explicit retained field used by `query.difference`.
+ */
+export interface DifferenceOperand {
+  resultId: string;
+  field: string;
+  component?: number | null;
+}
+/**
  * `query.model` response.
  */
 export interface ModelSummary {
@@ -3482,6 +3501,39 @@ export interface ResultField {
   nodeCount: number;
   unit: string;
   values: number[];
+}
+/**
+ * `query.difference` response. Values are retained f64 SI, component-fastest by target node.
+ */
+export interface DifferenceField {
+  left: ResolvedDifferenceOperand;
+  right: ResolvedDifferenceOperand;
+  comparisonResultId: string;
+  components: number;
+  nodeCount: number;
+  unit: string;
+  values: (number | null)[];
+  interpolated: boolean;
+  coverage: DifferenceCoverage;
+  warnings: Warning[];
+}
+/**
+ * The resolved identity and layout of one difference operand.
+ */
+export interface ResolvedDifferenceOperand {
+  resultId: string;
+  step: string;
+  field: string;
+  component?: number | null;
+  sourceComponents: number;
+}
+/**
+ * Nodewise coverage of the selected comparison Mesh by the other Mesh.
+ */
+export interface DifferenceCoverage {
+  insideNodes: number;
+  totalNodes: number;
+  outsideNodes: number[];
 }
 /**
  * `query.frames` response; stored components describe the unpadded History storage.

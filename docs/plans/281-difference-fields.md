@@ -1,6 +1,6 @@
 # Difference fields across retained Results
 
-Status: proposed query contract; implementation waits for the committed #280 Result-record API.
+Status: implemented on the committed #280 Result-record API; merge remains gated on #280.
 Issue: [#281](https://github.com/andeplane/fem-lab/issues/281), child of
 [#16](https://github.com/andeplane/fem-lab/issues/16) and its accepted
 [comparison plan](https://github.com/andeplane/fem-lab/blob/fc07f08/docs/plans/16-result-journal-comparison.md). This child implements the engine calculation

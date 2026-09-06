@@ -13,7 +13,7 @@ use femlab_engine::fem::assembly::{
     assemble_stiffness, expand, pattern, reactions, reduce, resolve, Assembled, Csr, Pattern, ResolvedConstraints,
 };
 use femlab_engine::fem::checks;
-use femlab_engine::fem::element::{element_for, min_det_j, Element, ElementCtx, FaceLoad, Iso, Material};
+use femlab_engine::fem::element::{element_for, min_det_j, Element, ElementCtx, FaceLoad, InverseMap, Iso, Material};
 use femlab_engine::fem::heat::HeatLoad;
 use femlab_engine::fem::loads::{assemble_loads, face_set_area, Load, LoadTotals};
 use femlab_engine::fem::material::{
@@ -1381,8 +1381,8 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
                 assert!((back[k] - xi[k]).abs() <= 1e-10, "{kind:?} gp {i} dir {k}");
             }
         }
-        assert!(el.inverse_map(&coords, [100.0, 100.0, 100.0]).is_none(), "{kind:?} far point");
-        assert!(el.inverse_map(&folded(kind), [2.0, 1.0, 0.5]).is_none(), "{kind:?} folded");
+        assert_eq!(el.inverse_map_status(&coords, [100.0, 100.0, 100.0]), InverseMap::Outside, "{kind:?} far point");
+        assert_eq!(el.inverse_map_status(&folded(kind), [2.0, 1.0, 0.5]), InverseMap::Failed, "{kind:?} folded");
     }
 }
 

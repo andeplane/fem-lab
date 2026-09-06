@@ -7,7 +7,7 @@
 
 use femlab_geometry::Mesh;
 
-use crate::fem::element::element_for;
+use crate::fem::element::{element_for, InverseMap};
 use crate::post::FieldData;
 
 /// How far outside its own bounding box an element is still considered, relative to the box.
@@ -16,8 +16,15 @@ const BBOX_SLACK: f64 = 1e-9;
 /// The element containing `x` and the nodal field interpolated there, or `None` when the point
 /// is outside the mesh. Ties (a point on a shared face) go to the lowest element id.
 pub fn probe(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Option<(u32, Vec<f64>)> {
+    probe_checked(mesh, f, x).ok().flatten()
+}
+
+/// Point location that preserves the distinction between a positively outside point and a
+/// numerical inversion failure. The failing element id makes the Query error actionable.
+pub fn probe_checked(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Result<Option<(u32, Vec<f64>)>, u32> {
     let mut coords = Vec::new();
     let mut shape = Vec::new();
+    let mut failed = None;
     for elem in 0..mesh.n_elems() as u32 {
         let kind = mesh.kind_of(elem);
         coords.resize(kind.n_nodes() * 3, 0.0);
@@ -26,8 +33,13 @@ pub fn probe(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Option<(u32, Vec<f64>)>
             continue;
         }
         let element = element_for(kind);
-        let Some(xi) = element.inverse_map(&coords, x) else {
-            continue;
+        let xi = match element.inverse_map_status(&coords, x) {
+            InverseMap::Inside(xi) => xi,
+            InverseMap::Outside => continue,
+            InverseMap::Failed => {
+                failed = Some(elem);
+                continue;
+            }
         };
         shape.resize(kind.n_nodes(), 0.0);
         element.shape_at(xi, &mut shape);
@@ -37,9 +49,12 @@ pub fn probe(mesh: &Mesh, f: &FieldData, x: [f64; 3]) -> Option<(u32, Vec<f64>)>
                 *o += shape[a] * f.data[node as usize * f.comps + c];
             }
         }
-        return Some((elem, out));
+        return Ok(Some((elem, out)));
     }
-    None
+    match failed {
+        Some(elem) => Err(elem),
+        None => Ok(None),
+    }
 }
 
 /// Is `x` inside the box the element's nodes span, up to a relative slack?
