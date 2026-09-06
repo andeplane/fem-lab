@@ -434,8 +434,10 @@ struct RawBlock {
 }
 
 /// Reads the subset of Gmsh MSH 4.1 ASCII this crate writes (see the module doc): `$MeshFormat`,
-/// `$PhysicalNames`, `$Entities`, `$Nodes`, and `$Elements`. Anything outside that — a binary
-/// file, an unknown element type or a missing section — is a `Schema` error naming the line.
+/// `$PhysicalNames`, `$Entities`, `$Nodes`, and `$Elements`. The writer assigns physical tags
+/// globally, and this reader likewise expects a tag to identify one name across dimensions.
+/// Anything outside the supported subset — a binary file, an unknown element type or a missing
+/// section — is a `Schema` error naming the line.
 pub fn read_msh(text: &str) -> Result<Mesh, Error> {
     let mut ls = Lines::new(text);
 

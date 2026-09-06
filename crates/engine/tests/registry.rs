@@ -2022,9 +2022,15 @@ fn named_sets_keep_their_exact_membership_in_msh_and_inp_exports() {
     };
     let msh = femlab_engine::io::read_msh(&msh_text).unwrap();
     assert_eq!(msh.elem_sets["left-cell"], [0], "a partial original element block survives");
+    let expected_left: Vec<u32> =
+        msh.coords.chunks_exact(3).enumerate().filter(|(_, xyz)| xyz[0] <= 1.0).map(|(node, _)| node as u32).collect();
     let expected_mid: Vec<u32> =
         msh.coords.chunks_exact(3).enumerate().filter(|(_, xyz)| xyz[0] == 1.0).map(|(node, _)| node as u32).collect();
+    let expected_loaded: Vec<u32> =
+        msh.coords.chunks_exact(3).enumerate().filter(|(_, xyz)| xyz[0] == 2.0).map(|(node, _)| node as u32).collect();
+    assert_eq!(msh.node_sets["left-cell"], expected_left, "an element region also keeps its nodes");
     assert_eq!(msh.node_sets["mid-plane"], expected_mid, "the node-only region survives");
+    assert_eq!(msh.node_sets["loaded"], expected_loaded, "a face Set also keeps its nodes");
     assert_eq!(msh.face_sets["loaded"].len(), 1);
     assert_eq!(msh.face_sets["loaded"][0].elem, 1);
 
@@ -2037,12 +2043,16 @@ fn named_sets_keep_their_exact_membership_in_msh_and_inp_exports() {
             .unwrap_or_default()
     };
     assert_eq!(records("*ELSET, ELSET=left-cell\n"), ["1"]);
-    let mid_ids: Vec<u32> = records("*NSET, NSET=mid-plane\n")
-        .iter()
-        .flat_map(|line| line.split(", "))
-        .map(|id| id.parse().unwrap())
-        .collect();
-    assert_eq!(mid_ids, expected_mid.iter().map(|node| node + 1).collect::<Vec<_>>());
+    let node_ids = |name: &str| -> Vec<u32> {
+        records(&format!("*NSET, NSET={name}\n"))
+            .iter()
+            .flat_map(|line| line.split(", "))
+            .map(|id| id.parse().unwrap())
+            .collect()
+    };
+    assert_eq!(node_ids("left-cell"), expected_left.iter().map(|node| node + 1).collect::<Vec<_>>());
+    assert_eq!(node_ids("mid-plane"), expected_mid.iter().map(|node| node + 1).collect::<Vec<_>>());
+    assert_eq!(node_ids("loaded"), expected_loaded.iter().map(|node| node + 1).collect::<Vec<_>>());
     assert_eq!(records("*SURFACE, TYPE=ELEMENT, NAME=loaded\n"), ["2, S4"]);
 }
 

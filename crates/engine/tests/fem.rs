@@ -1707,6 +1707,16 @@ fn read_msh_rejects_a_malformed_entities_header() {
 }
 
 #[test]
+fn read_msh_reports_malformed_point_entities_and_unknown_physical_tags() {
+    let (_, mut m) = good_msh_text();
+    m.node_sets.insert("pin".into(), vec![0]);
+    let good = write_msh(&m);
+    assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0"), "malformed entity line");
+    assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0 x 1"), "expected a number");
+    assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0 1 99"), "physical tag 99");
+}
+
+#[test]
 fn read_msh_rejects_an_entity_line_with_too_few_tokens() {
     let (good, _) = good_msh_text();
     assert_schema_err(&set_line_after(&good, "$Entities", 2, "1 0 0 0"), "malformed entity line");
@@ -1836,7 +1846,9 @@ fn read_msh_rejects_a_non_numeric_token_at_every_numeric_field() {
         ("$Nodes", 1, "x 3 1 3"),                // $Nodes header n_blocks
         ("$Nodes", 2, "2 1 0 x"),                // node entity-block header n_nodes
         ("$Nodes", 3, "x"),                      // a node tag
-        ("$Nodes", 6, "x 0 0"),                  // a node coordinate
+        ("$Nodes", 6, "x 0 0"),                  // node x coordinate
+        ("$Nodes", 6, "0 x 0"),                  // node y coordinate
+        ("$Nodes", 6, "0 0 x"),                  // node z coordinate
         ("$Elements", 1, "x 2 1 2"),             // $Elements header n_elem_blocks
         ("$Elements", 2, "x 1 2 1"),             // element entity-block header entity_dim
         ("$Elements", 2, "2 x 2 1"),             // element entity-block header entity_tag
