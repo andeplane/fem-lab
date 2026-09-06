@@ -102,6 +102,10 @@ export class Viewer {
   private triad: AxesHelper | null = null;
   private mesh: Mesh | null = null;
   private edges: LineSegments | null = null;
+  private outlines: LineSegments | null = null;
+  private readonly outlineMaterial = new LineBasicMaterial({ vertexColors: true });
+  /** Original edge index per drawn outline segment. */
+  private line = new Uint32Array(0);
 
   private surface: AppSurface | null = null;
   /** Original triangle index per drawn triangle, and original vertex index per drawn vertex. */
@@ -205,17 +209,43 @@ export class Viewer {
     geom.computeBoundingBox();
     if (geom.boundingBox && keep.length > 0) this.box = geom.boundingBox.clone();
 
-    for (const old of [this.mesh, this.edges]) {
+    for (const old of [this.mesh, this.edges, this.outlines]) {
       if (!old) continue;
       this.layers.remove(old);
       old.geometry.dispose();
     }
     this.mesh = new Mesh(geom, this.material);
     this.edges = this.buildEdges();
-    this.layers.add(this.mesh, this.edges);
+    this.outlines = this.buildOutlines(s);
+    this.layers.add(this.mesh, this.edges, this.outlines);
+    const outlineBox = this.outlines.geometry.boundingBox;
+    if (outlineBox && this.line.length > 0) {
+      this.box = keep.length > 0 ? this.box.union(outlineBox) : outlineBox.clone();
+    }
     this.paint();
     this.setChrome();
     this.render();
+  }
+
+  /** The engine supplies the actual Sheet boundaries, including hole edges and their names. */
+  private buildOutlines(s: AppSurface): LineSegments {
+    const keep: number[] = [];
+    for (let i = 0; i < (s.edges?.length ?? 0) / 2; i++) {
+      if (!this.hidden.has(s.bodyNames[s.edgeBody?.[i] ?? -1] ?? '')) keep.push(i);
+    }
+    this.line = Uint32Array.from(keep);
+    const positions = new Float32Array(keep.length * 6);
+    keep.forEach((edge, i) => {
+      for (let k = 0; k < 2; k++) {
+        const node = s.edges![edge * 2 + k]!;
+        positions.set(s.positions.subarray(node * 3, node * 3 + 3), i * 6 + k * 3);
+      }
+    });
+    const geom = new BufferGeometry();
+    geom.setAttribute('position', new BufferAttribute(positions, 3));
+    geom.setAttribute('color', new BufferAttribute(new Float32Array(positions.length), 3));
+    geom.computeBoundingBox();
+    return new LineSegments(geom, this.outlineMaterial);
   }
 
   private buildEdges(): LineSegments {
@@ -258,6 +288,16 @@ export class Viewer {
       }
     }
     colour.needsUpdate = true;
+    const outlineColour = this.outlines?.geometry.getAttribute('color') as BufferAttribute | undefined;
+    if (outlineColour) {
+      for (let i = 0; i < this.line.length; i++) {
+        const edge = this.line[i]!;
+        const hot = (s.faceNames[s.edgeFace?.[edge] ?? -1] ?? null) === this.hoverFace && this.hoverFace !== null;
+        c.set(hot ? HIGHLIGHT : 0xbac3d0);
+        for (let k = 0; k < 2; k++) outlineColour.setXYZ(i * 2 + k, c.r, c.g, c.b);
+      }
+      outlineColour.needsUpdate = true;
+    }
   }
 
   /** Ground grid at the model's scale with round ticks, and an axis triad beside it. */
@@ -352,12 +392,15 @@ export class Viewer {
   setClip(plane: { normal: [number, number, number]; offset: number } | null): void {
     this.material.clippingPlanes = plane ? [new Plane(new Vector3(...plane.normal).normalize(), -plane.offset)] : [];
     this.material.needsUpdate = true;
+    this.outlineMaterial.clippingPlanes = this.material.clippingPlanes;
+    this.outlineMaterial.needsUpdate = true;
     this.render();
   }
 
   setLayer(layer: string, on: boolean): void {
     const target = layer === 'grid' ? this.grid : layer === 'axes' ? this.triad : layer === 'edges' ? this.edges : layer === 'mesh' ? this.mesh : null;
     if (target) target.visible = on;
+    if (layer === 'edges' && this.outlines) this.outlines.visible = on;
     this.render();
   }
 
@@ -477,6 +520,8 @@ export class Viewer {
     cancelAnimationFrame(this.frame);
     this.controls.dispose();
     this.renderer.dispose();
+    this.outlineMaterial.dispose();
+    this.outlines?.geometry.dispose();
   }
 
   // ── picking ─────────────────────────────────────────────────────────────────────────────
@@ -486,8 +531,25 @@ export class Viewer {
     const rect = this.canvas.getBoundingClientRect();
     const ndc = new Vector2(((x - rect.left) / rect.width) * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
-    const hit = this.raycaster.intersectObject(this.mesh, false)[0];
-    if (!hit || hit.faceIndex === undefined || hit.faceIndex === null) return null;
+    // A fixed screen-space picking tolerance remains usable at any zoom and model scale.
+    const height = this.camera === this.orthographic
+      ? (this.orthographic.top - this.orthographic.bottom) / this.orthographic.zoom
+      : 2 * this.camera.position.distanceTo(this.box.getCenter(new Vector3())) * Math.tan(this.perspective.getEffectiveFOV() * Math.PI / 360);
+    this.raycaster.params.Line.threshold = 6 * height / Math.max(rect.height, 1);
+    const objects = this.outlines?.visible ? [this.mesh, this.outlines] : [this.mesh];
+    const hit = this.raycaster.intersectObjects(objects, false)[0];
+    if (!hit) return null;
+    if (hit.object === this.outlines && hit.index !== undefined) {
+      const edge = this.line[Math.floor(hit.index / 2)]!;
+      return {
+        face: s.faceNames[s.edgeFace?.[edge] ?? -1] ?? null,
+        body: s.bodyNames[s.edgeBody?.[edge] ?? -1] ?? null,
+        point: [hit.point.x, hit.point.y, hit.point.z],
+        node: null,
+        value: null,
+      };
+    }
+    if (hit.faceIndex === undefined || hit.faceIndex === null) return null;
     const t = this.tri[hit.faceIndex]!;
     const node = this.nearestNode(hit.faceIndex, hit.point);
     return {

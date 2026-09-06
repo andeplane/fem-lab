@@ -296,3 +296,14 @@ prove is the same either way.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+## Unmeshed Sheet preview (#154)
+
+The tagged square-with-hole fixture has outer area 4 m² and hole area 1 m².
+An in-plane scale (2, 3), quarter turn, and translation (5, 7) produce signed loop
+areas +24 and −6 m², net 18 m², and bounds [−1, 5] × [7, 11] m. Independent
+shoelace and vertex-degree checks exercise both native geometry and the real wasm
+transport before `mesh.set`. Chromium checks rendered pixels, all four named outer
+edges, the hole boundary, an empty hole interior and hidden-body picking; these
+queries and view actions must leave the three-command Journal unchanged. The preview
+is an outline, not a mesh or a solver discretisation.

@@ -897,6 +897,51 @@ fn objects_and_idealisation_strings_for_2d() {
 }
 
 #[test]
+fn unmeshed_sheet_preview_preserves_transformed_hole_boundaries() {
+    let mut e = engine();
+    let commands: Vec<Command> = serde_json::from_str(include_str!("fixtures/sheet-preview.json")).unwrap();
+    let mut nop = |_: Progress| true;
+    for command in commands {
+        pollster::block_on(e.dispatch(command, &mut nop)).unwrap();
+    }
+    assert!(e.model().mesh.is_none());
+    let preview = e.geometry_surface().unwrap();
+    assert_eq!(preview.len(), 1);
+    assert_eq!(preview[0].body, "plate");
+    assert_eq!(preview[0].outlines.len(), 2);
+    let mut area = 0.0;
+    for (i, outline) in preview[0].outlines.iter().enumerate() {
+        assert_eq!(outline.pts.len(), 4);
+        assert_eq!(outline.tags.len(), 4);
+        let twice_area: f64 = (0..4)
+            .map(|j| {
+                let a = outline.pts[j];
+                let b = outline.pts[(j + 1) % 4];
+                a[0] * b[1] - b[0] * a[1]
+            })
+            .sum();
+        assert!((twice_area / 2.0 - [24.0, -6.0][i]).abs() < 1e-12);
+        area += twice_area / 2.0;
+    }
+    assert!((area - 18.0).abs() < 1e-12, "(4 − 1) m² times the 2 × 3 in-plane scaling");
+    let outer = &preview[0].outlines[0];
+    for (tag, start, end) in [
+        ("plate.left", [-1.0, 7.0], [5.0, 7.0]),
+        ("plate.bottom", [5.0, 7.0], [5.0, 11.0]),
+        ("plate.right", [5.0, 11.0], [-1.0, 11.0]),
+        ("plate.top", [-1.0, 11.0], [-1.0, 7.0]),
+    ] {
+        let edge = outer.tags.iter().position(|name| name == tag).unwrap();
+        for k in 0..2 {
+            assert!((outer.pts[edge][k] - start[k]).abs() < 1e-12);
+            assert!((outer.pts[(edge + 1) % 4][k] - end[k]).abs() < 1e-12);
+        }
+    }
+    assert!(preview[0].outlines[1].tags.iter().all(|tag| tag == "plate.hole"));
+    assert_eq!(e.revision(), 3, "preview is derived data, never a mesh Command");
+}
+
+#[test]
 fn imported_file_with_a_broken_shape_fails_at_query_time() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"n"}"#);
@@ -995,7 +1040,7 @@ fn the_cantilever_meshes_and_every_auto_face_resolves() {
     // and a second read uses the cache
     assert_eq!(mesh_summary(&mut e).elements, 4);
     assert_eq!(e.mesh_surface().unwrap().triangles.len(), 2 * (1 + 1 + 4 * 4));
-    assert_eq!(e.geometry_surface().unwrap()[0].0, "beam");
+    assert_eq!(e.geometry_surface().unwrap()[0].body, "beam");
 }
 
 #[test]

@@ -105,13 +105,18 @@ impl Engine {
     }
 
     /// What the viewer draws, as fresh typed arrays: the Mesh skin once the Model has mesh
-    /// settings, otherwise the Bodies' geometry triangles. `triSet` indexes `setNames`
+    /// settings, otherwise the Bodies' geometry triangles and tagged Sheet outlines.
+    /// `edges` contains vertex-index pairs, with `edgeSet`/`edgeBody` identifying each edge.
+    /// `triSet` indexes `setNames`
     /// (`u32::MAX` for a triangle in no Set) and `triBody` indexes `bodyNames`.
     pub fn surface(&mut self) -> Result<JsValue, JsValue> {
         let mut positions: Vec<f32> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut tri_set: Vec<u32> = Vec::new();
         let mut tri_body: Vec<u32> = Vec::new();
+        let mut edges: Vec<u32> = Vec::new();
+        let mut edge_set: Vec<u32> = Vec::new();
+        let mut edge_body: Vec<u32> = Vec::new();
         let mut set_names: Vec<String> = Vec::new();
         let mut body_names: Vec<String> = Vec::new();
         let source = if self.inner.model().mesh.is_some() {
@@ -125,7 +130,8 @@ impl Engine {
             body_names = built.body_of_block.clone();
             "mesh"
         } else {
-            for (body, tri) in self.inner.geometry_surface().map_err(|e| throw(&e))? {
+            for preview in self.inner.geometry_surface().map_err(|e| throw(&e))? {
+                let tri = preview.triangles;
                 let offset = (positions.len() / 3) as u32;
                 positions.extend(tri.positions.iter().flat_map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]));
                 for (t, v) in tri.triangles.iter().enumerate() {
@@ -138,7 +144,20 @@ impl Engine {
                     tri_set.push(at as u32);
                     tri_body.push(body_names.len() as u32);
                 }
-                body_names.push(body);
+                for outline in preview.outlines {
+                    let start = (positions.len() / 3) as u32;
+                    positions.extend(outline.pts.iter().flat_map(|p| [p[0] as f32, p[1] as f32, 0.0]));
+                    for (i, tag) in outline.tags.iter().enumerate() {
+                        edges.extend([start + i as u32, start + ((i + 1) % outline.pts.len()) as u32]);
+                        let at = set_names.iter().position(|n| n == tag).unwrap_or_else(|| {
+                            set_names.push(tag.clone());
+                            set_names.len() - 1
+                        });
+                        edge_set.push(at as u32);
+                        edge_body.push(body_names.len() as u32);
+                    }
+                }
+                body_names.push(preview.body);
             }
             "geometry"
         };
@@ -147,6 +166,9 @@ impl Engine {
         put(&out, "indices", js_sys::Uint32Array::from(&indices[..]).into());
         put(&out, "triSet", js_sys::Uint32Array::from(&tri_set[..]).into());
         put(&out, "triBody", js_sys::Uint32Array::from(&tri_body[..]).into());
+        put(&out, "edges", js_sys::Uint32Array::from(&edges[..]).into());
+        put(&out, "edgeSet", js_sys::Uint32Array::from(&edge_set[..]).into());
+        put(&out, "edgeBody", js_sys::Uint32Array::from(&edge_body[..]).into());
         put(&out, "setNames", strings(&set_names));
         put(&out, "bodyNames", strings(&body_names));
         put(&out, "source", JsValue::from_str(source));

@@ -11,6 +11,10 @@ export interface Surface {
   indices: Uint32Array;
   triBody: Uint32Array;
   triFace: Uint32Array;
+  /** Optional tagged outline edges (vertex-index pairs), for unmeshed Sheet previews. */
+  edges?: Uint32Array;
+  edgeFace?: Uint32Array;
+  edgeBody?: Uint32Array;
   faceNames: string[];
   bodyNames: string[];
 }
