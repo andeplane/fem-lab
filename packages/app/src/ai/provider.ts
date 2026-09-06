@@ -63,6 +63,8 @@ export interface Usage {
 
 export type ChatEvent =
   | { type: 'text_delta'; text: string }
+  /** Display-only argument snapshot. Never executable until a completed tool_use arrives. */
+  | { type: 'tool_progress'; id: string; name: string; arguments: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'continuation'; continuation: Continuation }
   | { type: 'usage'; usage: Usage }

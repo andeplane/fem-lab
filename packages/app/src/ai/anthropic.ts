@@ -58,7 +58,20 @@ export function anthropicProvider(apiKey: string, make: (key: string) => Anthrop
           messages: toMessageParams(req.messages),
           ...thinkingFor(req.model),
         });
+        const preparing = new Map<number, { id: string; name: string; arguments: string }>();
         for await (const event of stream) {
+          if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+            const call = { id: event.content_block.id, name: event.content_block.name, arguments: '' };
+            preparing.set(event.index, call);
+            yield { type: 'tool_progress', ...call };
+          }
+          if (event.type === 'content_block_delta' && event.delta.type === 'input_json_delta') {
+            const call = preparing.get(event.index);
+            if (call) {
+              call.arguments += event.delta.partial_json;
+              yield { type: 'tool_progress', ...call };
+            }
+          }
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield { type: 'text_delta', text: event.delta.text };
         }
         const final = await stream.finalMessage();
