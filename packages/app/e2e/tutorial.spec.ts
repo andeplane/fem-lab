@@ -110,7 +110,9 @@ test.describe('@cpu the guided tutorial', () => {
       // talking about and never over the control itself.
       const cb = (await card.boundingBox())!;
       const tb = (await target.boundingBox())!;
-      const props = await page.locator('aside.props').boundingBox();
+      // On step 1 the start screen is still up and there is no Properties panel to miss.
+      const propsPanel = page.locator('aside.props');
+      const props = (await propsPanel.count()) ? await propsPanel.boundingBox() : null;
       if (props) expect(overlaps(cb, props), `card over Properties on ${before}`).toBe(false);
       expect(overlaps(cb, tb), `card over its own target on ${before}`).toBe(false);
       await expect(page.locator('.tutorial-spot')).toHaveCount(1);
