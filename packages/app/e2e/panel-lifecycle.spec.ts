@@ -1,5 +1,5 @@
 import { expect, test } from './fixtures';
-import { TABS } from '../src/store';
+import { TABS } from '../src/tabs';
 import type { DirHandle, FileHandle } from '../src/ai/project';
 
 test('@cpu every panel, disclosure and tab survives two open/close cycles', async ({ page }) => {
