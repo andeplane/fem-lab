@@ -383,6 +383,26 @@ copy, removal after dependent Commands are removed, undo/redo, and deterministic
 Journal replay with identical memberships and displacement. Unknown Bodies give structured
 errors identifying the selector argument and leave the Model and Journal unchanged.
 
+## Thermal Body loads on mapped and swept meshers (#260)
+
+The registry regressions use a 2 × 1 m mapped rectangle with 0.25 m plane-stress thickness
+and its 3 m solid extrusion, at both element orders and 1, 2 and 4 axial subdivisions.
+`load.temperature` with ΔT = 50 K and α = 1e-5/K gives exact free strain 5e-4 in every
+direction and zero stress. Fixing both x ends instead gives σxx = −EαΔT = −100 MPa for
+E = 200 GPa and ν = 0.25; the free transverse strain is (1+ν)αΔT = 6.25e-4. Every node's
+displacement agrees within 1e-12 m and every stress component within 1e-3 Pa.
+
+For `load.heatSource`, q = 100 W/m³ and k = 10 W/(m·K), with both x ends held at 300 K,
+give `T(x) = 300 + 5x(2−x)` K. The assembled source power agrees with the independent
+prescribed-volume values qV = 50 W (Sheet including thickness) and 600 W (solid) within
+1e-9 W. All nodal temperatures agree with the parabola within 1e-9 K. At the first element's
+midpoint, linear interpolation has the exact error `5/n²` K, decreasing by four under each
+refinement; quadratic interpolation reproduces the parabola within 1e-9 K.
+
+The same Commands and analytical solutions survive undo/redo and verified exported Journal
+replay. Unknown Body names, including a bad name after a valid implicit target in the same
+list, report the indexed argument and preserve the previous Model and Journal.
+
 ## Where the reference values are published
 
 - NAFEMS "The Standard NAFEMS Benchmarks" P18 (1990); FV set in R0015 (1987). Values as
