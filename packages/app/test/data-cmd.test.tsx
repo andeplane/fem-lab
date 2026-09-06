@@ -120,6 +120,17 @@ describe('the shell', () => {
     expect(root.querySelector('.bottom-body')!.textContent).toContain('model.new');
   });
 
+  // plan E — the tutorial spotlight finds "the + add material chip" from a Command id alone by
+  // reading `data-opens`, so that attribute is under the same invariant as `data-cmd`.
+  it('names only Commands the registry has on every data-opens, and puts it only on form.open', () => {
+    const { root, registry } = mount();
+    const known = new Set(registry.list().commands.map((d) => d.name));
+    const opens = [...root.querySelectorAll('[data-opens]')];
+    expect(opens.length).toBeGreaterThan(0);
+    expect(opens.filter((el) => el.getAttribute('data-cmd') !== 'form.open').map((el) => el.getAttribute('data-opens'))).toEqual([]);
+    expect([...new Set(opens.map((el) => el.getAttribute('data-opens')!))].filter((c) => !known.has(c))).toEqual([]);
+  });
+
   it('renders the start screen with its four paths before a Model exists', () => {
     const store = new Store();
     const root = document.createElement('div');

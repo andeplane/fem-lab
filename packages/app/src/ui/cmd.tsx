@@ -30,10 +30,16 @@ export interface CmdProps {
 }
 
 export function Cmd({ dispatch, cmd, args, children, onRun, ...rest }: CmdProps) {
+  // A control that fills the Properties form with some *other* Command names it here, so the
+  // tutorial spotlight can find "the + add material chip" from `highlight: "material.add"`
+  // alone (issue #38). The form's own inputs carry a bare `data-cmd="form.open"` with no args,
+  // so they never claim a Command they do not open.
+  const opens = cmd === 'form.open' && typeof args?.['command'] === 'string' ? (args['command'] as string) : undefined;
   return (
     <button
       type="button"
       data-cmd={cmd}
+      {...(opens === undefined ? {} : { 'data-opens': opens })}
       class={rest.class}
       title={rest.title ?? cmd}
       disabled={rest.disabled ?? false}
