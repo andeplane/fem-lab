@@ -238,7 +238,9 @@ export interface Fem {
   journal: {
     /**
      * Undo the last `steps` Commands (default 1), restoring the Model and orphaning any
-     * Result produced after that point. Not recorded in the Journal.
+     * Result produced after that point. Not recorded in the Journal. If `expectedJournal` is
+     * supplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise
+     * nothing is undone. Use this guard for a saved turn boundary while other callers can edit.
      */
     undo(args?: Omit<Extract<Command, { cmd: 'journal.undo' }>, 'cmd'>): Promise<Ack>;
     /**

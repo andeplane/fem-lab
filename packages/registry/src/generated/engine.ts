@@ -573,6 +573,7 @@ export type Command =
     }
   | {
       steps?: number | null;
+      expectedJournal?: string | null;
       cmd: "journal.undo";
     }
   | {
@@ -2232,6 +2233,7 @@ export type ModelFile_Command =
     }
   | {
       steps?: number | null;
+      expectedJournal?: string | null;
       cmd: "journal.undo";
     }
   | {
@@ -3365,6 +3367,10 @@ export interface CostEstimate {
  * `query.journal` response.
  */
 export interface JournalDump {
+  /**
+   * Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
+   */
+  hash: string;
   entries: JournalEntry[];
   revision: number;
   canUndo: boolean;

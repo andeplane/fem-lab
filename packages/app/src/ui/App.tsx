@@ -282,6 +282,20 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
  * than a replay of the history, and the bar's own title says so.
  */
 function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+  const previewStart = useRef<number | null>(null);
+  const preview = (scale: number): void => {
+    previewStart.current ??= store.state.deformScale;
+    // Keep both the legend and slider readout in sync with the drawing during the gesture.
+    store.set({ deformScale: scale });
+    viewer.current?.previewDeformScale(scale);
+  };
+  const cancelPreview = (): void => {
+    if (previewStart.current === null) return;
+    const scale = previewStart.current;
+    previewStart.current = null;
+    store.set({ deformScale: scale });
+    viewer.current?.previewDeformScale(scale);
+  };
   const step = s.result?.step ?? '';
   const mode = choiceOf(s.fieldKey).mode;
   const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
@@ -331,7 +345,12 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         aria-label="deformation scale"
         data-cmd="view.setDeformScale"
         value={String(s.deformScale)}
-        onChange={(e) => void dispatch({ cmd: 'view.setDeformScale', scale: Number((e.target as HTMLInputElement).value) }).catch(() => undefined)}
+        onInput={(e) => preview(Number((e.target as HTMLInputElement).value))}
+        onPointerCancel={cancelPreview}
+        onChange={(e) => {
+          const scale = Number((e.target as HTMLInputElement).value);
+          void dispatch({ cmd: 'view.setDeformScale', scale }).then(() => { previewStart.current = null; }, cancelPreview);
+        }}
       />
       <span class="mono">×{formatNumber(s.deformScale)}</span>
       <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} title="draw the real displacement">

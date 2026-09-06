@@ -1,8 +1,9 @@
 // The results state machine and everything it computes on the way to the screen: the design's
 // states 4–7 as one word, the Solve button's label, the legend's ticks, the balance line, and
 // the field→unit table both the Worker and the viewer read.
-import type { PathResult, ResultSummary, Valued } from '@femlab/registry';
+import type { ModelSummary, PathResult, ResultSummary, Valued } from '@femlab/registry';
 import { render } from 'preact';
+import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
 import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, legendTicks, siUnitOf } from '../src/fields';
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
@@ -31,6 +32,25 @@ const RESULT: ResultSummary = {
   reactions: [{ constraint: 'root', total: [kN(0), kN(0), kN(1)] }],
   appliedTotal: [kN(0), kN(0), kN(-1)],
   balance: 0,
+};
+
+const MODEL: ModelSummary = {
+  name: 'results-test',
+  revision: 0,
+  hash: 'results-test',
+  units: { length: 'mm' },
+  idealisation: 'solid',
+  bodies: [{ name: 'body', bbox: [
+    { value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' },
+    { value: 1, unit: 'm' }, { value: 1, unit: 'm' }, { value: 1, unit: 'm' },
+  ], measure: { value: 1, unit: 'm^3' }, faces: [] }],
+  materials: [],
+  sets: [],
+  constraints: [],
+  loads: [],
+  steps: [],
+  meshSettings: null,
+  warnings: [],
 };
 
 describe('the solve state machine', () => {
@@ -215,11 +235,11 @@ function fakeViewer() {
 }
 
 function harness(result: ResultSummary | null = RESULT) {
-  const store = new Store({ ...initialState, model: { units: { length: 'mm' } } as never });
+  const store = new Store({ ...initialState, model: MODEL });
   const viewer = { current: fakeViewer() };
   const transport = {
-    query: vi.fn(async (q: { query: string }) => {
-      if (q.query === 'query.convert') return { value: 1000, unit: 'mm' };
+    query: vi.fn(async (q: { query: string; quantity?: { value: number } }) => {
+      if (q.query === 'query.convert') return { value: q.quantity!.value * 1000, unit: 'mm' };
       if (result) return result;
       throw { code: 'not-found', cause: 'no Step has been solved yet' };
     }),
@@ -239,6 +259,54 @@ describe('ResultsView', () => {
     expect(viewer.current.setDim).toHaveBeenCalledWith(false);
     // The displacement reaches the viewer untouched: the mesh it deforms is in metres.
     expect(viewer.current.setDeformed.mock.calls.at(-1)![0]).toEqual(Float32Array.from([0, 0, 0, 0, 0, -0.0001919]));
+  });
+
+  it('converts Kelvin contours and legends using scale plus offset, cached by unit pair', async () => {
+    const heat = { ...RESULT, extremes: [{ ...RESULT.extremes[0]!, field: 'temperature' }] };
+    const { store, viewer, results, transport } = harness(heat);
+    store.set({ model: { ...MODEL, units: { temperature: 'degC', length: 'm' } } });
+    const { Engine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as { Engine: new (threads: number) => { query(json: string): string } };
+    const engine = new Engine(1);
+    const conversions = vi.fn(async (q: { query: string; quantity?: { value: number }; to?: string }) => {
+      if (q.query !== 'query.convert') return heat;
+      expect(q.to).toBe('degC');
+      return JSON.parse(engine.query(JSON.stringify(q))) as { value: number; unit: string };
+    });
+    transport.query.mockImplementation(conversions);
+    transport.field.mockImplementation(async () => ({ values: Float32Array.from([273.15, 293.15, 373.15]), min: 273.15, max: 373.15, unit: 'K' }));
+    await results.refresh();
+    const [values, range] = viewer.current.setField.mock.calls.at(-1)! as [Float32Array, [number, number]];
+    for (const [index, expected] of [0, 20, 100].entries()) expect(values[index]).toBeCloseTo(expected, 4);
+    expect(range[0]).toBeCloseTo(0, 4);
+    expect(range[1]).toBeCloseTo(100, 4);
+    expect(store.state.legend?.unit).toBe('degC');
+    expect(conversions.mock.calls.filter(([q]) => q.query === 'query.convert')).toHaveLength(2);
+    await results.refresh(true);
+    expect(conversions.mock.calls.filter(([q]) => q.query === 'query.convert')).toHaveLength(2);
+    store.set({ model: { ...MODEL, units: { temperature: 'K', length: 'm' } } });
+    await results.refresh(true);
+    expect(viewer.current.setField.mock.calls.at(-1)![0]).toEqual(Float32Array.from([273.15, 293.15, 373.15]));
+    expect(store.state.legend?.unit).toBe('K');
+  });
+
+  it('uses the thermal result quantity when converting a reaction contour', async () => {
+    const thermal = { ...RESULT, reactionQuantity: 'power' as const };
+    const { store, results, transport } = harness(thermal);
+    store.set({ result: thermal, model: { ...MODEL, units: { power: 'kW', length: 'm' } } });
+    transport.query.mockImplementation(async (q: { query: string; quantity?: { value: number; unit?: string }; to?: string }) => {
+      if (q.query !== 'query.convert') return thermal;
+      expect(q.quantity?.unit).toBe('W');
+      expect(q.to).toBe('kW');
+      return { value: q.quantity!.value / 1000, unit: 'kW' };
+    });
+    type Contour = { values: Float32Array; range: [number, number]; unit: string };
+    const contour = (results as unknown as {
+      contour: (choice: { field: string; component: number | null }, raw: Float32Array) => Promise<Contour>;
+    }).contour;
+    const output = await contour.call(results, { field: 'reaction', component: 0 }, Float32Array.from([1000, 2000]));
+    expect(output.values).toEqual(Float32Array.from([1, 2]));
+    expect(output.range).toEqual([1, 2]);
+    expect(output.unit).toBe('kW');
   });
 
   it('does the second refresh without refetching, and a forced one with', async () => {
@@ -269,6 +337,7 @@ describe('ResultsView', () => {
     const { store, viewer, results } = harness();
     await results.showField({ field: 'displacement', component: 2 });
     expect(store.state.fieldKey).toBe('uz');
+    expect((viewer.current.setField.mock.calls.at(-1)![0] as Float32Array)[5]).toBeCloseTo(-0.1919, 5);
     expect(store.state.viewMode).toBe('results');
     await results.showField({ field: null });
     expect(store.state.viewMode).toBe('geometry');
