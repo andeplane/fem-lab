@@ -4,7 +4,7 @@ import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';
 import { EXPORT_FORMATS, extremesCsv, pathCsv, reactionsCsv } from '../src/host-commands';
-import { ACK, MODEL_FILE, PATH, PROJECT, RESULT, SAVED, fakeHost, fakeTransport } from './fakes';
+import { ACK, AUTOSAVES, MODEL_FILE, PATH, PROJECT, RESULT, SAVED, fakeHost, fakeTransport } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
 const make = (projectOpen = false) => {
@@ -242,7 +242,7 @@ describe('Registry', () => {
 
   it('lists bounded autosave revisions and restores the explicitly selected Journal', async () => {
     const { registry, host } = make();
-    await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toEqual({ enabled: true, revisions: expect.any(Array) });
+    await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toEqual({ enabled: true, revisions: AUTOSAVES });
     await registry.dispatch({ cmd: 'file.restore', id: 'older' });
     expect(host.files.restore).toHaveBeenCalledWith('older');
     await expect(registry.dispatch({ cmd: 'file.restore', id: 7 })).rejects.toMatchObject({ code: 'schema', where: 'id' });
