@@ -178,6 +178,14 @@ describe('export_file', () => {
     await expect(resolveInProject(root, 'file/child/report.md')).rejects.toMatchObject({ code: 'ENOTDIR' });
   });
 
+  it('allows concurrent exports to create a shared nested directory', async () => {
+    const root = await scratch();
+    const registry = createRegistry({ engine: fakeEngine(), project: root });
+    const files = Array.from({ length: 8 }, (_, i) => `new/deep/report-${i}.md`);
+    await Promise.all(files.map((file) => callTool(registry, 'export_file', { format: 'report', path: file })));
+    for (const file of files) expect(await readFile(path.join(root, file), 'utf8')).toBe('<report>');
+  });
+
   it('refuses every write when the server was started without a project folder', async () => {
     const registry = createRegistry({ engine: fakeEngine() });
     await expect(callTool(registry, 'export_file', { format: 'msh', path: 'x.msh' })).rejects.toMatchObject({ code: 'file.scope' });

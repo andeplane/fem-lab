@@ -68,12 +68,12 @@ export async function resolveInProject(root: string | undefined, p: string): Pro
     const entry = await lstat(next).catch(missingPath);
     if (entry === undefined) {
       // Every existing ancestor has already been resolved and checked.
-      await mkdir(next);
-      dir = next;
-    } else {
-      dir = await realpath(next);
-      if (dir !== realRoot && !dir.startsWith(realRoot + path.sep)) throw linkError(p);
+      await mkdir(next, { recursive: true });
     }
+    // Another export may have created this directory while we awaited mkdir. Resolve
+    // and check the actual entry in either case, including a concurrently inserted link.
+    dir = await realpath(next);
+    if (dir !== realRoot && !dir.startsWith(realRoot + path.sep)) throw linkError(p);
   }
   const full = path.join(dir, parts[parts.length - 1]!);
   // lstat also detects dangling links; do not follow even an in-project leaf link.
