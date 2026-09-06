@@ -1472,6 +1472,18 @@ textarea:focus {
 }
 
 /* ── start screen ──────────────────────────────────────────────────────────────────────── */
+.start-layout {
+  height: 100%;
+  min-width: 0;
+}
+.start-layout.with-properties {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--properties-width, 308px);
+}
+.start-layout > .start {
+  min-width: 0;
+  overflow: auto;
+}
 .start {
   display: flex;
   flex-direction: column;
@@ -2271,8 +2283,8 @@ input.model-name:focus {
    sit over its composer. Wide enough for the 880 px column plus the drawer, it moves aside and
    centres in what is left; narrower, the drawer simply floats over it. */
 @media (min-width: 1320px) {
-  .start:has(~ .assistant) {
-    margin-right: 416px;
+  #app:has(> .assistant:not([hidden])) > .start-layout {
+    margin-right: var(--assistant-width, 392px);
   }
 }
 
@@ -2328,6 +2340,9 @@ input.model-name:focus {
   }
 }
 
+.palette-intent { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-divider); }
+.palette-intent button { color: var(--accent); border: 1px solid var(--border-panel); padding: 4px 8px; border-radius: 3px; }
+.palette-intent .faint { font-size: 11px; }
 /* Plan F · #42: what was solved, spanning both Result columns. */
 .result-header {
   grid-column: 1 / -1;
