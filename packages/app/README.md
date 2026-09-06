@@ -7,14 +7,14 @@ published to GitHub Pages by `.github/workflows/deploy.yml`.
 ## Run it
 
 ```sh
-node tools/build-wasm.mjs        # from the repo root: cargo → wasm-bindgen → wasm-opt
 npm ci
+node tools/build-wasm.mjs        # from the repo root: cargo → wasm-bindgen → wasm-opt
 npm run dev -w packages/app      # http://localhost:5173/fem-lab/
 ```
 
 `vite dev` and `vite preview` send `Cross-Origin-Opener-Policy`/`Cross-Origin-Embedder-Policy`
-themselves, so the app is cross-origin isolated (and therefore multi-threaded) locally without the
-service worker. GitHub Pages cannot send headers, so there the isolation comes from
+themselves, so the app is cross-origin isolated locally without the service worker. Isolation
+is a prerequisite for shared memory; query.capabilities reports the engine capabilities. GitHub Pages cannot send headers, so there the isolation comes from
 `public/coi-serviceworker.min.js`, wired up in `index.html`; the `sw` Playwright project drives
 exactly that path against a header-less server.
 

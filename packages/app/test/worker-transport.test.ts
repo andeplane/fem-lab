@@ -25,7 +25,7 @@ class FakeWorker {
   }
 }
 
-const ack = (over: Partial<Ack> = {}): Ack => ({ seq: 0, revision: 1, hash: 'h0', warnings: [], output: { kind: 'none' } as unknown as Ack['output'], ...over });
+const ack = (over: Partial<Ack> = {}): Ack => ({ seq: 0, revision: 1, hash: 'h0', warnings: [], output: { type: 'none' }, ...over });
 
 function make(answer: FakeWorker['answer']) {
   const workers: FakeWorker[] = [];
@@ -62,6 +62,38 @@ describe('WorkerTransport', () => {
   it('rebuilds typed arrays from a bulk reply', async () => {
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     const indices = new Uint32Array([0, 1, 2]);
+    const triSetOffsets = new Uint32Array([0, 3]);
+    const triSets = new Uint32Array([0, 1, 2]);
+    const { transport } = make((req, reply) =>
+      reply(
+        {
+          id: req.id,
+          ok: true,
+          value: { faceNames: ['b.top'], setNames: ['b.top', 'bearing', 'bearing_alias'], bodyNames: ['b'], source: 'mesh' },
+          buffers: [
+            { name: 'positions', dtype: 'f32', length: 9 },
+            { name: 'indices', dtype: 'u32', length: 3 },
+            { name: 'triFace', dtype: 'u32', length: 1 },
+            { name: 'triBody', dtype: 'u32', length: 1 },
+            { name: 'triSetOffsets', dtype: 'u32', length: 2 },
+            { name: 'triSets', dtype: 'u32', length: 3 },
+          ],
+        },
+        [positions.buffer as ArrayBuffer, indices.buffer as ArrayBuffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer, triSetOffsets.buffer as ArrayBuffer, triSets.buffer as ArrayBuffer],
+      ),
+    );
+    const s = await transport.surface();
+    expect(Array.from(s.positions)).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    expect(s.faceNames[s.triFace[0]!]).toBe('b.top');
+    expect(s.setNames).toEqual(['b.top', 'bearing', 'bearing_alias']);
+    expect(Array.from(s.triSetOffsets ?? [])).toEqual([0, 3]);
+    expect(Array.from(s.triSets ?? [])).toEqual([0, 1, 2]);
+    expect(s.source).toBe('mesh');
+  });
+
+  it('rebuilds Sheet edge arrays from a bulk reply', async () => {
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const indices = new Uint32Array([0, 1, 2]);
     const { transport } = make((req, reply) =>
       reply(
         {
@@ -73,15 +105,21 @@ describe('WorkerTransport', () => {
             { name: 'indices', dtype: 'u32', length: 3 },
             { name: 'triFace', dtype: 'u32', length: 1 },
             { name: 'triBody', dtype: 'u32', length: 1 },
+            { name: 'edges', dtype: 'u32', length: 2 },
+            { name: 'edgeFace', dtype: 'u32', length: 1 },
+            { name: 'edgeBody', dtype: 'u32', length: 1 },
           ],
         },
-        [positions.buffer as ArrayBuffer, indices.buffer as ArrayBuffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer],
+        [positions.buffer as ArrayBuffer, indices.buffer as ArrayBuffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer, new Uint32Array([0, 1]).buffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer],
       ),
     );
     const s = await transport.surface();
     expect(Array.from(s.positions)).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     expect(s.faceNames[s.triFace[0]!]).toBe('b.top');
     expect(s.source).toBe('geometry');
+    expect(s.edges).toEqual(new Uint32Array([0, 1]));
+    expect(s.faceNames[s.edgeFace![0]!]).toBe('b.top');
+    expect(s.bodyNames[s.edgeBody![0]!]).toBe('b');
   });
 
   it('transfers frame staging at f64 precision and returns the generated JSON shape', async () => {

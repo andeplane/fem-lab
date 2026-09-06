@@ -1,0 +1,69 @@
+{
+  "name": "radiating-block-transient",
+  "reference": "Benchmark E7: a 1 mm cube, insulated on five faces, radiating as a black body from the sixth into a 0 K sink. Its conductivity is deliberately enormous (1e4 W/(m K), radiative Biot number 6e-6) so the cube stays isothermal and the answer is the lumped energy balance rho cp V dT/dt = -sigma eps A T^4, i.e. dT/dt = -c T^4 with c = sigma A / (rho cp V) = 5.670374419e-9 K^-3 s^-1 for A/V = 1/L, L = 1 mm, rho = 100 kg/m^3, cp = 100 J/(kg K). Separating variables gives the closed form T(t) = T0 (1 + 3 c T0^3 t)^(-1/3), which is 381.49284808810995 K at t = 1 s from T0 = 1000 K. A linearised film cannot reproduce a fourth-power decay by accident. Crank-Nicolson at dt = 5 ms lands 3.3e-5 relative from the closed form; the engine test halves the increment three times and measures the theta-method's own rates, 1 at theta = 1 and 2 at theta = 0.5.",
+  "journal": [
+    { "cmd": "model.new", "name": "radiating-block" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "temperature": "K", "time": "s" } },
+    {
+      "cmd": "geometry.addBox",
+      "name": "block",
+      "size": ["1 mm", "1 mm", "1 mm"]
+    },
+    {
+      "cmd": "material.add",
+      "name": "isothermal",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "100 kg/m^3",
+      "k": "1e4 W/(m K)",
+      "cp": "100 J/(kg K)"
+    },
+    { "cmd": "material.assign", "material": "isothermal", "bodies": ["block"] },
+    {
+      "cmd": "mesh.set",
+      "mesher": { "kind": "lattice", "size": { "nx": 2, "ny": 1, "nz": 1 } },
+      "order": 1
+    },
+    {
+      "cmd": "load.radiation",
+      "name": "space",
+      "on": "block.xmax",
+      "emissivity": 1,
+      "tInf": "0 K"
+    },
+    {
+      "cmd": "step.add",
+      "name": "cool",
+      "procedure": "heat-transient",
+      "constraints": [],
+      "loads": ["space"],
+      "output": ["temperature"],
+      "dt": "0.005 s",
+      "tEnd": "1 s",
+      "theta": 0.5,
+      "initial": "1000 K",
+      "outputEvery": 50,
+      "nonlinearTolerance": 1e-9
+    },
+    { "cmd": "solve.run", "step": "cool" }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": ["0.5 mm", "0.5 mm", "0.5 mm"]
+      },
+      "path": "/value/value",
+      "expect": 381.49284808810995,
+      "tol": 1e-4,
+      "rel": true,
+      "note": "T(1 s) of the analytic fourth-power decay"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

@@ -3,17 +3,24 @@
 
 .assistant {
   flex: none;
-  width: 392px;
+  width: var(--assistant-width, 392px);
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg-panel);
+  background: var(--bg-well);
   border-left: 1px solid var(--border-panel);
   font-size: 12px;
 }
 
 .assistant[hidden] {
   display: none;
+}
+
+@media (max-width: 600px) {
+  .assistant {
+    width: min(392px, 100vw);
+    max-width: 100vw;
+  }
 }
 
 .assistant header {
@@ -207,6 +214,28 @@
   text-wrap: pretty;
   word-break: break-all;
 }
+.assistant .card .result-assumptions {
+  padding: 7px 9px;
+  border-top: 1px solid var(--border-divider);
+  font-size: 11px;
+  color: var(--text-low);
+}
+.assistant .card .result-assumptions .label {
+  margin-bottom: 5px;
+  color: var(--text-high);
+  font-weight: 600;
+}
+.assistant .card .result-assumption + .result-assumption {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-divider);
+}
+.assistant .card .result-assumption code {
+  color: var(--cyan-text);
+}
+.assistant .card .result-assumption .source {
+  color: var(--text-dim);
+}
 .assistant .card.bad {
   border-color: var(--red-border);
 }
@@ -325,7 +354,10 @@
   font-size: 11.5px;
   color: var(--text-low);
 }
-.assistant .thinking i {
+.assistant .thinking i,
+.assistant .tool-pending {
+  display: inline-block;
+  flex: none;
   width: 9px;
   height: 9px;
   border: 1.5px solid var(--accent);
@@ -356,9 +388,13 @@
   padding: 9px 12px;
   position: relative;
 }
+.assistant .suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.assistant .suggestions button { padding: 3px 8px; border: 1px solid #2b3038; border-radius: 3px; font-size: 11px; color: #8b929d; }
+.assistant .suggestions button:hover { color: #e7e9ec; border-color: #4c525b; }
 /* Issue #39: a flex item of the drawer, immediately above the composer, rather than a box
    positioned over it. It takes its space from `.messages` (which is `flex: 1`), so it cannot
    overlap the skills row or the composer at any drawer height and needs no magic offsets. */
+
 .assistant .popover {
   flex: 0 1 auto;
   min-height: 0;
@@ -617,4 +653,49 @@
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text-dim);
+}
+
+/* Transcript rows keep their natural height; landing-page cards must not size tool cards. */
+.assistant .messages > * {
+  flex: none;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.assistant .card {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.assistant .card .head > span { flex: none; }
+.assistant .card .head .cmd { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.assistant .card .args,
+.assistant .card .out {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  line-height: 1.6;
+  flex: none;
+}
+.assistant .prose p { margin: 0 0 8px; }
+.assistant .prose p:last-child { margin-bottom: 0; }
+.assistant .prose ul,
+.assistant .prose ol { margin: 6px 0; padding-left: 20px; white-space: normal; }
+.assistant .prose .prose-heading { font-weight: 600; color: var(--text-high); }
+.assistant .prose code { font-family: var(--mono); color: var(--cyan-text); }
+.assistant .prose pre { max-height: 240px; overflow: auto; white-space: pre-wrap; margin: 8px 0; padding: 8px; background: var(--bg-page); }
+.assistant .model-row { margin-top: 8px; }
+.assistant .model-row label { display: flex; align-items: center; gap: 8px; color: var(--text-low); font-size: 11px; }
+.assistant .model-row select { flex: 1; min-width: 0; background: var(--bg-page); color: var(--text-body); border: 1px solid var(--border-control); border-radius: var(--radius); padding: 3px 6px; font: inherit; }
+.assistant .queued { margin-top: 8px; color: var(--text-low); font-size: 11px; }
+.assistant .queued ol { max-height: 88px; overflow: auto; padding-left: 20px; margin: 4px 0; overflow-wrap: anywhere; }
+.assistant .cost { flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) {
+  .assistant *,
+  .assistant *::before,
+  .assistant *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

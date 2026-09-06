@@ -23,9 +23,10 @@ use femlab_geometry::mesh::ElementKind;
 use crate::command::Formulation;
 use crate::error::{Error, ErrorCode};
 use crate::fem::material::{plane_stress_condense, MaterialBatch, MaterialLaw, MaterialOut, VOIGT};
+use crate::fem::quadrature::Rule;
 use crate::fem::shape::{
-    centre_xi, dshape_of, face_dshape_of, face_rule_of, face_shape_of, in_reference, rule_of, shape_of, Hex20, Hex8,
-    Quad4, Quad8, RefElement, Tet10, Tet4, Tri3, Tri6,
+    centre_xi, dshape_of, face_dshape_of, face_rule_of, face_shape_of, in_reference, product_rule_of, rule_of,
+    shape_of, Hex20, Hex8, Quad4, Quad8, RefElement, Tet10, Tet4, Tri3, Tri6,
 };
 use crate::model::Idealisation;
 
@@ -75,6 +76,7 @@ pub trait Element: Send + Sync {
     fn kind(&self) -> ElementKind;
     /// `n_nodes * dim`.
     fn n_dof(&self) -> usize;
+    /// Stiffness/recovery points; mass integration may use a higher-degree rule.
     fn n_gp(&self) -> usize;
     /// `K_e`, row-major `n_dof × n_dof`; returns the smallest Gauss-point `det J`, which the
     /// well-posedness check reports.
@@ -239,8 +241,11 @@ impl Kin {
 /// `B̄_α = B_α − (1/V) ∫ B_α dV` (Taylor–Beresford–Wilson), which is what makes a constant
 /// strain field unable to excite them and the patch test pass on a distorted element.
 fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
+    kinematics_with_rule(kind, c, rule_of(kind))
+}
+
+fn kinematics_with_rule(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Result<Kin, Error> {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
-    let rule = rule_of(kind);
     let n_gp = rule.points.len();
     let n_dof = nn * dim;
     let m = n_modes(kind, c.formulation);
@@ -503,7 +508,7 @@ fn stiffness_of(kind: ElementKind, c: &ElementCtx<'_>, k: &mut [f64]) -> Result<
 }
 
 fn mass_of(kind: ElementKind, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -> Result<(), Error> {
-    let kin = kinematics(kind, c)?;
+    let kin = kinematics_with_rule(kind, c, product_rule_of(kind))?;
     let (nn, dim, nd) = (kin.n_nodes, kin.dim, kin.n_dof);
     m.fill(0.0);
     if !c.material.rho.is_finite() || c.material.rho < 0.0 {

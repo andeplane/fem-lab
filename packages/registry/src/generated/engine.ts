@@ -486,6 +486,21 @@ export type Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -550,6 +565,16 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -1430,6 +1455,11 @@ export type Query =
       query: "query.model";
     }
   | {
+      kind: ObjectKind;
+      name: string;
+      query: "query.definition";
+    }
+  | {
       query: "query.mesh";
     }
   | {
@@ -1452,12 +1482,6 @@ export type Query =
       resultId?: string | null;
       field: string;
       query: "query.field";
-    }
-  | {
-      left: DifferenceOperand;
-      right: DifferenceOperand;
-      onto: DifferenceOnto;
-      query: "query.difference";
     }
   | {
       /**
@@ -1621,10 +1645,6 @@ export type Query =
       query: "query.capabilities";
     };
 /**
- * The retained Result whose Mesh receives the difference values.
- */
-export type DifferenceOnto = "left" | "right";
-/**
  * How to select retained output; there is no temporal interpolation or extrapolation.
  */
 export type FrameSample =
@@ -1671,12 +1691,12 @@ export type ReportSection =
  */
 export type QueryResult =
   | ModelSummary
+  | ObjectDefinition
   | MeshSummary
   | SetInfo
   | ResultSummary
   | RetainedResults
   | ResultField
-  | DifferenceField
   | FramesResult
   | FrameResult
   | ProbeResult
@@ -1761,6 +1781,12 @@ export type Sweep =
       angle_deg: number;
       kind: "revolve";
     };
+/**
+ * An omitted optional material property that a successful solve read as its resolved zero.
+ * The value is kept in SI with the Result, so later unit, name and material edits cannot
+ * rewrite the assumption under an already-computed answer.
+ */
+export type AssumedMaterialProperty = "rho" | "alpha";
 /**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  */
@@ -2247,6 +2273,21 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -2311,6 +2352,16 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -2898,6 +2949,12 @@ export type Load1 =
     }
   | {
       on: string;
+      emissivity: number;
+      t_inf: number;
+      kind: "radiation";
+    }
+  | {
+      on: string;
       q: number;
       kind: "heatFlux";
     }
@@ -3164,14 +3221,6 @@ export interface RefineBoxSpec {
       };
 }
 /**
- * One explicit retained field used by `query.difference`.
- */
-export interface DifferenceOperand {
-  resultId: string;
-  field: string;
-  component?: number | null;
-}
-/**
  * `query.model` response.
  */
 export interface ModelSummary {
@@ -3321,6 +3370,12 @@ export interface Warning {
   where?: string | null;
 }
 /**
+ * Lossless input for editing one Model object through the same Command used to create it.
+ */
+export interface ObjectDefinition {
+  command: Command;
+}
+/**
  * `query.mesh` response.
  */
 export interface MeshSummary {
@@ -3388,6 +3443,10 @@ export interface ResultSummary {
    */
   resultId: string;
   step: string;
+  /**
+   * The Journal revision after the Command that produced this Result. It stays fixed while
+   * later edits make the Result stale and when undo removes that producing Command.
+   */
   revision: number;
   stale: boolean;
   solver: string;
@@ -3407,6 +3466,11 @@ export interface ResultSummary {
    * @maxItems 3
    */
   appliedTotal: [Valued, Valued, Valued];
+  /**
+   * Optional material properties the successful procedure actually read as zero because the
+   * Material omitted them. Empty when every solver-used property was explicit.
+   */
+  assumptions?: ResultAssumption[];
   /**
    * Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
    * shape is the Result field named `mode:k`.
@@ -3449,6 +3513,21 @@ export interface ReactionRow {
    * @maxItems 3
    */
   total: [Valued, Valued, Valued];
+}
+/**
+ * One solver-used material assumption captured at solve time.
+ */
+export interface ResultAssumption {
+  step: string;
+  body: string;
+  material: string;
+  property: AssumedMaterialProperty;
+  value: Valued;
+  /**
+   * The Material provenance at solve time; null when the Material named none.
+   */
+  source?: string | null;
+  cause: string;
 }
 /**
  * One time of a transient Step's history: the extremes of the field at that instant.
@@ -3501,39 +3580,6 @@ export interface ResultField {
   nodeCount: number;
   unit: string;
   values: number[];
-}
-/**
- * `query.difference` response. Values are retained f64 SI, component-fastest by target node.
- */
-export interface DifferenceField {
-  left: ResolvedDifferenceOperand;
-  right: ResolvedDifferenceOperand;
-  comparisonResultId: string;
-  components: number;
-  nodeCount: number;
-  unit: string;
-  values: (number | null)[];
-  interpolated: boolean;
-  coverage: DifferenceCoverage;
-  warnings: Warning[];
-}
-/**
- * The resolved identity and layout of one difference operand.
- */
-export interface ResolvedDifferenceOperand {
-  resultId: string;
-  step: string;
-  field: string;
-  component?: number | null;
-  sourceComponents: number;
-}
-/**
- * Nodewise coverage of the selected comparison Mesh by the other Mesh.
- */
-export interface DifferenceCoverage {
-  insideNodes: number;
-  totalNodes: number;
-  outsideNodes: number[];
 }
 /**
  * `query.frames` response; stored components describe the unpadded History storage.
@@ -3984,6 +4030,7 @@ export interface EngineError {
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
     | "solve.stalled"
+    | "solve.diverged"
     | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
@@ -4140,6 +4187,8 @@ export interface Step {
   dtFactor?: number | null;
   amplitude?: Amplitude | null;
   initial?: number | null;
+  nonlinearTolerance?: number | null;
+  nonlinearMaxIterations?: number | null;
 }
 /**
  * A Plugin used by the Model (phase P).

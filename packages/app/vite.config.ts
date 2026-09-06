@@ -35,7 +35,13 @@ export default defineConfig(({ command }) => ({
   server: { headers },
   preview: { headers },
   worker: { format: 'es' },
-  plugins: [preloadLazyChunks()],
+  plugins: [preloadLazyChunks(), {
+    name: 'femlab-dev-csp',
+    // Production keeps the static meta policy. Only the dev server needs HMR sockets.
+    transformIndexHtml(html, ctx) {
+      return ctx.server ? html.replace("connect-src 'self'", "connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:*") : html;
+    },
+  }],
   build: {
     target: 'es2022',
     // `tools/size-check.mjs` reads this to tell the landing chunk (the entry and its static

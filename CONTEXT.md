@@ -18,7 +18,9 @@ any mesh.
 _Avoid_: CAD, part file, solid model
 
 **Body**:
-One connected solid region of the geometry, carrying a material and a name.
+One connected region of the geometry, carrying a material and a name. Explicit Bodies own
+Shapes; mapped and swept mapped meshers own an implicit Body with the same rename and
+guarded-removal lifecycle (ADR 0016). A free mesher references an explicit Body.
 _Avoid_: part, instance, solid, volume
 
 **Face**:

@@ -39,7 +39,13 @@ function surface(): Bulk {
     indices: Uint32Array;
     triSet: Uint32Array;
     triBody: Uint32Array;
+    edges: Uint32Array;
+    edgeSet: Uint32Array;
+    edgeBody: Uint32Array;
     setNames: string[];
+    membershipNames: string[];
+    triSetOffsets: Uint32Array;
+    triSets: Uint32Array;
     bodyNames: string[];
     source: string;
   };
@@ -48,9 +54,14 @@ function surface(): Bulk {
     { name: 'indices', dtype: 'u32' as const, view: s.indices.slice() },
     { name: 'triFace', dtype: 'u32' as const, view: s.triSet.slice() },
     { name: 'triBody', dtype: 'u32' as const, view: s.triBody.slice() },
+    { name: 'triSetOffsets', dtype: 'u32' as const, view: s.triSetOffsets.slice() },
+    { name: 'triSets', dtype: 'u32' as const, view: s.triSets.slice() },
+    { name: 'edges', dtype: 'u32' as const, view: s.edges.slice() },
+    { name: 'edgeFace', dtype: 'u32' as const, view: s.edgeSet.slice() },
+    { name: 'edgeBody', dtype: 'u32' as const, view: s.edgeBody.slice() },
   ];
   return {
-    value: { faceNames: s.setNames, bodyNames: s.bodyNames, source: s.source },
+    value: { faceNames: s.setNames, setNames: s.membershipNames, bodyNames: s.bodyNames, source: s.source },
     buffers: arrays.map((a) => ({ name: a.name, dtype: a.dtype, length: a.view.length })),
     raw: arrays.map((a) => a.view.buffer as ArrayBuffer),
   };
@@ -106,7 +117,7 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
     case 'importFile': {
       need().import_file(JSON.stringify(req.payload));
       const { journal } = JSON.parse(need().export_file());
-      return { seq: -1, revision: need().revision(), hash: need().model_hash(), warnings: [], output: { kind: 'none' }, journal };
+      return { seq: -1, revision: need().revision(), hash: need().model_hash(), warnings: [], output: { type: 'none' }, journal };
     }
     case 'replay': {
       // Rebuild the full acknowledged history, then restore the active revision while keeping

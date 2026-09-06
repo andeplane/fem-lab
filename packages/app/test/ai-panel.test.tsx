@@ -5,12 +5,14 @@ import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as anthropic from '../src/ai/anthropic';
+import * as context from '../src/ai/context';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { fakeTransport } from '../../registry/test/fakes';
-import { AssistantPanel, chatBridge } from '../src/ai/AssistantPanel';
+import { AssistantPanel, ToolCard, chatBridge, resultAssumptions } from '../src/ai/AssistantPanel';
 import { parseVerification } from '../src/ai/context';
 import { Store } from '../src/store';
-import { makeHostContext } from '../src/host';
+import { Checks } from '../src/ui/Results';
+import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import type { WorkerTransport } from '../src/worker-transport';
 import type { ChatRequest } from '../src/ai/provider';
@@ -22,8 +24,14 @@ async function mount(patch: Partial<Store['state']> = {}) {
   const transport = fakeTransport();
   transport.query = (async (q: { query: string }) => (q.query === 'query.objects' ? { objects: [{ ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' }] } : { entries: [], revision: 0, canUndo: false, canRedo: false })) as never;
   const store = new Store();
-  const host = makeHostContext(store, transport as WorkerTransport, { current: null }, readHostCaps({}));
-  const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: HOST_COMMANDS });
+  const viewer = { current: null };
+  const host = makeHostContext(store, transport as WorkerTransport, viewer, readHostCaps({}));
+  host.chat.send = (text) => chatBridge.send(text);
+  host.chat.insertMention = (ref) => chatBridge.insertMention(ref);
+  host.chat.setDraft = (text) => chatBridge.setDraft(text);
+  host.chat.clear = () => chatBridge.clear();
+  const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport as WorkerTransport, viewer, async () => undefined)] });
+
   store.set({ ready: true, ...patch });
   const root = document.createElement('div');
   document.body.append(root);
@@ -61,7 +69,9 @@ describe('the assistant drawer', () => {
     for (const root of [...document.body.children]) render(null, root as HTMLElement);
     document.body.innerHTML = '';
     chatBridge.pending = null;
+    chatBridge.pendingDraft = null;
     localStorage.clear();
+    sessionStorage.clear();
   });
 
   it('names only Commands the registry has on every clickable', async () => {
@@ -104,7 +114,7 @@ describe('the assistant drawer', () => {
   });
 
   it('keeps a real conversation and an in-flight tool call alive while hidden', async () => {
-    localStorage.setItem('femlab.ai.key', 'test-key');
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
     let finishTool!: (value: unknown) => void;
     const pending = new Promise((resolve) => { finishTool = resolve; });
     let round = 0;
@@ -127,6 +137,9 @@ describe('the assistant drawer', () => {
       await tick();
       expect(root.textContent).toContain('Inspecting the beam.');
       expect(root.querySelector('.thinking')!.textContent).toContain('query.model');
+      expect(root.querySelector('.card')!.getAttribute('data-status')).toBe('pending');
+      expect(root.querySelector('.card [aria-label=Running]')).not.toBeNull();
+      expect(root.querySelector('.card .ok')).toBeNull();
       render(<AssistantPanel registry={registry} store={store} hidden />, root);
       await tick();
       expect(root.querySelector('aside')!.hidden).toBe(true);
@@ -140,16 +153,154 @@ describe('the assistant drawer', () => {
       expect(root.textContent).toContain('Inspecting the beam.');
       expect(root.textContent).toContain('The beam is ready.');
       expect(root.querySelector('.card .out')!.textContent).toContain('beam');
+      expect(root.querySelector('.card')!.getAttribute('data-status')).toBe('succeeded');
+      expect(root.querySelector('.card [aria-label=Succeeded]')).not.toBeNull();
       expect(root.querySelector('.thinking')).toBeNull();
     } finally { provider.mockRestore(); }
   });
 
+  it('renders every solver-used assumption from direct and script-returned Results beyond the JSON preview', () => {
+    const assumption = {
+      step: 'thermal-explicit',
+      body: 'heated-block',
+      material: 'catalogue-aluminium',
+      property: 'alpha' as const,
+      value: { value: 0, unit: '1/K' },
+      source: 'NASA NTRS 20120014854, Section 2, PDF p. 36',
+      cause: 'the resolved temperature field read the omitted thermal expansion coefficient as zero',
+    };
+    expect(resultAssumptions(JSON.stringify({ assumptions: [assumption] }))).toEqual([assumption]);
+
+    const result = JSON.stringify({
+      result: {
+        paddingBeforeTheSolveResult: 'x'.repeat(13000),
+        output: { type: 'solve', summary: { assumptions: [assumption] } },
+      },
+      console: [],
+    });
+    const root = document.createElement('div');
+    document.body.append(root);
+    render(
+      <ToolCard call={{ id: 'script', tool: 'run_script', command: 'script.run', input: { code: 'return await fem.solve.run({ step: "thermal-explicit" })' }, ms: 4, status: 'succeeded', result }} />,
+      root,
+    );
+    expect(root.querySelector('.out')!.textContent).not.toContain(assumption.cause);
+    const shown = root.querySelector('.result-assumption')!.textContent!;
+    for (const text of [assumption.step, assumption.body, assumption.material, assumption.property, '0 1/K', assumption.cause, assumption.source]) {
+      expect(shown).toContain(text);
+    }
+    render(
+      <ToolCard call={{ id: 'failed', tool: 'run_script', command: 'script.run', input: {}, ms: 4, status: 'failed', result }} />,
+      root,
+    );
+    expect(root.querySelector('.result-assumption')).toBeNull();
+  });
+
+  it('shows a script error as a failed tool card with its partial console output', async () => {
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
+    let round = 0;
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat() {
+        if (round++ === 0) yield { type: 'tool_use', id: 'script', name: 'run_script', input: { code: 'buildThenFail()' } };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry } = await mount();
+      const original = registry.query.bind(registry);
+      vi.spyOn(registry, 'query').mockImplementation((q) => q.query === 'query.journal' ? Promise.resolve({ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }) : original(q));
+      const dispatch = registry.dispatch.bind(registry);
+      vi.spyOn(registry, 'dispatch').mockImplementation((cmd) => cmd.cmd === 'script.run'
+        ? Promise.resolve({ result: null, console: ['built one body'], error: 'line 2: no such Set' })
+        : dispatch(cmd));
+      await type(root, 'Build it');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await tick();
+      await tick();
+      expect(root.querySelector('.card.bad')!.getAttribute('data-status')).toBe('failed');
+      expect(root.querySelector('.card [aria-label=Failed]')).not.toBeNull();
+      expect(root.querySelector('.card .out')!.textContent).toContain('built one body');
+      expect(root.querySelector('.card .out')!.textContent).toContain('line 2: no such Set');
+    } finally { provider.mockRestore(); }
+  });
+
+  it('renders deltas before completion and finalizes prose and verification without duplicates', async () => {
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
+    let resumeFirst!: () => void;
+    let resumeVerification!: () => void;
+    const first = new Promise<void>((resolve) => { resumeFirst = resolve; });
+    const verification = new Promise<void>((resolve) => { resumeVerification = resolve; });
+    let round = 0;
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat() {
+        if (round++ === 0) {
+          yield { type: 'text_delta', text: 'First' };
+          await first;
+          yield { type: 'text_delta', text: ' sentence.' };
+          yield { type: 'tool_use', id: 'inspect', name: 'query_model', input: {} };
+        } else {
+          yield { type: 'text_delta', text: 'Solved.\n<ver' };
+          await verification;
+          yield { type: 'text_delta', text: 'ification>\nok | Reaction balance | 0 %\n</verification>\nDone.' };
+        }
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry, store } = await mount({ journal: { hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false } });
+      const original = registry.query.bind(registry);
+      vi.spyOn(registry, 'query').mockImplementation((q) => q.query === 'query.journal' ? Promise.resolve({ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }) : original(q));
+      await type(root, 'Check it');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await tick();
+      expect(root.querySelector('.streaming')!.textContent).toBe('First');
+      expect(root.querySelector('.card')).toBeNull();
+      resumeFirst();
+      await tick();
+      await tick();
+      expect(root.querySelector('.streaming')!.textContent).toBe('Solved.');
+      expect(root.textContent).not.toContain('<ver');
+      expect(root.querySelector('.verify')).toBeNull();
+      resumeVerification();
+      await tick();
+      await tick();
+      expect(root.querySelector('.streaming')).toBeNull();
+      expect([...root.querySelectorAll('.prose p')].map((p) => p.textContent)).toEqual(['First sentence.', 'Solved.', 'Done.']);
+      expect(root.querySelectorAll('.verify')).toHaveLength(1);
+      expect(root.querySelector('.verify')!.textContent).toContain('Reaction balance');
+      expect(root.querySelector('.suggestions')!.textContent).toContain('Check this Model');
+      expect(root.querySelector('.suggestions')!.textContent).not.toContain('Build a cantilever');
+      expect(store.state.assistantVerifications).toHaveLength(1);
+      const checks = document.createElement('div');
+      document.body.append(checks);
+      const showChecks = () => render(<Checks s={store.state} dispatch={registry.dispatch.bind(registry)} query={registry.query.bind(registry)} />, checks);
+      showChecks();
+      expect(checks.textContent).toContain('Assistant-reported checks');
+      expect(checks.textContent).toContain('not independently verified');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('Reaction balance');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('0 %');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('Recorded at Model rev 0');
+      store.set({ journal: { ...store.state.journal!, hash: 'edited' }, revision: 1 });
+      await tick();
+      showChecks();
+      expect(root.querySelector('.verify')!.textContent).toContain('Stale');
+      expect(checks.querySelector('.assistant-check')!.textContent).toContain('Stale');
+      chatBridge.clear();
+      await tick();
+      expect(root.querySelector('.verify')).toBeNull();
+      expect(store.state.assistantVerifications).toHaveLength(1);
+      expect(checks.textContent).toContain('Reaction balance');
+    } finally { provider.mockRestore(); }
+  });
+
   it('shows the key source and the model in the settings sub-panel', async () => {
-    localStorage.setItem('femlab.ai.key', 'sk-ant-api03-abcdefgh7f2a');
+    sessionStorage.setItem('femlab.ai.key', 'sk-ant-api03-abcdefgh7f2a');
     const { root } = await mount({ panels: { 'assistant.settings': true } });
-    expect(root.textContent).toContain('from localStorage in this browser');
+    expect(root.textContent).toContain('from sessionStorage in this tab');
     expect(root.querySelector<HTMLInputElement>('.settings input[type=password]')!.placeholder).toBe('sk-ant-a…7f2a');
-    expect([...root.querySelectorAll('.settings option')].map((o) => o.textContent)).toContain('claude-opus-5');
+    expect([...root.querySelectorAll('.model-row option')].map((o) => o.textContent)).toContain('claude-opus-5');
     expect(root.querySelector('[data-cmd="ai.setModel"]')).not.toBeNull();
   });
 
@@ -171,6 +322,60 @@ describe('the assistant drawer', () => {
     root.querySelector<HTMLButtonElement>('.bar [data-cmd="chat.insertMention"]')!.click();
     await tick();
     expect([...root.querySelectorAll('.token span:first-child')].map((t) => t.textContent)).toEqual(['@body:beam', '@face:beam.top']);
+  });
+
+  it('prepares editable suggestions and selects a skill without sending the draft', async () => {
+    const { root, registry, store } = await mount();
+    const dispatch = vi.spyOn(registry, 'dispatch');
+    root.querySelector<HTMLButtonElement>('.suggestions button')!.click();
+    await tick();
+    const box = root.querySelector('textarea')!;
+    expect(box.value).toContain('Help me build a cantilever');
+    expect(document.activeElement).toBe(box);
+    expect(root.querySelector('.user')).toBeNull();
+    await type(root, 'Check my beam');
+    root.querySelector<HTMLButtonElement>('[title="Choose a skill for this draft"]')!.click();
+    await tick();
+    expect(store.state.panels['assistant.skills']).toBe(true);
+    const skill = [...root.querySelectorAll<HTMLButtonElement>('.popover button')].find((b) => b.textContent?.includes('beam-theory-check'))!;
+    skill.click();
+    await tick();
+    expect(box.value).toBe('/beam-theory-check Check my beam');
+    expect(document.activeElement).toBe(box);
+    expect(root.querySelector('.popover')).toBeNull();
+    expect(dispatch.mock.calls.some(([c]) => c.cmd === 'chat.send' || c.cmd === 'skill.invoke')).toBe(false);
+    expect(dispatch).toHaveBeenCalledWith({ cmd: 'chat.setDraft', text: '/beam-theory-check Check my beam' });
+  });
+
+  it('loads a selected skill on Send while retaining existing reference chips', async () => {
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
+    let received = '';
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(request) {
+        received = JSON.stringify(request.messages);
+        yield { type: 'text_delta', text: 'Checked' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry } = await mount();
+      chatBridge.insertMention('body:beam');
+      await type(root, 'Check my beam\nExplain assumptions');
+      root.querySelector<HTMLButtonElement>('[title="Choose a skill for this draft"]')!.click();
+      await tick();
+      [...root.querySelectorAll<HTMLButtonElement>('.popover button')].find((b) => b.textContent?.includes('beam-theory-check'))!.click();
+      await tick();
+      expect(root.querySelector('.token')!.textContent).toContain('@body:beam');
+      const dispatch = vi.spyOn(registry, 'dispatch');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await tick();
+      await tick();
+      expect(dispatch).toHaveBeenCalledWith({ cmd: 'skill.invoke', name: 'beam-theory-check', args: 'Check my beam\nExplain assumptions @body:beam' });
+      expect(received).toContain('Skill beam-theory-check');
+      expect(received).toContain('A beam-shaped model has a closed-form answer.');
+      expect(received).toContain('@body:beam');
+    } finally { provider.mockRestore(); }
   });
 
   it('shows the skill menu when the line starts with a slash', async () => {
@@ -227,7 +432,7 @@ describe('the assistant drawer', () => {
   });
 
   it('loads the same built-in through the production host, slash picker and sent turn', async () => {
-    localStorage.setItem('femlab.ai.key', 'test-key');
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
     const requests: ChatRequest[] = [];
     const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
       id: 'anthropic', models: ['test'],
@@ -244,7 +449,7 @@ describe('the assistant drawer', () => {
       expect(await registry.query({ query: 'query.skills' })).toContainEqual({ name: builtin.name, description: builtin.description, when: builtin.when, source: builtin.source });
       expect(await registry.dispatch({ cmd: 'skill.invoke', name: builtin.name, args: 'check the beam' })).toEqual({ name: builtin.name, body: builtin.body, source: 'builtin', args: 'check the beam' });
       await type(root, '/beam');
-      root.querySelector<HTMLButtonElement>('.popover [data-cmd="skill.invoke"]')!.click();
+      root.querySelector<HTMLButtonElement>('.popover [data-cmd="chat.setDraft"]')!.click();
       await tick();
       expect(root.querySelector('textarea')!.value).toBe('/beam-theory-check ');
       root.querySelector<HTMLButtonElement>('button.send')!.click();
@@ -364,5 +569,149 @@ describe('the verification block', () => {
 
   it('leaves text without a block completely alone', () => {
     expect(parseVerification('Just prose.')).toEqual({ rows: [], prose: 'Just prose.' });
+  });
+});
+
+describe('Assistant queue and model controls', () => {
+  beforeEach(() => {
+    for (const root of [...document.body.children]) render(null, root as HTMLElement);
+    document.body.innerHTML = '';
+    chatBridge.pending = null;
+    localStorage.clear();
+    sessionStorage.clear();
+    sessionStorage.setItem('femlab.ai.key', 'test-key');
+  });
+
+  it('preserves a missing-key draft and image until the key is saved and the person retries', async () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    const image = { type: 'image' as const, mediaType: 'image/png' as const, base64: 'AAAA', caption: 'reference' };
+    const screenshot = vi.spyOn(context, 'screenshotBlock').mockResolvedValue(image);
+    const seen: import('../src/ai/provider').Message[][] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(req) { seen.push(structuredClone(req.messages)); yield { type: 'done', stopReason: 'end_turn' }; },
+    });
+    try {
+      const { root } = await mount();
+      root.querySelector<HTMLButtonElement>('button[data-cmd="query.screenshot"]')!.click();
+      await tick();
+      chatBridge.insertMention('body:beam');
+      await tick();
+      press(await type(root, 'build from this image'), 'Enter');
+      await tick();
+      expect(root.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('build from this image');
+      expect(root.querySelector('.tokens .token')?.textContent).toContain('body:beam');
+      expect(root.querySelector('.images img')?.getAttribute('src')).toContain('AAAA');
+      expect(root.querySelector('.bubble')).toBeNull();
+      expect(provider).not.toHaveBeenCalled();
+      const key = root.querySelector<HTMLInputElement>('.settings input[type="password"]')!;
+      key.value = 'test-key';
+      key.dispatchEvent(new Event('input', { bubbles: true }));
+      await tick();
+      root.querySelector<HTMLButtonElement>('[data-cmd="ai.setKey"]')!.click();
+      await tick();
+      press(root.querySelector('textarea')!, 'Enter');
+      await tick(); await tick();
+      expect(seen).toHaveLength(1);
+      expect(JSON.stringify(seen[0])).toContain('build from this image');
+      expect(JSON.stringify(seen[0])).toContain('body:beam');
+      expect(seen[0]![0]!.content).toContainEqual(image);
+      expect(root.querySelector('.images img')).toBeNull();
+    } finally { screenshot.mockRestore(); provider.mockRestore(); }
+  });
+
+  it('queues with Enter, then interrupts with empty Enter and starts the next message once', async () => {
+    const seen: import('../src/ai/provider').ChatRequest[] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(req) {
+        seen.push(structuredClone({ ...req, signal: undefined }));
+        if (seen.length === 1) {
+          yield { type: 'text_delta', text: 'First tokens' };
+          yield { type: 'tool_progress', id: 'draft', name: 'query_model', arguments: '{' };
+          await new Promise<void>(resolve => req.signal!.addEventListener('abort', () => resolve(), { once: true }));
+          return;
+        }
+        yield { type: 'text_delta', text: 'Next answer' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root } = await mount();
+      press(await type(root, 'first'), 'Enter');
+      await tick(); await tick();
+      expect(root.querySelector('[data-status="preparing"]')?.textContent).toContain('{');
+      press(await type(root, 'second'), 'Enter');
+      await tick();
+      expect(seen).toHaveLength(1);
+      expect(root.querySelector('.queued')?.textContent).toContain('second');
+      expect(root.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('');
+      press(root.querySelector('textarea')!, 'Enter');
+      await tick(); await tick();
+      expect(seen).toHaveLength(2);
+      expect(root.querySelector('.queued')).toBeNull();
+      expect(root.querySelector('[data-status="cancelled"]')).not.toBeNull();
+      expect(root.querySelectorAll('.bubble')).toHaveLength(2);
+      expect(root.textContent).toContain('Next answer');
+      expect(JSON.stringify(seen[1]!.messages)).not.toContain('tool_use');
+      expect(JSON.stringify(seen[1]!.messages)).toContain('Response interrupted');
+    } finally { provider.mockRestore(); }
+  });
+
+  it('drains queued messages in order after ordinary completion, preserving the next draft', async () => {
+    let release!: () => void;
+    const paused = new Promise<void>(resolve => { release = resolve; });
+    const seen: string[] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(req) {
+        seen.push(JSON.stringify(req.messages.at(-1)));
+        if (seen.length === 1) await paused;
+        yield { type: 'text_delta', text: 'Done' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root } = await mount();
+      chatBridge.send('first');
+      chatBridge.send('second');
+      chatBridge.send('third');
+      await tick();
+      expect(seen).toHaveLength(1);
+      await type(root, 'unsent draft');
+      release();
+      await tick(); await tick();
+      expect(seen).toHaveLength(3);
+      expect(seen[1]).toContain('second');
+      expect(seen[2]).toContain('third');
+      expect(root.querySelector<HTMLTextAreaElement>('textarea')!.value).toBe('unsent draft');
+    } finally { release(); provider.mockRestore(); }
+  });
+
+  it('shows the model selector without Settings and routes UI and registry changes to the next request', async () => {
+    const seen: string[] = [];
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['claude-haiku-4-5'],
+      async *chat(req) { seen.push(req.model); yield { type: 'done', stopReason: 'end_turn' }; },
+    });
+    try {
+      const { root, registry } = await mount();
+      expect(root.querySelector('.settings')).toBeNull();
+      const select = root.querySelector<HTMLSelectElement>('[data-cmd="ai.setModel"]')!;
+      select.value = 'claude-haiku-4-5';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await paint(); await tick();
+      expect(localStorage.getItem('femlab.ai.model')).toBe('claude-haiku-4-5');
+      press(await type(root, 'hello'), 'Enter');
+      await tick(); await tick();
+      expect(seen).toEqual(['claude-haiku-4-5']);
+      await registry.dispatch({ cmd: 'ai.setModel', model: 'gpt-5.4-mini' });
+      await paint(); await tick();
+      expect(select.value).toBe('gpt-5.4-mini');
+      render(null, root);
+      const remounted = await mount();
+      expect(remounted.root.querySelector<HTMLSelectElement>('[data-cmd="ai.setModel"]')!.value).toBe('gpt-5.4-mini');
+    } finally { provider.mockRestore(); }
   });
 });

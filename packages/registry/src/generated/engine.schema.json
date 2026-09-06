@@ -80,7 +80,7 @@
         ]
       },
       {
-        "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind.",
+        "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
         "type": "object",
         "properties": {
           "kind": {
@@ -105,7 +105,7 @@
         ]
       },
       {
-        "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.",
+        "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
         "type": "object",
         "properties": {
           "kind": {
@@ -167,7 +167,7 @@
         ]
       },
       {
-        "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.",
+        "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
         "type": "object",
         "properties": {
           "name": {
@@ -227,7 +227,7 @@
         ]
       },
       {
-        "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.",
+        "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
         "type": "object",
         "properties": {
           "name": {
@@ -298,7 +298,7 @@
         ]
       },
       {
-        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
+        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
         "type": "object",
         "properties": {
           "name": {
@@ -438,7 +438,7 @@
         ]
       },
       {
-        "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters.",
+        "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.",
         "type": "object",
         "properties": {
           "mesher": {
@@ -826,6 +826,36 @@
         ]
       },
       {
+        "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "string"
+          },
+          "emissivity": {
+            "type": "number",
+            "format": "double"
+          },
+          "tInf": {
+            "$ref": "#/$defs/Q_temperature"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "load.radiation"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "on",
+          "emissivity",
+          "tInf"
+        ]
+      },
+      {
         "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
         "type": "object",
         "properties": {
@@ -871,7 +901,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
         "type": "object",
         "properties": {
           "name": {
@@ -986,6 +1016,23 @@
               }
             ]
           },
+          "nonlinearTolerance": {
+            "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
           "cmd": {
             "type": "string",
             "const": "step.add"
@@ -1037,7 +1084,7 @@
         ]
       },
       {
-        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
+        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.",
         "type": "object",
         "properties": {
           "step": {
@@ -1079,7 +1126,7 @@
         ]
       },
       {
-        "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false.",
+        "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nmay have unequal refinement ratios. Three distinct positive sizes are needed for a\nfinite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate\nare unavailable. Restores the previous mesh settings afterwards unless `restore` is false.\nUses the Step's actual procedure: static and steady heat measure equilibrium fields;\ntransient heat and explicit dynamics measure the final field at the configured tEnd\nwith the Step's time settings unchanged. Modal Steps are unsupported because a mode\namplitude is not a mesh-independent quantity; compare frequencies with\nsolve.run/query.result instead. Steps with after are unsupported: solve their\ndependencies and target at each mesh explicitly.",
         "type": "object",
         "properties": {
           "step": {
@@ -2058,7 +2105,7 @@
             ]
           },
           {
-            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.\nSheet translation, rotation about z and positive in-plane scaling are applied before\nmeshing. Size and refine boxes use world coordinates; curved boundaries are sampled\nto one tenth of size in world space. Nested or out-of-plane transforms are unsupported.",
             "type": "object",
             "properties": {
               "of": {
@@ -2743,6 +2790,28 @@
         "x-returns": "ModelSummary"
       },
       {
+        "description": "The complete upsert Command for an existing object's current definition, with exact\nSI quantities. Use it to populate an edit form; change its arguments and dispatch it\nto apply. Display summaries are rounded and must never be used to reconstruct edits.\nAuto-generated Sets and mesher-owned Bodies have no editable object definition.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ObjectKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "const": "query.definition"
+          }
+        },
+        "required": [
+          "query",
+          "kind",
+          "name"
+        ],
+        "x-returns": "ObjectDefinition"
+      },
+      {
         "description": "Counts and sanity of the current Mesh (nodes, elements, element kind, DOF, bounding box,\nedge lengths, Sets with their resolved sizes, quality). Builds the Mesh if needed.",
         "type": "object",
         "properties": {
@@ -2775,7 +2844,7 @@
         "x-returns": "SetInfo"
       },
       {
-        "description": "Summary of a Step's Result: solver info, extremes of every field with their location,\nreactions per constraint and the applied totals, and whether the Result is stale\n(the Model changed after it was solved). Check the reaction balance first.",
+        "description": "Summary of a Step's Result: solver info, extremes of every field with their location,\nreactions per constraint, applied totals, solver-used omitted material assumptions, and\nwhether the Result is stale (the Model changed after it was solved). Check the reaction\nbalance and assumptions first.",
         "type": "object",
         "properties": {
           "resultId": {
@@ -2844,32 +2913,6 @@
           "field"
         ],
         "x-returns": "ResultField"
-      },
-      {
-        "description": "Subtract two explicitly retained nodal fields as `left - right` on either Result's\nMesh. Unequal meshes use finite-element interpolation and report uncovered nodes as\nnull values; nonfinite arithmetic is a structured error. No current Result, display\nconversion, or node-number pairing is implied.",
-        "type": "object",
-        "properties": {
-          "left": {
-            "$ref": "#/$defs/DifferenceOperand"
-          },
-          "right": {
-            "$ref": "#/$defs/DifferenceOperand"
-          },
-          "onto": {
-            "$ref": "#/$defs/DifferenceOnto"
-          },
-          "query": {
-            "type": "string",
-            "const": "query.difference"
-          }
-        },
-        "required": [
-          "query",
-          "left",
-          "right",
-          "onto"
-        ],
-        "x-returns": "DifferenceField"
       },
       {
         "description": "Catalogue of retained transient primary-field frames (default: last solved Step).\nIndex 0 is the initial state; indices count retained frames, not integration steps.\nMetadata remains available for stale Results. No nodal values are copied by this Query.",
@@ -3250,37 +3293,16 @@
       }
     ],
     "$defs": {
-      "DifferenceOperand": {
-        "description": "One explicit retained field used by `query.difference`.",
-        "type": "object",
-        "properties": {
-          "resultId": {
-            "type": "string"
-          },
-          "field": {
-            "type": "string"
-          },
-          "component": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          }
-        },
-        "required": [
-          "resultId",
-          "field"
-        ]
-      },
-      "DifferenceOnto": {
-        "description": "The retained Result whose Mesh receives the difference values.",
+      "ObjectKind": {
+        "description": "Kinds of nameable objects in a Model.",
         "type": "string",
         "enum": [
-          "left",
-          "right"
+          "body",
+          "material",
+          "set",
+          "constraint",
+          "load",
+          "step"
         ]
       },
       "FrameSample": {
@@ -3384,18 +3406,6 @@
         "$ref": "#/$defs/Quantity",
         "x-dimension": "length"
       },
-      "ObjectKind": {
-        "description": "Kinds of nameable objects in a Model.",
-        "type": "string",
-        "enum": [
-          "body",
-          "material",
-          "set",
-          "constraint",
-          "load",
-          "step"
-        ]
-      },
       "ReportSection": {
         "description": "One section of the Markdown report. `query.report` writes the ones asked for in this order.",
         "oneOf": [
@@ -3457,6 +3467,9 @@
         "$ref": "#/$defs/ModelSummary"
       },
       {
+        "$ref": "#/$defs/ObjectDefinition"
+      },
+      {
         "$ref": "#/$defs/MeshSummary"
       },
       {
@@ -3470,9 +3483,6 @@
       },
       {
         "$ref": "#/$defs/ResultField"
-      },
-      {
-        "$ref": "#/$defs/DifferenceField"
       },
       {
         "$ref": "#/$defs/FramesResult"
@@ -4270,1031 +4280,16 @@
           "text"
         ]
       },
-      "MeshSummary": {
-        "description": "`query.mesh` response.",
+      "ObjectDefinition": {
+        "description": "Lossless input for editing one Model object through the same Command used to create it.",
         "type": "object",
         "properties": {
-          "nodes": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "elements": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "elementKind": {
-            "type": "string"
-          },
-          "dofs": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "bbox": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 6,
-            "maxItems": 6
-          },
-          "minEdge": {
-            "$ref": "#/$defs/Valued"
-          },
-          "maxEdge": {
-            "$ref": "#/$defs/Valued"
-          },
-          "sets": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/SetRow"
-            }
-          },
-          "quality": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/QualitySummary"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "nodes",
-          "elements",
-          "elementKind",
-          "dofs",
-          "bbox",
-          "minEdge",
-          "maxEdge",
-          "sets"
-        ]
-      },
-      "QualitySummary": {
-        "description": "Mesh quality inside `query.mesh`: worst-case ratios and the elements that set them.",
-        "type": "object",
-        "properties": {
-          "minDetJRatio": {
-            "description": "Smallest corner `min(det J) / max(det J)`; 1 is perfect, 0 degenerate, negative inverted.",
-            "type": "number",
-            "format": "double"
-          },
-          "maxAspect": {
-            "description": "Largest longest-edge over shortest-edge ratio.",
-            "type": "number",
-            "format": "double"
-          },
-          "minAngleDeg": {
-            "description": "Smallest angle at any element corner, in degrees.",
-            "type": "number",
-            "format": "double"
-          },
-          "worst": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/QualityRow"
-            }
-          }
-        },
-        "required": [
-          "minDetJRatio",
-          "maxAspect",
-          "minAngleDeg",
-          "worst"
-        ]
-      },
-      "QualityRow": {
-        "type": "object",
-        "properties": {
-          "element": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "value": {
-            "type": "number",
-            "format": "double"
-          }
-        },
-        "required": [
-          "element",
-          "value"
-        ]
-      },
-      "SetInfo": {
-        "description": "`query.set` response.",
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "count": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "bbox": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 6,
-            "maxItems": 6
-          },
-          "measure": {
-            "$ref": "#/$defs/Valued"
-          },
-          "centroid": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          }
-        },
-        "required": [
-          "name",
-          "kind",
-          "count",
-          "bbox",
-          "measure",
-          "centroid"
-        ]
-      },
-      "ResultSummary": {
-        "description": "`query.result` response.",
-        "type": "object",
-        "properties": {
-          "resultId": {
-            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
-            "type": "string"
-          },
-          "step": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "stale": {
-            "type": "boolean"
-          },
-          "solver": {
-            "type": "string"
-          },
-          "iterations": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "residual": {
-            "type": "number",
-            "format": "double"
-          },
-          "timeMs": {
-            "type": "number",
-            "format": "double"
-          },
-          "extremes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Extreme"
-            }
-          },
-          "reactionQuantity": {
-            "description": "Force for structural Results; power for thermal Results, retained with the solved state.",
-            "$ref": "#/$defs/ReactionQuantity"
-          },
-          "reactions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/ReactionRow"
-            }
-          },
-          "appliedTotal": {
-            "description": "Applied force vector or thermal power in component 0 (remaining components zero).",
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          },
-          "frequencies": {
-            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            }
-          },
-          "history": {
-            "description": "One row per output time of a transient Step: when, and the range the field covered.",
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/HistoryRow"
-            }
-          },
-          "balance": {
-            "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
-            "type": "number",
-            "format": "double"
-          }
-        },
-        "required": [
-          "resultId",
-          "step",
-          "revision",
-          "stale",
-          "solver",
-          "iterations",
-          "residual",
-          "timeMs",
-          "extremes",
-          "reactionQuantity",
-          "reactions",
-          "appliedTotal",
-          "balance"
-        ]
-      },
-      "Extreme": {
-        "description": "One extreme of a field component.",
-        "type": "object",
-        "properties": {
-          "field": {
-            "type": "string"
-          },
-          "component": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          },
-          "min": {
-            "$ref": "#/$defs/Valued"
-          },
-          "minAt": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          },
-          "max": {
-            "$ref": "#/$defs/Valued"
-          },
-          "maxAt": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          }
-        },
-        "required": [
-          "field",
-          "component",
-          "min",
-          "minAt",
-          "max",
-          "maxAt"
-        ]
-      },
-      "ReactionQuantity": {
-        "description": "The physical quantity carried by a Result's reactions and applied totals.",
-        "type": "string",
-        "enum": [
-          "force",
-          "power"
-        ]
-      },
-      "ReactionRow": {
-        "type": "object",
-        "properties": {
-          "constraint": {
-            "type": "string"
-          },
-          "total": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Valued"
-            },
-            "minItems": 3,
-            "maxItems": 3
-          }
-        },
-        "required": [
-          "constraint",
-          "total"
-        ]
-      },
-      "HistoryRow": {
-        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
-        "type": "object",
-        "properties": {
-          "time": {
-            "$ref": "#/$defs/Valued"
-          },
-          "min": {
-            "$ref": "#/$defs/Valued"
-          },
-          "max": {
-            "$ref": "#/$defs/Valued"
-          }
-        },
-        "required": [
-          "time",
-          "min",
-          "max"
-        ]
-      },
-      "RetainedResults": {
-        "type": "object",
-        "properties": {
-          "limit": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "records": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/RetainedResult"
-            }
-          }
-        },
-        "required": [
-          "limit",
-          "records"
-        ]
-      },
-      "RetainedResult": {
-        "description": "One immutable solve instance. Byte counts describe payloads, not allocator or peak memory.",
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "step": {
-            "type": "string"
-          },
-          "solvedRevision": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "modelName": {
-            "type": "string"
-          },
-          "modelHash": {
-            "type": "string"
-          },
-          "inputHash": {
-            "type": "string"
-          },
-          "stale": {
-            "type": "boolean"
-          },
-          "nodes": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "elements": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "fieldBytes": {
-            "description": "f64 arrays in final fields, modes, frequencies and transient History.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "meshBytes": {
-            "description": "Numeric coordinates, connectivity and resolved geometry Sets; excludes container overhead.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "modelJsonBytes": {
-            "description": "Serialized solved Model metadata size, not its in-memory allocation size.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "id",
-          "step",
-          "solvedRevision",
-          "modelName",
-          "modelHash",
-          "inputHash",
-          "stale",
-          "nodes",
-          "elements",
-          "fieldBytes",
-          "meshBytes",
-          "modelJsonBytes"
-        ]
-      },
-      "ResultField": {
-        "description": "Final scientific values are f64 SI in component-fastest entity order.",
-        "type": "object",
-        "properties": {
-          "resultId": {
-            "type": "string"
-          },
-          "step": {
-            "type": "string"
-          },
-          "field": {
-            "type": "string"
-          },
-          "components": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "per": {
-            "type": "string"
-          },
-          "entityCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "unit": {
-            "type": "string"
-          },
-          "values": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "format": "double"
-            }
-          }
-        },
-        "required": [
-          "resultId",
-          "step",
-          "field",
-          "components",
-          "per",
-          "entityCount",
-          "nodeCount",
-          "unit",
-          "values"
-        ]
-      },
-      "DifferenceField": {
-        "description": "`query.difference` response. Values are retained f64 SI, component-fastest by target node.",
-        "type": "object",
-        "properties": {
-          "left": {
-            "$ref": "#/$defs/ResolvedDifferenceOperand"
-          },
-          "right": {
-            "$ref": "#/$defs/ResolvedDifferenceOperand"
-          },
-          "comparisonResultId": {
-            "type": "string"
-          },
-          "components": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "unit": {
-            "type": "string"
-          },
-          "values": {
-            "type": "array",
-            "items": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "format": "double"
-            }
-          },
-          "interpolated": {
-            "type": "boolean"
-          },
-          "coverage": {
-            "$ref": "#/$defs/DifferenceCoverage"
-          },
-          "warnings": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/Warning"
-            }
-          }
-        },
-        "required": [
-          "left",
-          "right",
-          "comparisonResultId",
-          "components",
-          "nodeCount",
-          "unit",
-          "values",
-          "interpolated",
-          "coverage",
-          "warnings"
-        ]
-      },
-      "ResolvedDifferenceOperand": {
-        "description": "The resolved identity and layout of one difference operand.",
-        "type": "object",
-        "properties": {
-          "resultId": {
-            "type": "string"
-          },
-          "step": {
-            "type": "string"
-          },
-          "field": {
-            "type": "string"
-          },
-          "component": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          },
-          "sourceComponents": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "resultId",
-          "step",
-          "field",
-          "sourceComponents"
-        ]
-      },
-      "DifferenceCoverage": {
-        "description": "Nodewise coverage of the selected comparison Mesh by the other Mesh.",
-        "type": "object",
-        "properties": {
-          "insideNodes": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "totalNodes": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "outsideNodes": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0
-            }
-          }
-        },
-        "required": [
-          "insideNodes",
-          "totalNodes",
-          "outsideNodes"
-        ]
-      },
-      "FramesResult": {
-        "description": "`query.frames` response; stored components describe the unpadded History storage.",
-        "type": "object",
-        "properties": {
-          "resultId": {
-            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
-            "type": "string"
-          },
-          "step": {
-            "type": "string"
-          },
-          "modelHash": {
-            "type": "string"
-          },
-          "stale": {
-            "type": "boolean"
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "field": {
-            "$ref": "#/$defs/Field"
-          },
-          "components": {
-            "description": "Public field layout, matching final FieldData (three components, zero-padded).",
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "storedComponents": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "retainedBytes": {
-            "description": "Logical bytes of retained f64 times and unpadded primary values; excludes allocator\noverhead, spare capacity, final derived fields and temporary Query response copies.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "frames": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/FrameStamp"
-            }
-          }
-        },
-        "required": [
-          "resultId",
-          "step",
-          "modelHash",
-          "stale",
-          "nodeCount",
-          "field",
-          "components",
-          "storedComponents",
-          "retainedBytes",
-          "frames"
-        ]
-      },
-      "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
-        "type": "string",
-        "enum": [
-          "displacement",
-          "stress",
-          "stressUnaveraged",
-          "vonMises",
-          "principal",
-          "strain",
-          "reaction",
-          "temperature"
-        ]
-      },
-      "FrameStamp": {
-        "description": "One retained frame's zero-based index and time in seconds and Model display units.",
-        "type": "object",
-        "properties": {
-          "index": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "timeSi": {
-            "type": "number",
-            "format": "double"
-          },
-          "time": {
-            "$ref": "#/$defs/Valued"
-          }
-        },
-        "required": [
-          "index",
-          "timeSi",
-          "time"
-        ]
-      },
-      "FrameResult": {
-        "description": "`query.frame` response: SI values in the existing component-fastest FieldData layout.",
-        "type": "object",
-        "properties": {
-          "sample": {
-            "$ref": "#/$defs/ResolvedFrame"
-          },
-          "field": {
-            "$ref": "#/$defs/Field"
-          },
-          "components": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "nodeCount": {
-            "type": "integer",
-            "format": "uint",
-            "minimum": 0
-          },
-          "unit": {
-            "description": "SI unit for values: K for temperature, m for displacement, never a display unit.",
-            "type": "string"
-          },
-          "values": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "format": "double"
-            }
-          }
-        },
-        "required": [
-          "sample",
-          "field",
-          "components",
-          "nodeCount",
-          "unit",
-          "values"
-        ]
-      },
-      "ResolvedFrame": {
-        "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
-        "type": "object",
-        "properties": {
-          "resultId": {
-            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
-            "type": "string"
-          },
-          "step": {
-            "type": "string"
-          },
-          "modelHash": {
-            "type": "string"
-          },
-          "frame": {
-            "$ref": "#/$defs/FrameStamp"
-          }
-        },
-        "required": [
-          "resultId",
-          "step",
-          "modelHash",
-          "frame"
-        ]
-      },
-      "ProbeResult": {
-        "description": "`query.probe` response.",
-        "type": "object",
-        "properties": {
-          "sample": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ResolvedFrame"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "value": {
-            "$ref": "#/$defs/Valued"
-          },
-          "element": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "interpolated": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "value",
-          "element",
-          "interpolated"
-        ]
-      },
-      "PathResult": {
-        "description": "`query.path` response.",
-        "type": "object",
-        "properties": {
-          "sample": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ResolvedFrame"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "s": {
-            "type": "array",
-            "items": {
-              "type": "number",
-              "format": "double"
-            }
-          },
-          "values": {
-            "type": "array",
-            "items": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "format": "double"
-            }
-          },
-          "unit": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "s",
-          "values",
-          "unit"
-        ]
-      },
-      "CostEstimate": {
-        "description": "`query.cost` response.",
-        "type": "object",
-        "properties": {
-          "dofs": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "nnz": {
-            "description": "Upper bound on matrix non-zeros; exact when equal to nnzLower.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "nnzLower": {
-            "description": "Lower bound on matrix non-zeros.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "bytes": {
-            "description": "Estimated peak of the counted solve and frame-read phases. It includes mandatory\nassembly storage, retained primary values, a conservative transient f64 working-vector\nallowance and known native/browser frame-response storage. It is incomplete because\nsolver fill, JSON and allocator overhead are not known before solving.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "assemblyBytes": {
-            "description": "Mandatory assembly storage before transient-specific values are added.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "residentResultBytes": {
-            "description": "Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "resultMeshBytes": {
-            "description": "Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "retainedFrames": {
-            "description": "Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "retainedBytes": {
-            "description": "Logical f64 bytes for retained times and unpadded primary values.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "transientWorkBytes": {
-            "description": "Conservative full-field allowance for procedure working f64 vectors live with History.\nFree-DOF vectors are charged at the full nodal length.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "transportStagingBytes": {
-            "description": "One normalized three-component f64 frame owned by a native Query result.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "wasmTransportStagingBytes": {
-            "description": "Known lower bound for the WASM/Worker frame route while two normalized three-component\nnumeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "wasmTransportStagingComplete": {
-            "description": "False while the generic JSON route has value- and runtime-dependent allocation overhead.",
-            "type": "boolean"
-          },
-          "budgetBytes": {
-            "description": "Fixed 1.5 GiB planning budget; not measured free memory on the current host.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "feasible": {
-            "description": "False if the counted conservative estimate exceeds the planning budget; null means\nfeasibility is unknown. Fitting it does not establish that assembly or factorisation fits.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "note": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "dofs",
-          "nnz",
-          "nnzLower",
-          "bytes",
-          "assemblyBytes",
-          "residentResultBytes",
-          "resultMeshBytes",
-          "retainedFrames",
-          "retainedBytes",
-          "transientWorkBytes",
-          "transportStagingBytes",
-          "wasmTransportStagingBytes",
-          "wasmTransportStagingComplete",
-          "budgetBytes",
-          "note"
-        ]
-      },
-      "JournalDump": {
-        "description": "`query.journal` response.",
-        "type": "object",
-        "properties": {
-          "hash": {
-            "description": "Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.",
-            "type": "string"
-          },
-          "entries": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/JournalEntry"
-            }
-          },
-          "revision": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "canUndo": {
-            "type": "boolean"
-          },
-          "canRedo": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "hash",
-          "entries",
-          "revision",
-          "canUndo",
-          "canRedo"
-        ]
-      },
-      "JournalEntry": {
-        "description": "One applied Command and the Model hash after it.",
-        "type": "object",
-        "properties": {
-          "seq": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0
-          },
-          "cmd": {
+          "command": {
             "$ref": "#/$defs/Command"
-          },
-          "hashAfter": {
-            "type": "string"
           }
         },
         "required": [
-          "seq",
-          "cmd",
-          "hashAfter"
+          "command"
         ]
       },
       "Command": {
@@ -5375,7 +4370,7 @@
             ]
           },
           {
-            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind.",
+            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
             "type": "object",
             "properties": {
               "kind": {
@@ -5400,7 +4395,7 @@
             ]
           },
           {
-            "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.",
+            "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
             "type": "object",
             "properties": {
               "kind": {
@@ -5462,7 +4457,7 @@
             ]
           },
           {
-            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.",
+            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -5522,7 +4517,7 @@
             ]
           },
           {
-            "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.",
+            "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -5593,7 +4588,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
             "type": "object",
             "properties": {
               "name": {
@@ -5733,7 +4728,7 @@
             ]
           },
           {
-            "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters.",
+            "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.",
             "type": "object",
             "properties": {
               "mesher": {
@@ -6121,6 +5116,36 @@
             ]
           },
           {
+            "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.radiation"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "emissivity",
+              "tInf"
+            ]
+          },
+          {
             "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
@@ -6166,7 +5191,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
             "type": "object",
             "properties": {
               "name": {
@@ -6281,6 +5306,23 @@
                   }
                 ]
               },
+              "nonlinearTolerance": {
+                "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
               "cmd": {
                 "type": "string",
                 "const": "step.add"
@@ -6332,7 +5374,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {
@@ -6374,7 +5416,7 @@
             ]
           },
           {
-            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false.",
+            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nmay have unequal refinement ratios. Three distinct positive sizes are needed for a\nfinite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate\nare unavailable. Restores the previous mesh settings afterwards unless `restore` is false.\nUses the Step's actual procedure: static and steady heat measure equilibrium fields;\ntransient heat and explicit dynamics measure the final field at the configured tEnd\nwith the Step's time settings unchanged. Modal Steps are unsupported because a mode\namplitude is not a mesh-independent quantity; compare frequencies with\nsolve.run/query.result instead. Steps with after are unsupported: solve their\ndependencies and target at each mesh explicitly.",
             "type": "object",
             "properties": {
               "step": {
@@ -7292,7 +6334,7 @@
             ]
           },
           {
-            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.\nSheet translation, rotation about z and positive in-plane scaling are applied before\nmeshing. Size and refine boxes use world coordinates; curved boundaries are sampled\nto one tenth of size in world space. Nested or out-of-plane transforms are unsupported.",
             "type": "object",
             "properties": {
               "of": {
@@ -7712,6 +6754,20 @@
           }
         ]
       },
+      "Field": {
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "type": "string",
+        "enum": [
+          "displacement",
+          "stress",
+          "stressUnaveraged",
+          "vonMises",
+          "principal",
+          "strain",
+          "reaction",
+          "temperature"
+        ]
+      },
       "Q_time": {
         "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -7924,6 +6980,948 @@
               "sha256"
             ]
           }
+        ]
+      },
+      "MeshSummary": {
+        "description": "`query.mesh` response.",
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "elements": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "elementKind": {
+            "type": "string"
+          },
+          "dofs": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "bbox": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 6,
+            "maxItems": 6
+          },
+          "minEdge": {
+            "$ref": "#/$defs/Valued"
+          },
+          "maxEdge": {
+            "$ref": "#/$defs/Valued"
+          },
+          "sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SetRow"
+            }
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/QualitySummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "nodes",
+          "elements",
+          "elementKind",
+          "dofs",
+          "bbox",
+          "minEdge",
+          "maxEdge",
+          "sets"
+        ]
+      },
+      "QualitySummary": {
+        "description": "Mesh quality inside `query.mesh`: worst-case ratios and the elements that set them.",
+        "type": "object",
+        "properties": {
+          "minDetJRatio": {
+            "description": "Smallest corner `min(det J) / max(det J)`; 1 is perfect, 0 degenerate, negative inverted.",
+            "type": "number",
+            "format": "double"
+          },
+          "maxAspect": {
+            "description": "Largest longest-edge over shortest-edge ratio.",
+            "type": "number",
+            "format": "double"
+          },
+          "minAngleDeg": {
+            "description": "Smallest angle at any element corner, in degrees.",
+            "type": "number",
+            "format": "double"
+          },
+          "worst": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/QualityRow"
+            }
+          }
+        },
+        "required": [
+          "minDetJRatio",
+          "maxAspect",
+          "minAngleDeg",
+          "worst"
+        ]
+      },
+      "QualityRow": {
+        "type": "object",
+        "properties": {
+          "element": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "element",
+          "value"
+        ]
+      },
+      "SetInfo": {
+        "description": "`query.set` response.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "bbox": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 6,
+            "maxItems": 6
+          },
+          "measure": {
+            "$ref": "#/$defs/Valued"
+          },
+          "centroid": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "count",
+          "bbox",
+          "measure",
+          "centroid"
+        ]
+      },
+      "ResultSummary": {
+        "description": "`query.result` response.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "revision": {
+            "description": "The Journal revision after the Command that produced this Result. It stays fixed while\nlater edits make the Result stale and when undo removes that producing Command.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "solver": {
+            "type": "string"
+          },
+          "iterations": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "residual": {
+            "type": "number",
+            "format": "double"
+          },
+          "timeMs": {
+            "type": "number",
+            "format": "double"
+          },
+          "extremes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Extreme"
+            }
+          },
+          "reactionQuantity": {
+            "description": "Force for structural Results; power for thermal Results, retained with the solved state.",
+            "$ref": "#/$defs/ReactionQuantity"
+          },
+          "reactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ReactionRow"
+            }
+          },
+          "appliedTotal": {
+            "description": "Applied force vector or thermal power in component 0 (remaining components zero).",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "assumptions": {
+            "description": "Optional material properties the successful procedure actually read as zero because the\nMaterial omitted them. Empty when every solver-used property was explicit.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ResultAssumption"
+            }
+          },
+          "frequencies": {
+            "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            }
+          },
+          "history": {
+            "description": "One row per output time of a transient Step: when, and the range the field covered.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/HistoryRow"
+            }
+          },
+          "balance": {
+            "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "resultId",
+          "step",
+          "revision",
+          "stale",
+          "solver",
+          "iterations",
+          "residual",
+          "timeMs",
+          "extremes",
+          "reactionQuantity",
+          "reactions",
+          "appliedTotal",
+          "balance"
+        ]
+      },
+      "Extreme": {
+        "description": "One extreme of a field component.",
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "component": {
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "min": {
+            "$ref": "#/$defs/Valued"
+          },
+          "minAt": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "max": {
+            "$ref": "#/$defs/Valued"
+          },
+          "maxAt": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "field",
+          "component",
+          "min",
+          "minAt",
+          "max",
+          "maxAt"
+        ]
+      },
+      "ReactionQuantity": {
+        "description": "The physical quantity carried by a Result's reactions and applied totals.",
+        "type": "string",
+        "enum": [
+          "force",
+          "power"
+        ]
+      },
+      "ReactionRow": {
+        "type": "object",
+        "properties": {
+          "constraint": {
+            "type": "string"
+          },
+          "total": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "constraint",
+          "total"
+        ]
+      },
+      "ResultAssumption": {
+        "description": "One solver-used material assumption captured at solve time.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "property": {
+            "$ref": "#/$defs/AssumedMaterialProperty"
+          },
+          "value": {
+            "$ref": "#/$defs/Valued"
+          },
+          "source": {
+            "description": "The Material provenance at solve time; null when the Material named none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "body",
+          "material",
+          "property",
+          "value",
+          "cause"
+        ]
+      },
+      "AssumedMaterialProperty": {
+        "description": "An omitted optional material property that a successful solve read as its resolved zero.\nThe value is kept in SI with the Result, so later unit, name and material edits cannot\nrewrite the assumption under an already-computed answer.",
+        "type": "string",
+        "enum": [
+          "rho",
+          "alpha"
+        ]
+      },
+      "HistoryRow": {
+        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
+        "type": "object",
+        "properties": {
+          "time": {
+            "$ref": "#/$defs/Valued"
+          },
+          "min": {
+            "$ref": "#/$defs/Valued"
+          },
+          "max": {
+            "$ref": "#/$defs/Valued"
+          }
+        },
+        "required": [
+          "time",
+          "min",
+          "max"
+        ]
+      },
+      "RetainedResults": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/RetainedResult"
+            }
+          }
+        },
+        "required": [
+          "limit",
+          "records"
+        ]
+      },
+      "RetainedResult": {
+        "description": "One immutable solve instance. Byte counts describe payloads, not allocator or peak memory.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "solvedRevision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "modelName": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "inputHash": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "nodes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "elements": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "fieldBytes": {
+            "description": "f64 arrays in final fields, modes, frequencies and transient History.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "meshBytes": {
+            "description": "Numeric coordinates, connectivity and resolved geometry Sets; excludes container overhead.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "modelJsonBytes": {
+            "description": "Serialized solved Model metadata size, not its in-memory allocation size.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "step",
+          "solvedRevision",
+          "modelName",
+          "modelHash",
+          "inputHash",
+          "stale",
+          "nodes",
+          "elements",
+          "fieldBytes",
+          "meshBytes",
+          "modelJsonBytes"
+        ]
+      },
+      "ResultField": {
+        "description": "Final scientific values are f64 SI in component-fastest entity order.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "components": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "per": {
+            "type": "string"
+          },
+          "entityCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "required": [
+          "resultId",
+          "step",
+          "field",
+          "components",
+          "per",
+          "entityCount",
+          "nodeCount",
+          "unit",
+          "values"
+        ]
+      },
+      "FramesResult": {
+        "description": "`query.frames` response; stored components describe the unpadded History storage.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "field": {
+            "$ref": "#/$defs/Field"
+          },
+          "components": {
+            "description": "Public field layout, matching final FieldData (three components, zero-padded).",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "storedComponents": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "retainedBytes": {
+            "description": "Logical bytes of retained f64 times and unpadded primary values; excludes allocator\noverhead, spare capacity, final derived fields and temporary Query response copies.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/FrameStamp"
+            }
+          }
+        },
+        "required": [
+          "resultId",
+          "step",
+          "modelHash",
+          "stale",
+          "nodeCount",
+          "field",
+          "components",
+          "storedComponents",
+          "retainedBytes",
+          "frames"
+        ]
+      },
+      "FrameStamp": {
+        "description": "One retained frame's zero-based index and time in seconds and Model display units.",
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "timeSi": {
+            "type": "number",
+            "format": "double"
+          },
+          "time": {
+            "$ref": "#/$defs/Valued"
+          }
+        },
+        "required": [
+          "index",
+          "timeSi",
+          "time"
+        ]
+      },
+      "FrameResult": {
+        "description": "`query.frame` response: SI values in the existing component-fastest FieldData layout.",
+        "type": "object",
+        "properties": {
+          "sample": {
+            "$ref": "#/$defs/ResolvedFrame"
+          },
+          "field": {
+            "$ref": "#/$defs/Field"
+          },
+          "components": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "description": "SI unit for values: K for temperature, m for displacement, never a display unit.",
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "required": [
+          "sample",
+          "field",
+          "components",
+          "nodeCount",
+          "unit",
+          "values"
+        ]
+      },
+      "ResolvedFrame": {
+        "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "frame": {
+            "$ref": "#/$defs/FrameStamp"
+          }
+        },
+        "required": [
+          "resultId",
+          "step",
+          "modelHash",
+          "frame"
+        ]
+      },
+      "ProbeResult": {
+        "description": "`query.probe` response.",
+        "type": "object",
+        "properties": {
+          "sample": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ResolvedFrame"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "value": {
+            "$ref": "#/$defs/Valued"
+          },
+          "element": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "interpolated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value",
+          "element",
+          "interpolated"
+        ]
+      },
+      "PathResult": {
+        "description": "`query.path` response.",
+        "type": "object",
+        "properties": {
+          "sample": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ResolvedFrame"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "s": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "s",
+          "values",
+          "unit"
+        ]
+      },
+      "CostEstimate": {
+        "description": "`query.cost` response.",
+        "type": "object",
+        "properties": {
+          "dofs": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "nnz": {
+            "description": "Upper bound on matrix non-zeros; exact when equal to nnzLower.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "nnzLower": {
+            "description": "Lower bound on matrix non-zeros.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "bytes": {
+            "description": "Estimated peak of the counted solve and frame-read phases. It includes mandatory\nassembly storage, retained primary values, a conservative transient f64 working-vector\nallowance and known native/browser frame-response storage. It is incomplete because\nsolver fill, JSON and allocator overhead are not known before solving.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "assemblyBytes": {
+            "description": "Mandatory assembly storage before transient-specific values are added.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "residentResultBytes": {
+            "description": "Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "resultMeshBytes": {
+            "description": "Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "retainedFrames": {
+            "description": "Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "retainedBytes": {
+            "description": "Logical f64 bytes for retained times and unpadded primary values.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transientWorkBytes": {
+            "description": "Conservative full-field allowance for procedure working f64 vectors live with History.\nFree-DOF vectors are charged at the full nodal length.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transportStagingBytes": {
+            "description": "One normalized three-component f64 frame owned by a native Query result.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "wasmTransportStagingBytes": {
+            "description": "Known lower bound for the WASM/Worker frame route while two normalized three-component\nnumeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "wasmTransportStagingComplete": {
+            "description": "False while the generic JSON route has value- and runtime-dependent allocation overhead.",
+            "type": "boolean"
+          },
+          "budgetBytes": {
+            "description": "Fixed 1.5 GiB planning budget; not measured free memory on the current host.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "feasible": {
+            "description": "False if the counted conservative estimate exceeds the planning budget; null means\nfeasibility is unknown. Fitting it does not establish that assembly or factorisation fits.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dofs",
+          "nnz",
+          "nnzLower",
+          "bytes",
+          "assemblyBytes",
+          "residentResultBytes",
+          "resultMeshBytes",
+          "retainedFrames",
+          "retainedBytes",
+          "transientWorkBytes",
+          "transportStagingBytes",
+          "wasmTransportStagingBytes",
+          "wasmTransportStagingComplete",
+          "budgetBytes",
+          "note"
+        ]
+      },
+      "JournalDump": {
+        "description": "`query.journal` response.",
+        "type": "object",
+        "properties": {
+          "hash": {
+            "description": "Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.",
+            "type": "string"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JournalEntry"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "canUndo": {
+            "type": "boolean"
+          },
+          "canRedo": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hash",
+          "entries",
+          "revision",
+          "canUndo",
+          "canRedo"
+        ]
+      },
+      "JournalEntry": {
+        "description": "One applied Command and the Model hash after it.",
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "cmd": {
+            "$ref": "#/$defs/Command"
+          },
+          "hashAfter": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "cmd",
+          "hashAfter"
         ]
       },
       "ScriptText": {
@@ -8586,6 +8584,7 @@
             "type": "string"
           },
           "revision": {
+            "description": "The Journal revision after the Command that produced this Result. It stays fixed while\nlater edits make the Result stale and when undo removes that producing Command.",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
@@ -8633,6 +8632,13 @@
             },
             "minItems": 3,
             "maxItems": 3
+          },
+          "assumptions": {
+            "description": "Optional material properties the successful procedure actually read as zero because the\nMaterial omitted them. Empty when every solver-used property was explicit.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ResultAssumption"
+            }
           },
           "frequencies": {
             "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
@@ -8758,6 +8764,53 @@
         "required": [
           "constraint",
           "total"
+        ]
+      },
+      "ResultAssumption": {
+        "description": "One solver-used material assumption captured at solve time.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "material": {
+            "type": "string"
+          },
+          "property": {
+            "$ref": "#/$defs/AssumedMaterialProperty"
+          },
+          "value": {
+            "$ref": "#/$defs/Valued"
+          },
+          "source": {
+            "description": "The Material provenance at solve time; null when the Material named none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "body",
+          "material",
+          "property",
+          "value",
+          "cause"
+        ]
+      },
+      "AssumedMaterialProperty": {
+        "description": "An omitted optional material property that a successful solve read as its resolved zero.\nThe value is kept in SI with the Result, so later unit, name and material edits cannot\nrewrite the assumption under an already-computed answer.",
+        "type": "string",
+        "enum": [
+          "rho",
+          "alpha"
         ]
       },
       "HistoryRow": {
@@ -8933,6 +8986,7 @@
           "constraint.rigid-modes",
           "solve.not-positive-definite",
           "solve.stalled",
+          "solve.diverged",
           "solve.too-large",
           "gpu.shader",
           "gpu.too-large",
@@ -10259,6 +10313,32 @@
               "on": {
                 "type": "string"
               },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "t_inf": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "radiation"
+              }
+            },
+            "required": [
+              "kind",
+              "on",
+              "emissivity",
+              "t_inf"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "string"
+              },
               "q": {
                 "type": "number",
                 "format": "double"
@@ -10401,6 +10481,21 @@
               "null"
             ],
             "format": "double"
+          },
+          "nonlinearTolerance": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "nonlinearMaxIterations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
           }
         },
         "required": [
@@ -11017,7 +11112,7 @@
             ]
           },
           {
-            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind.",
+            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
             "type": "object",
             "properties": {
               "kind": {
@@ -11042,7 +11137,7 @@
             ]
           },
           {
-            "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.",
+            "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
             "type": "object",
             "properties": {
               "kind": {
@@ -11104,7 +11199,7 @@
             ]
           },
           {
-            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.",
+            "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -11164,7 +11259,7 @@
             ]
           },
           {
-            "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.",
+            "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
             "type": "object",
             "properties": {
               "name": {
@@ -11235,7 +11330,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
             "type": "object",
             "properties": {
               "name": {
@@ -11375,7 +11470,7 @@
             ]
           },
           {
-            "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters.",
+            "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.",
             "type": "object",
             "properties": {
               "mesher": {
@@ -11763,6 +11858,36 @@
             ]
           },
           {
+            "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "emissivity": {
+                "type": "number",
+                "format": "double"
+              },
+              "tInf": {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "load.radiation"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "on",
+              "emissivity",
+              "tInf"
+            ]
+          },
+          {
             "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
@@ -11808,7 +11933,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any\nStep whose system depends on its own answer — today a radiation load — and are ignored by\na Step that is linear.",
             "type": "object",
             "properties": {
               "name": {
@@ -11923,6 +12048,23 @@
                   }
                 ]
               },
+              "nonlinearTolerance": {
+                "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "nonlinearMaxIterations": {
+                "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
               "cmd": {
                 "type": "string",
                 "const": "step.add"
@@ -11974,7 +12116,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {
@@ -12016,7 +12158,7 @@
             ]
           },
           {
-            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nshould halve each time (three or more). Restores the previous mesh settings afterwards\nunless `restore` is false.",
+            "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nmay have unequal refinement ratios. Three distinct positive sizes are needed for a\nfinite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate\nare unavailable. Restores the previous mesh settings afterwards unless `restore` is false.\nUses the Step's actual procedure: static and steady heat measure equilibrium fields;\ntransient heat and explicit dynamics measure the final field at the configured tEnd\nwith the Step's time settings unchanged. Modal Steps are unsupported because a mode\namplitude is not a mesh-independent quantity; compare frequencies with\nsolve.run/query.result instead. Steps with after are unsupported: solve their\ndependencies and target at each mesh explicitly.",
             "type": "object",
             "properties": {
               "step": {
@@ -12934,7 +13076,7 @@
             ]
           },
           {
-            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+            "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.\nSheet translation, rotation about z and positive in-plane scaling are applied before\nmeshing. Size and refine boxes use world coordinates; curved boundaries are sampled\nto one tenth of size in world space. Nested or out-of-plane transforms are unsupported.",
             "type": "object",
             "properties": {
               "of": {

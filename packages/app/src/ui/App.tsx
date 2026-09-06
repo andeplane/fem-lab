@@ -9,7 +9,7 @@ import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
 import { lazy } from '../lazy';
-import { solveLabel, stageOf, unsaved, type Store, type UiState } from '../store';
+import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
@@ -24,11 +24,12 @@ import { blockers, type Defs, shapeKinds } from './schema';
 
 export type { Dispatch } from './cmd';
 
-// Three chunks that must not be on the boot path: the two AI SDKs, the tutorial runner and (in
-// `ViewerPane` below) three.js. Same import sites as before, one `import()` later.
+// Chunks that must not be on the boot path: the two AI SDKs, the tutorial runner, the report
+// renderer and (in `ViewerPane` below) three.js. Same import sites as before, one `import()` later.
 const AssistantPanel = lazy(() => import('../ai').then((m) => m.AssistantPanel));
 const TutorialPanel = lazy(() => import('../tutorial').then((m) => m.TutorialPanel));
 const Tour = lazy(() => import('../tutorial').then((m) => m.Tour));
+const Report = lazy(() => import('./Report').then((m) => m.Report));
 
 export interface AppProps {
   store: Store;
@@ -184,7 +185,7 @@ function ProjectSaved({ s }: { s: UiState }) {
 function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.lastError) {
     return (
-      <div class="banner error" role="alert">
+      <div class="banner error" role="alert" aria-live="assertive" aria-atomic="true">
         <span class="mono code">{s.lastError.code}</span>
         <span>{s.lastError.cause}</span>
         {s.lastError.suggestion ? <span class="suggestion">{s.lastError.suggestion}</span> : null}
@@ -227,9 +228,9 @@ function SolvingCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.solving === null) return null;
   const percent = Math.round((s.progress?.fraction ?? 0) * 100);
   return (
-    <div class="solving-card" role="status">
+    <div class="solving-card" role="status" aria-live="polite" aria-atomic="true">
       <div class="solving-head">
-        <span class="spinner" />
+        <span class="spinner" aria-hidden="true" />
         <b>Solving · {s.solving}</b>
         <Cmd dispatch={dispatch} cmd="solve.cancel" class="tbutton outline">
           Cancel
@@ -253,7 +254,7 @@ function ErrorCard({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const fix = e.suggestion && /^[a-z]+\.[a-zA-Z]+$/.test(e.suggestion.trim()) ? e.suggestion.trim() : null;
   const text = `${e.code}: ${e.cause}${e.where ? ` (at ${e.where})` : ''}`;
   return (
-    <div class="error-card" role="alert">
+    <div class="error-card" role="alert" aria-live="assertive" aria-atomic="true">
       <div class="error-head">
         <span class="mono code">{e.code}</span>
         <b>{e.cause}</b>
@@ -503,6 +504,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         return;
       }
       viewer.current = v;
+      v.setSelection(store.state.selection);
       viewer.onReady?.();
       v.onPick((p) => {
         const frame = store.state.transient?.frame;
@@ -512,7 +514,10 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       addEventListener('resize', onResize);
       if (typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(onResize);
-        observer.observe(el);
+        // Observe the layout box, not the canvas' drawing buffer: a canvas can keep its old
+        // intrinsic size while its CSS track changes, so observing it alone misses a splitter
+        // or viewport resize. Viewer.resize then updates the backing store from clientWidth.
+        observer.observe(el.parentElement ?? el);
       }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);
@@ -524,7 +529,9 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       viewer.current = null;
       v.dispose();
     };
-  }, [viewer, dispatch]);
+  }, [viewer, dispatch, store]);
+
+  useEffect(() => viewer.current?.setSelection(s.selection), [viewer, s.selection]);
 
   const ref = s.selection.refs[0];
   const stale = s.result?.stale === true;
@@ -570,7 +577,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       {stale ? (
         <div class="stale-banner" role="status">
           <span>
-            Result is stale — Model changed after journal line {s.result!.revision}.
+            Result is stale — Model changed after revision {s.result!.revision}.
             {s.study ? ' The convergence table reports separate study solves; it does not refresh these stale contours. Re-solve to display the current Model.' : ''}
           </span>
           <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }}>
@@ -592,6 +599,75 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** A view-only splitter: pointer movement previews in Store, and pointer-up emits one Command. */
+function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }: { panel: ResizablePanel; axis: 'x' | 'y'; direction: 1 | -1; store: Store; dispatch: Dispatch; fixed?: boolean }) {
+  const gesture = useRef<{ pointerId: number; start: number; size: number; previous: number } | null>(null);
+  const limits = PANEL_SIZE_LIMITS[panel];
+  const position = (e: PointerEvent): number => (axis === 'x' ? e.clientX : e.clientY);
+  const preview = (size: number): void => store.resizePanel(panel, clampPanelSize(panel, size));
+  const effectiveSize = (): number => {
+    const selector = panel === 'tree' ? '.workspace > .panel.tree' : panel === 'properties' ? '.workspace > .panel.props' : panel === 'bottom' ? '.bottom' : 'aside.assistant';
+    const box = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+    const rendered = box ? (axis === 'x' ? box.width : box.height) : 0;
+    return rendered > 0 ? Math.round(rendered) : store.state.panelSizes[panel];
+  };
+  const finish = (commit: boolean): void => {
+    const active = gesture.current;
+    if (!active) return;
+    gesture.current = null;
+    if (commit && store.state.panelSizes[panel] !== active.previous) void dispatch({ cmd: 'panel.resize', panel, size: store.state.panelSizes[panel] }).catch(() => preview(active.previous));
+    else if (!commit) store.resizePanel(panel, active.previous);
+  };
+  return (
+    <div
+      class={`resize-handle ${axis} ${panel === 'assistant' ? 'assistant-resize' : panel}${fixed ? ' fixed' : ''}`}
+      style={fixed ? `--assistant-width:${store.state.panelSizes.assistant}px` : undefined}
+      role="separator"
+      tabIndex={0}
+      data-cmd="panel.resize"
+      aria-label={`Resize ${panel} panel`}
+      aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
+      aria-valuemin={limits.min}
+      aria-valuemax={limits.max}
+      aria-valuenow={effectiveSize()}
+      onPointerDown={(e) => {
+        const el = e.currentTarget as HTMLElement;
+        gesture.current = { pointerId: e.pointerId, start: position(e), size: effectiveSize(), previous: store.state.panelSizes[panel] };
+        el.focus();
+        el.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      }}
+      onPointerMove={(e) => {
+        const active = gesture.current;
+        if (!active || active.pointerId !== e.pointerId) return;
+        preview(active.size + (position(e) - active.start) * direction);
+      }}
+      onPointerUp={(e) => {
+        if (gesture.current?.pointerId === e.pointerId) finish(true);
+      }}
+      onPointerCancel={(e) => {
+        if (gesture.current?.pointerId === e.pointerId) finish(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(false);
+          return;
+        }
+        const positive = axis === 'x' ? e.key === 'ArrowRight' : e.key === 'ArrowDown';
+        const negative = axis === 'x' ? e.key === 'ArrowLeft' : e.key === 'ArrowUp';
+        if (!positive && !negative) return;
+        e.preventDefault();
+        const delta = (positive ? 10 : -10) * direction;
+        const size = clampPanelSize(panel, effectiveSize() + delta);
+        preview(size);
+        void dispatch({ cmd: 'panel.resize', panel, size }).catch(() => undefined);
+      }}
+    />
   );
 }
 
@@ -620,34 +696,42 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   return (
     <>
       {started ? (
-        <div class="shell">
+        <div class="shell" style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <TopBar s={s} dispatch={dispatch} />
-          <div class="under-bar">
+          <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
               <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
+              <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />
               <div class="centre">
                 <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
+                <ResizeHandle panel="bottom" axis="y" direction={-1} store={store} dispatch={dispatch} />
               </div>
               <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
+              <ResizeHandle panel="properties" axis="x" direction={-1} store={store} dispatch={dispatch} />
             </div>
           </div>
         </div>
       ) : (
-        <Start s={s} dispatch={dispatch} />
+        <div class={s.form ? 'start-layout with-properties' : 'start-layout'} style={`--properties-width:${s.panelSizes.properties}px;--assistant-width:${s.panelSizes.assistant}px`}>
+          <Start s={s} dispatch={dispatch} />
+          {s.form ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
+        </div>
       )}
       <Examples s={s} dispatch={dispatch} />
       <Projects s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
+      {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
       {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
           opens on the start screen and keeps its conversation when the workspace comes up around
-          it. `style.css` reserves its 392 px on `.workspace` when the window is wide enough, so
-          the five-column layout of the design holds and the top bar stays full-width. Collapsing
-          only hides the drawer, preserving the conversation and any running turn. */}
-      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} /> : null}
+          it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
+          layout of the design while the top bar stays full-width. Collapsing only hides the
+          drawer, preserving the conversation and any running turn. */}
+      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
+      {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}
     </>

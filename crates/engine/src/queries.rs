@@ -38,6 +38,8 @@ impl Engine {
     pub fn query(&mut self, q: Query) -> Result<QueryResult, Error> {
         match q {
             Query::Model {} => self.query_model().map(QueryResult::Model),
+            Query::Definition { kind, name } => crate::definition::command(&self.model, kind, &name)
+                .map(|command| QueryResult::Definition(ObjectDefinition { command })),
             Query::Journal { from_seq } => {
                 let from = from_seq.unwrap_or(0);
                 Ok(QueryResult::Journal(JournalDump {
@@ -234,6 +236,18 @@ impl Engine {
                                 "h = {} {}, tInf = {} {}",
                                 units::fmt_sig(hv.value, 4),
                                 hv.unit,
+                                units::fmt_sig(t.value, 4),
+                                t.unit
+                            ),
+                        )
+                    }
+                    LoadKind::Radiation { emissivity, t_inf, .. } => {
+                        let t = display(m, *t_inf, Temperature::DIM);
+                        (
+                            "radiation",
+                            format!(
+                                "emissivity = {}, tInf = {} {}",
+                                units::fmt_sig(*emissivity, 4),
                                 units::fmt_sig(t.value, 4),
                                 t.unit
                             ),

@@ -2,15 +2,17 @@
 // journaled) and nothing else: every effect it has on the Model goes through `registry.dispatch`,
 // and every clickable carries the `data-cmd` of the Command behind it, so `test/data-cmd.test.tsx`
 // holds this panel against `registry.list()` the same way it holds the shell.
-import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry } from '@femlab/registry';
+import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry, type ResultAssumption } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
-import type { Store, UiState } from '../store';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { verificationState, type AssistantVerification, type Store, type UiState } from '../store';
+
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
 import './assistant.css';
 import { buildSystem, buildTurn, downscaleImage, objectIndex, parseVerification, screenshotBlock, type IndexEntry, type VerifyRow } from './context';
-import { defaultProvider, maskKey, MODELS, resolveKey, storedModel, storeKey } from './keys';
+import { defaultProvider, maskKey, MODELS, resolveKey, storedModel } from './keys';
+import { Prose, toolDisplay } from './Prose';
 import { openaiProvider } from './openai';
 import { ProjectFolder, pickFolder, watchAgents, type DirHandle } from './project';
 import type { ImageBlock, Message, Provider, ProviderId } from './provider';
@@ -20,6 +22,8 @@ export interface AssistantPanelProps {
   store: Store;
   /** Collapse keeps local conversation state and active tool calls alive. */
   hidden?: boolean;
+  /** Store-backed width in CSS pixels; the shell's resize handle owns the gesture. */
+  panelWidth?: number;
   /**
    * Accepted for symmetry with the rest of the shell and unused: the panel reaches the engine
    * through the registry and nothing else, which is what makes a remote host a transport change.
@@ -37,6 +41,8 @@ export interface AssistantPanelProps {
 export const chatBridge = {
   /** The one line a `chat.send` before the drawer left behind; the panel takes it on mount. */
   pending: null as string | null,
+  pendingDraft: null as string | null,
+  setDraft: (text: string): void => { chatBridge.pendingDraft = text; },
   send: (text: string): void => {
     chatBridge.pending = text;
   },
@@ -51,10 +57,12 @@ const buffer = (text: string): void => {
   chatBridge.pending = text;
 };
 
+interface QueuedMessage { text: string; images: ImageBlock[]; provider: ProviderId; model: string; key: string }
+
 type Item =
   | { kind: 'user'; text: string; images: ImageBlock[] }
   | { kind: 'prose'; text: string }
-  | { kind: 'verify'; rows: VerifyRow[] }
+  | { kind: 'verify'; record: AssistantVerification }
   | { kind: 'skill'; name: string; note: string }
   | { kind: 'tool'; call: ToolCall }
   | { kind: 'diff'; entries: JournalEntry[]; steps: number; journal: string | null }
@@ -152,24 +160,82 @@ function withRefs(text: string) {
   return text.split(/(@[a-z]+:[^\s,;)]+|@selection\b)/g).map((part, i) => (part.startsWith('@') ? <span class="ref" key={i}>{part}</span> : part));
 }
 
-function ToolCard({ call }: { call: ToolCall }) {
+const object = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+
+function isResultAssumption(value: unknown): value is ResultAssumption {
+  const row = object(value);
+  const valued = object(row?.value);
+  return row !== null
+    && typeof row.step === 'string'
+    && typeof row.body === 'string'
+    && typeof row.material === 'string'
+    && (row.property === 'rho' || row.property === 'alpha')
+    && valued !== null && typeof valued.value === 'number' && typeof valued.unit === 'string'
+    && (row.source === null || typeof row.source === 'string')
+    && typeof row.cause === 'string';
+}
+
+/** Read typed assumption rows from a Result, solve.run Ack, or a compatible value returned by a
+ * script. Shape validation keeps the dedicated display stable for other script return values. */
+export function resultAssumptions(json: string): ResultAssumption[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  for (let depth = 0; depth < 4; depth++) {
+    const row = object(value);
+    if (row === null) return [];
+    if (Array.isArray(row.assumptions)) return row.assumptions.filter(isResultAssumption);
+    value = row.summary ?? row.output ?? row.result;
+  }
+  return [];
+}
+
+export function ToolCard({ call }: { call: ToolCall }) {
+  const assumptions = call.status === 'succeeded' ? resultAssumptions(call.result) : [];
+  const working = call.status === 'preparing' || call.status === 'pending';
+  const label = call.status === 'preparing' ? 'Preparing' : call.status === 'pending' ? 'Running' : call.status === 'succeeded' ? 'Succeeded' : call.status === 'cancelled' ? 'Interrupted' : 'Failed';
   return (
-    <div class={`card${call.ok ? '' : ' bad'}`}>
+    <div class={`card${call.status === 'failed' ? ' bad' : ''}`} data-status={call.status}>
       <div class="head">
-        <span class={call.ok ? 'ok' : 'fail'}>{call.ok ? '✓' : '✕'}</span>
+        <span class={working ? 'tool-pending' : call.status === 'succeeded' ? 'ok' : 'fail'} role="img" aria-label={label}>
+          {working ? '' : call.status === 'succeeded' ? '✓' : call.status === 'cancelled' ? '–' : '✕'}
+        </span>
         <span class="cmd">{call.command}</span>
-        <span class="ms">{call.ms > 0 ? `${call.ms} ms` : '…'}</span>
+        <span class="ms">{working || call.status === 'cancelled' ? label : `${call.ms} ms`}</span>
       </div>
-      <div class="args">{JSON.stringify(call.input)}</div>
-      {call.result ? <div class="out">{call.result.slice(0, 400)}</div> : null}
+      <div class="args" tabIndex={0} aria-label="Tool arguments">{toolDisplay(call.arguments ?? JSON.stringify(call.input))}</div>
+      {call.result ? <div class="out" tabIndex={0} aria-label="Tool result">{toolDisplay(call.result)}</div> : null}
+      {assumptions.length > 0 ? (
+        <div class="result-assumptions">
+          <div class="label">Solver-used assumptions</div>
+          {assumptions.map((row, i) => (
+            <div class="result-assumption" key={`${row.step}:${row.body}:${row.property}:${i}`}>
+              <div><strong>{row.step}</strong> · {row.body} · {row.material}</div>
+              <div><code>{row.property}</code> = {row.value.value} {row.value.unit}</div>
+              <div>{row.cause}</div>
+              <div class="source">{row.source ?? 'No material source recorded'}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function AssistantPanel({ registry, store, hidden = false }: AssistantPanelProps) {
+export function AssistantPanel({ registry, store, hidden = false, panelWidth = 392 }: AssistantPanelProps) {
   const ui = useStore(store);
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState('');
+  const [streaming, setStreaming] = useState('');
+  const transcript = useRef<HTMLDivElement>(null);
+  const followBottom = useRef(true);
+  useLayoutEffect(() => {
+    if (followBottom.current && transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight;
+  }, [items, streaming, busy]);
   const [draft, setDraft] = useState('');
   const [caret, setCaret] = useState(0);
   /** The keyboard cursor in whichever popover is open, and the `@` the person dismissed with Esc. */
@@ -184,6 +250,25 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const [keyDraft, setKeyDraft] = useState('');
   const [turn, setTurn] = useState<TurnResult | null>(null);
   const messages = useRef<Message[]>([]);
+  const queue = useRef<QueuedMessage[]>([]);
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
+  const activeRequest = useRef<AbortController | null>(null);
+  const execute = useRef<(job: QueuedMessage, signal: AbortSignal) => Promise<void>>(async () => undefined);
+
+  useEffect(() => {
+    if (!ui.assistantModel) return;
+    const owner = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(ui.assistantModel!));
+    if (owner) { setProvider(owner); setModel(ui.assistantModel); }
+  }, [ui.assistantModel]);
+  useEffect(() => () => { queue.current = []; activeRequest.current?.abort(); }, []);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const focusDraft = useRef(false);
+  useLayoutEffect(() => {
+    if (focusDraft.current && !hidden) {
+      composer.current?.focus();
+      focusDraft.current = false;
+    }
+  });
 
   const key = resolveKey(provider);
   const openPanel = (name: string, fallback = false) => ui.panels[`assistant.${name}`] ?? fallback;
@@ -231,47 +316,56 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     }
   };
 
-  const send = useCallback(
-    async (text: string) => {
-      const line = text.trim();
-      if (!line || busy) return;
-      const providerImpl: Provider = provider === 'anthropic' ? anthropicProvider(key.key ?? '') : openaiProvider(key.key ?? '');
-      if (!key.key) {
-        add({ kind: 'bad', text: `no ${provider} API key yet — open Settings and paste one; it stays in this browser` });
-        store.togglePanel('assistant.settings', true);
-        return;
-      }
-      const attached = images;
-      setDraft('');
-      setTokens([]);
-      setImages([]);
+  const runMessage = useCallback(
+    async (job: QueuedMessage, signal: AbortSignal) => {
+      const { text: line, images: attached, provider, model, key: apiKey } = job;
+      const providerImpl: Provider = provider === 'anthropic' ? anthropicProvider(apiKey) : openaiProvider(apiKey);
       setBusy('thinking…');
       add({ kind: 'user', text: line, images: attached });
+      let prose = '';
+      let proseContext: Omit<AssistantVerification, 'rows'> | null = null;
+      const finishProse = () => {
+        if (prose.trim()) flushProse(prose, add, (rows) => {
+          const record = { rows, ...proseContext! };
+          store.set({ assistantVerifications: [...store.state.assistantVerifications, record] });
+          return record;
+        });
+        prose = '';
+        proseContext = null;
+        setStreaming('');
+      };
       try {
         const built = await buildTurn({ text: line, registry, images: attached, selection: ui.selection, skills });
+        if (signal.aborted) return;
         if (built.skill) add({ kind: 'skill', name: built.skill, note: 'loaded into this turn' });
         for (const bad of built.unresolved) add({ kind: 'bad', text: `${bad.ref}: ${bad.cause}` });
         messages.current.push(built.message);
 
         const system = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
-        let prose = '';
-        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current })) {
+        for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current, signal })) {
           if (event.type === 'text') {
+            if (!proseContext) {
+              const state = store.state;
+              proseContext = { model: state.model?.name ?? null, revision: state.revision, journalHash: state.journal?.hash ?? null, result: state.result ? { step: state.result.step, revision: state.result.revision } : null };
+            }
             prose += event.text;
+            setStreaming(streamingProse(prose));
             setBusy('writing…');
-          } else if (event.type === 'tool_start') {
-            if (prose.trim()) flushProse(prose, add);
-            prose = '';
-            setBusy(`${event.call.command}…`);
-            add({ kind: 'tool', call: event.call });
+          } else if (event.type === 'tool_start' || event.type === 'tool_progress') {
+            finishProse();
+            setBusy(`${event.type === 'tool_progress' ? 'preparing ' : ''}${event.call.command}…`);
+            const call = { ...event.call };
+            setItems(cur => cur.some(i => i.kind === 'tool' && i.call.id === call.id)
+              ? cur.map(i => i.kind === 'tool' && i.call.id === call.id ? { kind: 'tool', call } : i)
+              : [...cur, { kind: 'tool', call }]);
           } else if (event.type === 'tool_end') {
             setItems((cur) => cur.map((i) => (i.kind === 'tool' && i.call.id === event.call.id ? { kind: 'tool', call: { ...event.call } } : i)));
           } else if (event.type === 'error') {
+            finishProse();
             add({ kind: 'bad', text: event.message });
           } else if (event.type === 'turn') {
-            if (prose.trim()) flushProse(prose, add);
-            prose = '';
-            const wrote = event.turn.calls.filter((c) => c.ok && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
+            finishProse();
+            const wrote = event.turn.calls.filter((c) => c.status === 'succeeded' && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
             if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
             setTurn(event.turn);
@@ -279,13 +373,54 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         }
         await refreshIndex();
       } catch (e) {
+        finishProse();
         add({ kind: 'bad', text: e instanceof FemError ? `${e.code}: ${e.cause}` : String(e) });
       } finally {
-        setBusy('');
+        finishProse();
+        setItems(cur => cur.map(i => i.kind === 'tool' && i.call.status === 'preparing'
+          ? { kind: 'tool', call: { ...i.call, status: 'cancelled', result: 'Not executed: response ended before this call could run.' } } : i));
+        if (signal.aborted) add({ kind: 'prose', text: 'Response interrupted.' });
       }
     },
-    [busy, provider, key.key, images, registry, ui.selection, skills, enabled, folder, model, store],
+    [registry, ui.selection, skills, enabled, folder, store],
   );
+  execute.current = runMessage;
+
+  const send = useCallback(async (text: string) => {
+    const line = text.trim();
+    if (!line) {
+      if (queue.current.length && activeRequest.current) {
+        activeRequest.current.abort();
+        setBusy('interrupting… waiting for any active tool');
+      }
+      return;
+    }
+    const selectedModel = store.state.assistantModel ?? model;
+    const selectedProvider = (Object.keys(MODELS) as ProviderId[]).find(id => MODELS[id].includes(selectedModel)) ?? provider;
+    const apiKey = resolveKey(selectedProvider).key;
+    if (!apiKey) {
+      add({ kind: 'bad', text: `no ${selectedProvider} API key yet — open Settings and paste one; it stays in this browser` });
+      store.togglePanel('assistant.settings', true);
+      return;
+    }
+    queue.current.push({ text: line, images: [...images], provider: selectedProvider, model: selectedModel, key: apiKey });
+    followBottom.current = true;
+    setQueued([...queue.current]);
+    setDraft('');
+    setTokens([]);
+    setImages([]);
+    if (activeRequest.current) return;
+    // A ref owns the lock before the first await, including two sends in the same paint.
+    while (queue.current.length) {
+      const controller = new AbortController();
+      activeRequest.current = controller;
+      const job = queue.current.shift()!;
+      setQueued([...queue.current]);
+      try { await execute.current(job, controller.signal); }
+      finally { activeRequest.current = null; }
+    }
+    setBusy('');
+  }, [images, provider, model, store]);
 
   const refreshIndex = useCallback(async () => {
     setIndex(await objectIndex(registry).catch(() => []));
@@ -298,11 +433,23 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       store.togglePanel('assistant', true);
       void send(text);
     };
+    chatBridge.setDraft = (text) => {
+      store.togglePanel('assistant', true);
+      setDraft(text);
+      store.togglePanel('assistant.skills', false);
+      focusDraft.current = true;
+    };
+    if (chatBridge.pendingDraft !== null) {
+      chatBridge.setDraft(chatBridge.pendingDraft);
+      chatBridge.pendingDraft = null;
+    }
     chatBridge.insertMention = insert;
     chatBridge.clear = () => {
       chatBridge.pending = null;
+      if (activeRequest.current) return;
       messages.current = [];
       setItems([]);
+      setStreaming('');
       setTurn(null);
     };
     const queued = chatBridge.pending;
@@ -310,6 +457,8 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     if (queued !== null) void send(queued);
     return () => {
       chatBridge.send = buffer;
+      chatBridge.setDraft = (text: string): void => { chatBridge.pendingDraft = text; };
+
     };
   });
 
@@ -325,52 +474,52 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const mentionRows: Row[] = mentionsOpen
     ? [
         ...(ui.selection.refs.length > 0 && query === ''
-          ? [{ key: '@selection', kind: 'context', name: 'selection', meta: ui.selection.refs.join(' '), cmd: 'chat.insertMention', run: () => ui.selection.refs.forEach((r) => insert(r)) }]
+          ? [{ key: '@selection', kind: 'context', name: 'selection', meta: ui.selection.refs.join(' '), cmd: 'chat.insertMention', run: () => void Promise.all(ui.selection.refs.map((ref) => dispatch({ cmd: 'chat.insertMention', ref }))) }]
           : []),
         ...(query === '' ? [{ key: '@view', kind: 'context', name: 'view', meta: 'attach the current view as an image', cmd: 'query.screenshot', run: () => void attachView() }] : []),
         ...index
           .filter((e) => !query || e.ref.toLowerCase().includes(query.toLowerCase()))
-          .map((e) => ({ key: e.ref, kind: e.kind, name: e.name, meta: e.summary, cmd: 'chat.insertMention', run: () => insert(e.ref) })),
+          .map((e) => ({ key: e.ref, kind: e.kind, name: e.name, meta: e.summary, cmd: 'chat.insertMention', run: () => void dispatch({ cmd: 'chat.insertMention', ref: e.ref }) })),
       ]
     : [];
   const slash = /^\/(\S*)$/.exec(draft);
   const slashKey = slash ? `/${slash[1]!}` : null;
-  const skillRows: Row[] = (slash && dismissed !== slashKey ? skills.filter((s) => s.name.startsWith(slash[1]!)) : []).map((s) => ({
+  const skillRows: Row[] = (openPanel('skills') ? enabled : slash && dismissed !== slashKey ? enabled.filter((s) => s.name.startsWith(slash[1]!)) : []).map((s) => ({
     key: s.name,
     kind: s.source,
     name: s.name,
     meta: s.description,
-    cmd: 'skill.invoke',
-    run: () => setDraft(`/${s.name} `),
+    cmd: 'chat.setDraft',
+    run: () => void dispatch({ cmd: 'chat.setDraft', text: `/${s.name} ${draft.replace(/^\/\S*\s*/, '')}` }),
   }));
   // Only one is ever open, so one cursor serves both.
   const menu = groupRows(mentionRows.length > 0 ? mentionRows : skillRows);
   const cursor = menu.flat.length === 0 ? 0 : Math.min(active, menu.flat.length - 1);
 
-  const compose = () => [...tokens.map((t) => `@${t}`), draft].join(' ').trim();
+  const compose = () => [draft, ...tokens.map((t) => `@${t}`)].join(' ').trim();
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
 
   return (
-    <aside class="assistant" hidden={hidden}>
+    <aside class="assistant" hidden={hidden} aria-label="Assistant" style={`--assistant-width:${panelWidth}px`}>
       <header>
         <span class="ring">✳</span>
         <span class="title">Assistant</span>
         <span class="note">shares this Model</span>
         <span class="grow" />
-        <Cmd cmd="panel.toggle" title="Settings" run={() => store.togglePanel('assistant.settings')}>
+        <Cmd cmd="panel.toggle" title="Settings" run={() => void dispatch({ cmd: 'panel.toggle', panel: 'assistant.settings' })}>
           ⚙
         </Cmd>
-        <Cmd cmd="chat.clear" title="Start a new conversation" run={() => chatBridge.clear()}>
+        <Cmd cmd="chat.clear" disabled={busy !== ''} title="Start a new conversation" run={() => void dispatch({ cmd: 'chat.clear' })}>
           ⟲
         </Cmd>
-        <Cmd cmd="panel.toggle" title="Close the assistant" run={() => store.togglePanel('assistant', false)}>
+        <Cmd cmd="panel.toggle" title="Close the assistant" run={() => void dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: false })}>
           ×
         </Cmd>
       </header>
 
       <div class="strip">
         {folder ? (
-          <Cmd cmd="panel.toggle" class="agents" title="The project rules in force" run={() => store.togglePanel('assistant.rules')}>
+          <Cmd cmd="panel.toggle" class="agents" title="The project rules in force" run={() => void dispatch({ cmd: 'panel.toggle', panel: 'assistant.rules' })}>
             <span class="mono">{openPanel('rules') ? '▾' : '▸'}</span>
             <span class="file">{folder.agentsMd?.file ?? 'no AGENTS.md'}</span>
             <span class="count">{folder.agentsMd ? `${rules.length} project rules in force` : 'no project rules'}</span>
@@ -389,7 +538,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
           {skills.map((s) => {
             const on = ui.panels[`skill:${s.name}`] !== false;
             return (
-              <Cmd key={s.name} cmd="panel.toggle" title={s.description} pressed={on} run={() => store.togglePanel(`skill:${s.name}`, !on)}>
+              <Cmd key={s.name} cmd="panel.toggle" title={s.description} pressed={on} run={() => void dispatch({ cmd: 'panel.toggle', panel: `skill:${s.name}`, open: !on })}>
                 <span class="dot" />
                 <span>{s.name}</span>
               </Cmd>
@@ -398,10 +547,14 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         </div>
       </div>
 
-      <div class="messages">
+      <div class="messages" ref={transcript} onScroll={(event) => {
+        const el = event.currentTarget;
+        followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+      }}>
         {items.map((item, i) => (
-          <Item key={i} item={item} registry={registry} dispatch={dispatch} />
+          <Item key={i} item={item} registry={registry} dispatch={dispatch} state={ui} />
         ))}
+        {streaming ? <Prose streaming text={streaming} /> : null}
         {busy ? (
           <div class="thinking">
             <i />
@@ -415,7 +568,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
           and needs no offsets. The transcript shifts up when it opens — that is the trade. */}
       {menu.flat.length > 0 ? (
         <div class="popover">
-          <div class="hint">{mentionRows.length > 0 ? `@${query} — reference anything in the Model, the Journal or the project folder` : `/${slash![1]} — a skill is loaded into the turn it is used in`}</div>
+          <div class="hint">{mentionRows.length > 0 ? `@${query} — reference anything in the Model, the Journal or the project folder` : `/${slash?.[1] ?? 'skill'} — a skill is loaded into the turn it is used in`}</div>
           <div class="list">
             {menu.groups.map((group) => (
               <div class="group" key={group.kind}>
@@ -451,6 +604,13 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
           </div>
         ) : null}
 
+        <div class="suggestions" aria-label="Prompt suggestions">
+          {(items.some((item) => item.kind === 'user')
+            ? [{ label: 'Check this Model', text: 'Inspect the current Model and identify checks to run before trusting its results.' }, { label: 'Explain the next step', text: 'Explain the next useful modeling or verification step and why.' }]
+            : [{ label: 'Build a cantilever', text: 'Help me build a cantilever beam. Ask for the dimensions, material and load that you need.' }, { label: 'Inspect this Model', text: 'Inspect the current Model and explain its geometry, materials, boundary conditions and loads.' }]
+          ).map((suggestion) => <Cmd key={suggestion.label} cmd="chat.setDraft" disabled={busy !== ''} run={() => dispatch({ cmd: 'chat.setDraft', text: suggestion.text })}>{suggestion.label}</Cmd>)}
+        </div>
+
         <div class="box">
           <div class="tokens">
             {tokens.map((t) => (
@@ -460,6 +620,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
               </span>
             ))}
             <textarea
+              ref={composer}
               rows={1}
               placeholder={items.length === 0 ? 'Describe the model, or ask for a check…' : 'Reply, or ask for the next step…'}
               value={draft}
@@ -493,9 +654,9 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
                     return void setDismissed(at ? `${at.from}:${at.q}` : slashKey);
                   }
                 }
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !e.repeat) {
                   e.preventDefault();
-                  void send(compose());
+                  void dispatch({ cmd: 'chat.send', text: compose() }).catch(() => undefined);
                 }
               }}
               onPaste={(e) => {
@@ -526,11 +687,14 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             />
           </div>
           <div class="bar">
-            <Cmd cmd="panel.toggle" class="at" title="Reference a Model object, a file or a Result" run={() => void refreshIndex().then(() => store.togglePanel('assistant.mentions'))}>
+            <Cmd cmd="panel.toggle" class="at" title="Reference a Model object, a file or a Result" run={() => void refreshIndex().then(() => dispatch({ cmd: 'panel.toggle', panel: 'assistant.mentions' }))}>
               @
             </Cmd>
-            <Cmd cmd="chat.insertMention" title="Reference the current selection" disabled={ui.selection.refs.length === 0} run={() => ui.selection.refs.forEach(insert)}>
+            <Cmd cmd="chat.insertMention" title="Reference the current selection" disabled={ui.selection.refs.length === 0} run={() => void Promise.all(ui.selection.refs.map((ref) => dispatch({ cmd: 'chat.insertMention', ref })))}>
               @selection
+            </Cmd>
+            <Cmd cmd="panel.toggle" title="Choose a skill for this draft" disabled={busy !== ''} run={() => dispatch({ cmd: 'panel.toggle', panel: 'assistant.skills' })}>
+              /skill
             </Cmd>
             <Cmd
               cmd="query.screenshot"
@@ -553,15 +717,30 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
                 }}
               />
             </label>
-            <Cmd cmd="chat.send" class="send" disabled={busy !== '' || compose() === ''} run={() => send(compose())}>
-              Send
+            <Cmd cmd="chat.send" class="send" disabled={compose() === '' && !(busy && queued.length)} run={() => dispatch({ cmd: 'chat.send', text: compose() })}>
+              {busy ? (compose() === '' && queued.length ? 'Send next' : 'Queue') : 'Send'}
             </Cmd>
           </div>
         </div>
 
+        <div class="model-row">
+          <label>Model <select aria-label="Assistant model" data-cmd="ai.setModel" value={model}
+            onChange={(e) => {
+              const next = (e.target as HTMLSelectElement).value;
+              void dispatch({ cmd: 'ai.setModel', model: next }).catch(error => add({ kind: 'bad', text: String(error) }));
+            }}>
+            {(Object.keys(MODELS) as ProviderId[]).map(id => <optgroup label={id === 'openai' ? 'OpenAI' : 'Anthropic'}>
+              {MODELS[id].map(m => <option key={m} value={m}>{m}</option>)}
+            </optgroup>)}
+          </select></label>
+        </div>
+        {queued.length > 0 ? <div class="queued" aria-live="polite">
+          <div>{queued.length} queued · Enter on an empty composer to interrupt and send next</div>
+          <ol>{queued.map(job => <li>{job.text}{job.images.length ? ` · ${job.images.length} images` : ''}</li>)}</ol>
+        </div> : null}
         <div class="cost">
           <span>{turn ? `this turn: ${turn.calls.length} commands · ${turn.skills.length} skills · ${seconds(turn.ms)}${turn.cost === null ? '' : ` · $${turn.cost.toFixed(3)}`}` : `${model} · ${skills.length} skills`}</span>
-          <span>{key.source === 'stored' ? 'key stored in this browser' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
+          <span>{key.source === 'stored' ? 'key stored for this tab session' : key.source === 'dev' ? 'key from the dev server' : 'no key yet'}</span>
         </div>
       </div>
 
@@ -570,33 +749,15 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
           <label>
             <span>Provider</span>
             <select
+              data-cmd="ai.setModel"
               value={provider}
               onChange={(e) => {
                 const next = (e.target as HTMLSelectElement).value as ProviderId;
-                setProvider(next);
-                setModel(storedModel(next));
+                void dispatch({ cmd: 'ai.setModel', model: storedModel(next) }).catch(error => add({ kind: 'bad', text: String(error) }));
               }}
             >
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI</option>
-            </select>
-          </label>
-          <label>
-            <span>Model</span>
-            <select
-              data-cmd="ai.setModel"
-              value={model}
-              onChange={(e) => {
-                const next = (e.target as HTMLSelectElement).value;
-                setModel(next);
-                void dispatch({ cmd: 'ai.setModel', model: next }).catch(() => undefined);
-              }}
-            >
-              {MODELS[provider].map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
             </select>
           </label>
           <label>
@@ -605,8 +766,9 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             <Cmd
               cmd="ai.setKey"
               title="Keep this key in this browser only"
-              run={() => {
-                storeKey(provider, keyDraft || null);
+              run={async () => {
+                const key = keyDraft || null;
+                await dispatch({ cmd: 'ai.setKey', key, provider });
                 setKeyDraft('');
                 setProvider(provider);
               }}
@@ -615,7 +777,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             </Cmd>
           </label>
           <span class="source">
-            {key.source === 'stored' ? 'from localStorage in this browser' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
+            {key.source === 'stored' ? 'from sessionStorage in this tab' : key.source === 'dev' ? 'from the dev server’s shell environment; never in a build' : 'no key: the assistant cannot send anything'}
           </span>
         </div>
       ) : null}
@@ -623,14 +785,22 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   );
 }
 
-/** Prose is split on its `<verification>` block, so the card and the sentences both survive. */
-function flushProse(text: string, add: (item: Item) => void): void {
-  const { rows, prose } = parseVerification(text);
-  if (prose) add({ kind: 'prose', text: prose });
-  if (rows.length > 0) add({ kind: 'verify', rows });
+/** Keep verification markup private while its tag or block is still arriving. */
+function streamingProse(text: string): string {
+  let visible = parseVerification(text).prose.replace(/<verification>[\s\S]*$/i, '');
+  const start = visible.lastIndexOf('<');
+  if (start >= 0 && '<verification>'.startsWith(visible.slice(start).toLowerCase())) visible = visible.slice(0, start);
+  return visible;
 }
 
-function Item({ item, registry, dispatch }: { item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
+/** Prose is split on its `<verification>` block, so the card and the sentences both survive. */
+function flushProse(text: string, add: (item: Item) => void, record: (rows: VerifyRow[]) => AssistantVerification): void {
+  const { rows, prose } = parseVerification(text);
+  if (prose) add({ kind: 'prose', text: prose });
+  if (rows.length > 0) add({ kind: 'verify', record: record(rows) });
+}
+
+function Item({ item, registry, dispatch, state }: { state: UiState; item: Item; registry: Registry; dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> }) {
   const [undoState, setUndoState] = useState<'ready' | 'pending' | 'done' | 'failed'>('ready');
   const [undoError, setUndoError] = useState('');
   if (item.kind === 'user') {
@@ -643,7 +813,7 @@ function Item({ item, registry, dispatch }: { item: Item; registry: Registry; di
       </div>
     );
   }
-  if (item.kind === 'prose') return <div class="prose">{item.text}</div>;
+  if (item.kind === 'prose') return <Prose text={item.text} />;
   if (item.kind === 'bad') return <div class="bad-line">{item.text}</div>;
   if (item.kind === 'tool') return <ToolCard call={item.call} />;
   if (item.kind === 'skill') {
@@ -660,10 +830,11 @@ function Item({ item, registry, dispatch }: { item: Item; registry: Registry; di
       <div class="card verify">
         <div class="head">
           <span>◎</span>
-          <span>VERIFICATION</span>
+          <span>VERIFICATION · also in Checks</span>
         </div>
+        <div class="out">Assistant-reported · not independently verified<br />{verificationState(item.record, state)}</div>
         <div class="rows">
-          {item.rows.map((row, i) => (
+          {item.record.rows.map((row, i) => (
             <div key={i}>
               <span class={`icon ${row.status}`}>{row.status === 'ok' ? '✓' : row.status === 'warn' ? '!' : '✕'}</span>
               <span class="what">{row.what}</span>

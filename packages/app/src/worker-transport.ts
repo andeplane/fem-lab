@@ -110,6 +110,8 @@ export class WorkerTransport implements EngineTransport {
     const saved = structuredClone(file);
     return await this.call('importFile', saved, undefined, (value) => {
       const ack = value as ImportAck;
+      // The engine normalizes omitted/default fields. Its receipt, rather than the input file,
+      // is the authoritative Journal for both recovery and the explicit-open saved baseline.
       this.shadow = ack.journal.entries as ShadowEntry[];
       this.revision = ack.revision;
     }) as ImportAck;
