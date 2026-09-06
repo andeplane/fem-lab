@@ -52,13 +52,16 @@ export function fieldsOf(step: Step): [string, string][] {
  * The same values keyed by the `data-field` path `SchemaForm` renders, so each input can carry
  * its own `placeholder`. A multi-part quantity (`size` is three lengths) becomes `size.0`,
  * `size.1`, `size.2`, which is exactly how the form paths its inputs.
+ *
+ * Verbatim, unlike `fieldsOf`: a placeholder is what the person is meant to *type*, and the
+ * engine's unit parser reads `kg/m^3`, not the `kg/m³` the card prints.
  */
 export function formHintsOf(step: Step): Record<string, string> {
   const out: Record<string, string> = {};
   const walk = (path: string[], value: unknown): void => {
     if (Array.isArray(value)) return value.forEach((v, i) => walk([...path, String(i)], v));
     if (value !== null && typeof value === 'object') return Object.entries(value as Record<string, unknown>).forEach(([k, v]) => walk([...path, k], v));
-    out[path.join('.')] = prettyUnits(String(value));
+    out[path.join('.')] = String(value);
   };
   for (const [k, v] of Object.entries(sourceOf(step))) walk([k], v);
   return out;
@@ -86,7 +89,9 @@ export function candidates(step: Step, form: { cmd: string } | null): string[] {
     if (IS_COMMAND.test(h)) out.push(`[data-cmd="${h}"]`, `[data-opens="${h}"]`);
     else out.push(h);
   }
-  out.push(PALETTE);
+  // The ⌘K rung only makes sense while there is a Command to run: a read-only step that names
+  // no control is asking the reader to look at something, not to press anything.
+  if (step.expect) out.push(PALETTE);
   return out;
 }
 
@@ -147,8 +152,11 @@ export function place(rect: Box, card: { width: number; height: number }, viewpo
 }
 
 /** What to call the resolved control in prose, read off its own visible text so it can never
- * drift from the UI. `null` when it has none worth quoting (a bare form row, an icon). */
+ * drift from the UI. `null` when there is nothing worth quoting: an icon with no text, a
+ * paragraph of it, or a field of the open form — "click the Name box" is not the instruction
+ * there, the values list beside it is. */
 export function nameOf(el: HTMLElement | null): string | null {
-  const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  if (el === null || el.closest(FORM) !== null) return null;
+  const text = el.textContent?.replace(/\s+/g, ' ').trim() ?? '';
   return text.length > 0 && text.length <= 40 ? text : null;
 }

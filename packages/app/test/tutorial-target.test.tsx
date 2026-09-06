@@ -39,6 +39,12 @@ describe('candidates', () => {
   it('falls back to the ⌘K field for a step that names no control at all', () => {
     expect(candidates(step({ highlight: undefined }), null)).toEqual(['.palette-field']);
   });
+
+  it('points at nothing for a read-only step with no control: it is asking you to look', () => {
+    expect(candidates(step({ expect: null, doIt: undefined, highlight: undefined }), null)).toEqual([]);
+    // but a read-only step that does name a panel still highlights it
+    expect(candidates(step({ expect: null, doIt: undefined, highlight: '[title="panel.toggle results"]' }), null)).toEqual(['[title="panel.toggle results"]']);
+  });
 });
 
 describe('resolve', () => {
@@ -102,8 +108,9 @@ describe('fieldsOf', () => {
 });
 
 describe('formHintsOf', () => {
-  it('keys every value by the data-field path SchemaForm renders', () => {
-    expect(formHintsOf(step())).toEqual({ name: 'steel', E: '210 GPa', nu: '0.3', rho: '7850 kg/m³' });
+  // A placeholder is what the person types, and the engine's unit parser reads `kg/m^3`.
+  it('keys every value by the data-field path SchemaForm renders, verbatim', () => {
+    expect(formHintsOf(step())).toEqual({ name: 'steel', E: '210 GPa', nu: '0.3', rho: '7850 kg/m^3' });
   });
 
   it('paths a multi-part quantity by index, as the form does', () => {
@@ -158,5 +165,10 @@ describe('nameOf', () => {
     expect(nameOf(root.querySelector('button'))).toBeNull();
     expect(nameOf(root.querySelector('div'))).toBeNull();
     expect(nameOf(null)).toBeNull();
+  });
+
+  it('declines a field of the open form: "click the Name box" is not the instruction there', () => {
+    const root = shell('<aside class="props"><div class="field" data-field="name">Name<input /></div></aside>');
+    expect(nameOf(root.querySelector('.field'))).toBeNull();
   });
 });

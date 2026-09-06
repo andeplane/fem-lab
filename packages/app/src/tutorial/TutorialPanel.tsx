@@ -184,7 +184,7 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
           </p>
         ) : name ? (
           <p class="tutorial-where">
-            Click <b>{name}</b>, outlined in the viewer.
+            Click <b>{name}</b> — it is the outlined control.
           </p>
         ) : null}
         {values.length > 0 ? (
