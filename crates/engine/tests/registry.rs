@@ -3371,7 +3371,11 @@ fn mapped_body_warns_until_a_constraint_targets_its_sets() {
     );
     ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"support"}"#);
     assert!(e.warnings().iter().any(|w| w.code == "model.unconstrained"));
-    // Region predicates can select the mapped mesh directly, without naming a Body.
+    // A Body region is explicit too: an unrelated Body's Set cannot support the mapped one.
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"region","where":{"kind":"body","name":"other"}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"region"}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+    // Box predicates can select the mapped mesh directly, without naming a Body.
     ok(
         &mut e,
         r#"{"cmd":"geometry.nameRegion","name":"region","where":{"kind":"bbox","min":["0 m","0 m","0 m"],"max":["0 m","44 m","0 m"]}}"#,
