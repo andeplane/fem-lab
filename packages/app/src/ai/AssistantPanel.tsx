@@ -38,6 +38,8 @@ export interface AssistantPanelProps {
 export const chatBridge = {
   /** The one line a `chat.send` before the drawer left behind; the panel takes it on mount. */
   pending: null as string | null,
+  pendingDraft: null as string | null,
+  setDraft: (text: string): void => { chatBridge.pendingDraft = text; },
   send: (text: string): void => {
     chatBridge.pending = text;
   },
@@ -132,6 +134,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const [keyDraft, setKeyDraft] = useState('');
   const [turn, setTurn] = useState<TurnResult | null>(null);
   const messages = useRef<Message[]>([]);
+  const composer = useRef<HTMLTextAreaElement>(null);
 
   const key = resolveKey(provider);
   const openPanel = (name: string, fallback = false) => ui.panels[`assistant.${name}`] ?? fallback;
@@ -245,6 +248,16 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       store.togglePanel('assistant', true);
       void send(text);
     };
+    chatBridge.setDraft = (text) => {
+      store.togglePanel('assistant', true);
+      setDraft(text);
+      store.togglePanel('assistant.skills', false);
+      composer.current?.focus();
+    };
+    if (chatBridge.pendingDraft !== null) {
+      chatBridge.setDraft(chatBridge.pendingDraft);
+      chatBridge.pendingDraft = null;
+    }
     chatBridge.insertMention = insert;
     chatBridge.clear = () => {
       chatBridge.pending = null;
@@ -258,13 +271,14 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
     if (queued !== null) void send(queued);
     return () => {
       chatBridge.send = buffer;
+      chatBridge.setDraft = (text) => { chatBridge.pendingDraft = text; };
     };
   });
 
   const query = draft.startsWith('@') ? draft.slice(1) : '';
   const shown = index.filter((e) => !query || e.ref.toLowerCase().includes(query.toLowerCase()));
   const slash = /^\/(\S*)$/.exec(draft);
-  const skillMenu = slash ? skills.filter((s) => s.name.startsWith(slash[1]!)) : [];
+  const skillMenu = openPanel('skills') ? enabled : slash ? enabled.filter((s) => s.name.startsWith(slash[1]!)) : [];
 
   const compose = () => [...tokens.map((t) => `@${t}`), draft].join(' ').trim();
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
@@ -347,10 +361,10 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         ) : null}
         {skillMenu.length > 0 ? (
           <div class="popover">
-            <div class="hint">/{slash![1]} — a skill is loaded into the turn it is used in</div>
+            <div class="hint">/{slash?.[1] ?? 'skill'} — a skill is loaded into the turn it is used in</div>
             <div class="list">
               {skillMenu.map((s) => (
-                <Cmd key={s.name} cmd="skill.invoke" title={s.description} run={() => setDraft(`/${s.name} `)}>
+                <Cmd key={s.name} cmd="chat.setDraft" title={s.description} run={() => dispatch({ cmd: 'chat.setDraft', text: `/${s.name} ${draft.replace(/^\/\S*\s*/, '')}` })}>
                   <span class="kind">{s.source}</span>
                   <span class="name">{s.name}</span>
                   <span class="meta">{s.description}</span>
@@ -376,6 +390,13 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
           </div>
         ) : null}
 
+        <div class="suggestions" aria-label="Prompt suggestions">
+          {(items.some((item) => item.kind === 'user')
+            ? [{ label: 'Check this Model', text: 'Inspect the current Model and identify checks to run before trusting its results.' }, { label: 'Explain the next step', text: 'Explain the next useful modeling or verification step and why.' }]
+            : [{ label: 'Build a cantilever', text: 'Help me build a cantilever beam. Ask for the dimensions, material and load that you need.' }, { label: 'Inspect this Model', text: 'Inspect the current Model and explain its geometry, materials, boundary conditions and loads.' }]
+          ).map((suggestion) => <Cmd key={suggestion.label} cmd="chat.setDraft" disabled={busy !== ''} run={() => dispatch({ cmd: 'chat.setDraft', text: suggestion.text })}>{suggestion.label}</Cmd>)}
+        </div>
+
         <div class="box">
           <div class="tokens">
             {tokens.map((t) => (
@@ -385,6 +406,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
               </span>
             ))}
             <textarea
+              ref={composer}
               rows={1}
               placeholder={items.length === 0 ? 'Describe the model, or ask for a check…' : 'Reply, or ask for the next step…'}
               value={draft}
@@ -429,6 +451,9 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
             </Cmd>
             <Cmd cmd="chat.insertMention" title="Reference the current selection" disabled={ui.selection.refs.length === 0} run={() => ui.selection.refs.forEach(insert)}>
               @selection
+            </Cmd>
+            <Cmd cmd="panel.toggle" title="Choose a skill for this draft" disabled={busy !== ''} run={() => dispatch({ cmd: 'panel.toggle', panel: 'assistant.skills' })}>
+              /skill
             </Cmd>
             <Cmd
               cmd="query.screenshot"

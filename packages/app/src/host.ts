@@ -145,6 +145,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
     // the two AI SDKs off the boot path: a static `chatBridge` import would drag `src/ai/**`,
     // and with it @anthropic-ai/sdk and openai, into the landing chunk.
     chat: {
+      setDraft: (text) => {
+        store.togglePanel('assistant', true);
+        void import('./ai').then((m) => m.chatBridge.setDraft(text));
+      },
       send: (text) => void import('./ai').then((m) => m.chatBridge.send(text)),
       insertMention: (ref) => void import('./ai').then((m) => m.chatBridge.insertMention(ref)),
       clear: () => void import('./ai').then((m) => m.chatBridge.clear()),
