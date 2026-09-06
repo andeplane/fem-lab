@@ -3033,7 +3033,7 @@ const TIP_UZ: &str = r#"{"kind":"probe","field":"displacement","component":2,"at
 /// The rate is about 1, not the 2 plan A hoped for: a fully clamped three-dimensional root is a
 /// re-entrant corner, and a point quantity measured over a singular corner converges at first
 /// order however good the element is. (The same study over 100, 50 and 25 mm is not even in the
-/// asymptotic range yet — its differences grow, so `richardson` reports a negative rate.) What
+/// asymptotic range yet — its differences grow, so the convergent estimate is unavailable.) What
 /// the extrapolation does reach is the beam formula, inside 1 %.
 #[test]
 fn a_convergence_study_reports_a_rate_and_restores_the_mesh() {

@@ -82,6 +82,25 @@ plane-stress sheet and an axisymmetric ring. A8's numerics half is
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
 
+### Richardson rate and limit with unequal refinements (#121)
+
+The manufactured sequence `q(h) = 1.25 + C h^p` has the independent exact limit `1.25`
+and rate `p`. Engine tests cover `p = 0.5, 1, 2, 3, 4`, both signs of `C`, equal ratios
+(`[4,2,1]`) and unequal ratios in both directions (`[7,4,1]`, `[7,2,1]`). Length and
+quantity unit factors span `1e-100`–`1e100` and `1e-200`–`1e200`, respectively: the rate
+must stay within `1e-9` and the rescaled limit within `1e-8` of the closed forms. The
+reported regression `q = 1 + h²` on `[3,2,1]` recovers `(limit, rate) = (1,2)` within
+`1e-12`; reordering or adding a coarse point outside the power-law range has no effect.
+An extreme spacing case (`[1e200,1e-200,1e-300]`, `p=0.001`) also checks that mesh-size
+quotient overflow cannot invalidate finite data.
+
+The generalized equation uses both log refinement ratios `a=log(h1/h2)` and
+`b=log(h2/h3)`: `Δq12/Δq23 = (exp(ap)-1)/(1-exp(-bp))`. Its positive-rate solution
+exists uniquely only when the difference ratio exceeds `a/b`. Logarithms, `expm1` and a
+bracketed solve avoid forming overflowing difference products or size powers. Diverging,
+logarithmic, constant and oscillating sequences, invalid triples and unrepresentable
+limits have no estimate; `study.converge` reports its existing unavailable fields.
+
 ## B. Beams and locking (phase 1–2)
 
 | # | Case | Reference | Tolerance | Proves | Status |
