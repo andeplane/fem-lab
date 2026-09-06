@@ -24,14 +24,6 @@ const TOP = {
 };
 
 /** Rewrite every `#/$defs/<old>` to `#/$defs/<new>` per `rename`. */
-function canonical(value) {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
-}
-
-const sameSchema = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
-
 function retarget(node, rename) {
   if (Array.isArray(node)) return node.map((n) => retarget(n, rename));
   if (!node || typeof node !== 'object') return node;
@@ -49,7 +41,7 @@ function retarget(node, rename) {
  * `femlab schema` emits six independent JSON Schemas, each with its own `$defs`, and
  * json-schema-to-typescript resolves `#/$defs/..` against the root it is given. Compiling them
  * one by one would declare `Quantity` six times, so fold them into one root with one `$defs`
- * table. Same-named defs that are structurally identical are shared; the few that differ (the model
+ * table. Same-named defs that are byte-identical are shared; the few that differ (the model
  * file's SI predicates vs the Command's unit-string predicates) are prefixed with their table's
  * type name, e.g. `ModelFile_FacePredicate`, and their `$ref`s rewritten.
  */
@@ -61,12 +53,12 @@ export function mergeSchema(doc) {
     const { $schema, title, $defs = {}, ...body } = doc[key];
     const rename = {};
     for (const [k, v] of Object.entries($defs)) {
-      if (defs[k] && !sameSchema(defs[k], v)) rename[k] = `${name}_${k}`;
+      if (defs[k] && JSON.stringify(defs[k]) !== JSON.stringify(v)) rename[k] = `${name}_${k}`;
     }
     const fixed = retarget({ ...body, $defs }, rename);
     for (const [k, v] of Object.entries(fixed.$defs)) defs[rename[k] ?? k] = v;
     delete fixed.$defs;
-    if (defs[name] && !sameSchema(defs[name], fixed)) {
+    if (defs[name] && JSON.stringify(defs[name]) !== JSON.stringify(fixed)) {
       throw new Error(`top-level ${name} collides with a different $defs entry of the same name`);
     }
     defs[name] = fixed;
@@ -126,12 +118,7 @@ export async function generate(doc) {
     bannerComment: BANNER,
     strictIndexSignatures: true,
   });
-  // Journal entries occur in both the saved-file and query-result schemas. Their Commands can
-  // differ when a host-only or model-file extension is added, but application code handles both
-  // wire shapes as one Journal row. Keep that stable public name even when the compiler prefixes
-  // the structurally different definitions.
-  const journalAlias = '\n/** A Journal row from either a saved ModelFile or a query result. */\nexport type JournalEntry = ModelFile_JournalEntry | QueryResult_JournalEntry;\n';
-  return { 'engine.ts': `${engine}${journalAlias}`, 'fem.d.ts': femDts(doc) };
+  return { 'engine.ts': engine, 'fem.d.ts': femDts(doc) };
 }
 
 async function main(argv) {

@@ -14,11 +14,27 @@ byte for byte.
 - **every engine Query**: `query_model`, `query_mesh`, `query_set`, `query_result`, `query_probe`,
   `query_path`, `query_cost`, `query_journal`, `query_script`, `query_report`, `query_convert`,
   `query_objects`, `query_capabilities`.
+- **`validate_script { code, timeoutMs? }`** — parse and type-check against the generated
+  engine API and this host's registered argument schemas, without running code or changing
+  the Model. Returns `{ ok, diagnostics }` with codes, causes, one-based source locations and hints.
 - **`run_script`** — TypeScript against the `fem` API (`await fem.geometry.addBox({ … })`,
   `await fem.query.model()`), an optional `timeoutMs` up to 30 s (default 30 s). Its Commands enter the Journal like any other.
 - **`export_file { format, path, step? }`** — writes `vtu`, `msh`, `inp`, `stl`, `report` (the
   Markdown calculation note), `script` or `journal` into the `--project` folder. Paths are
   relative to that folder; `..`, absolute paths and symlinks out of it are refused.
+
+Validation has a separate worker and deadline: 10 s by default, configurable up to 30 s for
+`validate_script`, with a 64,000-character source limit. `run_script` first validates with the
+default validation deadline; only valid input reaches its execution worker and starts the
+execution timeout. Validation and execution failures are returned as MCP tool errors with
+their diagnostics or script output intact. Compiler work does not block the MCP event loop.
+
+Engine result fields have generated types. Host argument types come from the actual host
+registry; host results without declared response schemas remain dynamically typed. Type
+checking cannot establish physical correctness, object existence, termination or the behavior
+of dynamically generated code. Runtime registry validation and execution isolation still apply.
+The browser exposes the same `query.validateScript` capability and automatically validates
+`script.run`, using its own registered host commands and a lazy compiler worker.
 
 ## Script execution permissions
 

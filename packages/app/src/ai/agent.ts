@@ -103,6 +103,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
     const pending: { id: string; name: string; input: unknown }[] = [];
     let text = '';
     let failed = false;
+    let continuation: Message['continuation'];
 
     for await (const event of provider.chat({ system, messages, tools, model, maxTokens })) {
       if (event.type === 'text_delta') {
@@ -110,6 +111,8 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
         yield { type: 'text', text: event.text };
       } else if (event.type === 'tool_use') {
         pending.push({ id: event.id, name: event.name, input: event.input });
+      } else if (event.type === 'continuation') {
+        continuation = event.continuation;
       } else if (event.type === 'usage') {
         usage.input += event.usage.input;
         usage.output += event.usage.output;
@@ -123,6 +126,7 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
 
     messages.push({
       role: 'assistant',
+      ...(continuation ? { continuation } : {}),
       content: [...(text ? [{ type: 'text' as const, text }] : []), ...pending.map((p) => ({ type: 'tool_use' as const, id: p.id, name: p.name, input: p.input }))],
     });
     if (pending.length === 0) break;
@@ -138,7 +142,11 @@ export async function* runTurn(opts: TurnOptions): AsyncGenerator<AgentEvent, Tu
       try {
         const value = await callTool(registry, p.name, p.input);
         call.result = JSON.stringify(value ?? null);
-        if (p.name === RUN_SCRIPT) owned.push(...((value as ScriptResult)?.journalEntries ?? []));
+        if (p.name === RUN_SCRIPT) {
+          const script = value as ScriptResult;
+          owned.push(...(script?.journalEntries ?? []));
+          if (script?.error) call.ok = false;
+        }
         else if ('journaled' in registry.describe(call.command) && (registry.describe(call.command) as { journaled: boolean }).journaled) {
           const ack = value as Ack;
           owned.push({ seq: ack.seq, hashAfter: ack.hash, cmd: { cmd: call.command, ...(p.input as Record<string, unknown>) } as Command });

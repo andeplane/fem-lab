@@ -14,12 +14,12 @@ import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
 import { ExportModal } from './Export';
-import { Examples, Palette, Start } from './Overlays';
+import { Examples, Palette, Projects, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
 import { ModelName } from './ModelName';
 import { Cmd, useStore, type Dispatch } from './cmd';
-import { blockers, type Defs } from './schema';
+import { blockers, type Defs, shapeKinds } from './schema';
 
 export type { Dispatch } from './cmd';
 
@@ -45,9 +45,34 @@ export interface AppProps {
   registry?: Registry;
 }
 
+/** Text controls own editing shortcuts; the shell must leave them to the browser. */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
+  if (target.isContentEditable) return true;
+  for (let node: HTMLElement | null = target; node; node = node.parentElement) {
+    const value = node.getAttribute('contenteditable');
+    if (value !== null) return value.toLowerCase() !== 'false';
+  }
+  return false;
+}
+
+export function handleGlobalKey(e: KeyboardEvent, dispatch: Dispatch, selectionCount: number, panels: Record<string, boolean>): void {
+  if (e.defaultPrevented) return;
+  const meta = e.metaKey || e.ctrlKey;
+  const key = e.key.toLowerCase();
+  if (isEditableTarget(e.target) && meta && (key === 'z' || key === 'c')) return;
+  if (meta && key === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
+  else if (meta && key === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
+  else if (meta && key === 'c' && selectionCount > 0) (e.preventDefault(), void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined));
+  else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial', 'projects']) if (panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
+}
+
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
 const VARIANTS = new Map<string, JsonSchema>(doc.commands.oneOf.map((v) => [v.properties['cmd']!.const!, v as unknown as JsonSchema]));
+/** Every shape the tree's add menu offers, read off the schema once (issue #43). */
+const SHAPES = shapeKinds(DEFS);
 
 const MM = { length: 'mm', force: 'N', stress: 'MPa' };
 const SI = { length: 'm', force: 'N', stress: 'Pa' };
@@ -60,6 +85,8 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : s.lastError ? `${s.lastError.code} ${s.lastError.cause}` : '';
   const mm = s.model?.units.length === 'mm';
   const stage = stageOf(s);
+  const solveText = solveLabel(stage, s);
+  const engineState = s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…';
   return (
     <header class="topbar">
       <div class="logo">
@@ -85,12 +112,15 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="journal.redo" class="tbutton" args={{ steps: 1 }} disabled={!s.journal?.canRedo} title="journal.redo (⇧⌘Z)">
         ↷
       </Cmd>
-      <span class="chip" title={s.notes.join('\n') || 'everything available'}>
+      <span class="chip" title={[engineState, ...s.notes].join('\n')}>
         <span class={s.notes.length > 0 ? 'dot warn' : 'dot'} />
-        {s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…'}
+        <span class="engine-state">{engineState}</span>
       </span>
-      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `solve.run ${step}`}>
-        {solveLabel(stage, s)}
+      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `${solveText} — solve.run ${step}`}>
+        {solveText}
+      </Cmd>
+      <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'projects' }} pressed={s.panels['projects'] === true} title="Every project saved in this browser">
+        Projects
       </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'examples' }}>
         Examples
@@ -98,11 +128,14 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="file.open" class="tbutton" args={{ picker: true }} title="Open a femlab/1 file">
         Open
       </Cmd>
-      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Save the Model and its Journal">
+      <Cmd dispatch={dispatch} cmd="project.save" class="tbutton" title="Write the open project now and take a fresh thumbnail">
         Save
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.compare" class="tbutton" args={{ picker: true }} title="Compare a saved femlab/1 file without opening it">
         Compare
+      </Cmd>
+      <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Download the Model and its Journal as a femlab/1 file">
+        Save as file
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="A URL that reopens this Model (not built yet)">
         Share
@@ -123,6 +156,11 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
+/**
+ * The project name, editable in place (`project.rename` on blur or Enter), and the saved chip
+ * next to it. There is no "unsaved" dot: the Journal is written into the open project after
+ * every Command, so there is no unsaved state, and a dot that lies is worse than no dot.
+ */
 /** The design's 32 px blocker strip: W-code chip, plain-language cause, one mono fix Command. */
 function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.lastError) {
@@ -223,6 +261,15 @@ async function sendToAssistant(dispatch: Dispatch, text: string): Promise<void> 
   }
 }
 
+/**
+ * Why the shape on screen is not the shape the Result holds (#42). One sentence, on the legend
+ * and on the slider alike, so the number is never on screen without its explanation.
+ */
+export function exaggerationHelp(scale: number): string {
+  if (scale === 1) return 'The displacement is drawn at true scale — usually far too small to see. Drag the slider to exaggerate it.';
+  return `Displacements are drawn ${formatNumber(scale)}× larger than they are so the shape is readable. The Result itself is unchanged; the faint outline is the undeformed body. Press "true scale" for ×1.`;
+}
+
 /** The design's 168 px legend: field, unit, gradient bar, six ticks, three colour maps. */
 function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const l = s.legend;
@@ -234,8 +281,8 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <div class="legend-head">
         <span class="legend-field mono">{choiceOf(s.fieldKey).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
-        <span class="legend-sub mono">
-          {s.result?.step} · deformed ×{formatNumber(s.deformScale)}
+        <span class="legend-sub mono" title={exaggerationHelp(s.deformScale)}>
+          {s.result?.step} · {s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}
         </span>
       </div>
       <div class="legend-body">
@@ -341,13 +388,18 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
           }}
         />
       ) : null}
-      <span class="faint">deformation</span>
+      <span class="faint" title={exaggerationHelp(s.deformScale)}>
+        exaggeration
+      </span>
       <input
         type="range"
         min="0"
-        max="400"
-        step="10"
-        aria-label="deformation scale"
+        // An auto scale of ×1000 has to be reachable, and the thumb must not sit pinned at the
+        // end of a 0–400 track when it is: the track grows to whatever is drawn.
+        max={String(Math.max(400, s.deformScale))}
+        step={String(Math.max(1, Math.round(Math.max(400, s.deformScale) / 100)))}
+        aria-label="exaggeration"
+        title={exaggerationHelp(s.deformScale)}
         data-cmd="view.setDeformScale"
         value={String(s.deformScale)}
         onInput={(e) => preview(Number((e.target as HTMLInputElement).value))}
@@ -358,7 +410,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         }}
       />
       <span class="mono">×{formatNumber(s.deformScale)}</span>
-      <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} title="draw the real displacement">
+      <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} pressed={s.deformScale === 1} title="draw the real displacement">
         true scale
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.export" class="tbutton" args={{ spec: { format: 'png' } }} title="the viewer as a PNG, legend burned in">
@@ -457,7 +509,10 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       </div>
       {stale ? (
         <div class="stale-banner" role="status">
-          <span>Result is stale — Model changed after journal line {s.result!.revision}</span>
+          <span>
+            Result is stale — Model changed after journal line {s.result!.revision}.
+            {s.study ? ' The convergence table reports separate study solves; it does not refresh these stale contours. Re-solve to display the current Model.' : ''}
+          </span>
           <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }}>
             Re-solve
           </Cmd>
@@ -494,29 +549,23 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   }, [started, s.form, store]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
-      if (meta && e.key.toLowerCase() === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
-      else if (meta && e.key.toLowerCase() === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
-      else if (meta && e.key.toLowerCase() === 'c' && s.selection.refs.length > 0) void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined);
-      else if (e.key === 'Escape') for (const p of ['palette', 'examples', 'export', 'report', 'tutorial']) if (s.panels[p]) void dispatch({ cmd: 'panel.toggle', panel: p, open: false }).catch(() => undefined);
-    };
-    addEventListener('keydown', onKey);
-    return () => removeEventListener('keydown', onKey);
+    const onKey = (e: KeyboardEvent) => handleGlobalKey(e, dispatch, s.selection.refs.length, s.panels);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [dispatch, s.selection.refs.length, s.panels]);
 
   // One fragment for both states, with the overlays at fixed positions: the start screen
-  // offers "Start a tutorial", and a tutorial that begins there has to survive the switch to
+  // offers "Tutorials", and a tutorial that begins there has to survive the switch to
   // the workspace its first Command causes — which it only does if the node keeps its slot.
   return (
     <>
       {started ? (
         <div class="shell">
           <TopBar s={s} dispatch={dispatch} />
-          <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
+          <div class="under-bar">
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
-              <ModelTree s={s} dispatch={dispatch} />
+              <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
               <div class="centre">
                 <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
@@ -529,14 +578,15 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
         <Start s={s} dispatch={dispatch} />
       )}
       <Examples s={s} dispatch={dispatch} />
+      <Projects s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
       {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
           opens on the start screen and keeps its conversation when the workspace comes up around
-          it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
-          layout of the design while the top bar stays full-width. Collapsing only hides the
-          drawer, preserving the conversation and any running turn. */}
+          it. `style.css` reserves its 392 px on `.workspace` when the window is wide enough, so
+          the five-column layout of the design holds and the top bar stays full-width. Collapsing
+          only hides the drawer, preserving the conversation and any running turn. */}
       {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}

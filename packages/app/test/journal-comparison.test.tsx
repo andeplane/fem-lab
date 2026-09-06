@@ -50,9 +50,9 @@ it('fences an imported comparison reply when a pending explicit save finishes', 
   const s = setup();
   await s.compare({ ...first, cmd: { cmd: 'model.new', name: 'colleague' } });
   const write = deferred<void>();
-  s.ctx.project.writeText = vi.fn(() => write.promise);
-  const saving = s.registry.dispatch({ cmd: 'file.save', to: 'project' });
-  await vi.waitFor(() => expect(s.ctx.project.writeText).toHaveBeenCalledOnce());
+  s.ctx.folder.writeText = vi.fn(() => write.promise);
+  const saving = s.registry.dispatch({ cmd: 'file.save', to: 'folder' });
+  await vi.waitFor(() => expect(s.ctx.folder.writeText).toHaveBeenCalledOnce());
   const reply = deferred<JournalDiff>(); s.query.mockReturnValueOnce(reply.promise);
   const pending = s.registry.query({ query: 'query.journalComparison' });
   write.resolve(); await saving;
