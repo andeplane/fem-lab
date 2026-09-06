@@ -4,8 +4,8 @@
 //   landing JS   the entry chunk and its *static* import closure — what must be parsed and run
 //                before the start screen can paint. Everything else (three.js, the two AI SDKs,
 //                the tutorial runner, sucrase) is behind an `import()` and does not count.
-//   cold boot    landing + the chunks `index.html` preloads + the engine Worker and the wasm
-//                module it fetches at once. The whole download before anyone clicks anything.
+//   cold boot    landing + the chunks `index.html` preloads + the engine Worker and its wasm
+//                module. Script, validation and solver runtimes load only when requested.
 //
 // The static/dynamic split comes from Vite's `dist/.vite/manifest.json` (`build.manifest`), not
 // from guessing at filenames, so a static import sneaking back into the entry moves the number.
@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 const LANDING_JS_GZ = 1024 * 1024; // 1 MB
 const COLD_BOOT_GZ = 3 * 1024 * 1024; // 3 MB
 /** Fetched at boot without being a static import: the engine Worker and its wasm module. */
-const BOOT = /(^|\/)engine\.worker-[^/]*\.js$|\.wasm$/;
+const BOOT = /(^|\/)engine\.worker-[^/]*\.js$|(^|\/)femlab_engine_wasm_bg-[^/]*\.wasm$/;
 
 const dist = path.join(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), 'packages', 'app', 'dist');
 const manifest = JSON.parse(readFileSync(path.join(dist, '.vite', 'manifest.json'), 'utf8'));

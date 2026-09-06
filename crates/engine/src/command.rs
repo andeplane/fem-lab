@@ -126,7 +126,9 @@ pub enum Solver {
     GpuPcg,
 }
 
-/// Result fields.
+/// Result fields. Reaction is support force in N for structural Results and removed heat
+/// power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
+/// display units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
@@ -681,7 +683,7 @@ pub enum Command {
         description: Option<String>,
     },
 
-    /// Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage
+    /// Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage
     /// stays SI and every input may still use any unit of the right dimension; this only
     /// changes how values are reported back.
     #[serde(rename = "model.setUnits", rename_all = "camelCase")]
@@ -695,13 +697,16 @@ pub enum Command {
 
     /// Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
     /// rename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`
-    /// already exists in that kind.
+    /// already exists in that kind. Mapped and swept mapped Bodies also rename their mesher
+    /// geometry, named Face/Body-region selectors and material association.
     #[serde(rename = "model.rename", rename_all = "camelCase")]
     ModelRename { kind: ObjectKind, name: String, to: String },
 
     /// Copy an object under a new name. A Body copy shares nothing with the original; a Step
     /// copy references the same Constraints and Loads. Useful for "the same load case but
     /// twice the pressure": duplicate, then re-issue the create Command with the new value.
+    /// A mapped or swept mapped Body cannot be copied: the Model has one mesher geometry
+    /// slot. Returns unsupported without changing the Model; use model.rename or mesh.set.
     #[serde(rename = "model.duplicate", rename_all = "camelCase")]
     ModelDuplicate {
         kind: ObjectKind,
@@ -724,6 +729,7 @@ pub enum Command {
     /// Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's
     /// walls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure
     /// on `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.
+    /// Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
     #[serde(rename = "geometry.subtractBox", rename_all = "camelCase")]
     GeometrySubtractBox { name: String, from: String, size: [Q<Length>; 3], at: [Q<Length>; 3] },
 
@@ -736,6 +742,7 @@ pub enum Command {
     /// Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a
     /// cylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape
     /// is positioned in world coordinates, so use its `at` or a transform to place it.
+    /// Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
     #[serde(rename = "geometry.subtract", rename_all = "camelCase")]
     GeometrySubtract { name: String, from: String, shape: ShapeSpec },
 
@@ -764,8 +771,10 @@ pub enum Command {
     },
 
     /// Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-    /// (including temperature and volumetric heat sources), and named Sets that still reference
-    /// it; remove or retarget those first.
+    /// (including temperature and volumetric heat sources), named selectors or free-mesher
+    /// geometry references that still use a Body; remove or retarget those first. Removing
+    /// a mapped or swept mapped Body clears its mesher and material association, preserving
+    /// unrelated explicit geometry and Materials.
     #[serde(rename = "geometry.remove", rename_all = "camelCase")]
     GeometryRemove { name: String },
 
@@ -806,10 +815,15 @@ pub enum Command {
     /// Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
     /// 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
     /// `formulation: full` is the textbook linear element that locks in bending: keep the
-    /// default incompatible modes or use order 2 when bending matters.
+    /// default incompatible modes or use order 2 when bending matters. Mapped geometry owns
+    /// a Body name distinct from explicit geometry. Keeping that name preserves its material;
+    /// changing/removing it requires no remaining Body references and clears its material.
+    /// Use model.rename to change an implicit Body name while preserving its references.
     /// `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
     /// (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
-    /// geometry: the selected mesher still determines the boundary approximation.
+    /// geometry: the selected mesher still determines the boundary approximation. `formulation`
+    /// has no effect when `simplices` is true, because simplex elements have no incompatible
+    /// modes.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     MeshSet {
         mesher: MesherSpec,
@@ -885,7 +899,8 @@ pub enum Command {
     LoadForce { name: String, on: SetRef, total: [Q<Force>; 3] },
 
     /// Gravity (or any uniform acceleration) as a body force on every Body whose Material has
-    /// a density; Bodies without one are skipped and listed in the warnings.
+    /// a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
+    /// apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
     #[serde(rename = "load.gravity", rename_all = "camelCase")]
     LoadGravity { name: String, g: [Q<Acceleration>; 3] },
 
@@ -1009,7 +1024,12 @@ pub enum Command {
     /// Re-mesh at each size, re-solve the Step and report the quantity of interest per size,
     /// the observed convergence rate and a Richardson estimate of the converged value. Sizes
     /// should halve each time (three or more). Restores the previous mesh settings afterwards
-    /// unless `restore` is false.
+    /// unless `restore` is false. Uses the Step's actual procedure: static and steady heat
+    /// measure equilibrium fields; transient heat and explicit dynamics measure the final
+    /// field at the configured tEnd with the Step's time settings unchanged. Modal Steps are
+    /// unsupported because a mode amplitude is not a mesh-independent quantity; compare
+    /// frequencies with solve.run/query.result instead. Steps with after are unsupported:
+    /// solve their dependencies and target at each mesh explicitly.
     #[serde(rename = "study.converge", rename_all = "camelCase")]
     StudyConverge {
         step: String,

@@ -21,16 +21,19 @@ use crate::post::{Extremum, FieldData};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{Extreme, HistoryRow, Output, ReactionRow, ResultSummary, StudyReport, StudyRow, Valued};
 use crate::solve::SolveOptions;
-use crate::units::{Dim, Dimension, Force, Frequency, Length, Stress, Temperature, Time, Q};
+use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Q};
 
 /// The material law every Model material resolves to for now; plugins add their own later.
 const LAW: &str = "linear-elastic";
 
 /// The dimension a Result field carries, so a summary reports it in the Model's own units.
-pub fn field_dimension(field: Field) -> Dimension {
+pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
     match field {
         Field::Displacement => Length::DIM,
-        Field::Reaction => Force::DIM,
+        Field::Reaction => match reaction {
+            ReactionQuantity::Force => Force::DIM,
+            ReactionQuantity::Power => Power::DIM,
+        },
         Field::Temperature => Temperature::DIM,
         Field::Strain => Dimension::NONE,
         Field::Stress | Field::StressUnaveraged | Field::VonMises | Field::Principal => Stress::DIM,
@@ -206,7 +209,7 @@ pub fn procedure_name(p: Procedure) -> String {
 /// The `procedure::Step` a Model Step means: the fields that procedure reads, and the defaults
 /// plan A names for the ones the Command left out. A missing `dt` or `tEnd` is a schema error
 /// naming the field, because a transient with no clock is not a Step anybody meant.
-fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedure::Step, Error> {
+pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedure::Step, Error> {
     let want = |v: Option<f64>, field: &'static str| {
         v.ok_or_else(|| {
             let name = procedure_name(step.procedure);
@@ -237,6 +240,49 @@ fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedure::Step, Er
             output_every: step.output_every.unwrap_or(1) as usize,
         },
     })
+}
+
+pub(crate) struct PlannedCost {
+    pub estimate: crate::query::CostEstimate,
+    transient: Option<(usize, usize, &'static str)>,
+}
+
+/// The cost Query and solve preflight share one schedule and byte calculation. Explicit Steps
+/// derive their step count from the same element-frequency bound as the integrator.
+pub(crate) fn planned_cost(
+    mesh: &femlab_geometry::Mesh,
+    explicit_problem: Option<&Problem<'_>>,
+    step: &procedure::Step,
+) -> Result<PlannedCost, Error> {
+    let mut estimate = match step {
+        procedure::Step::Static { solver } | procedure::Step::Modal { solver, .. } => {
+            crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
+        }
+        procedure::Step::HeatSteady { solver } => crate::solve::cost_estimate(mesh, 1, solver.solver),
+        procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
+            let (steps, _) = procedure::time_grid(*dt, *t_end)?;
+            let base = crate::solve::cost_estimate(mesh, 1, solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, 5)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "heat-transient")) });
+        }
+        procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
+            let p = explicit_problem.expect("an explicit cost plan needs its resolved Problem");
+            let (steps, _) = procedure::explicit::retention_grid(p, *t_end, *dt_factor)?;
+            let components = p.dofs_per_node();
+            let base = crate::solve::cost_estimate(mesh, components, Solver::Auto);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), components, steps, *output_every, 6)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "explicit")) });
+        }
+    };
+    estimate.note.push_str(" Retained transient frames: none.");
+    Ok(PlannedCost { estimate, transient: None })
+}
+
+impl PlannedCost {
+    fn enforce(&self, step: &str) -> Result<(), Error> {
+        let (steps, every, procedure) = self.transient.expect("solve_run calls this only for transient Steps");
+        crate::solve::enforce_transient_budget(&self.estimate, step, procedure, steps, every)
+    }
 }
 
 /// The Model's amplitude as the procedure's; the two are the same shape in different modules
@@ -280,7 +326,7 @@ impl Engine {
         let prev = match &step.after {
             Some(name) => {
                 let current_hash = self.model_hash();
-                let (hash, result) = self.results.get(name).ok_or_else(|| {
+                let (hash, _, result) = self.results.get(name).ok_or_else(|| {
                     Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
                         .at(format!("step '{}'", step.name))
                         .suggest(format!("solve.run on step '{name}' first"))
@@ -307,11 +353,14 @@ impl Engine {
                 &step,
                 prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)),
             )?;
+            if matches!(&proc_step, procedure::Step::HeatTransient { .. } | procedure::Step::Explicit { .. }) {
+                planned_cost(p.mesh, Some(&p), &proc_step)?.enforce(&step.name)?;
+            }
             procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
         };
         result.solver.time_ms = self.host.now_ms() - started;
         let hash = self.model_hash();
-        self.results.insert(step.name.clone(), (hash, result));
+        self.results.insert(step.name.clone(), (hash, self.revision(), result));
         Ok(Output::Solve { summary: self.result_summary(&step.name) })
     }
 
@@ -342,6 +391,29 @@ impl Engine {
             .step(step_name)
             .ok_or_else(|| Error::not_found("step", step_name, &self.model.names(ObjectKind::Step)))?
             .clone();
+        if step.procedure == Procedure::Modal {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!(
+                    "step '{}' is modal; a nodal mode amplitude is not a mesh-independent convergence quantity",
+                    step.name
+                ),
+            )
+            .at("step.procedure")
+            .suggest("solve.run at each mesh and compare the same frequency with query.result"));
+        }
+        if let Some(previous) = &step.after {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!(
+                    "step '{}' continues '{previous}'; a convergence study must recompute its dependency on each mesh",
+                    step.name
+                ),
+            )
+            .at("step.after")
+            .suggest("mesh.set, then solve.run on each dependency and the target Step for every refinement"));
+        }
+        let proc_step = procedure_step(&step, SolveOptions::default())?;
         let (settings, h) = self.study_mesh(sizes)?;
         let mut progress = on_progress;
         let mut rows = Vec::with_capacity(h.len());
@@ -360,21 +432,16 @@ impl Engine {
             self.mesh = None;
             self.mesh()?;
             let started = self.host.now_ms();
-            let mut result = {
+            let (mut result, dofs) = {
                 let built = self.mesh.as_ref().expect("built above");
                 let p = build_problem(&self.model, built, &step)?;
-                let procedure_step = procedure::Step::Static { solver: SolveOptions::default() };
-                procedure::run(&p, &procedure_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?
+                let result = procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
+                (result, p.n_dofs() as u64)
             };
             result.solver.time_ms = self.host.now_ms() - started;
             let built = self.mesh.as_ref().expect("built above");
             let (value, u) = self.quantity_of(&result, &built.mesh, quantity)?;
-            rows.push(StudyRow {
-                size: where_,
-                dofs: (built.mesh.n_nodes() * built.mesh.dim) as u64,
-                value,
-                time_ms: result.solver.time_ms,
-            });
+            rows.push(StudyRow { size: where_, dofs, value, time_ms: result.solver.time_ms });
             values.push(value);
             unit = u;
             last = Some(result);
@@ -384,7 +451,7 @@ impl Engine {
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
             let hash = self.model_hash();
-            self.results.insert(step.name, (hash, last.expect("at least two sizes ran")));
+            self.results.insert(step.name, (hash, self.revision(), last.expect("at least two sizes ran")));
         } else {
             self.model.mesh = Some(settings);
             self.mesh = None;
@@ -454,7 +521,7 @@ impl Engine {
                 Engine::pick(&v, component)
             }
         };
-        let d = display(&self.model, raw, field_dimension(field));
+        let d = display(&self.model, raw, field_dimension(field, res.reaction_quantity));
         Ok((d.value, d.unit))
     }
 
@@ -464,7 +531,10 @@ impl Engine {
     }
 
     /// The stored Result of a Step, or `not-found` naming the Steps that have one.
-    pub(crate) fn stored<'e>(&'e self, step: Option<&str>) -> Result<(&'e str, &'e String, &'e StepResult), Error> {
+    pub(crate) fn stored<'e>(
+        &'e self,
+        step: Option<&str>,
+    ) -> Result<(&'e str, &'e String, u32, &'e StepResult), Error> {
         let name: &'e str = match step {
             Some(n) => self.results.get_key_value(n).map(|(k, _)| k.as_str()).unwrap_or(""),
             None => self
@@ -472,16 +542,16 @@ impl Engine {
                 .ok_or_else(|| Error::new(ErrorCode::NotFound, "no Step has been solved yet").suggest("solve.run"))?,
         };
         let known: Vec<&str> = self.results.keys().map(String::as_str).collect();
-        let (hash, res) = self.results.get(name).ok_or_else(|| {
+        let (hash, revision, res) = self.results.get(name).ok_or_else(|| {
             Error::not_found("result", step.unwrap_or(name), &known).suggest("solve.run on that Step first")
         })?;
-        Ok((name, hash, res))
+        Ok((name, hash, *revision, res))
     }
 
     /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
     /// changed coordinates or connectivity; the Model hash covers every mesh input.
     pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
-        let (name, hash, result) = self.stored(step)?;
+        let (name, hash, _, result) = self.stored(step)?;
         if *hash != self.model_hash() {
             return Err(Error::new(
                 ErrorCode::ResultStale,
@@ -498,7 +568,7 @@ impl Engine {
     /// Step, counting from 1.
     pub fn field_named(&self, step: Option<&str>, name: &str) -> Result<&crate::post::FieldData, Error> {
         if let Some(k) = name.strip_prefix("mode:") {
-            let (step_name, _, res) = self.stored(step)?;
+            let (step_name, _, _, res) = self.stored(step)?;
             let i: usize = k.parse().unwrap_or(0);
             return res.modes.get(i.wrapping_sub(1)).ok_or_else(|| {
                 Error::new(
@@ -515,7 +585,7 @@ impl Engine {
 
     /// One Result field, for a host that wants the raw array.
     pub fn field(&self, step: Option<&str>, field: Field) -> Result<&crate::post::FieldData, Error> {
-        let (name, _, res) = self.stored(step)?;
+        let (name, _, _, res) = self.stored(step)?;
         res.fields.get(&field).ok_or_else(|| {
             Error::new(ErrorCode::NotFound, format!("step '{name}' has no {} field", field_name(field)))
                 .suggest("query.result lists the fields that were computed")
@@ -525,7 +595,7 @@ impl Engine {
     /// `query.result`: what the Step produced, in the Model's display units. The Step must
     /// have a Result: every caller has just stored one or resolved it through [`Engine::stored`].
     pub(crate) fn result_summary(&self, step: &str) -> ResultSummary {
-        let (name, hash, res) = self.stored(Some(step)).expect("the caller resolved this Step");
+        let (name, hash, revision, res) = self.stored(Some(step)).expect("the caller resolved this Step");
         let m = &self.model;
         let applied = ["x", "y", "z"].map(|a| res.scalars[&format!("applied_total_{a}")]);
         let mut sum = applied;
@@ -543,26 +613,33 @@ impl Engine {
             .fold(f64::MIN_POSITIVE, |acc, x| acc.max(x.abs()));
         ResultSummary {
             step: name.to_string(),
-            revision: self.revision(),
+            reaction_quantity: res.reaction_quantity,
+            revision: revision + 1,
             stale: *hash != self.model_hash(),
             solver: res.solver.solver.to_string(),
             iterations: res.solver.iterations as u32,
             residual: res.solver.rel_residual,
             time_ms: res.solver.time_ms,
-            extremes: res.extremes.iter().map(|(f, e)| extreme(m, *f, e)).collect(),
+            extremes: res.extremes.iter().map(|(f, e)| extreme(m, *f, e, res.reaction_quantity)).collect(),
             reactions: res
                 .reactions
                 .iter()
-                .map(|(n, r)| ReactionRow { constraint: n.clone(), total: vec3(m, *r, Force::DIM) })
+                .map(|(n, r)| ReactionRow {
+                    constraint: n.clone(),
+                    total: vec3(m, *r, field_dimension(Field::Reaction, res.reaction_quantity)),
+                })
                 .collect(),
-            applied_total: vec3(m, applied, Force::DIM),
+            applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
             history: res
                 .history
                 .iter()
                 .flat_map(crate::procedure::heat::history_extremes)
                 .map(|(t, lo, hi)| {
-                    let dim = field_dimension(res.history.as_ref().map_or(Field::Temperature, |h| h.field));
+                    let dim = field_dimension(
+                        res.history.as_ref().map_or(Field::Temperature, |h| h.field),
+                        res.reaction_quantity,
+                    );
                     HistoryRow { time: display(m, t, Time::DIM), min: display(m, lo, dim), max: display(m, hi, dim) }
                 })
                 .collect(),
@@ -575,8 +652,8 @@ fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> [Valued; 3] {
     [display(model, v[0], dim), display(model, v[1], dim), display(model, v[2], dim)]
 }
 
-fn extreme(model: &Model, field: Field, e: &Extremum) -> Extreme {
-    let dim = field_dimension(field);
+fn extreme(model: &Model, field: Field, e: &Extremum, reaction: ReactionQuantity) -> Extreme {
+    let dim = field_dimension(field, reaction);
     Extreme {
         field: field_name(field),
         component: e.component as u8,
@@ -587,11 +664,15 @@ fn extreme(model: &Model, field: Field, e: &Extremum) -> Extreme {
     }
 }
 
-/// The point fields `mesh.export` writes for a Step: what ParaView colours by.
+/// The point fields `mesh.export` writes in SI. Thermal reactions are `ReactionPower_W`,
+/// with removed power in component 0; mechanical `Reaction` remains a force vector in N.
 pub fn export_fields(res: &StepResult) -> Vec<(&'static str, usize, Vec<f64>)> {
     [
         ("Displacement", Field::Displacement),
-        ("Reaction", Field::Reaction),
+        (
+            if res.reaction_quantity == ReactionQuantity::Power { "ReactionPower_W" } else { "Reaction" },
+            Field::Reaction,
+        ),
         ("Stress", Field::Stress),
         ("VonMises", Field::VonMises),
         ("Temperature", Field::Temperature),
@@ -621,7 +702,7 @@ mod tests {
         ];
         for (field, name, dim) in all {
             assert_eq!(field_name(field), name);
-            assert_eq!(field_dimension(field), dim);
+            assert_eq!(field_dimension(field, ReactionQuantity::Force), dim);
         }
     }
 }
