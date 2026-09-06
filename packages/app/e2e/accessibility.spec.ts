@@ -16,6 +16,7 @@ test.describe('@cpu accessibility and small screens', () => {
     const examples = page.getByRole('dialog', { name: 'Examples and benchmarks' });
     await expect(examples).toBeVisible();
     await expect(examples.locator('button').first()).toBeFocused();
+    await expect(examples.locator('.ex-card').first()).toBeVisible();
     await page.keyboard.press('Shift+Tab');
     await expect(examples.locator('button').last()).toBeFocused();
     await page.keyboard.press('Escape');
@@ -75,6 +76,87 @@ test.describe('@cpu accessibility and small screens', () => {
       expect(layout.centreTop).toBe(layout.workspaceTop);
       expect(layout.treeTop).toBeGreaterThanOrEqual(layout.centreBottom - 1);
       expect(layout.propsTop).toBeGreaterThanOrEqual(layout.treeTop);
+    }
+  });
+
+  test('walks the tree, forms, results, script, tutorial, and assistant at phone widths', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(async () => {
+      await window.fem.model.new({ name: 'keyboard-walk' });
+      await window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] });
+    });
+    await expect(page.locator('.shell')).toBeVisible();
+
+    for (const width of [320, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      const assertInside = async (selector: string): Promise<void> => {
+        const box = await page.locator(selector).boundingBox();
+        expect(box, `${selector} should be rendered`).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      };
+
+      await assertInside('.panel.tree');
+      await assertInside('.panel.props');
+      const treeRow = page.locator('.tree .row-main').first();
+      await treeRow.focus();
+      await expect(treeRow).toBeFocused();
+      await treeRow.press('Enter');
+      await expect(page.locator('.props-body')).toBeVisible();
+      const propInput = page.locator('.props-body input').first();
+      await propInput.focus();
+      await expect(propInput).toBeFocused();
+
+      const resultsTab = page.getByRole('tab', { name: /results/ });
+      await resultsTab.click();
+      await expect(resultsTab).toHaveAttribute('aria-selected', 'true');
+      await assertInside('.bottom');
+      const scriptTab = page.getByRole('tab', { name: /script/ });
+      await scriptTab.click();
+      await expect(scriptTab).toHaveAttribute('aria-selected', 'true');
+      const script = page.locator('textarea.script-edit');
+      if ((await script.count()) === 0) await page.getByRole('button', { name: 'edit this script', exact: true }).click();
+      await script.focus();
+      await expect(script).toBeFocused();
+      await script.press('Tab');
+      await expect(page.locator('.script-rail button').first()).toBeFocused();
+
+      const tutorialOpener = page.getByRole('button', { name: 'Tutorials', exact: true });
+      await tutorialOpener.click();
+      const tutorial = page.locator('.tutorial-panel[aria-label="Tutorials"]');
+      await expect(tutorial).toBeVisible();
+      await assertInside('.tutorial-panel');
+      const tutorialClose = tutorial.getByRole('button', { name: 'close' });
+      await tutorialClose.focus();
+      await tutorialClose.press('Tab');
+      await expect(tutorial.locator('button').nth(1)).toBeFocused();
+      await tutorialClose.click();
+      await expect(tutorial).toHaveCount(0);
+
+      const assistantOpener = page.getByRole('button', { name: '✳ Assistant', exact: true });
+      await assistantOpener.click();
+      const assistant = page.locator('.assistant:not([hidden])');
+      await expect(assistant).toBeVisible();
+      await expect(page.getByRole('complementary', { name: 'Assistant' })).toBeVisible();
+      await assertInside('.assistant');
+      await assertInside('.assistant textarea');
+      const settings = assistant.getByTitle('Settings', { exact: true });
+      await settings.click();
+      await expect(assistant.locator('.settings')).toBeVisible();
+      await assertInside('.assistant .settings');
+      const provider = assistant.locator('.settings select').first();
+      await provider.focus();
+      await expect(provider).toBeFocused();
+      await provider.press('Tab');
+      await expect(page.locator('.assistant :focus')).toHaveCount(1);
+      await settings.click();
+      await assistant.locator('textarea').focus();
+      await expect(assistant.locator('textarea')).toBeFocused();
+      await assistant.locator('textarea').press('Tab');
+      await expect(page.locator('.assistant :focus')).toHaveCount(1);
+      await assistant.getByTitle('Close the assistant', { exact: true }).click();
+      await expect(page.locator('.assistant:not([hidden])')).toHaveCount(0);
     }
   });
 

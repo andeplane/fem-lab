@@ -259,7 +259,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
 
   return (
-    <aside class="assistant" hidden={hidden}>
+    <aside class="assistant" hidden={hidden} aria-label="Assistant">
       <header>
         <span class="ring">✳</span>
         <span class="title">Assistant</span>

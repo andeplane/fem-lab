@@ -19,6 +19,16 @@
   color: var(--text-body);
 }
 
+@media (max-width: 600px) {
+  .tutorial-panel {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+    max-width: none;
+  }
+}
+
 .tutorial-head {
   display: flex;
   align-items: center;
