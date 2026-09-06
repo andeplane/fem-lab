@@ -3657,3 +3657,66 @@ fn journal_guard_uses_full_history_even_for_filtered_queries() {
     ok(&mut e, &guarded);
     assert_eq!(e.revision(), 1);
 }
+
+#[test]
+fn the_free_mesher_accepts_a_transformed_sheet_and_preserves_named_holes() {
+    let mut e = engine();
+    let commands: Vec<Command> = serde_json::from_str(include_str!("fixtures/transformed-sheet.json")).unwrap();
+    for cmd in commands {
+        pollster::block_on(e.dispatch(cmd, &mut |_: Progress| true)).unwrap();
+    }
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"domain","where":{"kind":"body","name":"plate"}}"#);
+    for size in ["1 m", "0.5 m", "0.25 m"] {
+        for order in [1, 2] {
+            ok(
+                &mut e,
+                &format!(
+                    r#"{{"cmd":"mesh.set","mesher":{{"kind":"free","of":"plate","size":"{size}"}},"order":{order}}}"#
+                ),
+            );
+            let summary = mesh_summary(&mut e);
+            assert_eq!(summary.element_kind, if order == 1 { "tri3" } else { "tri6" });
+            assert!((set_info(&mut e, "domain").measure.value - 18.0).abs() < 1e-9);
+            for (tag, length) in [
+                ("plate.left", 6.0),
+                ("plate.bottom", 4.0),
+                ("plate.right", 6.0),
+                ("plate.top", 4.0),
+                ("plate.hole", 10.0),
+            ] {
+                let set = set_info(&mut e, tag);
+                assert!((set.measure.value - length).abs() < 1e-10, "{tag}: {set:?}");
+                assert!(set.count > 0);
+            }
+            let mesh = &e.mesh().unwrap().mesh;
+            for element in 0..mesh.n_elems() as u32 {
+                let nodes = mesh.elem_nodes(element);
+                let (a, b, c) = (mesh.node(nodes[0]), mesh.node(nodes[1]), mesh.node(nodes[2]));
+                let det = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+                assert!(det > 0.0, "positive physical Jacobian");
+            }
+        }
+    }
+}
+
+#[test]
+fn unsupported_sheet_transforms_return_structured_errors_without_mutating_the_model() {
+    let mut e = engine();
+    let commands: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/transformed-sheet.json")).unwrap();
+    for cmd in &commands[..2] {
+        ok(&mut e, &cmd.to_string());
+    }
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    for (field, value) in
+        [("rotate", serde_json::json!([15.0, 0.0, 0.0])), ("translate", serde_json::json!(["5 m", "7 m", "1 m"]))]
+    {
+        let mut cmd = commands[2].clone();
+        cmd["shape"]["at"][field] = value;
+        let error = err(&mut e, &cmd.to_string());
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert!(error.cause.contains("xy plane"));
+        assert!(error.where_.is_some());
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+}

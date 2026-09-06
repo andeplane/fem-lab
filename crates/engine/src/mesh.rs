@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 
 use femlab_geometry::{
-    extrude, face_centroid_normal, free, lattice, mapped, nearest_boundary_face, resolve_face_set, resolve_region,
-    revolve, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox, Shape, Solid,
+    extrude, face_centroid_normal, free_sheet, lattice, mapped, nearest_boundary_face, resolve_face_set,
+    resolve_region, revolve, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox, Solid,
 };
 
 use crate::command::ObjectKind;
@@ -153,8 +153,8 @@ fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result
             Ok((body.clone(), part, "mapped"))
         }
         MesherSettings::Free { of, size, refine } => {
-            let sketch = match model.body(of).map(|b| &b.shape) {
-                Some(Shape::Sheet { sketch }) => sketch,
+            let shape = match model.body(of).map(|b| &b.shape) {
+                Some(shape) if shape.dim() == 2 => shape,
                 Some(_) => {
                     return Err(Error::new(
                         ErrorCode::ModelIllPosed,
@@ -167,7 +167,7 @@ fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result
                     return Err(Error::not_found("body", of, &model.names(ObjectKind::Body)).at("mesher.of"));
                 }
             };
-            let part = free(sketch, *size, quadratic, refine).map_err(|e| {
+            let part = free_sheet(shape, *size, quadratic, refine).map_err(|e| {
                 Error::new(ErrorCode::MeshFailed, e.0)
                     .at("mesher.size")
                     .suggest("mesh.set with a different element size, or a sketch whose holes lie inside it")
