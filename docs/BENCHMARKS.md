@@ -12,8 +12,26 @@ conflicting published values and must be settled before the number is hard-coded
 
 The **Status** column has three states. `engine test` means a Rust test in
 `crates/engine/tests/` asserts it; `green` means the Command-level form in
-`crates/engine/benches/cases/*.json` passes under `femlab bench`, which is what makes a row a
+`crates/femlab/benches/cases/*.json` passes under `femlab bench`, which is what makes a row a
 Benchmark in the sense of PLAN rule 8; blank means not implemented yet.
+
+## Installed CLI cases (#306)
+
+`femlab bench` embeds every canonical `crates/femlab/benches/cases/*.json` file in filename
+order at build time. A copied release executable needs no checkout or adjacent data directory.
+The JSON Journals, published reference values and tolerances are unchanged. New case files are
+picked up automatically by the build and included in the Cargo source package.
+
+`--filter` still selects by case-name substring; text, `--json`, `--markdown` and
+`--update-docs <path>` keep their existing report interfaces. Explicit `--cases <directory>`
+uses only that directory, including an empty directory; a missing or malformed custom directory
+reports an error and never falls back to built-ins.
+
+Packaging verification copies a release executable out of a disposable build checkout, removes
+that owned checkout, and runs its embedded cases plus a custom case. The CLI regression also
+checks the installed-style heat bar against the independent linear conduction values
+25 °C at x/L = 1/4 and 50 °C at x/L = 1/2, and compares the complete embedded reports against
+those from the canonical JSON directory (excluding elapsed times).
 
 ## Measured status
 

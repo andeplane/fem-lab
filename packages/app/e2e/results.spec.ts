@@ -1,6 +1,6 @@
 // Design states 4–7 end to end: open the cantilever example, solve it, read the Results tab
 // against the Benchmark B1 number, export a VTU, edit the load and watch the Result go stale.
-// The reference is `crates/engine/benches/cases/cantilever-hex8-im.json`: a tip deflection of
+// The reference is `crates/femlab/benches/cases/cantilever-hex8-im.json`: a tip deflection of
 // 0.1919619 mm from Timoshenko, which a 25 mm lattice of incompatible-modes hexes meets to 2 %.
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';

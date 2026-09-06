@@ -3475,7 +3475,7 @@ fn a_step_result_is_bit_identical_at_one_and_many_threads() {
 // Benchmarks E1, E2, C7, E3, B4, C6, F1 and F2 of `docs/BENCHMARKS.md`, plus the
 // well-posedness and argument checks the four new procedures own. Everything here builds a
 // `Problem` and calls `procedure::run` directly; the Command-level forms are the Journals in
-// `crates/engine/benches/cases`.
+// `crates/femlab/benches/cases`.
 
 /// A Material with a conductivity, a capacity and a density, for the heat and dynamics cases.
 fn conductor(k: f64, rho: f64, cp: f64) -> Material {
