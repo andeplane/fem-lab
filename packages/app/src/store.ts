@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, Capabilities, JournalDiff, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
@@ -48,6 +48,11 @@ export interface UiState {
   journal: JournalDump | null;
   /** Exact normalized Journal of the last successful explicit open/save; autosave is separate. */
   savedJournal: string | null;
+  /** The complete normalized baseline, retained so comparison can show removed entries too. */
+  savedBaseline: JournalDump['entries'] | null;
+  /** Current-vs-baseline causal diff, or an explicitly imported comparison. */
+  journalComparison: JournalDiff | null;
+  comparisonSource: 'saved' | 'imported' | null;
   script: string;
   /** `query.model().revision` mirrored, so the tree header can show `rev N` without a query. */
   revision: number;
@@ -140,6 +145,9 @@ export const initialState: UiState = {
   model: null,
   journal: null,
   savedJournal: null,
+  savedBaseline: null,
+  journalComparison: null,
+  comparisonSource: null,
   script: '',
   revision: 0,
   selection: EMPTY_SELECTION,
@@ -268,7 +276,12 @@ export class Store {
   }
 
   markSaved(journal: { entries: JournalDump['entries'] }): void {
-    this.set({ savedJournal: journalIdentity(journal.entries) });
+    this.set({
+      savedJournal: journalIdentity(journal.entries),
+      savedBaseline: journal.entries.map((entry) => ({ ...entry })),
+      journalComparison: null,
+      comparisonSource: null,
+    });
   }
 
   fail(e: unknown): void {

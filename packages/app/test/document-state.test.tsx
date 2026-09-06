@@ -28,6 +28,36 @@ it('tracks complete Journal content, ignores view changes, and clears when undo 
   store.set({ journal: { ...store.state.journal!, entries: edited } });
   store.markSaved({ entries });
   expect(unsaved(store.state)).toBe(true);
+  expect(store.state.savedBaseline).toEqual(entries);
+});
+
+it('compares an imported file through journalDiff without importing or changing the active Journal', async () => {
+  const current = entries[0]!;
+  const imported = { ...current, cmd: { cmd: 'model.new' as const, name: 'imported' } };
+  const store = new Store({ ...new Store().state, journal: { entries: [current], revision: 1, hash: 'active', canUndo: true, canRedo: false } });
+  const query = vi.fn(async () => ({ baseHash: 'base', currentHash: 'current', sharedEntries: 0, removed: [imported], added: [current] }));
+  const importFile = vi.fn();
+  const transport = { query, importFile } as unknown as WorkerTransport;
+  const compare = appHostCommands(store, transport, { current: null }, async () => undefined).find((def) => def.name === 'file.compare')!;
+  const result = await compare.run({ json: JSON.stringify({ format: 'femlab/1', journal: { entries: [imported] } }) }, {} as never);
+
+  expect(result).toMatchObject({ sharedEntries: 0, removed: [imported], added: [current] });
+  expect(query).toHaveBeenCalledWith({ query: 'query.journalDiff', base: { entries: [imported] } });
+  expect(importFile).not.toHaveBeenCalled();
+  expect(store.state.journal?.entries).toEqual([current]);
+  expect(store.state.comparisonSource).toBe('imported');
+});
+
+it('keeps an explicit baseline normalized while undo and redo update the causal diff', () => {
+  const first = entries[0]!;
+  const second = { seq: 1, cmd: { cmd: 'model.setName' as const, name: 'girder' }, hashAfter: 'h2' };
+  const store = new Store();
+  store.markSaved({ entries: [first] });
+  store.set({ journal: { entries: [first, second], revision: 2, hash: 'h2', canUndo: true, canRedo: false } });
+  expect(store.state.savedBaseline).toEqual([first]);
+  expect(unsaved(store.state)).toBe(true);
+  store.set({ journal: { entries: [first], revision: 1, hash: 'h', canUndo: false, canRedo: true } });
+  expect(unsaved(store.state)).toBe(false);
 });
 
 it('commits the name exactly once on Enter or blur, cancels Escape, and rejects blank drafts', async () => {

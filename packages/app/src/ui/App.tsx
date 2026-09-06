@@ -101,6 +101,9 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Save the Model and its Journal">
         Save
       </Cmd>
+      <Cmd dispatch={dispatch} cmd="file.compare" class="tbutton" args={{ picker: true }} title="Compare a saved femlab/1 file without opening it">
+        Compare
+      </Cmd>
       <Cmd dispatch={dispatch} cmd="file.shareLink" class="tbutton" title="A URL that reopens this Model (not built yet)">
         Share
       </Cmd>

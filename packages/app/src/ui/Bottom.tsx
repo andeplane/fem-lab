@@ -24,36 +24,44 @@ export function solveBoundary(entries: JournalEntry[]): number {
   return seq;
 }
 
+function JournalRow({ s, dispatch, entry, className = '' }: { s: UiState; dispatch: Dispatch; entry: JournalEntry; className?: string }) {
+  const e = entry;
+  const cmd = e.cmd as unknown as Record<string, unknown> & { cmd: string };
+  const meta = s.journalWho[e.seq];
+  const boundary = s.result?.stale === true ? solveBoundary(s.journal?.entries ?? []) : -1;
+  const stale = boundary >= 0 && e.seq > boundary;
+  return (
+    <div class={className}>
+      <Cmd dispatch={dispatch} cmd="clipboard.copy" class={stale ? 'jrow stale' : 'jrow'} args={{ what: { kind: 'text', text: commandLine(cmd) } }} title={commandLine(cmd)}>
+        <span class="no">{e.seq}</span>
+        <span class={cmd.cmd.startsWith('solve.') ? 'jcmd solve' : 'jcmd'}>{cmd.cmd}</span>
+        <span class="jargs">{argText(cmd)}</span>
+        <span class="jwho">{meta?.who ?? 'you'}</span>
+        <span class="jtime">{clock(meta?.at)}</span>
+      </Cmd>
+      {e.seq === boundary ? (
+        <div class="boundary">
+          <span class="rule" />
+          <span class="section-label">Result produced here · undo boundary</span>
+          <span class="rule" />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const entries = s.journal?.entries ?? [];
-  // Rows after the solve are only "stale" once the engine says the Result is: an export or a
-  // camera move after a solve changes nothing the Result depends on.
-  const boundary = s.result?.stale === true ? solveBoundary(entries) : -1;
   return (
     <div class="rows">
-      {entries.map((e) => {
-        const cmd = e.cmd as unknown as Record<string, unknown> & { cmd: string };
-        const meta = s.journalWho[e.seq];
-        const stale = boundary >= 0 && e.seq > boundary;
-        return (
-          <div key={e.seq}>
-            <Cmd dispatch={dispatch} cmd="clipboard.copy" class={stale ? 'jrow stale' : 'jrow'} args={{ what: { kind: 'text', text: commandLine(cmd) } }} title={commandLine(cmd)}>
-              <span class="no">{e.seq}</span>
-              <span class={cmd.cmd.startsWith('solve.') ? 'jcmd solve' : 'jcmd'}>{cmd.cmd}</span>
-              <span class="jargs">{argText(cmd)}</span>
-              <span class="jwho">{meta?.who ?? 'you'}</span>
-              <span class="jtime">{clock(meta?.at)}</span>
-            </Cmd>
-            {e.seq === boundary ? (
-              <div class="boundary">
-                <span class="rule" />
-                <span class="section-label">Result produced here · undo boundary</span>
-                <span class="rule" />
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
+      {s.journalComparison ? <div class="section-label comparison-label">{s.comparisonSource === 'imported' ? 'Compared file' : 'Since last explicit save/open'}</div> : null}
+      {entries.map((e) => <JournalRow key={e.seq} s={s} dispatch={dispatch} entry={e} className={s.journalComparison && e.seq >= s.journalComparison.sharedEntries ? 'comparison-added' : ''} />)}
+      {s.journalComparison && s.journalComparison.removed.length > 0 ? (
+        <>
+          <div class="section-label comparison-removed-label">Removed from comparison baseline</div>
+          {s.journalComparison.removed.map((e) => <JournalRow key={`removed-${e.seq}`} s={s} dispatch={dispatch} entry={e} className="comparison-removed" />)}
+        </>
+      ) : null}
       {entries.length === 0 ? <div class="empty-note">The Journal is empty. Every Command you apply lands here, and the Script tab shows the same thing as TypeScript.</div> : null}
     </div>
   );

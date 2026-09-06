@@ -673,6 +673,21 @@ textarea:focus {
   background: var(--warn-bg);
   border-left-color: var(--yellow);
 }
+.comparison-added .jrow {
+  border-left-color: var(--accent);
+}
+.comparison-removed .jrow {
+  color: var(--text-faint);
+  border-left-color: var(--red-text);
+  text-decoration: line-through;
+}
+.comparison-label,
+.comparison-removed-label {
+  padding: 8px 14px 3px;
+}
+.comparison-removed-label {
+  color: var(--red-text);
+}
 .no {
   width: 24px;
   flex: none;

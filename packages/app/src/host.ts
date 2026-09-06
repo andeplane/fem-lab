@@ -1,7 +1,7 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type AutosaveState, type HostContext, type HostDef, type Selection } from '@femlab/registry';
+import { FemError, type AutosaveState, type HostContext, type HostDef, type Journal, type JournalDiff, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
 import type { ResultsView } from './results';
@@ -283,5 +283,48 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         return { name, commands: entries.length };
       },
     },
+    {
+      name: 'file.compare',
+      description: 'Compare the current Journal with a saved femlab/1 file without opening it or changing the current Model. Returns ordered added and removed Command entries; the imported file is never replayed.',
+      schema: z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) })]),
+      tool: true,
+      run: async (input) => {
+        const how = input as { json?: string; picker?: true };
+        const text = how.json ?? await new Promise<string>((resolve, reject) => {
+          const picker = document.createElement('input');
+          picker.type = 'file';
+          picker.accept = '.json,application/json';
+          picker.onchange = () => {
+            const file = picker.files?.[0];
+            if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            file.text().then(resolve, reject);
+          };
+          picker.click();
+        });
+        let file: { format?: unknown; journal?: unknown };
+        try {
+          file = JSON.parse(text) as { format?: unknown; journal?: unknown };
+        } catch (e) {
+          throw new FemError('schema', `not a femlab/1 JSON file: ${(e as Error).message}`, 'json', 'use file.save to write a comparable Model file');
+        }
+        if (file.format !== 'femlab/1' || !file.journal || typeof file.journal !== 'object' || !Array.isArray((file.journal as { entries?: unknown }).entries)) {
+          throw new FemError('schema', 'the comparison file is not a femlab/1 file with a Journal', 'file', 'use file.save to write a comparable Model file');
+        }
+        const diff = (await transport.query({ query: 'query.journalDiff', base: file.journal as Journal })) as JournalDiff;
+        store.set({ journalComparison: diff, comparisonSource: 'imported' });
+        return diff;
+      },
+    },
   ] as HostDef[];
+}
+
+/** The current causal Journal comparison, exposed to the AI without exposing Store internals. */
+export function appHostQueries(store: Store): HostDef[] {
+  return [{
+    name: 'query.journalComparison',
+    description: 'Compare the current Journal with the last successful explicit save/open baseline. Returns ordered `added` and `removed` Journal entries, or `null` before an explicit baseline exists. Use file.compare to inspect an imported file without opening it.',
+    schema: z.object({}),
+    tool: true,
+    run: () => store.state.journalComparison,
+  }];
 }

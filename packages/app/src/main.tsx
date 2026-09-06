@@ -1,7 +1,7 @@
 // Boot (plan B §7.4): capabilities → engine Worker → Registry → `window.fem` → `<App/>`.
 // The shell renders first and the engine arrives into it, so the start screen is on screen
 // before the 3.2 MB wasm module has finished downloading.
-import { HOST_COMMANDS, Registry, makeFemProxy, type Capabilities, type EngineSchema, type Fem } from '@femlab/registry';
+import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, type Capabilities, type EngineSchema, type Fem } from '@femlab/registry';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-600.css';
@@ -12,7 +12,7 @@ import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { devApiKeys } from './dev-keys';
-import { appHostCommands, makeHostContext, noteAutosave, primeAutosave, type ViewerRef } from './host';
+import { appHostCommands, appHostQueries, makeHostContext, noteAutosave, primeAutosave, type ViewerRef } from './host';
 import { ResultsView } from './results';
 import { ScriptHost } from './script-host';
 import { openShared } from './share';
@@ -71,6 +71,11 @@ async function boot(): Promise<void> {
     const script = ((await transport.query({ query: 'query.script' })) as { text: string }).text;
     const objects = ((await transport.query({ query: 'query.objects' })) as { objects: never[] }).objects;
     store.set({ model, journal, script, objects, revision: (model as { revision: number }).revision });
+    const baseline = store.state.savedBaseline;
+    if (baseline) {
+      const comparison = await transport.query({ query: 'query.journalDiff', base: { entries: baseline } });
+      store.set({ journalComparison: comparison as never, comparisonSource: 'saved' });
+    }
     viewer.current?.setSurface(await transport.surface());
     await results.refresh();
     noteAutosave(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? []);
@@ -79,6 +84,7 @@ async function boot(): Promise<void> {
     schema: schema as unknown as EngineSchema,
     host: ctx,
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results)],
+    hostQueries: [...HOST_QUERIES, ...appHostQueries(store)],
   });
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
@@ -92,7 +98,7 @@ async function boot(): Promise<void> {
       store.log('command', cmd.cmd);
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, so the Journal has to be re-read after it too.
-      if (registry.describe(cmd.cmd).provider === 'engine' || cmd.cmd === 'file.export' || cmd.cmd === 'file.restore' || cmd.cmd === 'file.open' || cmd.cmd === 'example.open') {
+      if (registry.describe(cmd.cmd).provider === 'engine' || cmd.cmd === 'file.export' || cmd.cmd === 'file.save' || cmd.cmd === 'file.restore' || cmd.cmd === 'file.open' || cmd.cmd === 'example.open') {
         const { seq } = ack as { seq?: number };
         if (typeof seq === 'number' && seq >= 0) store.set({ journalWho: { ...store.state.journalWho, [seq]: { who: store.state.source, at: Date.now() } } });
         await refresh();
