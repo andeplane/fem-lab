@@ -29,6 +29,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'view.setVisible': { bodies: ['beam'], on: false },
   'view.setTheme': { theme: 'dark' },
   'view.animate': { step: 'modes', mode: 1, playing: true },
+  'view.playTransient': { step: 'heat', playing: false, sample: { kind: 'frame', index: 0 } },
   'selection.set': { bodies: ['beam'], mode: 'add' },
   'selection.clear': {},
   'selection.setPickTarget': { target: 'face' },
