@@ -72,6 +72,11 @@ same Frame by index or by exact/explicitly nearest unit-bearing time, without te
 interpolation. Final-field Queries retain their existing defaults when no sample is supplied.
 Frames carry the solved Model hash and Step name; these identify Model state, so a host must
 invalidate cached Frames on every solve acknowledgement, including a re-solve of the same Model.
+`view.playTransient` plays these Frames at positive simulated seconds per wall second, holds
+each stored field until the next retained time, and stops at the endpoint. An explicit sample
+seeks by index or engine-resolved physical time; changing speed or pausing preserves the
+continuous playhead between Frames. The viewer uses one Frame for contours, displacement,
+legend and probes. `view.animate` keeps its separate 0–100 percent modal/amplitude phase contract.
 
 ## Doing things
 
