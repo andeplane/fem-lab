@@ -461,20 +461,26 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
 
 /** A view-only splitter: pointer movement previews in Store, and pointer-up emits one Command. */
 function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }: { panel: ResizablePanel; axis: 'x' | 'y'; direction: 1 | -1; store: Store; dispatch: Dispatch; fixed?: boolean }) {
-  const gesture = useRef<{ pointerId: number; start: number; size: number } | null>(null);
+  const gesture = useRef<{ pointerId: number; start: number; size: number; previous: number } | null>(null);
   const limits = PANEL_SIZE_LIMITS[panel];
   const position = (e: PointerEvent): number => (axis === 'x' ? e.clientX : e.clientY);
   const preview = (size: number): void => store.resizePanel(panel, clampPanelSize(panel, size));
+  const effectiveSize = (): number => {
+    const selector = panel === 'tree' ? '.workspace > .panel.tree' : panel === 'properties' ? '.workspace > .panel.props' : panel === 'bottom' ? '.bottom' : 'aside.assistant';
+    const box = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+    const rendered = box ? (axis === 'x' ? box.width : box.height) : 0;
+    return rendered > 0 ? Math.round(rendered) : store.state.panelSizes[panel];
+  };
   const finish = (commit: boolean): void => {
     const active = gesture.current;
     if (!active) return;
     gesture.current = null;
     if (commit && store.state.panelSizes[panel] !== active.size) void dispatch({ cmd: 'panel.resize', panel, size: store.state.panelSizes[panel] }).catch(() => preview(active.size));
-    else if (!commit) preview(active.size);
+    else if (!commit) store.resizePanel(panel, active.previous);
   };
   return (
     <div
-      class={`resize-handle ${axis} ${panel}${fixed ? ' fixed' : ''}`}
+      class={`resize-handle ${axis} ${panel === 'assistant' ? 'assistant-resize' : panel}${fixed ? ' fixed' : ''}`}
       style={fixed ? `--assistant-width:${store.state.panelSizes.assistant}px` : undefined}
       role="separator"
       tabIndex={0}
@@ -483,10 +489,11 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
       aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
       aria-valuemin={limits.min}
       aria-valuemax={limits.max}
-      aria-valuenow={store.state.panelSizes[panel]}
+      aria-valuenow={effectiveSize()}
       onPointerDown={(e) => {
         const el = e.currentTarget as HTMLElement;
-        gesture.current = { pointerId: e.pointerId, start: position(e), size: store.state.panelSizes[panel] };
+        gesture.current = { pointerId: e.pointerId, start: position(e), size: effectiveSize(), previous: store.state.panelSizes[panel] };
+        el.focus();
         el.setPointerCapture(e.pointerId);
         e.preventDefault();
       }}
@@ -503,6 +510,8 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
       }}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
           finish(false);
           return;
         }
@@ -511,7 +520,7 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
         if (!positive && !negative) return;
         e.preventDefault();
         const delta = (positive ? 10 : -10) * direction;
-        const size = clampPanelSize(panel, store.state.panelSizes[panel] + delta);
+        const size = clampPanelSize(panel, effectiveSize() + delta);
         preview(size);
         void dispatch({ cmd: 'panel.resize', panel, size }).catch(() => undefined);
       }}

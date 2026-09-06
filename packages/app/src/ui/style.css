@@ -489,7 +489,8 @@ textarea:focus {
 /* ── viewer ────────────────────────────────────────────────────────────────────────────── */
 .centre {
   display: grid;
-  grid-template-rows: minmax(460px, 1fr) minmax(184px, var(--bottom-height, 252px));
+  --bottom-used: min(var(--bottom-height, 252px), max(184px, calc(100% - 460px)));
+  grid-template-rows: minmax(460px, 1fr) var(--bottom-used);
   position: relative;
   min-height: 0;
   min-width: 0;
@@ -526,7 +527,7 @@ textarea:focus {
   right: var(--properties-used, 308px);
 }
 .resize-handle.bottom {
-  top: calc(100% - var(--bottom-height, 252px));
+  top: calc(100% - var(--bottom-used, 252px));
 }
 .resize-handle:focus-visible {
   outline: 2px solid var(--cyan);
@@ -1813,7 +1814,7 @@ button.solve.stale {
   z-index: 40;
   box-shadow: 0 0 40px #000000cc;
 }
-.resize-handle.assistant.fixed {
+.resize-handle.assistant-resize.fixed {
   position: fixed;
   top: 0;
   right: var(--assistant-width, 392px);
@@ -1821,10 +1822,10 @@ button.solve.stale {
   left: auto;
   margin-left: 0;
 }
-.shell ~ .resize-handle.assistant.fixed {
+.shell ~ .resize-handle.assistant-resize.fixed {
   top: 46px;
 }
-.shell:has(.banner) ~ .resize-handle.assistant.fixed {
+.shell:has(.banner) ~ .resize-handle.assistant-resize.fixed {
   top: 78px;
 }
 .shell ~ .assistant {
@@ -1872,7 +1873,8 @@ button.solve.stale {
     grid-template-columns: minmax(180px, var(--tree-used)) minmax(360px, 1fr) minmax(240px, var(--properties-used));
   }
   .centre {
-    grid-template-rows: minmax(320px, 1fr) minmax(184px, var(--bottom-height, 220px));
+    --bottom-used: min(var(--bottom-height, 220px), max(184px, calc(100% - 320px)));
+    grid-template-rows: minmax(320px, 1fr) var(--bottom-used);
   }
   .results {
     grid-template-columns: 1fr;
