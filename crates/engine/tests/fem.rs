@@ -5069,5 +5069,4 @@ fn consistent_quadratic_gravity_distribution_remains_unchanged() {
         assert!((f[2 * i + 1] - expected).abs() < 1e-10);
         assert_eq!(f[2 * i], 0.0);
     }
-
 }
