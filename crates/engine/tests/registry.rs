@@ -2380,6 +2380,52 @@ fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
     assert_eq!(bad.code, ErrorCode::Schema);
 }
 
+/// A modal model with every displacement DOF constrained has no reduced system to solve. The
+/// failed solve must be a structured model error, and the Engine must remain usable afterwards.
+#[test]
+fn a_modal_solve_with_no_free_dofs_returns_an_error_and_recovers() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"fully-fixed-modal"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    for (name, face) in [
+        ("xmin", "block.xmin"),
+        ("xmax", "block.xmax"),
+        ("ymin", "block.ymin"),
+        ("ymax", "block.ymax"),
+        ("zmin", "block.zmin"),
+        ("zmax", "block.zmax"),
+    ] {
+        ok(&mut e, &format!(r#"{{"cmd":"constraint.fix","name":"{name}","on":"{face}"}}"#));
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmin","xmax","ymin","ymax","zmin","zmax"],"loads":[],"nModes":2}"#,
+    );
+
+    let failure = err(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(failure.code, ErrorCode::ModelIllPosed);
+    assert_eq!(failure.where_.as_deref(), Some("constraints"));
+    assert!(failure.cause.contains("no free displacement DOF"), "{}", failure.cause);
+    assert_eq!(
+        failure.suggestion.as_deref(),
+        Some("constraint.remove on an over-constraining displacement constraint")
+    );
+
+    // The failed solve is transactional: reissuing the Step with five faces released and solving
+    // again works on the same Engine, so the worker did not abort or retain broken state.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmax"],"loads":[],"nModes":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(result_of(&mut e, Some("modes")).frequencies.len(), 2);
+}
+
 /// A Step that names an earlier one with `after` reads its temperature field: the
 /// thermal-to-structural chain. Running it before the Step it continues is a `not-found`.
 #[test]
