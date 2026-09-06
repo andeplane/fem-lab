@@ -59,6 +59,9 @@ export class ResultsView {
   private displacement: Float32Array | null = null;
   private loadedFor = '';
   private conversions = new Map<string, { scale: number; offset: number }>();
+  private selectedStep: string | undefined;
+  /** Only the latest concurrent `view.animate` request may commit playback state. */
+  private animationRequest = 0;
   /** What was *asked* for, not what it resolved to: an `"auto"` that could not be computed while
    *  the Viewer or the displacement was missing is recomputed on the next `load`, and a person
    *  who typed ×200 keeps ×200 across a field switch and a re-solve. */
@@ -72,8 +75,9 @@ export class ResultsView {
 
   /** display = SI × scale + offset, derived from the engine once per unit pair. */
   private async conversion(field: string): Promise<{ scale: number; offset: number }> {
-    const si = siUnitOf(field);
-    const to = displayUnitOf(field, this.store.state.model?.units);
+    const reactionQuantity = this.store.state.result?.reactionQuantity;
+    const si = siUnitOf(field, reactionQuantity);
+    const to = displayUnitOf(field, this.store.state.model?.units, reactionQuantity);
     if (si === to) return { scale: 1, offset: 0 };
     const key = `${si}→${to}`;
     const hit = this.conversions.get(key);
@@ -134,8 +138,9 @@ export class ResultsView {
     // No Step has been solved is a normal state, not a failure: `query.result` says so with
     // `not-found`, which is the one error this call swallows.
     try {
-      return (await this.transport.query({ query: 'query.result' })) as ResultSummary;
+      return (await this.transport.query({ query: 'query.result', ...(this.selectedStep === undefined ? {} : { step: this.selectedStep }) })) as ResultSummary;
     } catch {
+      this.selectedStep = undefined;
       return null;
     }
   }
@@ -181,7 +186,7 @@ export class ResultsView {
     const values = magnitude(raw, choice.magnitude === true);
     for (let i = 0; i < values.length; i++) values[i] = values[i]! * scale + offset;
     const [min, max] = extent(values);
-    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units) };
+    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units, this.store.state.result?.reactionQuantity) };
   }
 
   /** `view.showField`: `{ field: null }` turns contours off, anything else picks a scalar. */
@@ -224,11 +229,33 @@ export class ResultsView {
     v?.setDeformed(this.displacement, scale);
   }
 
+  /** Select the requested solved Step/mode before applying playback speed or phase. */
+  async animate(a: { step: string; mode?: number; playing: boolean; speed?: number; frame?: number }): Promise<void> {
+    const request = ++this.animationRequest;
+    const result = await this.transport.query({ query: 'query.result', step: a.step }) as ResultSummary;
+    if (request !== this.animationRequest) return;
+    if (a.mode !== undefined && a.mode > (result.frequencies?.length ?? 0))
+      throw new FemError('not-found', `Step '${a.step}' has no mode ${a.mode}`, 'view.animate.mode', 'query.result for the available modes');
+    if (a.mode === undefined && !result.extremes.some((e) => e.field === 'displacement') && !result.frequencies?.length)
+      throw new FemError('unsupported', `Step '${a.step}' has no displacement to animate`, 'view.animate', 'view.showField to inspect its static field');
+    const fieldKey = a.mode === undefined ? available(this.store.state.fieldKey, result, this.store.state.yieldStress !== null) : `mode:${a.mode}`;
+    const needsLoad = this.selectedStep !== a.step || this.store.state.result?.step !== a.step || this.store.state.fieldKey !== fieldKey;
+    this.selectedStep = a.step;
+    this.store.set({ result, fieldKey, viewMode: 'results' });
+    this.viewer.current?.setMode('results');
+    if (needsLoad) await this.load(result);
+    if (request !== this.animationRequest) return;
+    const phase = a.frame === undefined ? undefined : a.frame / 100;
+    const speed = a.speed ?? this.store.state.animationSpeed;
+    this.viewer.current?.animate(a.playing, speed, phase);
+    this.store.set({ playing: a.playing, animationSpeed: speed, phase: phase ?? (a.playing ? 0 : 0.25) });
+  }
+
   /** What the legend burns into a screenshot; `null` outside Results mode. */
-  legendBurn(): { title: string; unit: string; min: number; max: number; colormap: string; scale: number } | null {
-    const { legend, fieldKey, colormap, viewMode, screenshotScale } = this.store.state;
+  legendBurn(): { title: string; unit: string; min: number; max: number; colormap: string } | null {
+    const { legend, fieldKey, colormap, viewMode } = this.store.state;
     if (!legend || viewMode !== 'results') return null;
-    return { title: choiceOf(fieldKey).label, unit: legend.unit, min: legend.min, max: legend.max, colormap, scale: screenshotScale };
+    return { title: choiceOf(fieldKey).label, unit: legend.unit, min: legend.min, max: legend.max, colormap };
   }
 
   /**
@@ -239,6 +266,7 @@ export class ResultsView {
     const out = (ack as { output?: { type?: string; report?: StudyReport } } | undefined)?.output;
     if (out?.type === 'study' && out.report) this.store.set({ study: out.report });
     if (out?.type !== 'solve') return;
+    this.selectedStep = undefined;
     const warnings = (ack as { warnings?: Warning[] }).warnings ?? [];
     this.store.set({ tab: 'results', viewMode: 'results', assumptions: warnings });
     this.viewer.current?.setMode('results');

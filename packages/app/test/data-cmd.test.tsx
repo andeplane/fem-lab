@@ -3,7 +3,7 @@
 // wired to nothing, fails here rather than in front of a person.
 import { HOST_COMMANDS, Registry, type EngineSchema, type ModelSummary } from '@femlab/registry';
 import { h, render } from 'preact';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
@@ -80,6 +80,9 @@ async function cleanupShells() {
 }
 
 describe('the shell', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ examples: [] }) })));
+  });
   afterEach(cleanupShells);
 
   it('releases shell keyboard handlers before removing its DOM', async () => {
@@ -94,11 +97,28 @@ describe('the shell', () => {
     expect(document.body.children).toHaveLength(0);
   });
 
+  it('closes the command palette before opening a parameterized Command form', async () => {
+    const { root, commands } = mount({ panels: { palette: true } });
+    const input = root.querySelector<HTMLInputElement>('.palette input')!;
+    input.value = 'load.traction';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await afterEffects();
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    input.dispatchEvent(enter);
+    // Closing restores focus to the opener before Chromium performs Enter's default click.
+    expect(enter.defaultPrevented).toBe(true);
+    await waitForGone(() => root.querySelector('.palette'), 'the command palette');
+    expect(commands.slice(-2)).toEqual([
+      { cmd: 'panel.toggle', panel: 'palette', open: false },
+      { cmd: 'form.open', command: 'load.traction' },
+    ]);
+  });
+
   it('names only Commands the registry has on every clickable, in every panel', async () => {
     const seen = new Set<string>();
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
       await cleanupShells();
-      const { root, registry } = mount({ tab, panels: { palette: true } });
+      const { root, registry } = mount({ tab, panels: { palette: true, examples: true } });
       const { commands, queries } = registry.list();
       const known = new Set([...commands, ...queries].map((d) => d.name));
       const used = [...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
@@ -106,7 +126,7 @@ describe('the shell', () => {
       expect([...new Set(used)].filter((c) => !known.has(c)), tab).toEqual([]);
     }
     // Every panel of the design is represented, not just the top bar.
-    for (const cmd of ['form.open', 'script.run', 'form.pick', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode']) expect([...seen]).toContain(cmd);
+    for (const cmd of ['form.open', 'script.run', 'form.pick', 'chat.insertMention', 'clipboard.copy', 'file.save', 'view.setMode', 'example.filter']) expect([...seen]).toContain(cmd);
   });
 
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {

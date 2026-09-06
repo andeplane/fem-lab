@@ -74,7 +74,8 @@ function Row({ field, children, error }: { field: Field; children: preact.Compon
 /** The design's quantity field: value with unit, − / + steppers, and the SI echo underneath. */
 function Quantity({ value, dimension, onChange, query, keyField, placeholder, hint }: { value: unknown; dimension: string; onChange(v: unknown): void; query: Query; keyField: boolean; placeholder?: string; hint?: string }) {
   const [echo, setEcho] = useState<{ text: string; bad: boolean }>({ text: '', bad: false });
-  const text = typeof value === 'string' || value === undefined || value === null ? String(value ?? '') : JSON.stringify(value);
+  const parsed = parseQuantity(value);
+  const text = typeof value === 'string' || value === undefined || value === null ? String(value ?? '') : parsed ? `${parsed.value} ${parsed.unit}` : JSON.stringify(value);
   useEffect(() => {
     let live = true;
     if (parseQuantity(text) === null) {

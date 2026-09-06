@@ -12,7 +12,7 @@ async function persistedProject(page: Page): Promise<unknown> {
     const id = (open as { id?: string } | null)?.id;
     if (id === undefined) return null;
     return new Promise<unknown>((resolve, reject) => {
-      const opening = indexedDB.open('femlab', 2);
+      const opening = indexedDB.open('femlab');
       opening.onerror = () => reject(opening.error);
       opening.onsuccess = () => {
         const db = opening.result;

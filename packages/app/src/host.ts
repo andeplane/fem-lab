@@ -1,14 +1,15 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type AiProvider, type EngineTransport, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { storeKey } from './ai/key-storage';
 import type { HostCaps } from './capabilities';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
-import { type ShareCommand, shareUrl } from './share';
-import { EMPTY_SELECTION, type Store, type ViewMode, visibilityReducer } from './store';
+import { type Autosave, type ShareCommand, applyShared, indexedDbStore, makeAutosave, memoryStore, shareUrl } from './share';
+import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 
@@ -39,6 +40,51 @@ async function fetchExample(name: string): Promise<string> {
  * import time; the three hooks below are what `main.tsx` needs and are safe to call before it.
  */
 let projects: Projects | null = null;
+
+export const autosave: Autosave = makeAutosave({
+  // a browser with IndexedDB blocked (private mode, or a headless test) keeps working: the
+  // autosave is then simply per-session, and file.save is still there.
+  store: typeof indexedDB === 'undefined' ? memoryStore() : indexedDbStore(indexedDB),
+  initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
+  onError: (e) => console.warn('autosave failed', e),
+});
+
+/** Read once at boot so `query.autosave` can answer without waiting on IndexedDB. */
+let lastSaved: AutosaveState['saved'] = null;
+let lastAutosaves: AutosaveVersion[] = [];
+
+const summary = (saved: { id?: string; name: string; at: number; cmds: unknown[] }): AutosaveVersion => ({
+  id: saved.id ?? `legacy-${saved.at}`,
+  name: saved.name,
+  at: saved.at,
+  commands: saved.cmds.length,
+});
+
+/** The other half of the boot hook: `await primeAutosave();` before the start screen renders. */
+export async function primeAutosave(): Promise<AutosaveState['saved']> {
+  const saved = await autosave.read();
+  lastAutosaves = (await autosave.readAll()).map(summary);
+  lastSaved = saved && { name: saved.name, at: saved.at, commands: saved.cmds.length };
+  return lastSaved;
+}
+
+/**
+ * The boot hook proper: one line at the end of `main.tsx`'s `refresh()`, which already runs
+ * after every journaled Command and has just re-read the Model and the Journal.
+ */
+export function noteAutosave(name: string, journal: { cmd: unknown }[]): void {
+  // Boot refreshes before any Command; an empty Journal is nothing to restore (issue #48).
+  if (!autosave.enabled() || journal.length === 0) return;
+  autosave.note(name, journal as never);
+  lastSaved = { name, at: Date.now(), commands: journal.length };
+  lastAutosaves = autosave.history().map(summary);
+}
+
+/** The UI copy of the bounded history, including a debounced newest snapshot. */
+export function autosaveHistory(): AutosaveVersion[] {
+  return lastAutosaves.slice();
+}
+
 
 /** A viewer screenshot cut down to a Recent card. `view.screenshot` renders at the canvas size
  *  and ignores `width`/`height`, so the downscale is a canvas draw here, not a screenshot option. */
@@ -77,7 +123,7 @@ export function forkProject(): void {
   projects?.fork();
 }
 
-export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView): HostContext {
+export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, save: Autosave = autosave): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
@@ -146,11 +192,15 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
       },
-      animate: (a) => v().animate(a.playing),
+      animate: (a) => {
+        v();
+        if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
+        return results.animate(a);
+      },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
         const burn = o.legend === false ? null : results?.legendBurn();
-        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined) };
+        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
     },
     selection: {
@@ -206,6 +256,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
           input.onchange = () => {
             const file = input.files?.[0];
             if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            if (file.size > MAX_MODEL_FILE_BYTES) return reject(new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'picker', 'open a smaller file written by file.save'));
             file.text().then(resolve, reject);
           };
           input.click();
@@ -231,8 +282,35 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
       // with a background save into a project there is no "unsaved" copy to throw away.
       setAutosave: (on) => {
         own.setEnabled(on);
+        save.setEnabled(on);
         localStorage.setItem('femlab.autosave', on ? 'on' : 'off');
       },
+      restore: async (id) => {
+        const revisions = await save.readAll();
+        lastAutosaves = revisions.map(summary);
+        const saved = id === undefined ? revisions[0] : revisions.find((revision) => revision.id === id);
+        if (id !== undefined && !saved) {
+          throw new FemError('not-found', `autosave revision '${id}' was not found`, 'file.restore.id', 'query.autosaveHistory to choose an available revision, then call file.restore with its id');
+        }
+        if (!saved) return null;
+        // As with an example: a restored Journal that ends on a solve comes back solved on screen.
+        own.fork();
+        let solved: unknown = null;
+        await applyShared(
+          {
+            dispatch: async (cmd) => {
+              const ack = await transport.dispatch(cmd as never);
+              if (String(cmd.cmd).startsWith('solve.') || cmd.cmd === 'study.converge') solved = ack;
+              return ack;
+            },
+          },
+          saved.cmds,
+        );
+        if (solved) await results?.onAck(solved);
+        return { name: saved.name, at: saved.at, commands: saved.cmds.length };
+      },
+      autosave: () => ({ enabled: save.enabled(), saved: save.history()[0] ? summary(save.history()[0]!) : null }),
+      autosaves: () => save.history().map(summary),
     },
     projects: {
       new: (name) => own.new(name),
@@ -263,13 +341,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
     examples: { fetch: fetchExample },
     ai: {
       setKey: (key, provider: AiProvider) => {
-        const slot = provider === 'openai' ? 'femlab.ai.key.openai' : 'femlab.ai.key';
-        try {
-          if (key === null) localStorage.removeItem(slot);
-          else localStorage.setItem(slot, key);
-        } catch {
-          // Keep the app usable when a browser refuses localStorage.
-        }
+        storeKey(provider, key);
       },
       setModel: (model) => {
         localStorage.setItem('femlab.ai.model', model);
@@ -281,13 +353,14 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
 }
 
 /**
- * Three Commands the design's shell needs that `@femlab/registry` does not declare: the display
+ * Four Commands the design's shell needs that `@femlab/registry` does not declare: the display
  * mode segmented control, opening a bundled example that is a Journal rather than a saved
  * `femlab/1` file, and putting a Command into the Properties form without running it (every
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+  let editRequest = 0;
   return [
     {
       name: 'view.setMode',
@@ -298,6 +371,22 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
         const { mode } = input as { mode: ViewMode };
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
+      },
+    },
+    {
+      name: 'form.edit',
+      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
+      schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
+      tool: true,
+      run: async (input) => {
+        const target = input as { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+        const request = ++editRequest;
+        const previousForm = store.state.form;
+        const revision = store.state.revision;
+        const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+        if (request !== editRequest || store.state.form !== previousForm || store.state.revision !== revision) return;
+        const { cmd, ...args } = command;
+        store.openForm(cmd, args);
       },
     },
     {
@@ -330,6 +419,16 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       run: (input) => {
         const { command, args, keepInitial } = input as { command: string; args?: Record<string, unknown>; keepInitial?: boolean };
         store.openForm(command, args ?? {}, keepInitial === true);
+      },
+    },
+    {
+      name: 'example.filter',
+      description: 'Filter the Examples gallery by one metadata tag and one difficulty level. Pass `null` for either field to show every value in that dimension; this changes only the gallery view.',
+      schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable() }),
+      tool: true,
+      run: (input) => {
+        const { tag, difficulty } = input as { tag: string | null; difficulty: ExampleDifficulty | null };
+        store.set({ exampleFilter: { tag, difficulty } });
       },
     },
     {
