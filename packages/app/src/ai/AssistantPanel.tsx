@@ -121,6 +121,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const ui = useStore(store);
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState('');
+  const [streaming, setStreaming] = useState('');
   const [draft, setDraft] = useState('');
   const [tokens, setTokens] = useState<string[]>([]);
   const [images, setImages] = useState<ImageBlock[]>([]);
@@ -186,6 +187,12 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       setImages([]);
       setBusy('thinking…');
       add({ kind: 'user', text: line, images: attached });
+      let prose = '';
+      const finishProse = () => {
+        if (prose.trim()) flushProse(prose, add);
+        prose = '';
+        setStreaming('');
+      };
       try {
         const built = await buildTurn({ text: line, registry, images: attached, selection: ui.selection, skills });
         if (built.skill) add({ kind: 'skill', name: built.skill, note: 'loaded into this turn' });
@@ -193,23 +200,22 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         messages.current.push(built.message);
 
         const system = buildSystem({ registry, skills: enabled, project: folder ? { name: folder.name, files: folder.files, agentsMd: folder.agentsMd } : null });
-        let prose = '';
         for await (const event of runTurn({ provider: providerImpl, registry, model, system, tools: toToolDefinitions(registry), messages: messages.current })) {
           if (event.type === 'text') {
             prose += event.text;
+            setStreaming(streamingProse(prose));
             setBusy('writing…');
           } else if (event.type === 'tool_start') {
-            if (prose.trim()) flushProse(prose, add);
-            prose = '';
+            finishProse();
             setBusy(`${event.call.command}…`);
             add({ kind: 'tool', call: event.call });
           } else if (event.type === 'tool_end') {
             setItems((cur) => cur.map((i) => (i.kind === 'tool' && i.call.id === event.call.id ? { kind: 'tool', call: { ...event.call } } : i)));
           } else if (event.type === 'error') {
+            finishProse();
             add({ kind: 'bad', text: event.message });
           } else if (event.type === 'turn') {
-            if (prose.trim()) flushProse(prose, add);
-            prose = '';
+            finishProse();
             const wrote = event.turn.calls.filter((c) => c.status === 'succeeded' && WROTE.has(c.command)).map((c) => String((c.input as { path?: string; name?: string })?.path ?? (c.input as { name?: string })?.name ?? c.command));
             if (wrote.length > 0) add({ kind: 'files', files: wrote });
             if (event.turn.diff.length > 0) add({ kind: 'diff', entries: event.turn.diff, steps: event.turn.undoSteps, journal: event.turn.undoJournal });
@@ -218,8 +224,10 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         }
         await refreshIndex();
       } catch (e) {
+        finishProse();
         add({ kind: 'bad', text: e instanceof FemError ? `${e.code}: ${e.cause}` : String(e) });
       } finally {
+        finishProse();
         setBusy('');
       }
     },
@@ -242,6 +250,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       chatBridge.pending = null;
       messages.current = [];
       setItems([]);
+      setStreaming('');
       setTurn(null);
     };
     const queued = chatBridge.pending;
@@ -312,6 +321,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
         {items.map((item, i) => (
           <Item key={i} item={item} registry={registry} dispatch={dispatch} />
         ))}
+        {streaming ? <div class="prose streaming">{streaming}</div> : null}
         {busy ? (
           <div class="thinking">
             <i />
@@ -509,6 +519,14 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       ) : null}
     </aside>
   );
+}
+
+/** Keep verification markup private while its tag or block is still arriving. */
+function streamingProse(text: string): string {
+  let visible = parseVerification(text).prose.replace(/<verification>[\s\S]*$/i, '');
+  const start = visible.lastIndexOf('<');
+  if (start >= 0 && '<verification>'.startsWith(visible.slice(start).toLowerCase())) visible = visible.slice(0, start);
+  return visible;
 }
 
 /** Prose is split on its `<verification>` block, so the card and the sentences both survive. */

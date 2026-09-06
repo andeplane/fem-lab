@@ -159,6 +159,54 @@ describe('the assistant drawer', () => {
     } finally { provider.mockRestore(); }
   });
 
+  it('renders deltas before completion and finalizes prose and verification without duplicates', async () => {
+    localStorage.setItem('femlab.ai.key', 'test-key');
+    let resumeFirst!: () => void;
+    let resumeVerification!: () => void;
+    const first = new Promise<void>((resolve) => { resumeFirst = resolve; });
+    const verification = new Promise<void>((resolve) => { resumeVerification = resolve; });
+    let round = 0;
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat() {
+        if (round++ === 0) {
+          yield { type: 'text_delta', text: 'First' };
+          await first;
+          yield { type: 'text_delta', text: ' sentence.' };
+          yield { type: 'tool_use', id: 'inspect', name: 'query_model', input: {} };
+        } else {
+          yield { type: 'text_delta', text: 'Solved.\n<ver' };
+          await verification;
+          yield { type: 'text_delta', text: 'ification>\nok | Reaction balance | 0 %\n</verification>\nDone.' };
+        }
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry } = await mount();
+      const original = registry.query.bind(registry);
+      vi.spyOn(registry, 'query').mockImplementation((q) => q.query === 'query.journal' ? Promise.resolve({ hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false }) : original(q));
+      await type(root, 'Check it');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await tick();
+      expect(root.querySelector('.streaming')!.textContent).toBe('First');
+      expect(root.querySelector('.card')).toBeNull();
+      resumeFirst();
+      await tick();
+      await tick();
+      expect(root.querySelector('.streaming')!.textContent).toBe('Solved.\n');
+      expect(root.textContent).not.toContain('<ver');
+      expect(root.querySelector('.verify')).toBeNull();
+      resumeVerification();
+      await tick();
+      await tick();
+      expect(root.querySelector('.streaming')).toBeNull();
+      expect([...root.querySelectorAll('.prose')].map((p) => p.textContent)).toEqual(['First sentence.', 'Solved.\n\nDone.']);
+      expect(root.querySelectorAll('.verify')).toHaveLength(1);
+      expect(root.querySelector('.verify')!.textContent).toContain('Reaction balance');
+    } finally { provider.mockRestore(); }
+  });
+
   it('shows the key source and the model in the settings sub-panel', async () => {
     localStorage.setItem('femlab.ai.key', 'sk-ant-api03-abcdefgh7f2a');
     const { root } = await mount({ panels: { 'assistant.settings': true } });
