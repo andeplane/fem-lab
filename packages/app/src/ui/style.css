@@ -1813,3 +1813,24 @@ button.solve.stale {
     justify-content: flex-end;
   }
 }
+
+/* Plan F · #42: what was solved, spanning both Result columns. */
+.result-header {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 10px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border-divider);
+  font-size: 11.5px;
+}
+.result-header .mono {
+  color: var(--text-high);
+}
+.result-header.stale {
+  border-bottom-color: var(--warn-border);
+}
+.result-header.stale .faint {
+  color: var(--warn-text);
+}

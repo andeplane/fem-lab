@@ -218,6 +218,15 @@ async function sendToAssistant(dispatch: Dispatch, text: string): Promise<void> 
   }
 }
 
+/**
+ * Why the shape on screen is not the shape the Result holds (#42). One sentence, on the legend
+ * and on the slider alike, so the number is never on screen without its explanation.
+ */
+export function exaggerationHelp(scale: number): string {
+  if (scale === 1) return 'The displacement is drawn at true scale — usually far too small to see. Drag the slider to exaggerate it.';
+  return `Displacements are drawn ${formatNumber(scale)}× larger than they are so the shape is readable. The Result itself is unchanged; the faint outline is the undeformed body. Press "true scale" for ×1.`;
+}
+
 /** The design's 168 px legend: field, unit, gradient bar, six ticks, three colour maps. */
 function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const l = s.legend;
@@ -229,8 +238,8 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <div class="legend-head">
         <span class="legend-field mono">{choiceOf(s.fieldKey).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
-        <span class="legend-sub mono">
-          {s.result?.step} · deformed ×{formatNumber(s.deformScale)}
+        <span class="legend-sub mono" title={exaggerationHelp(s.deformScale)}>
+          {s.result?.step} · {s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}
         </span>
       </div>
       <div class="legend-body">
@@ -322,19 +331,24 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
           }}
         />
       ) : null}
-      <span class="faint">deformation</span>
+      <span class="faint" title={exaggerationHelp(s.deformScale)}>
+        exaggeration
+      </span>
       <input
         type="range"
         min="0"
-        max="400"
-        step="10"
-        aria-label="deformation scale"
+        // An auto scale of ×1000 has to be reachable, and the thumb must not sit pinned at the
+        // end of a 0–400 track when it is: the track grows to whatever is drawn.
+        max={String(Math.max(400, s.deformScale))}
+        step={String(Math.max(1, Math.round(Math.max(400, s.deformScale) / 100)))}
+        aria-label="exaggeration"
+        title={exaggerationHelp(s.deformScale)}
         data-cmd="view.setDeformScale"
         value={String(s.deformScale)}
         onChange={(e) => void dispatch({ cmd: 'view.setDeformScale', scale: Number((e.target as HTMLInputElement).value) }).catch(() => undefined)}
       />
       <span class="mono">×{formatNumber(s.deformScale)}</span>
-      <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} title="draw the real displacement">
+      <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} pressed={s.deformScale === 1} title="draw the real displacement">
         true scale
       </Cmd>
       <Cmd dispatch={dispatch} cmd="file.export" class="tbutton" args={{ spec: { format: 'png' } }} title="the viewer as a PNG, legend burned in">

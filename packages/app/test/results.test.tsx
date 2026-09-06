@@ -8,7 +8,7 @@ import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, leg
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
 import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
 import { Store, initialState, solveLabel, stageOf } from '../src/store';
-import { probeLine } from '../src/ui/App';
+import { exaggerationHelp, probeLine } from '../src/ui/App';
 import { PathPlot, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
 import { specOf, unavailable } from '../src/ui/Export';
 import type { WorkerTransport } from '../src/worker-transport';
@@ -327,6 +327,16 @@ describe('ResultsView', () => {
     await results.onAck({ output: { type: 'solve' } });
     expect(store.state.deformScale).toBe(200);
     expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(expect.any(Float32Array), 200);
+  });
+});
+
+describe('the exaggeration, said in words', () => {
+  it('explains the number wherever it appears, and says what ×1 means', () => {
+    const help = exaggerationHelp(1000);
+    expect(help).toContain('1000× larger');
+    expect(help).toContain('The Result itself is unchanged');
+    expect(help).toContain('the faint outline is the undeformed body');
+    expect(exaggerationHelp(1)).toContain('true scale');
   });
 });
 
