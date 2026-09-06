@@ -328,6 +328,7 @@ describe('ResultsView', () => {
     await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'stress', component: 99 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
     await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
     await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'mode:999' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: '' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
     expect(structural.store.state.fieldKey).toBe('uz');
     expect(structural.transport.query.mock.calls.length).toBe(structuralQueries);
 

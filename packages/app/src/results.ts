@@ -192,7 +192,7 @@ export class ResultsView {
 
   /** `view.showField`: `{ field: null }` turns contours off, anything else picks a scalar. */
   async showField(f: { field: string | null; component?: number | null }): Promise<void> {
-    if (!f.field) {
+    if (f.field === null) {
       this.store.set({ viewMode: 'geometry' });
       this.viewer.current?.setMode('geometry');
       this.viewer.current?.setField(null, [0, 1]);

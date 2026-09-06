@@ -170,6 +170,8 @@ describe('Registry', () => {
     expect(host.view.setClip).toHaveBeenCalledWith(null);
     await registry.dispatch({ cmd: 'view.showField', field: null });
     expect(host.view.showField).toHaveBeenCalledWith({ field: null });
+    await registry.dispatch({ cmd: 'view.showField', field: '' });
+    expect(host.view.showField).toHaveBeenCalledWith({ field: '' });
     await registry.dispatch({ cmd: 'selection.set', faces: ['beam.top'] });
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
