@@ -77,7 +77,8 @@ export interface Fem {
     nameRegion(args: Omit<Extract<Command, { cmd: 'geometry.nameRegion' }>, 'cmd'>): Promise<Ack>;
     /**
      * Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-     * and material assignments that still reference it; remove or retarget those first.
+     * (including temperature and volumetric heat sources), and named Sets that still reference
+     * it; remove or retarget those first.
      */
     remove(args: Omit<Extract<Command, { cmd: 'geometry.remove' }>, 'cmd'>): Promise<Ack>;
   };
@@ -173,6 +174,11 @@ export interface Fem {
      * A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
      * producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
      * Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.
+     * Disjoint Bodies compose independently, each using its own reference. Overlapping
+     * assignments must produce exactly the same increment; otherwise `solve.run` returns
+     * `model.ill-posed` naming both Loads and the Body. Equal increments are not added.
+     * When continuing a heat Step, its nodal temperatures replace `value`; these per-Body
+     * references still apply, with 293.15 K on Bodies without a temperature Load.
      */
     temperature(args: Omit<Extract<Command, { cmd: 'load.temperature' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -213,7 +219,8 @@ export interface Fem {
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**
      * Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
-     * stay in the Model and can be reused by other Steps.
+     * stay in the Model and can be reused by other Steps. Fails with `in-use` while another
+     * Step names it in `after`; re-issue that dependent Step without the reference first.
      */
     remove(args: Omit<Extract<Command, { cmd: 'step.remove' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -226,7 +233,9 @@ export interface Fem {
     /**
      * Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
      * element quality) and refuses with a suggested fix. Returns extremes and reactions;
-     * always check that reactions balance the applied loads before trusting a stress.
+     * always check that reactions balance the applied loads before trusting a stress. A Step
+     * with `after` requires its predecessor's Result to match the current Model state;
+     * after an edit, solve the predecessor again before continuing the chain.
      */
     run(args: Omit<Extract<Command, { cmd: 'solve.run' }>, 'cmd'>): Promise<Ack>;
   };
@@ -324,7 +333,9 @@ export interface Fem {
      * checks with a hand calculation where one applies, and the Journal as an appendix. Nothing
      * in it depends on the clock or the machine, so two runs of the same Journal produce
      * byte-identical text. `step` reports one Step instead of every solved one; `include` picks
-     * sections. Formulas are `$$…$$` for KaTeX.
+     * sections. Automatic hand references require a current static Step on an uncut 3D lattice
+     * box with one fully clamped end and one single-component force on the opposite end;
+     * other cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.
      */
     report(args?: Omit<Extract<Query, { query: 'query.report' }>, 'query'>): Promise<ReportText>;
     /**
