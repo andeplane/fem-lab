@@ -30,8 +30,8 @@ function fakeEngine(): EngineHandle & { seen: unknown[] } {
     seen,
     dispatch: (cmd) => {
       seen.push(cmd);
-      if (cmd['cmd'] === 'material.add' && cmd['nu'] === undefined) {
-        return Promise.reject({ code: 'schema', cause: 'nu is required', where: 'nu' });
+      if (cmd['cmd'] === 'material.add' && (cmd['nu'] === undefined || Number(cmd['nu']) < 0)) {
+        return Promise.reject({ code: 'schema', cause: 'nu must be present and nonnegative', where: 'nu' });
       }
       return Promise.resolve({ seq: seen.length, revision: seen.length, hash: 'abc', warnings: [], output: { type: 'export', text: `<${String(cmd['format'])}>` } });
     },
@@ -78,6 +78,18 @@ describe('calling a tool', () => {
     await expect(callTool(registry, 'no_such_tool', {})).rejects.toMatchObject({ code: 'not-found' });
   });
 
+  it('validates without engine access and refuses invalid scripts before worker execution', async () => {
+    const engine = fakeEngine();
+    const registry = createRegistry({ engine });
+    const validation = await callTool(registry, 'validate_script', { code: 'await fem.material.add({ name: "x", E: "1 Pa" });' }) as { ok: boolean; diagnostics: { cause: string }[] };
+    expect(validation.ok).toBe(false);
+    expect(validation.diagnostics.some((item) => item.cause.includes('nu'))).toBe(true);
+    expect(engine.seen).toEqual([]);
+    const outcome = await callTool(registry, RUN_SCRIPT, { code: 'await fem.model.new({ name: "would mutate" });\nawait fem.geometry.notReal({});' }) as { error: string };
+    expect(outcome.error).toContain('script.validation');
+    expect(engine.seen).toEqual([]);
+  });
+
   it('runs TypeScript through run_script, with the console and the errors the person wrote', async () => {
     const engine = fakeEngine();
     const registry = createRegistry({ engine });
@@ -88,7 +100,10 @@ describe('calling a tool', () => {
     expect(out.console).toEqual(['size 2']);
     expect(engine.seen).toContainEqual({ cmd: 'geometry.addBox', name: 'b', size: ['1 m', '1 m', '1 m'] });
     const bad = (await callTool(registry, RUN_SCRIPT, { code: 'await fem.material.add({ name: "x", E: "1 Pa" });' })) as { error: string };
-    expect(bad.error).toContain('schema: nu is required');
+    expect(bad.error).toContain('script.validation');
+    expect(engine.seen).not.toContainEqual(expect.objectContaining({ cmd: 'material.add' }));
+    const runtime = await callTool(registry, RUN_SCRIPT, { code: 'await fem.material.add({ name: "x", E: "1 Pa", nu: -0.1 });' }) as { error: string };
+    expect(runtime.error).toContain('schema: nu must be present and nonnegative');
   });
 });
 
@@ -213,7 +228,7 @@ describe('resources', () => {
 
 describe('errors an editor sees', () => {
   it('keep the engine shape, and wrap anything else', () => {
-    expect(JSON.parse(errorText({ code: 'schema', cause: 'nu is required' }))).toMatchObject({ code: 'schema' });
+    expect(JSON.parse(errorText({ code: 'schema', cause: 'nu must be present and nonnegative' }))).toMatchObject({ code: 'schema' });
     expect(JSON.parse(errorText(new Error('boom')))).toEqual({ code: 'internal', cause: 'boom' });
     expect(JSON.parse(errorText('bare'))).toEqual({ code: 'internal', cause: 'bare' });
   });

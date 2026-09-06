@@ -35,7 +35,7 @@ its first commit.
 | Well-posedness | A's `checks::all(&Problem) -> Vec<Error>` returns every failing check; `solve.run` refuses with the first, `query.model.warnings` lists all (B's `check_well_posed` is this function) |
 | `cost_estimate` (B J4.7) | A provides `solve::cost_estimate(mesh, dofs_per_node, solver) -> CostEstimate { dofs, nnz, bytes, feasible, note }` from the pattern (§5) |
 | `study.converge` | B implements the Command (re-mesh via C, re-solve via A); A provides `post::convergence::{observed_rate, richardson}` as library code so the same functions serve the tests and the Command |
-| Benchmarks as scripts | Rust-level cases in `crates/engine/tests/` are the fast engine tests. The Command-level form B's `femlab bench` runs (`crates/engine/benches/cases/*.json`, a Journal plus checks) is what turns a row green in `BENCHMARKS.md` (PLAN rule 8). A's `src/bench/` registry is deleted; a case whose mesh is not yet expressible through `mesh.set` (C's mapped/annulus meshers) is marked "engine test only" in the status table until it is |
+| Benchmarks as scripts | Rust-level cases in `crates/engine/tests/` are the fast engine tests. The Command-level form B's `femlab bench` runs (`crates/femlab/benches/cases/*.json`, a Journal plus checks) is what turns a row green in `BENCHMARKS.md` (PLAN rule 8). A's `src/bench/` registry is deleted; a case whose mesh is not yet expressible through `mesh.set` (C's mapped/annulus meshers) is marked "engine test only" in the status table until it is |
 | Exporters | VTU and Gmsh `.msh` writers/readers are C's `crates/geometry/src/io/` (they take `&Mesh` plus named `f64` slices, no engine dependency). Abaqus `.inp` deferred per C §3. A does not plan exporters |
 | hex8 formulation | A's incompatible modes stand (BENCHMARKS B1 requires "the improved hex8 does not lock" and B's `ElementType::Hex8Im` names it); C's "B-bar first" is the R4 contingency, not the default. C §4 is edited accordingly |
 | Threads | No `threads` feature: rayon and `faer/rayon` are `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` (B §10). The serial arm of `par.rs` is compiled only on wasm32 and proven by the wasm `cargo check` lane |
@@ -109,7 +109,7 @@ crates/engine/                    (B creates the crate, error.rs, command.rs, en
       stress.rs             GP→nodal extrapolation, averaging, von Mises, principal
       probe.rs              point location, probe, path, L2/H1 error norms
       convergence.rs        observed_rate(), richardson()   (library: study.converge uses them)
-  benches/cases/*.json      Command-level Benchmark scripts run by `femlab bench` (B §6), one per green row
+  # Command-level cases are packaged at crates/femlab/benches/cases (issue #306).
   tests/
     common/mod.rs           reaction_balance(), assert_rel(), mesh recipes shared by the cases
     a_element.rs b_beams.rs c_2d.rs d_solids.rs e_heat.rs f_dynamics.rs
@@ -119,7 +119,7 @@ crates/engine/                    (B creates the crate, error.rs, command.rs, en
 ```
 
 `tests/*.rs` are the fast Rust-level runners that also do the convergence studies;
-`benches/cases/*.json` are the same cases as Journals for `femlab bench` (PLAN rule 8) and
+`crates/femlab/benches/cases/*.json` are the same cases as Journals for `femlab bench` (PLAN rule 8) and
 are what flips a `BENCHMARKS.md` row to green. There is no `src/bench/` registry: a case is a
 test plus a Journal, nothing else.
 
@@ -447,11 +447,14 @@ dyn-compatible and `element_for` could not return `&'static dyn Element`. The sa
 for every Extension Point trait (`MaterialLaw`, `Element`, later `Mesher`/`Procedure`): no
 generic methods, flat slices, so a TS/wasm plugin adapter can implement them.
 
-Kernel of `Iso::stiffness` (per Gauss point): `J = Σ x_a ⊗ dN_a/dξ`, `det J ≤ 1e-14·V_ref` →
+Kernel of `Iso::stiffness` (per Gauss point): `J = Σ x_a ⊗ dN_a/dξ`,
+`det(J / max|J_ij|) ≤ 1e-14` over the active spatial dimensions →
 `Error { code: Inverted, where_: element }`; `∇N = J⁻ᵀ dN/dξ`; `B` (6×n_dof, or
 3/4×n_dof in 2D); weight `w det J` times thickness (plane stress), 1 (plane strain), `2π r`
 (axisymmetric); `K_e += Bᵀ C B w`. The law is called once per element with all Gauss points
 as a batch (`n = n_gp`), which is what makes the batched ABI pay off.
+The scale-relative validity criterion replaces the original absolute SI cutoff under
+[#130](https://github.com/andeplane/fem-lab/issues/130); physical integration weights are unchanged.
 
 **Incompatible modes** (`Formulation::IncompatibleModes`, hex8 and quad4 only): bubble
 functions `P_k(ξ) = 1 − ξ_k²`, k = 1..dim, each multiplying every displacement component →
@@ -599,15 +602,22 @@ pub struct GpuCg { ctx: gpu::CgContext, scale: Vec<f64> /* D^-½ */ }
 pub async fn solve(k: &Csr, b: &[f64], opts: &SolveOptions, gpu: Option<&Gpu>, progress: OnProgress<'_>) -> Result<(Vec<f64>, SolveInfo), Error>;
 
 /// B's query.cost (J4.7): from the pattern alone, before any assembly.
-pub struct CostEstimate { pub dofs: usize, pub nnz: usize, pub bytes: u64, pub feasible: bool, pub note: String }
+pub struct CostEstimate { pub dofs: u64, pub nnz: u64, pub nnz_lower: u64, pub bytes: u64, pub budget_bytes: u64, pub feasible: Option<bool>, pub note: String }
 pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostEstimate;
 ```
 
-`cost_estimate` builds the `Pattern` (cheap, O(nnz)) and reports `nnz·12` bytes for the CSR
-plus, for `CpuDirect`, the symbolic factor's nnz from `SymbolicLlt` (exact, no numerics);
-`feasible` is `bytes < 1.5 GiB` on wasm32 and `true` natively; `note` says which solver `Auto`
-would pick. `time_ms` in `SolveInfo` is filled by B's `dispatch` from `Host::now_ms`, never
-by A (the engine has no clock).
+`cost_estimate` counts node couplings with adjacency and one marker array, capped at 16 MiB
+of scratch. Above that cap it returns conservative clique bounds in linear time, without
+materialising a `Pattern`, matrix values or element slots (#122). `nnzLower..nnz` bounds the
+matrix entries; equal endpoints mean exact. `bytes` is mandatory assembly storage **only**:
+two CSRs, element slots, element-slot offsets and one RHS. It excludes the resident mesh/model,
+local element buffers, reduction, solver vectors, direct-factor fill/workspace and time history.
+The fixed `budgetBytes = 1.5 GiB` is a planning budget on all hosts, not a free-memory probe.
+`feasible` is false when this lower bound exceeds the budget, otherwise null (unknown); a
+lower bound fitting never establishes feasibility. `note` names the CPU solver `Auto` would
+pick without device information. Heat Steps count one DOF per node. The query still meshes
+when necessary; the scratch cap applies to estimation after meshing. `time_ms` in `SolveInfo`
+is filled by B's `dispatch` from `Host::now_ms`, never by A (the engine has no clock).
 
 `Auto`: `CpuDirect` when `n ≤ 200_000` (`100_000` on wasm32, Q2) or no GPU and
 `n ≤ 400_000`; else `GpuPcg` when a device is present; else `CpuPcg`. The thresholds are
@@ -827,7 +837,7 @@ Common helpers in `tests/common/mod.rs`:
 
 Two forms of every case: the Rust test here, and — once its mesh recipe is expressible
 through `mesh.set` (C's mapped/annulus/extrude Meshers) — a Journal in
-`crates/engine/benches/cases/<id>.json` with the same checks, run by B's `femlab bench`.
+`crates/femlab/benches/cases/<id>.json` with the same checks, run by B's `femlab bench`.
 The `BENCHMARKS.md` status column has three states: `engine test` (Rust only), `green`
 (Journal form passes in CI), `unresolved` (`#[ignore]`). D4 stays `engine test` for good
 (its body force is a closure, not a Command).
@@ -975,7 +985,7 @@ numbers below are `A1…A22`; B's 17–19 depend on A8 and A11.
 | A19 | `post::error_norms` + D4 manufactured solutions (elasticity + Poisson, 4 kinds) | rates within ± 0.1 |
 | A20 | LE1, LE10, FV52 meshes and cases | C5, D1 (hex20, tet10, hex8 recorded), D3 resolved and un-ignored or left `#[ignore]` with the computed number in the log and an open item in BENCHMARKS.md |
 | A21 | `gpu/mod.rs`, `shaders/*.wgsl`, `tests/wgsl_validate.rs`, `tests/gpu_kernels.rs` (SpMV, dot, vec kernels individually) | naga validates 3 files and rejects the broken one; SpMV vs f64 within f32 bound; dot bit-identical across two runs; A4 GPU; broken shader through the device → `Internal`; 1 KiB limits → `TooLarge`; lavapipe job green and coverage 100 % with `--features gpu-tests`; the `rust` job's bridge exclusion is removed when the lavapipe job is promoted |
-| A22 | `gpu/cg.rs` + `GpuCg` in dispatch + `Auto` policy; Journal forms (`benches/cases/*.json`) for every case whose mesh C's Meshers can express; `BENCHMARKS.md` status column; ADR 0013 note on the faer determinism outcome | D5's CI sibling (66k DOF) matches direct to 1e-8, also with `gpu_chunk_rows` forcing 3 chunks; B1 `[32,8,8]` via `GpuPcg`; `#[ignore]` 800k-DOF run prints time on Metal; `femlab bench` passes on every committed case |
+| A22 | `gpu/cg.rs` + `GpuCg` in dispatch + `Auto` policy; Journal forms (`crates/femlab/benches/cases/*.json`) for every case whose mesh C's Meshers can express; `BENCHMARKS.md` status column; ADR 0013 note on the faer determinism outcome | D5's CI sibling (66k DOF) matches direct to 1e-8, also with `gpu_chunk_rows` forcing 3 chunks; B1 `[32,8,8]` via `GpuPcg`; `#[ignore]` 800k-DOF run prints time on Metal; `femlab bench` passes on every committed case |
 
 GPU (A21–A22) is last on purpose (C §0 #5: confirmed cases before GPU depth; the device
 plumbing and the lavapipe lane themselves land in B's commit 16 and are not blocked by A).
@@ -1032,7 +1042,7 @@ Review 2026-09-05. One line per change: what, why.
 
 1. Added "Reconciled with B and C" (top): 17 seam decisions (crate layout, `Mesh` location, builder location, Command/Quantity ownership, error type, `Solver`/`Field` enums, `Gpu`, `Engine::new`, model-vs-numeric types, checks API, `cost_estimate`, `study.converge` helpers, Benchmarks-as-scripts, exporters, hex8 formulation, threads, node ordering, commit numbering, coverage) — the three plans disagreed on every one of them.
 2. Moved `Mesh` and the structured builder to `crates/geometry` (§1.1, §2) — C's geometry crate is the producer and B's seam needs one type; A's `structured.rs` and C's mapped mesher were the same code twice.
-3. Deleted `src/bench/` and commit 23's `Benchmark` registry (§1.1, §9, §11) — PLAN rule 8 / BENCHMARKS.md say Benchmarks are Command scripts run by `femlab bench` (B §6); a Rust registry duplicated that; replaced by `benches/cases/*.json` and a three-state status column.
+3. Deleted `src/bench/` and commit 23's `Benchmark` registry (§1.1, §9, §11) — PLAN rule 8 / BENCHMARKS.md say Benchmarks are Command scripts run by `femlab bench` (B §6); a Rust registry duplicated that; replaced by `crates/femlab/benches/cases/*.json` and a three-state status column.
 4. Replaced the `gpu` and `threads` Cargo features with target-cfg dependencies plus a test-only `gpu-tests` feature (§0, §1.2) — B has `Engine.gpu` unconditional, B/C put rayon under target cfg, and the serial shim's coverage problem disappears when it is not compiled natively.
 5. Added `dx12` to the native wgpu features and stated "no unix-only dependency" (§1.2) — owner requirement that nothing blocks Windows.
 6. Added `libm` and the transcendental rule (§0, §1.2, §2) — B §2.9's clippy deny list applies to the engine; `std::f64::sin` differs native vs wasm.

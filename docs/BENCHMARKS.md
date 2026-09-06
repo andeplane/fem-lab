@@ -12,8 +12,26 @@ conflicting published values and must be settled before the number is hard-coded
 
 The **Status** column has three states. `engine test` means a Rust test in
 `crates/engine/tests/` asserts it; `green` means the Command-level form in
-`crates/engine/benches/cases/*.json` passes under `femlab bench`, which is what makes a row a
+`crates/femlab/benches/cases/*.json` passes under `femlab bench`, which is what makes a row a
 Benchmark in the sense of PLAN rule 8; blank means not implemented yet.
+
+## Installed CLI cases (#306)
+
+`femlab bench` embeds every canonical `crates/femlab/benches/cases/*.json` file in filename
+order at build time. A copied release executable needs no checkout or adjacent data directory.
+The JSON Journals, published reference values and tolerances are unchanged. New case files are
+picked up automatically by the build and included in the Cargo source package.
+
+`--filter` still selects by case-name substring; text, `--json`, `--markdown` and
+`--update-docs <path>` keep their existing report interfaces. Explicit `--cases <directory>`
+uses only that directory, including an empty directory; a missing or malformed custom directory
+reports an error and never falls back to built-ins.
+
+Packaging verification copies a release executable out of a disposable build checkout, removes
+that owned checkout, and runs its embedded cases plus a custom case. The CLI regression also
+checks the installed-style heat bar against the independent linear conduction values
+25 °C at x/L = 1/4 and 50 °C at x/L = 1/2, and compares the complete embedded reports against
+those from the canonical JSON directory (excluding elapsed times).
 
 ## Measured status
 
@@ -73,14 +91,41 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | A6 | Free thermal expansion of a block | ε = αΔT, σ = 0 | 1e-10 | thermal strain path | engine test |
 | A7 | Reaction balance, every case | Σ reactions = −Σ applied loads | 1e-9 rel | Dirichlet handling and reaction recovery | engine test + green |
 | A8 | Journal replay, every case | Model hash identical after replay | exact | the engine is deterministic and scriptable | engine test |
+| A9 | GPU CG early convergence on identity and positive diagonal systems, 1 / 7 / 257 equations | `x_i = b_i / d_i`, including zero RHS | exact for powers-of-four diagonals | converged corrections survive the rest of a 25-iteration submission; reused contexts reset correctly | GPU test |
 
 A5 is run for all eight element kinds, driven by a prescribed end displacement so the reaction
 *is* `F`; A7's scale is the largest force that flows through the model, because a Step driven by
 a displacement or a temperature has no applied total to be relative to. A6 covers hex8, hex20, a
-plane-stress sheet and an axisymmetric ring. A8's numerics half is
+plane-stress sheet and an axisymmetric ring. A6 also runs three independently supported unit
+cubes at 1, 2 and 3 hex8 divisions per edge through the registry (#146). Their temperature
+increments are +80 K, −40 K and 0 K, from distinct references. Free expansion has
+`u = α ΔT (x − x₀)` and zero stress; a preceding uniform heat solve with both x ends held gives
+`σxx = −E α ΔT`, `σyy = σzz = 0` and lateral strain `(1 + ν) α ΔT`. With E = 210 GPa and
+α = 1.2e-5 /K, the two heated cubes carry −201.6 MPa and +100.8 MPa. Every nodal displacement
+is within 1e-12 m and stress component within 1e-3 Pa of the closed form on all three meshes.
+Reversing disjoint Load order is bit-identical; equal overlapping increments are idempotent,
+while unequal increments are rejected with both Load names and the Body. A8's numerics half is
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
+
+A9 runs the shipped CG shaders on the adapter with budgets of 2, 25 and 50 iterations,
+including matrix chunks of three rows and a vector crossing the 256-thread workgroup boundary.
+The positive diagonal cases also pass through Jacobi scaling and f64 refinement at 1 and 2 CPU
+threads. These are algebraic identities at every tested size, so no mesh convergence rate
+applies. A coupled 2×2 SPD system checks the nonzero beta recurrence against its closed-form
+inverse; zero and negative curvature check that a broken-down batch preserves its last finite
+correction instead of dividing by an invalid denominator.
+
+A1 also runs all eight element families at length factors `1e-9`, `1e-6`, `1e-5`, `1e-3`,
+`1`, `1e3`, and `1e6`, with full and incompatible-mode formulations and every applicable
+idealisation. Constant strain/stress, `uᵀKu = V ε:σ`, and the linear-temperature identity
+`TᵀK_T T = kV` use the analytical physical volume (thickness-weighted area in plane stress,
+unit-depth area in plane strain, and Pappus' volume in axisymmetry). Analytical affine
+determinants and inverse-map points are checked at every scale. Inverted, collapsed and
+relatively singular counterparts are rejected independently of size. These are exact patch
+identities across scale, not a mesh convergence rate; Jacobian validity uses a dimensionless
+normalised determinant, with the unused 2D identity padding excluded from the length scale.
 
 Quantity boundary regressions check overflow independently of a solve: decimal `1e999` and
 finite `1e308 kN` must be rejected; `Pa^127`, overflowing products and inversion of `m^-128`
@@ -146,6 +191,7 @@ Harder's parallelogram specimen *is* a parallelogram, whose own converged answer
 | C6 | NAFEMS FV32 cantilevered tapered membrane, modal | 44.623, 130.03, 162.70, 246.05, 379.90, 391.44 Hz | 1 % | 2D eigen | engine test |
 | C7 | NAFEMS T4 steady conduction + convection | T(E) = 18.3 °C (converged 18.25) | 0.5 °C | convection BC | engine test + green |
 | C8 | Thermal → structural chain, restrained plate (**substitute for NAFEMS T1**) | σxx = −E α ΔT/(1−ν) = −150 MPa at mid-height | 2 % | thermal → structural coupling | green |
+| C9 | Free 2D mesh with overlapping refinement boxes | finer overlap mean triangle area ≤ 0.5 · 0.25²; outside the coarse box, a triangle area > 0.9 · 0.5 · 2² | exact | centroid-based refinement selection, input-order determinism | geometry test |
 
 **C1's finite width is 3 %, not 1.6 %.** Plan C's half-width of 10 hole radii was measured and
 extrapolates to K_t = 3.094 — three per cent above Kirsch's infinite-plate 3.00, not the 1.6 %
@@ -173,6 +219,14 @@ n = 4, 8, 16, 32 quad8 gives 23.969 in plane stress and 21.526 in plane strain, 
 23.9 and arXiv 1806.07500's 21.520 respectively. The monitored point is C = (48, 52), the midpoint
 of the loaded edge, which is what the literature values belong to; plans A and C say the top corner
 (48, 60), which is a different quantity — 25.18 and 22.63 by the same extrapolation.
+
+**C9 checks local refinement selection independently of the implementation.** A 10 m square uses
+a global size of 2 m, a coarse box of size 1 m, and a nested box of size 0.25 m. The test computes
+each triangle's area directly from its node coordinates with the shoelace formula, groups triangles
+by their independently computed centroids, and checks the fine-overlap mean against 0.5 · 0.25²
+(measured 0.0283569 m²) and the outside maximum against the global behavior (1.953125 m² > 1.8 m²).
+Both box orders must produce exactly equal mesh points and connectivity, so order independence is
+checked beyond aggregate counts.
 
 ## D. Three-dimensional solids (phase 2–3)
 
@@ -208,6 +262,11 @@ profile is linear to 1e-10 for all of them, and the heat that enters at the hot 
 the cold one to 1e-9. A volumetric source in a slab held at both faces is checked against its
 own closed form `T = T_s + q(Lx − x²)/2k` in the same commit, which is the oracle for
 `load.heatSource`.
+
+The registry's E1 VTU export is also read, unmodified, by the independent `vtkio` reader.
+Every exported temperature must match `T(x) = 273.15 + 100 x` K within 1e-9 K, with positions
+in metres; the B1 export checks point-field tuple counts and mesh topology through the same
+reader. This catches file-format errors that an encoder-specific test decoder would miss (#186).
 
 **E2's tolerance is 2 %, not 1 %, and the reason is physics.** The published fin formula is
 one-dimensional; the model is the real two-dimensional slab, whose mid-plane has to conduct
@@ -304,6 +363,46 @@ against a *closed form* rather than a printed number:
 Both rows revert to the NAFEMS cases the moment the published data is at hand; the chaining they
 prove is the same either way.
 
+## Named Sets on mesher-defined Bodies (#239)
+
+The registry patch `mapped_and_swept_bodies_resolve_face_and_body_selectors_for_an_exact_patch`
+uses a 2 × 1 m mapped rectangle (0.1 m plane-stress thickness) and its 3 m extrusion.
+For both element orders and subdivision scales 1, 2 and 4, geometric face rules resolve the
+actual left/right boundaries, and a whole-Body region contains every element and node. Face
+counts, nodal coordinates, boundary measures (1 m / 3 m²) and domain measures (2 m² / 6 m³)
+provide independent membership oracles after each remesh.
+
+A named right-face traction produces σxx = 20 MPa with E = 200 GPa and ν = 0.25. Named
+symmetry constraints permit the exact affine solution ux = σxx x/E and uy,z = −ν σxx y,z/E.
+Every node agrees within 1e-12 m and every stress component within 1e-3 Pa on all meshes;
+force balance is below 1e-10. A separate whole-Body nodal force adds 10 N to the 2 MN traction:
+applied force and support reactions independently recover 2,000,010 N and its negative.
+
+The lifecycle regression checks named Set query visibility, dependency errors, rename and
+copy, removal after dependent Commands are removed, undo/redo, and deterministic exported
+Journal replay with identical memberships and displacement. Unknown Bodies give structured
+errors identifying the selector argument and leave the Model and Journal unchanged.
+
+## Thermal Body loads on mapped and swept meshers (#260)
+
+The registry regressions use a 2 × 1 m mapped rectangle with 0.25 m plane-stress thickness
+and its 3 m solid extrusion, at both element orders and 1, 2 and 4 axial subdivisions.
+`load.temperature` with ΔT = 50 K and α = 1e-5/K gives exact free strain 5e-4 in every
+direction and zero stress. Fixing both x ends instead gives σxx = −EαΔT = −100 MPa for
+E = 200 GPa and ν = 0.25; the free transverse strain is (1+ν)αΔT = 6.25e-4. Every node's
+displacement agrees within 1e-12 m and every stress component within 1e-3 Pa.
+
+For `load.heatSource`, q = 100 W/m³ and k = 10 W/(m·K), with both x ends held at 300 K,
+give `T(x) = 300 + 5x(2−x)` K. The assembled source power agrees with the independent
+prescribed-volume values qV = 50 W (Sheet including thickness) and 600 W (solid) within
+1e-9 W. All nodal temperatures agree with the parabola within 1e-9 K. At the first element's
+midpoint, linear interpolation has the exact error `5/n²` K, decreasing by four under each
+refinement; quadratic interpolation reproduces the parabola within 1e-9 K.
+
+The same Commands and analytical solutions survive undo/redo and verified exported Journal
+replay. Unknown Body names, including a bad name after a valid implicit target in the same
+list, report the indexed argument and preserve the previous Model and Journal.
+
 ## Where the reference values are published
 
 - NAFEMS "The Standard NAFEMS Benchmarks" P18 (1990); FV set in R0015 (1987). Values as
@@ -325,3 +424,37 @@ transport before `mesh.set`. Chromium checks rendered pixels, all four named out
 edges, the hole boundary, an empty hole interior and hidden-body picking; these
 queries and view actions must leave the three-command Journal unchanged. The preview
 is an outline, not a mesh or a solver discretisation.
+
+### Automatic hand-reference applicability (#149)
+
+`automatic_hand_checks_require_the_steps_actual_supports_and_end_load` checks the
+report's cantilever reference at 10 and 20 axial divisions: for L = 1 m, b = h =
+0.1 m, E = 210 GPa and P = 1 kN, PL³/(3EI) = 0.190476190476 mm. The existing
+axial case independently checks FL/(EA) = 0.047619047619 mm at F = 100 kN.
+These are analytical reference values, separate from the finite-element response.
+
+At both meshes, an inactive global load, a midpoint-loaded cantilever, and a
+simply supported midpoint-loaded beam receive no cantilever reference. Pure
+applicability checks also cover reversed ends, partial supports, stale Results,
+chained Steps, cuts, mixed or zero forces, missing definitions and independent
+mapped geometry. The hook only recognizes uncut, axis-aligned 3D lattice boxes
+with one fully fixed end and one single-component force at the opposite end.
+Other geometries and boundary conditions explicitly report no applicable
+automatic reference; their verification belongs to a dedicated Benchmark.
+
+## Cost-query memory benchmark (#122)
+
+The estimator is tested against every small element-family assembly pattern at one, two and
+three DOFs per node, including shared nodes and unused nodes. Its mandatory-storage lower
+bound equals the actual lengths of two CSR arrays, element slots and their offsets, and one
+RHS; it makes no claim about unknown factor fill or solver workspace.
+
+A synthetic 50 × 50 × 100 Hex8 grid (250,000 elements) has exactly
+`9 × (3×50+1) × (3×50+1) × (3×100+1) = 61,767,909` directed scalar matrix entries at three
+DOFs per node. The independent tensor-neighbour graph formula checks the count while a
+per-thread allocator measures peak live scratch **after** mesh construction: at most 16 MiB,
+compared with 576 MB for element slots alone. A 750,000-element repeated overlapping-clique
+mesh forces the bounded fallback; its known graph count lies within the returned interval,
+the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
+1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
+These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.

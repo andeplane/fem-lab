@@ -1,6 +1,6 @@
 // The three smokes of plan B §8. They drive the app the way the AI and the DevTools MCP do —
 // through `window.fem` — and then check that what a person sees agrees with what the engine says.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 // `window.fem` is typed by `src/main.tsx`'s `declare global`, so these calls are checked against
 // the generated schema exactly as a user's script would be.
@@ -24,6 +24,40 @@ async function expectCanvasSized(page: Page): Promise<void> {
 }
 
 test.describe('@cpu the shell', () => {
+  test('camera shortcuts move the view without touching the Journal or typed input', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.model.new({ name: 'camera-shortcuts' }));
+    await page.waitForFunction(async () => {
+      try {
+        await window.fem.registry.query({ query: 'query.view' });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const journal = await page.evaluate(() => window.fem.query.journal());
+    const shortcuts = ['Digit1', 'Digit2', 'Digit3', 'Digit4'];
+    for (let i = 0; i < shortcuts.length; i++) {
+      const before = await page.evaluate(async (n) => {
+        await window.fem.dispatch({ cmd: 'view.setCamera', position: [10 + n, 11 + n, 12 + n], target: [0, 0, 0] });
+        return window.fem.registry.query({ query: 'query.view' });
+      }, i);
+      await page.keyboard.press(`Shift+${shortcuts[i]}`);
+      await expect.poll(() => page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).not.toEqual(before);
+    }
+
+    const input = page.locator('.props input').first();
+    await input.focus();
+    const beforeTyping = await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }));
+    const value = await input.inputValue();
+    await page.keyboard.press('Shift+Digit1');
+    expect(await input.inputValue()).toContain('!');
+    expect(await input.inputValue()).not.toBe(value);
+    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.view' }))).toEqual(beforeTyping);
+    expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
+  });
+
   test('Assistant stays on the right and spans the workspace when toggled', async ({ page }) => {
     await page.goto('./');
     await ready(page);
@@ -79,8 +113,6 @@ test.describe('@cpu the shell', () => {
   });
 
   test('boots, builds a Model from window.fem, and shows it', async ({ page }, testInfo) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     const t0 = Date.now();
     await page.goto('./');
 
@@ -134,7 +166,6 @@ test.describe('@cpu the shell', () => {
     expect(unknown).toEqual([]);
 
     await testInfo.attach('shell.png', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
-    expect(errors).toEqual([]);
   });
 
   test('collapsing the Assistant preserves its draft, references and transcript', async ({ page }) => {
@@ -280,10 +311,17 @@ test.describe('@cpu the shell', () => {
 
 test.describe('@sw without server headers', () => {
   test('the coi service worker makes the page cross-origin isolated after one reload', async ({ page }) => {
+    const navigations: string[] = [];
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) navigations.push(frame.url());
+    });
     await page.goto('./');
     // The first visit registers the worker and reloads itself once; the guard stops a loop.
     await page.waitForFunction(() => window.crossOriginIsolated === true, undefined, { timeout: 60_000 });
     expect(await page.evaluate(() => window.crossOriginIsolated)).toBe(true);
+    expect(await page.evaluate(() => navigator.serviceWorker.controller !== null)).toBe(true);
+    expect(await page.evaluate(() => sessionStorage.getItem('coi-reset'))).toBe('1');
+    expect(navigations.filter((url) => url.endsWith('/fem-lab/'))).toHaveLength(2);
     await ready(page);
     const caps = (await page.evaluate(() => window.fem.query.capabilities())) as unknown as { crossOriginIsolated: boolean; threads: number };
     expect(caps.crossOriginIsolated).toBe(true);

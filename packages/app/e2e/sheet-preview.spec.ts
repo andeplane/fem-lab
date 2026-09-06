@@ -71,6 +71,18 @@ test('@cpu unmeshed transformed Sheet outlines are visible and named outer/hole 
   await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['plate'], on: false }));
   await page.mouse.click(outer.x, outer.y);
   await expect.poll(() => page.evaluate(() => window.fem.registry.query({ query: 'query.selection' }))).toMatchObject({ refs: [] });
+  // Hiding the edge layer must survive rebuilding a previously hidden Body and its mode.
+  await page.evaluate(async () => {
+    await window.fem.dispatch({ cmd: 'view.toggle', layer: 'edges', on: false });
+    await window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['plate'], on: true });
+    await window.fem.dispatch({ cmd: 'view.setMode', mode: 'mesh' });
+  });
+  await page.mouse.click(outer.x, outer.y);
+  await expect.poll(() => page.evaluate(() => window.fem.registry.query({ query: 'query.selection' }))).toMatchObject({ refs: [] });
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.toggle', layer: 'edges' }));
+  await page.mouse.click(outer.x, outer.y);
+  await expect.poll(() => page.evaluate(() => window.fem.registry.query({ query: 'query.selection' }))).toMatchObject({ faces: ['plate.right'] });
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'selection.clear' }));
   await page.evaluate(async () => {
     await window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['plate'], on: true });
     await window.fem.dispatch({ cmd: 'view.setProjection', projection: 'perspective' });
