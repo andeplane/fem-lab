@@ -85,6 +85,25 @@ describe('animation capture', () => {
     expect(() => env.recorder(document.createElement('canvas'), 30, { stopped: () => undefined, failed: () => undefined })).toThrowError(expect.objectContaining({ code: 'unsupported' }));
   });
 
+  it('stops canvas tracks when MediaRecorder construction fails', () => {
+    const stop = vi.fn();
+    class BrokenRecorder {
+      static isTypeSupported(): boolean { return true; }
+      constructor() { throw new Error('constructor failed'); }
+    }
+    const host = {
+      MediaRecorder: BrokenRecorder,
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame: () => undefined,
+      performance: { now: () => 0 },
+    };
+    const canvas = { captureStream: () => ({ getTracks: () => [{ stop }] }) };
+    const env = browserAnimationCaptureEnvironment(host as never);
+
+    expect(() => env.recorder(canvas as unknown as HTMLCanvasElement, 30, { stopped: () => undefined, failed: () => undefined })).toThrow('constructor failed');
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it('restores the exact viewer and UI animation state after capture', async () => {
     const c = controlled();
     const store = new Store();
@@ -164,6 +183,36 @@ describe('animation capture', () => {
       { playing: false, phase: 0.62, speed: 1 },
       { playing: false, phase: 0.62, speed: 1 },
     ]);
+  });
+
+  it('restores the viewer and releases the active slot when recorder cancellation throws', async () => {
+    const store = new Store();
+    store.set({ fieldKey: 'mode:1', result: { step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] } as never, playing: true, phase: 0.2 });
+    const restored: unknown[] = [];
+    const env: AnimationCaptureEnvironment = {
+      now: () => 0,
+      requestFrame: () => 9,
+      cancelFrame: () => undefined,
+      recorder: () => ({ start: () => undefined, stop: () => { throw new Error('already stopped'); } }),
+    };
+    const viewer = {
+      animationState: () => ({ playing: true, phase: 0.2, speed: 1 }),
+      setPhase: () => undefined,
+      restoreAnimation: (state: unknown) => restored.push(state),
+      atCaptureSize: (_width: number, _height: number, task: (canvas: HTMLCanvasElement) => Promise<unknown>) => task(document.createElement('canvas')),
+    } as unknown as Viewer;
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, env);
+
+    const first = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
+    expect(ctx.view.cancelAnimationCapture()).toBe(true);
+    await expect(first).resolves.toEqual({ webm: null });
+    expect(store.state).toMatchObject({ capturingAnimation: false, playing: true, phase: 0.2 });
+    expect(restored).toEqual([{ playing: true, phase: 0.2, speed: 1 }]);
+
+    const second = ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 });
+    expect(ctx.view.cancelAnimationCapture()).toBe(true);
+    await expect(second).resolves.toEqual({ webm: null });
+    expect(restored).toHaveLength(2);
   });
 
   it('rejects an overlapping host capture before it changes dimensions, phase, or UI state', async () => {

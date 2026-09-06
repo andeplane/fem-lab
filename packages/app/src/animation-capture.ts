@@ -88,7 +88,13 @@ export class AnimationCapture {
           if (!stopping) {
             stopping = true;
             this.env.cancelFrame(frame);
-            recorder?.stop();
+            try {
+              recorder?.stop();
+            } catch {
+              // Cancellation has already discarded the recording. A dead encoder must not
+              // leave the caller, viewer restoration and the active slot waiting forever.
+              finish(null);
+            }
           }
         };
         const start = this.env.now();
@@ -141,7 +147,13 @@ export function browserAnimationCaptureEnvironment(host: MediaRecorderHost = glo
       const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((mime) => Recorder.isTypeSupported(mime));
       if (!mimeType) throw new FemError('unsupported', 'this browser has no WebM encoder', 'file.export', 'open the app in a current Chromium browser, or export a PNG');
       const stream = canvas.captureStream(fps);
-      const media = new Recorder(stream, { mimeType, videoBitsPerSecond: 6_000_000 });
+      let media: MediaRecorder;
+      try {
+        media = new Recorder(stream, { mimeType, videoBitsPerSecond: 6_000_000 });
+      } catch (error) {
+        for (const track of stream.getTracks()) track.stop();
+        throw error;
+      }
       const chunks: Blob[] = [];
       media.ondataavailable = (event) => {
         if (event.data.size > 0) chunks.push(event.data);
