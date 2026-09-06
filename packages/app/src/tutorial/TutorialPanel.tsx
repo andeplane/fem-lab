@@ -17,13 +17,30 @@ import './tutorial.css';
  * ponytail: a bounded retry loop, not a MutationObserver — good enough for a form that settles
  * within a render or two; move to an observer if a step ever needs to wait longer than this.
  */
+/**
+ * A `highlight` is a Command id (`material.add`) or a raw CSS selector (`[title="panel.toggle
+ * results"]`); only the former is wrapped in `[data-cmd=...]`, and a selector that does not
+ * parse is a miss, not a page error (issue #55).
+ */
+export function findTarget(selector: string): HTMLElement | null {
+  try {
+    if (/^[\w.:-]+$/.test(selector)) {
+      const byCmd = document.querySelector<HTMLElement>(`[data-cmd="${selector}"]`);
+      if (byCmd) return byCmd;
+    }
+    return document.querySelector<HTMLElement>(selector);
+  } catch {
+    return null;
+  }
+}
+
 function useHighlight(selector: string | undefined): void {
   useEffect(() => {
     if (!selector) return undefined;
     let el: HTMLElement | null = null;
     let tries = 0;
     const timer = setInterval(() => {
-      el = document.querySelector<HTMLElement>(`[data-cmd="${selector}"]`) ?? document.querySelector<HTMLElement>(selector);
+      el = findTarget(selector);
       if (el) {
         el.setAttribute('data-tutorial-target', '');
         clearInterval(timer);
