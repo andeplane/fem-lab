@@ -18,7 +18,7 @@ import { Examples, Palette, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
 import { Cmd, useStore, type Dispatch } from './cmd';
-import { blockers, type Defs } from './schema';
+import { blockers, type Defs, shapeKinds } from './schema';
 
 export type { Dispatch } from './cmd';
 
@@ -47,6 +47,8 @@ export interface AppProps {
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
 const VARIANTS = new Map<string, JsonSchema>(doc.commands.oneOf.map((v) => [v.properties['cmd']!.const!, v as unknown as JsonSchema]));
+/** Every shape the tree's add menu offers, read off the schema once (issue #43). */
+const SHAPES = shapeKinds(DEFS);
 
 const MM = { length: 'mm', force: 'N', stress: 'MPa' };
 const SI = { length: 'm', force: 'N', stress: 'Pa' };
@@ -497,7 +499,7 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
           <div class="under-bar">
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
-              <ModelTree s={s} dispatch={dispatch} />
+              <ModelTree s={s} dispatch={dispatch} shapes={SHAPES} />
               <div class="centre">
                 <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />

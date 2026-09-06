@@ -130,4 +130,17 @@ describe('the shell', () => {
     // The "start from geometry" card carries the model-name field, which is the same Command.
     expect([...root.querySelectorAll('[data-cmd]')].map((el) => el.getAttribute('data-cmd'))).toEqual(['panel.toggle', 'panel.toggle', 'model.new', 'model.new', 'panel.toggle']);
   });
+
+  // Plan F · #43: the add chip is there with items in the group, and its menu is Commands.
+  it('offers the shape menu from the Geometry chip even though the group already has a body', async () => {
+    const { root, registry } = mount();
+    const known = new Set(registry.list().commands.map((d) => d.name));
+    const chip = [...root.querySelectorAll<HTMLButtonElement>('.tree .add-row > .chip-add')].find((b) => b.textContent?.includes('add body'))!;
+    expect(chip).toBeTruthy();
+    chip.click();
+    await new Promise((r) => setTimeout(r, 20));
+    const menu = [...root.querySelectorAll('.add-menu [data-cmd]')];
+    expect(menu.map((el) => el.textContent)).toEqual(['▭box', '⬭cylinder', '◯sphere', '▱sheet', '⬒extrude', '◑revolve', '⬬union', '⊖subtract', '⊗intersect', '⇲transform', '∖cut']);
+    expect(menu.map((el) => el.getAttribute('data-cmd')!).filter((c) => !known.has(c))).toEqual([]);
+  });
 });
