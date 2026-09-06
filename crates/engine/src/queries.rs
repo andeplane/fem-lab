@@ -440,22 +440,22 @@ impl Engine {
         })
     }
 
-    /// `query.cost`: what solving this Step would take, from the sparsity alone.
+    /// `query.cost`: bounded assembly counting plus the Step's actual retained-output schedule.
     pub(crate) fn query_cost(&mut self, step: &str) -> Result<CostEstimate, Error> {
-        let procedure = self
+        let step = self
             .model
             .step(step)
             .ok_or_else(|| Error::not_found("step", step, &self.model.names(ObjectKind::Step)))?
-            .procedure;
+            .clone();
+        let procedure = crate::solve_run::procedure_step(&step, crate::solve::SolveOptions::default())?;
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
-        let dpn =
-            if matches!(procedure, crate::command::Procedure::HeatSteady | crate::command::Procedure::HeatTransient) {
-                1
-            } else {
-                built.mesh.dim
-            };
-        Ok(crate::solve::cost_estimate(&built.mesh, dpn, crate::command::Solver::Auto))
+        if matches!(procedure, crate::procedure::Step::Explicit { .. }) {
+            let problem = crate::solve_run::build_problem(&self.model, built, &step)?;
+            Ok(crate::solve_run::planned_cost(&built.mesh, Some(&problem), &procedure)?.estimate)
+        } else {
+            Ok(crate::solve_run::planned_cost(&built.mesh, None, &procedure)?.estimate)
+        }
     }
 
     fn query_objects(&self, kinds: Option<&[ObjectKind]>) -> ObjectList {

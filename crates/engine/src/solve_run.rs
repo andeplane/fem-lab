@@ -268,7 +268,7 @@ pub fn procedure_name(p: Procedure) -> String {
 /// The `procedure::Step` a Model Step means: the fields that procedure reads, and the defaults
 /// plan A names for the ones the Command left out. A missing `dt` or `tEnd` is a schema error
 /// naming the field, because a transient with no clock is not a Step anybody meant.
-fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedure::Step, Error> {
+pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedure::Step, Error> {
     let want = |v: Option<f64>, field: &'static str| {
         v.ok_or_else(|| {
             let name = procedure_name(step.procedure);
@@ -299,6 +299,49 @@ fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedure::Step, Er
             output_every: step.output_every.unwrap_or(1) as usize,
         },
     })
+}
+
+pub(crate) struct PlannedCost {
+    pub estimate: crate::query::CostEstimate,
+    transient: Option<(usize, usize, &'static str)>,
+}
+
+/// The cost Query and solve preflight share one schedule and byte calculation. Explicit Steps
+/// derive their step count from the same element-frequency bound as the integrator.
+pub(crate) fn planned_cost(
+    mesh: &femlab_geometry::Mesh,
+    explicit_problem: Option<&Problem<'_>>,
+    step: &procedure::Step,
+) -> Result<PlannedCost, Error> {
+    let mut estimate = match step {
+        procedure::Step::Static { solver } | procedure::Step::Modal { solver, .. } => {
+            crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
+        }
+        procedure::Step::HeatSteady { solver } => crate::solve::cost_estimate(mesh, 1, solver.solver),
+        procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
+            let (steps, _) = procedure::time_grid(*dt, *t_end)?;
+            let base = crate::solve::cost_estimate(mesh, 1, solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, 5)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "heat-transient")) });
+        }
+        procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
+            let p = explicit_problem.expect("an explicit cost plan needs its resolved Problem");
+            let (steps, _) = procedure::explicit::retention_grid(p, *t_end, *dt_factor)?;
+            let components = p.dofs_per_node();
+            let base = crate::solve::cost_estimate(mesh, components, Solver::Auto);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), components, steps, *output_every, 6)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "explicit")) });
+        }
+    };
+    estimate.note.push_str(" Retained transient frames: none.");
+    Ok(PlannedCost { estimate, transient: None })
+}
+
+impl PlannedCost {
+    fn enforce(&self, step: &str) -> Result<(), Error> {
+        let (steps, every, procedure) = self.transient.expect("solve_run calls this only for transient Steps");
+        crate::solve::enforce_transient_budget(&self.estimate, step, procedure, steps, every)
+    }
 }
 
 /// The Model's amplitude as the procedure's; the two are the same shape in different modules
@@ -369,6 +412,9 @@ impl Engine {
                 &step,
                 prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)),
             )?;
+            if matches!(&proc_step, procedure::Step::HeatTransient { .. } | procedure::Step::Explicit { .. }) {
+                planned_cost(p.mesh, Some(&p), &proc_step)?.enforce(&step.name)?;
+            }
             let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
             let mut result =
                 procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?;

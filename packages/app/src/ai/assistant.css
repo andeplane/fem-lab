@@ -3,7 +3,7 @@
 
 .assistant {
   flex: none;
-  width: 392px;
+  width: var(--assistant-width, 392px);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -14,6 +14,13 @@
 
 .assistant[hidden] {
   display: none;
+}
+
+@media (max-width: 600px) {
+  .assistant {
+    width: min(392px, 100vw);
+    max-width: 100vw;
+  }
 }
 
 .assistant header {
@@ -347,7 +354,10 @@
   font-size: 11.5px;
   color: var(--text-low);
 }
-.assistant .thinking i {
+.assistant .thinking i,
+.assistant .tool-pending {
+  display: inline-block;
+  flex: none;
   width: 9px;
   height: 9px;
   border: 1.5px solid var(--accent);
@@ -639,4 +649,14 @@
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant *,
+  .assistant *::before,
+  .assistant *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

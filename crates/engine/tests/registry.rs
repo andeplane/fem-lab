@@ -2495,6 +2495,8 @@ fn the_cost_of_a_step_is_the_sparsity_of_its_mesh() {
     assert!(c.nnz > c.dofs);
     assert!(c.bytes > c.nnz * 12 + c.dofs * 32);
     assert_eq!(c.nnz_lower, c.nnz);
+    assert_eq!((c.retained_frames, c.retained_bytes, c.transient_work_bytes, c.transport_staging_bytes), (0, 0, 0, 0));
+    assert_eq!(c.bytes, c.assembly_bytes);
     assert_eq!(c.feasible, None);
     assert_eq!(c.budget_bytes, 1_610_612_736);
     assert!(c.note.starts_with("cpu-direct"), "{}", c.note);
@@ -2510,7 +2512,85 @@ fn the_cost_of_a_step_is_the_sparsity_of_its_mesh() {
         assert_eq!(heat.dofs, c.dofs / 3);
         assert_eq!(heat.nnz, c.nnz / 9);
         assert!(heat.bytes < c.bytes);
+        if procedure == "heat-transient" {
+            assert_eq!(heat.retained_frames, 11, "initial plus all ten steps");
+            assert_eq!(heat.retained_bytes, 11 * (1025 + 1) * 8);
+            assert_eq!(heat.transient_work_bytes, 1025 * 5 * 8);
+            assert_eq!(heat.transport_staging_bytes, 1025 * 3 * 8);
+            assert_eq!(heat.bytes, heat.assembly_bytes + heat.retained_bytes + heat.transient_work_bytes);
+        } else {
+            assert_eq!(heat.retained_frames, 0);
+        }
     }
+    for (name, every, frames) in [("partial", 4, 4), ("endpoint-only", 20, 2)] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"{name}","procedure":"heat-transient","loads":[],"constraints":[],"dt":"0.1 s","tEnd":"1 s","outputEvery":{every}}}"#
+            ),
+        );
+        let QueryResult::Cost(heat) = e.query(Query::Cost { step: name.into() }).unwrap() else { panic!() };
+        assert_eq!(heat.retained_frames, frames);
+        assert_eq!(heat.retained_bytes, frames * (1025 + 1) * 8);
+    }
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root"],"loads":[],"nModes":2}"#);
+    let QueryResult::Cost(modal) = e.query(Query::Cost { step: "modes".into() }).unwrap() else { panic!() };
+    assert_eq!(modal.retained_frames, 0);
+}
+
+#[test]
+fn transient_cost_errors_are_structured_before_allocation() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"cost errors"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":[],"loads":[]}"#);
+    let QueryResult::Cost(static_cost) = e.query(Query::Cost { step: "static".into() }).unwrap() else { panic!() };
+    assert_eq!(static_cost.retained_frames, 0, "a static step retains no transient frames");
+
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"missing-dt","procedure":"heat-transient","constraints":[],"loads":[],"tEnd":"1 s"}"#,
+    );
+    assert_eq!(e.query(Query::Cost { step: "missing-dt".into() }).expect_err("dt is required").code, ErrorCode::Schema);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"zero-dt","procedure":"heat-transient","constraints":[],"loads":[],"dt":"0 s","tEnd":"1 s"}"#,
+    );
+    assert_eq!(
+        e.query(Query::Cost { step: "zero-dt".into() }).expect_err("the grid is invalid").code,
+        ErrorCode::Schema
+    );
+
+    ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"block.xmax","total":["1 N","0 N","0 N"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"dynamic","procedure":"explicit","constraints":[],"loads":["tip"],"tEnd":"1 ms"}"#,
+    );
+    assert_eq!(
+        e.query(Query::Cost { step: "dynamic".into() }).expect_err("the Body has no Material").code,
+        ErrorCode::ModelNoMaterial
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"massless","E":"210 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"massless","bodies":["block"]}"#);
+    assert_eq!(
+        e.query(Query::Cost { step: "dynamic".into() }).expect_err("there is no density").code,
+        ErrorCode::ModelIllPosed
+    );
+
+    ok(&mut e, r#"{"cmd":"material.add","name":"massless","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.prescribe","name":"left-a","on":"block.xmin","dof":"ux","value":"0 m"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.prescribe","name":"left-b","on":"block.xmin","dof":"ux","value":"1 mm"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conflicting-grid","procedure":"explicit","constraints":["left-a","left-b"],"loads":[],"tEnd":"1 ms"}"#,
+    );
+    assert_eq!(
+        e.query(Query::Cost { step: "conflicting-grid".into() })
+            .expect_err("planning resolves the same conflicting constraints as integration")
+            .code,
+        ErrorCode::ConstraintConflict
+    );
 }
 
 #[test]
@@ -3342,6 +3422,42 @@ fn a_transient_heat_step_reports_its_history_and_validates_its_amplitude() {
     assert_eq!(result_of(&mut e, Some("cycled")).history.len(), 3);
 }
 
+/// Retention is budgeted before History allocation. A rejected replacement leaves the earlier
+/// Result available, and the same Engine accepts a corrected schedule afterwards.
+#[test]
+fn an_over_budget_transient_preserves_the_prior_result_and_engine() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"0 degC"}"#);
+    let ordinary = r#"{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["cold"],
+        "loads":[],"dt":"0.5 s","tEnd":"1 s","theta":1.0,"initial":"20 degC","outputEvery":1}"#;
+    ok(&mut e, ordinary);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
+    let prior = result_of(&mut e, Some("warm"));
+    assert_eq!(prior.history.len(), 3);
+
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["cold"],
+            "loads":[],"dt":"0.000000001 s","tEnd":"1 s","theta":1.0,"initial":"20 degC","outputEvery":1}"#,
+    );
+    let QueryResult::Cost(cost) = e.query(Query::Cost { step: "warm".into() }).unwrap() else { panic!() };
+    assert_eq!(cost.retained_frames, 1_000_000_001);
+    assert!(cost.retained_bytes > cost.budget_bytes);
+    assert_eq!(cost.feasible, Some(false));
+    let rejected = err(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
+    assert_eq!(rejected.code, ErrorCode::SolveTooLarge);
+    assert_eq!(rejected.where_.as_deref(), Some("step 'warm'.outputEvery"));
+    assert!(rejected.suggestion.as_deref().unwrap().contains("outputEvery at least"));
+
+    ok(&mut e, ordinary);
+    let retained = result_of(&mut e, Some("warm"));
+    assert!(!retained.stale, "restoring the solved Model makes the prior Result current again");
+    assert_eq!(retained.history, prior.history);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
+    assert_eq!(result_of(&mut e, Some("warm")).history.len(), 3);
+}
+
 /// A modal Step reports its frequencies in hertz, and a host fetches mode `k`'s shape by name.
 #[test]
 fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
@@ -3579,6 +3695,7 @@ fn an_explicit_step_drops_a_free_block_by_g_t_squared_over_two() {
         r#"{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],
             "output":["displacement"],"tEnd":"1 ms","dtFactor":0.9,"outputEvery":10}"#,
     );
+    let QueryResult::Cost(cost) = e.query(Query::Cost { step: "fall".into() }).unwrap() else { panic!() };
     ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
     let uz = probe_at(&mut e, "fall", Field::Displacement, Some(2), ["50 mm", "50 mm", "50 mm"]);
     let want = -0.5 * 9.81 * 1e-6 * 1e3;
@@ -3586,6 +3703,56 @@ fn an_explicit_step_drops_a_free_block_by_g_t_squared_over_two() {
     let summary = result_of(&mut e, Some("fall"));
     assert_eq!(summary.solver, "cpu-explicit");
     assert!(summary.iterations > 100, "{}", summary.iterations);
+    assert_eq!(cost.retained_frames as usize, summary.history.len());
+    assert_eq!(
+        cost.retained_frames,
+        u64::from(1 + summary.iterations / 10 + u32::from(!summary.iterations.is_multiple_of(10)))
+    );
+}
+
+/// Cost planning and integration must use the same supported massless-element rule. A wholly
+/// held massless Body contributes no frequency; the massive Body supplies the grid. Making the
+/// massless Body free turns the same model into the structured local-CFL error before allocation.
+#[test]
+fn explicit_cost_and_run_share_the_fixed_massless_element_grid() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"planned massless support"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"massive","size":["0.1 m","0.1 m","0.1 m"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.addBox","name":"massless","size":["0.1 m","0.1 m","0.1 m"],"at":["0.2 m","0 m","0 m"]}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"held-massless","where":{"kind":"bbox","min":["0.19 m","-0.01 m","-0.01 m"],"max":["0.31 m","0.11 m","0.11 m"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"zero","E":"210 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["massive"]}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"zero","bodies":["massless"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"held-massless"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"dynamic","procedure":"explicit","constraints":["hold"],"loads":[],"tEnd":"1e-8 s","dtFactor":0.9,"outputEvery":2}"#,
+    );
+    let QueryResult::Cost(cost) = e.query(Query::Cost { step: "dynamic".into() }).unwrap() else { panic!() };
+    ok(&mut e, r#"{"cmd":"solve.run","step":"dynamic"}"#);
+    let summary = result_of(&mut e, Some("dynamic"));
+    assert_eq!(cost.retained_frames as usize, summary.history.len());
+    assert_eq!(
+        cost.retained_frames,
+        u64::from(1 + summary.iterations / 2 + u32::from(!summary.iterations.is_multiple_of(2)))
+    );
+
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"dynamic","procedure":"explicit","constraints":[],"loads":[],"tEnd":"1e-8 s","dtFactor":0.9,"outputEvery":2}"#,
+    );
+    let err = e.query(Query::Cost { step: "dynamic".into() }).expect_err("free massless stiffness has no CFL bound");
+    assert_eq!(err.code, ErrorCode::ModelIllPosed);
+    assert!(err.where_.as_deref().is_some_and(|where_| where_.starts_with("element ")));
+    assert!(err.cause.contains("finite explicit frequency bound is undefined"), "{}", err.cause);
 }
 
 /// Every procedure refuses a Model whose Body has no material, and says which Body.
