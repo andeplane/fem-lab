@@ -5,7 +5,7 @@
 // Values arrive from the engine in SI and are shown in the Model's own units, so the array the
 // viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
-import type { JournalDump, ResultSummary, StudyReport, Warning } from '@femlab/registry';
+import { FemError, type JournalDump, type ResultSummary, type StudyReport, type Warning } from '@femlab/registry';
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store } from './store';
@@ -269,7 +269,28 @@ export function magnitude(values: Float32Array, on: boolean): Float32Array {
 
 /** `view.showField { field, component }` → the picker key that names the same scalar. */
 export function fieldKeyOf(field: string, component: number | null): string {
-  if (field.startsWith('mode:') || field === 'safety' || field === 'utilisation') return field;
-  const exact = FIELD_CHOICES.find((c) => c.field === field && c.component === component);
-  return (exact ?? FIELD_CHOICES.find((c) => c.field === field))?.key ?? 'vonMises';
+  if (field === 'safety' || field === 'utilisation') {
+    if (component !== null) throw unsupportedField(field, component);
+    return field;
+  }
+  if (field.startsWith('mode:')) {
+    if (!/^mode:[1-9]\d*$/.test(field) || component !== null) throw unsupportedField(field, component);
+    return field;
+  }
+  const choices = FIELD_CHOICES.filter((c) => c.field === field);
+  if (choices.length === 0) throw unsupportedField(field, component);
+  if (component === null) return choices.find((c) => c.component === null)?.key ?? choices[0]!.key;
+  const exact = choices.find((c) => c.component === component);
+  if (!exact) throw unsupportedField(field, component);
+  return exact.key;
+}
+
+function unsupportedField(field: string, component: number | null): FemError {
+  const suffix = component === null ? '' : ` component ${component}`;
+  return new FemError(
+    'unsupported',
+    `the browser cannot contour result field '${field}'${suffix}`,
+    'view.showField',
+    'choose a field and component from the Results picker',
+  );
 }
