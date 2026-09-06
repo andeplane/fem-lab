@@ -12,6 +12,7 @@ import { EMPTY_SELECTION, type Store, type ViewMode } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import type { WorkerTransport } from './worker-transport';
+import type { TransientInput } from './transient';
 
 /**
  * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
@@ -22,6 +23,8 @@ import type { WorkerTransport } from './worker-transport';
 export interface ViewerRef {
   current: Viewer | null;
   onReady?: () => void;
+  /** A scrub preview; only the final gesture is dispatched as a host Command. */
+  previewTransient?: (input: TransientInput) => Promise<void>;
 }
 
 const soon = (what: string, suggestion: string) => (): never => {
@@ -141,11 +144,20 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
         document.documentElement.dataset['theme'] = t;
         v().setTheme(t);
       },
-      animate: (a) => v().animate(a.playing),
+      animate: (a) => {
+        v();
+        if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.animate', 'solve a Step in the app');
+        return results.animate(a);
+      },
+      playTransient: (a) => {
+        v();
+        if (!results) throw new FemError('unsupported', 'no Result host is available', 'view.playTransient', 'solve a transient Step in the app');
+        return results.playTransient(a);
+      },
       camera: () => v().getCamera() as never,
       screenshot: async (o) => {
         const burn = o.legend === false ? null : results?.legendBurn();
-        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined) };
+        return { png: v().screenshot(burn ? { ...burn, colormap: burn.colormap as ColormapName } : undefined, o) };
       },
     },
     selection: {
