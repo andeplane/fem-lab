@@ -4,7 +4,7 @@ import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';
 import { EXPORT_FORMATS, extremesCsv, pathCsv, reactionsCsv } from '../src/host-commands';
-import { ACK, FOLDER, MODEL_FILE, PATH, PROJECT, RESULT, fakeHost, fakeTransport } from './fakes';
+import { ACK, AUTOSAVES, FOLDER, MODEL_FILE, PATH, PROJECT, RESULT, fakeHost, fakeTransport } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
 const make = (folderOpen = false) => {
@@ -33,6 +33,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'selection.clear': {},
   'selection.setPickTarget': { target: 'face' },
   'panel.toggle': { panel: 'palette', open: true },
+  'panel.resize': { panel: 'tree', size: 300 },
   'query.validateScript': { code: '1 + 1' },
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
@@ -47,6 +48,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'file.export': { spec: { format: 'vtu' } },
   'file.shareLink': {},
   'file.autosave': { on: true },
+  'file.restore': {},
   'file.read': { path: 'AGENTS.md' },
   'file.write': { path: 'reports/a.md', text: '# a' },
   'folder.open': { picker: true },
@@ -181,12 +183,16 @@ describe('Registry', () => {
 
   it('view.* and selection.* pass their arguments through', async () => {
     const { registry, host } = make();
+    await registry.dispatch({ cmd: 'panel.resize', panel: 'properties', size: 360 });
+    expect(host.panels.resize).toHaveBeenCalledWith('properties', 360);
     await registry.dispatch({ cmd: 'view.toggle', layer: 'edges', on: false });
     expect(host.view.toggle).toHaveBeenCalledWith('edges', false);
     await registry.dispatch({ cmd: 'view.setClip', plane: null });
     expect(host.view.setClip).toHaveBeenCalledWith(null);
     await registry.dispatch({ cmd: 'view.showField', field: null });
     expect(host.view.showField).toHaveBeenCalledWith({ field: null });
+    await registry.dispatch({ cmd: 'view.showField', field: '' });
+    expect(host.view.showField).toHaveBeenCalledWith({ field: '' });
     await registry.dispatch({ cmd: 'selection.set', faces: ['beam.top'] });
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
@@ -279,6 +285,14 @@ describe('Registry', () => {
     await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toBeNull();
   });
 
+  it('lists bounded autosave revisions and restores the explicitly selected Journal', async () => {
+    const { registry, host } = make();
+    await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toEqual({ enabled: true, revisions: AUTOSAVES });
+    await registry.dispatch({ cmd: 'file.restore', id: 'older' });
+    expect(host.files.restore).toHaveBeenCalledWith('older');
+    await expect(registry.dispatch({ cmd: 'file.restore', id: 7 })).rejects.toMatchObject({ code: 'schema', where: 'id' });
+  });
+
   it('file.read and file.write stay inside the open folder and refuse big files', async () => {
     const { registry, host } = make(true);
     await expect(registry.dispatch({ cmd: 'file.read', path: 'AGENTS.md' })).resolves.toEqual({ text: 'content of AGENTS.md' });
@@ -302,7 +316,12 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'solve.cancel' });
     expect(transport.cancel).toHaveBeenCalled();
     await registry.dispatch({ cmd: 'ai.setKey', key: 'sk' });
-    expect(host.ai.setKey).toHaveBeenCalledWith('sk');
+    expect(host.ai.setKey).toHaveBeenCalledWith('sk', 'anthropic');
+    await registry.dispatch({ cmd: 'ai.setKey', key: 'sk-openai', provider: 'openai' });
+    expect(host.ai.setKey).toHaveBeenCalledWith('sk-openai', 'openai');
+    await registry.dispatch({ cmd: 'ai.setKey', key: null, provider: 'openai' });
+    expect(host.ai.setKey).toHaveBeenCalledWith(null, 'openai');
+    await expect(registry.dispatch({ cmd: 'ai.setKey', key: 'bad', provider: 'other' })).rejects.toMatchObject({ code: 'schema' });
     await registry.dispatch({ cmd: 'ai.setModel', model: 'm' });
     expect(host.ai.setModel).toHaveBeenCalledWith('m');
     await expect(registry.dispatch({ cmd: 'script.run', code: '1' })).resolves.toEqual({ result: 1, console: [] });
@@ -324,6 +343,10 @@ describe('Registry', () => {
     expect(wrote()).toEqual(['beam.png', 'image/png', new Uint8Array([65, 66, 67])]);
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'png', legend: false } });
     expect(host.view.screenshot).toHaveBeenLastCalledWith({ legend: false });
+    await registry.dispatch({ cmd: 'file.export', spec: { format: 'png', width: 1200, height: 675, legend: false, title: 'Beam' } });
+    expect(host.view.screenshot).toHaveBeenLastCalledWith({ width: 1200, height: 675, legend: false, title: 'Beam' });
+    await expect(registry.dispatch({ cmd: 'file.export', spec: { format: 'png', width: 0 } })).rejects.toThrow();
+    await expect(registry.query({ query: 'query.screenshot', height: -2 })).rejects.toThrow();
 
     await registry.dispatch({ cmd: 'file.export', spec: { format: 'csv' } });
     expect(wrote()[0]).toBe('beam-extremes.csv');

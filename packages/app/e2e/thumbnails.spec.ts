@@ -1,7 +1,7 @@
 // CI builds the app once, then this supported-Chromium pass generates every gallery image from
 // the real viewer. It replays the real Model and Mesh Commands but omits solves, so a thumbnail
 // never presents invented result contours as physics.
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
