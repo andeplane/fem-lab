@@ -36,3 +36,4 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"
 proptest = "1.11"
 pollster = "1.0"
 naga = { version = "30.0.1", features = ["wgsl-in"] }
+vtkio = { version = "0.7.0-rc2", default-features = false, features = ["xml"] }
