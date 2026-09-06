@@ -82,6 +82,16 @@ plane-stress sheet and an axisymmetric ring. A8's numerics half is
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
 
+A1 also runs all eight element families at length factors `1e-9`, `1e-6`, `1e-5`, `1e-3`,
+`1`, `1e3`, and `1e6`, with full and incompatible-mode formulations and every applicable
+idealisation. Constant strain/stress, `uᵀKu = V ε:σ`, and the linear-temperature identity
+`TᵀK_T T = kV` use the analytical physical volume (thickness-weighted area in plane stress,
+unit-depth area in plane strain, and Pappus' volume in axisymmetry). Analytical affine
+determinants and inverse-map points are checked at every scale. Inverted, collapsed and
+relatively singular counterparts are rejected independently of size. These are exact patch
+identities across scale, not a mesh convergence rate; Jacobian validity uses a dimensionless
+normalised determinant, with the unused 2D identity padding excluded from the length scale.
+
 ## B. Beams and locking (phase 1–2)
 
 | # | Case | Reference | Tolerance | Proves | Status |
