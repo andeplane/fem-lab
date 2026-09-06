@@ -736,6 +736,16 @@ impl Engine {
                 self.model
                     .step(name)
                     .ok_or_else(|| Error::not_found("step", name, &self.model.names(ObjectKind::Step)))?;
+                let users: Vec<&str> = self
+                    .model
+                    .steps
+                    .iter()
+                    .filter(|s| s.after.as_deref() == Some(name.as_str()))
+                    .map(|s| s.name.as_str())
+                    .collect();
+                if !users.is_empty() {
+                    return Err(in_use("step", name, &users, "steps"));
+                }
                 self.model.steps.retain(|s| s.name != *name);
                 Ok(Output::None)
             }
@@ -1069,6 +1079,9 @@ impl Engine {
                 for s in &mut m.steps {
                     if s.name == name {
                         s.name = to.into();
+                    }
+                    if s.after.as_deref() == Some(name) {
+                        s.after = Some(to.into());
                     }
                 }
             }

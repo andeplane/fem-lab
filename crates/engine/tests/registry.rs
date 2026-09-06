@@ -2422,6 +2422,41 @@ fn a_static_step_after_a_heat_step_turns_temperature_into_stress() {
     // ΔT is 50 K, so σ_xx is −210 GPa × 1.2e-5 × 50 = −126 MPa.
     let sigma = probe_at(&mut e, "stress", Field::Stress, Some(0), ["500 mm", "50 mm", "50 mm"]);
     assert!((sigma + 126.0).abs() <= 0.02 * 126.0, "σ_xx = {sigma} MPa");
+
+    // A rename follows the dependency. The old Result remains as a stale orphan, so it cannot
+    // silently satisfy the renamed reference; rerunning the predecessor makes the chain valid.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"step","name":"conduct","to":"thermal"}"#);
+    assert_eq!(e.model().step("stress").unwrap().after.as_deref(), Some("thermal"));
+    let missing = err(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert!(missing.cause.contains("'thermal' has no Result"), "{missing:?}");
+
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model().step("stress").unwrap().after.as_deref(), Some("conduct"));
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.model().step("stress").unwrap().after.as_deref(), Some("thermal"));
+
+    let before = e.revision();
+    let used = err(&mut e, r#"{"cmd":"step.remove","name":"thermal"}"#);
+    assert_eq!(used.code, ErrorCode::InUse);
+    assert!(used.cause.contains("stress"), "{used:?}");
+    assert_eq!(e.revision(), before, "a refused removal is not journaled");
+    ok(&mut e, r#"{"cmd":"solve.run","step":"thermal"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+
+    // Saved files contain the retargeted Model but no Results, while replay reruns the Journal.
+    let saved = e.export_file();
+    let mut reopened = engine();
+    reopened.import_file(saved.clone()).unwrap();
+    assert_eq!(reopened.model().step("stress").unwrap().after.as_deref(), Some("thermal"));
+    let missing = err(&mut reopened, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert!(missing.cause.contains("'thermal' has no Result"), "{missing:?}");
+    ok(&mut reopened, r#"{"cmd":"solve.run","step":"thermal"}"#);
+    ok(&mut reopened, r#"{"cmd":"solve.run","step":"stress"}"#);
+
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&saved.journal.entries, false, true)).expect("the renamed chain replays");
+    assert_eq!(replayed.model().step("stress").unwrap().after.as_deref(), Some("thermal"));
+    assert!(replayed.field_named(Some("stress"), "stress").is_ok());
 }
 
 /// An explicit Step falls under gravity by exactly `g t²/2`, which is what central differences
