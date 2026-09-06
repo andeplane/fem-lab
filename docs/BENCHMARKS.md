@@ -460,6 +460,27 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
 
+### Procedure-aware convergence studies (#115)
+
+`convergence_studies_use_the_heat_operator_and_one_temperature_dof` uses a 1 m
+rod with 0°C ends, conductivity 45 W/(m K) and source 900 W/m³. The independent
+solution is T(x)=10x(1−x) °C. At x=1/3 m, linear interpolation on h=1/2, 1/4,
+1/8 m meshes has error 20h²/9 °C: the study must report second-order convergence
+and extrapolate to 20/9 °C. Its thermal DOF counts are 12, 45 and 225, with one
+unknown per node. Both restore modes preserve the intended mesh/Result pairing.
+
+`convergence_studies_keep_transient_initial_time_and_amplitude_settings` checks
+uniform T=10t K heating with q=ρc·10 and matching end ramps. The time integrator
+is exact for this linear function: all three meshes reach 20 K at 2 s and 40 K
+at 4 s, retaining the configured zero initial state, 0.25 s time step and output
+cadence. `convergence_studies_use_explicit_dynamics_for_a_falling_block` checks
+u_z=−gt²/2 at t=1 ms on 1³, 2³ and 4³ meshes, within 1%, without static supports.
+
+Modal amplitude studies and chained Steps explicitly return `unsupported` before
+changing Model, Journal or stored fields. Frequencies need a mode-aware quantity;
+chained studies need dependency results recomputed on each refinement. The current
+command instead directs callers to explicit per-mesh solve.run sequences.
+
 ### Thermal reaction power and display units (#120)
 
 For a `1 × 0.1 × 0.1 m` bar with `k=45 W/(m K)`, a `1000 W/m²` end flux
