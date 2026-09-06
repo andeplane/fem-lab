@@ -443,6 +443,27 @@ describe('autosave', () => {
     for (const row of rows) await expect(registry.dispatch({ cmd: 'file.restore', id: row.id })).resolves.toMatchObject({ name: row.name });
   });
 
+  it('preserves distinct IDs when two open sessions save identical content', async () => {
+    const store = memoryStore();
+    const a = makeAutosave({ store, now: () => 100 });
+    const b = makeAutosave({ store, now: () => 200 });
+    await a.readAll();
+    await b.readAll();
+    a.note('a', journal(1));
+    const first = a.history()[0]!.id!;
+    await a.flush();
+    b.note('a', journal(1));
+    const second = b.history()[0]!.id!;
+    await b.flush();
+    const { registry } = autosaveRegistry(b);
+    const rows = (await registry.query({ query: 'query.autosaveHistory' }) as { revisions: { id: string; name: string }[] }).revisions;
+    expect(second).not.toBe(first);
+    expect(rows.map((row) => row.id)).toEqual(expect.arrayContaining([first, second]));
+    for (const row of rows.filter((row) => row.id === first || row.id === second)) {
+      await expect(registry.dispatch({ cmd: 'file.restore', id: row.id })).resolves.toMatchObject({ name: 'a' });
+    }
+  });
+
   it('keeps a failed revision visible and retryable after a quota error', async () => {
     const store = memoryStore();
     const onError = vi.fn();

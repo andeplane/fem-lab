@@ -386,7 +386,9 @@ export function makeAutosave({
   const merge = (current: Saved[], incoming: Saved[]): Saved[] => {
     let merged = normalize(current);
     for (const revision of incoming.slice().reverse()) {
-      if (!merged.some((existing) => same(existing, revision))) merged = [revision, ...merged];
+      const existing = merged.findIndex((saved) => saved.id === revision.id);
+      if (existing >= 0) merged.splice(existing, 1);
+      merged = [revision, ...merged];
     }
     return merged.slice(0, MAX_AUTOSAVES);
   };
@@ -401,7 +403,7 @@ export function makeAutosave({
   const visible = (): Saved[] => {
     const seen = new Set<string>();
     return [...pending, ...revisions].filter((revision) => {
-      const key = JSON.stringify(revision.cmds);
+      const key = revision.id ?? `legacy-${revision.at}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -434,8 +436,7 @@ export function makeAutosave({
       const candidate = { id: id?.() ?? globalThis.crypto?.randomUUID?.() ?? `${at}-${instanceId}-${nextId++}`, name, at, cmds: journal.map((e) => e.cmd) };
       const current = [...pending, ...revisions].find((revision) => same(revision, candidate));
       const revision = current ? { ...candidate, id: current.id } : candidate;
-      if (pending[0] && same(pending[0], revision)) pending[0] = revision;
-      else pending = [revision, ...pending].slice(0, MAX_AUTOSAVES);
+      pending = [revision, ...pending.filter((saved) => saved.id !== revision.id)].slice(0, MAX_AUTOSAVES);
       if (timer === null) timer = setTimer(write, delayMs);
     },
     setEnabled(next) {

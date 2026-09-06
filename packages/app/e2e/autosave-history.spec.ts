@@ -93,4 +93,35 @@ test.describe('@cpu autosave Journal revisions', () => {
     expect(new Set(saved.map((revision) => revision.id)).size).toBe(2);
     await peer.close();
   });
+
+  test('restores both IDs when two browser tabs save identical Journal content', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase('femlab');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve();
+    }));
+    await page.reload();
+    await ready(page);
+    const peer = await page.context().newPage();
+    await peer.goto('./');
+    await ready(peer);
+    await Promise.all([
+      page.evaluate(() => window.fem.model.new({ name: 'same-content' })),
+      peer.evaluate(() => window.fem.model.new({ name: 'same-content' })),
+    ]);
+    await expect.poll(async () => (await storedAutosaves(page)).filter((revision) => revision.name === 'same-content').length).toBe(2);
+    await page.reload();
+    await ready(page);
+    await expect.poll(async () => ((await page.evaluate(() => window.fem.registry.query({ query: 'query.autosaveHistory' }))) as { revisions: { name: string }[] }).revisions.filter((revision) => revision.name === 'same-content').length).toBe(2);
+    const history = (await page.evaluate(() => window.fem.registry.query({ query: 'query.autosaveHistory' }))) as { revisions: { id: string; name: string }[] };
+    const revisions = history.revisions.filter((revision) => revision.name === 'same-content');
+    expect(revisions).toHaveLength(2);
+    expect(new Set(revisions.map((revision) => revision.id)).size).toBe(2);
+    await page.evaluate(async (ids) => {
+      for (const id of ids) await window.fem.dispatch({ cmd: 'file.restore', id });
+    }, revisions.map((revision) => revision.id));
+    await peer.close();
+  });
 });
