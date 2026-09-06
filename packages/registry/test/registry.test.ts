@@ -400,3 +400,27 @@ describe('Registry', () => {
     expect(registry.list().commands).toHaveLength(schemaCommands.length + 1);
   });
 });
+
+
+it('rejects oversized Model files from every input route before importing', async () => {
+  const { registry, host, transport } = make(true);
+  const oversized = ' '.repeat(16 * 1024 * 1024 + 1);
+  await expect(registry.dispatch({ cmd: 'file.open', json: oversized })).rejects.toMatchObject({ code: 'schema', where: 'json' });
+  // Character count alone misses multi-byte UTF-8 data.
+  await expect(registry.dispatch({ cmd: 'file.open', json: 'é'.repeat(8 * 1024 * 1024 + 1) })).rejects.toMatchObject({ code: 'schema', where: 'json' });
+  vi.mocked(host.files.pick).mockResolvedValue(oversized);
+  await expect(registry.dispatch({ cmd: 'file.open', picker: true })).rejects.toMatchObject({ code: 'schema' });
+  vi.mocked(host.folder.readText).mockResolvedValue(oversized);
+  await expect(registry.dispatch({ cmd: 'file.open', path: 'model.json' })).rejects.toMatchObject({ code: 'schema' });
+  expect(transport.importFile).not.toHaveBeenCalled();
+});
+
+it('rejects script source and deadlines outside the documented bounds before validation', async () => {
+  const { registry, host } = make();
+  for (const timeoutMs of [0, -1, 30001, Infinity, NaN]) {
+    await expect(registry.dispatch({ cmd: 'script.run', code: '1', timeoutMs })).rejects.toMatchObject({ code: 'schema' });
+  }
+  await expect(registry.dispatch({ cmd: 'script.run', code: ' '.repeat(64001) })).rejects.toMatchObject({ code: 'schema' });
+  expect(host.script.validate).not.toHaveBeenCalled();
+  expect(host.script.run).not.toHaveBeenCalled();
+});

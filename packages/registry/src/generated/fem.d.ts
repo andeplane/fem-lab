@@ -25,13 +25,16 @@ export interface Fem {
     /**
      * Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
      * rename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`
-     * already exists in that kind.
+     * already exists in that kind. Mapped and swept mapped Bodies also rename their mesher
+     * geometry, named Face/Body-region selectors and material association.
      */
     rename(args: Omit<Extract<Command, { cmd: 'model.rename' }>, 'cmd'>): Promise<Ack>;
     /**
      * Copy an object under a new name. A Body copy shares nothing with the original; a Step
      * copy references the same Constraints and Loads. Useful for "the same load case but
      * twice the pressure": duplicate, then re-issue the create Command with the new value.
+     * A mapped or swept mapped Body cannot be copied: the Model has one mesher geometry
+     * slot. Returns unsupported without changing the Model; use model.rename or mesh.set.
      */
     duplicate(args: Omit<Extract<Command, { cmd: 'model.duplicate' }>, 'cmd'>): Promise<Ack>;
   };
@@ -46,6 +49,7 @@ export interface Fem {
      * Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's
      * walls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure
      * on `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.
+     * Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
      */
     subtractBox(args: Omit<Extract<Command, { cmd: 'geometry.subtractBox' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -58,6 +62,7 @@ export interface Fem {
      * Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a
      * cylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape
      * is positioned in world coordinates, so use its `at` or a transform to place it.
+     * Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
      */
     subtract(args: Omit<Extract<Command, { cmd: 'geometry.subtract' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -77,8 +82,10 @@ export interface Fem {
     nameRegion(args: Omit<Extract<Command, { cmd: 'geometry.nameRegion' }>, 'cmd'>): Promise<Ack>;
     /**
      * Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-     * (including temperature and volumetric heat sources), and named Sets that still reference
-     * it; remove or retarget those first.
+     * (including temperature and volumetric heat sources), named selectors or free-mesher
+     * geometry references that still use a Body; remove or retarget those first. Removing
+     * a mapped or swept mapped Body clears its mesher and material association, preserving
+     * unrelated explicit geometry and Materials.
      */
     remove(args: Omit<Extract<Command, { cmd: 'geometry.remove' }>, 'cmd'>): Promise<Ack>;
   };
@@ -106,7 +113,10 @@ export interface Fem {
      * Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
      * 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
      * `formulation: full` is the textbook linear element that locks in bending: keep the
-     * default incompatible modes or use order 2 when bending matters.
+     * default incompatible modes or use order 2 when bending matters. Mapped geometry owns
+     * a Body name distinct from explicit geometry. Keeping that name preserves its material;
+     * changing/removing it requires no remaining Body references and clears its material.
+     * Use model.rename to change an implicit Body name while preserving its references.
      */
     set(args: Omit<Extract<Command, { cmd: 'mesh.set' }>, 'cmd'>): Promise<Ack>;
     /**

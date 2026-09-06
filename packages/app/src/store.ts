@@ -34,6 +34,11 @@ export interface FormState {
   initial: Record<string, unknown>;
 }
 export type ConsoleLevel = 'command' | 'engine' | 'warn' | 'error' | 'result';
+export type ExampleDifficulty = 1 | 2 | 3;
+export interface ExampleFilter {
+  tag: string | null;
+  difficulty: ExampleDifficulty | null;
+}
 export interface ConsoleLine {
   level: ConsoleLevel;
   text: string;
@@ -68,6 +73,8 @@ export interface UiState {
   deformScale: number;
   /** Panel id → open. Panels absent from the map are closed. */
   panels: Record<string, boolean>;
+  /** The Examples gallery's two independent, registry-driven filters. */
+  exampleFilter: ExampleFilter;
   /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
   panelSizes: PanelSizes;
   /** Body names hidden only in the viewer by `view.setVisible`; the Model is unchanged. */
@@ -196,6 +203,7 @@ export const initialState: UiState = {
   },
   panelSizes: { ...DEFAULT_PANEL_SIZES },
   hiddenBodies: [],
+  exampleFilter: { tag: null, difficulty: null },
   tab: 'journal',
   objects: [],
   form: null,
