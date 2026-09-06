@@ -999,6 +999,13 @@ HTML element with a CSS gradient and min/max in display units from `query.result
 
 ### 7.3 Panels and controls as data
 
+> **Superseded in part by plan D** (`docs/plans/D-projects-and-start.md`, issues #40 and #41).
+> The top bar's "model name + unsaved flag" is now the **project** name with a saved chip, and it
+> gains **Projects** (`panel.toggle { panel: 'projects' }`), **Save** (`project.save`) and
+> **Save as file** (`file.save`). The Assistant drawer is mounted outside `.workspace`, so it
+> exists on the start screen. `file.restore` and `query.autosave` are deleted; Recent projects
+> replaces them.
+
 `src/panels.ts` declares `PANELS: { id, title, side, defaultOpen }[]` and
 `CONTROLS: { id, label, cmd: string, args?: unknown, panel: PanelId, kind: 'button'|'toggle'|'form' }[]`.
 Components render from these tables; every rendered control carries `data-cmd`. The vitest
@@ -1161,7 +1168,14 @@ built-in has `name`, `description` ≥ 40 chars and a body; `query.skills` == me
 `skill.invoke` unknown → `NotFound` listing names; a Playwright step types `/beam` and asserts
 the menu shows the built-in.
 
-### 7.9 Project folder (`src/project.ts`, `packages/registry/src/project-paths.ts`)
+### 7.9 Project folder (`src/ai/project.ts`, `packages/registry/src/project-paths.ts`)
+
+> **Renamed by plan D.** A *project* is now one saved Model in this browser (issue #41), so the
+> disk-side Commands here are `folder.open | folder.close | folder.refresh` and the Query is
+> `query.folder`; `HostContext.project` is `HostContext.folder` and `ProjectInfo` is `FolderInfo`.
+> The handle store is `src/db.ts`'s `handles` object store — one module owns the `femlab`
+> database, which is what fixes the two-modules-at-version-1 collision described there. Read the
+> Commands below as `folder.*`.
 
 Chromium's File System Access API (ADR 0014; `showDirectoryPicker` needs a user gesture and is
 Window-only, so `project.open { picker: true }` runs on the main thread from a click). The handle
