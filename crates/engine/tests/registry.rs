@@ -2051,6 +2051,61 @@ fn the_mesh_writers_are_reachable_through_mesh_export() {
 }
 
 #[test]
+fn named_sets_keep_their_exact_membership_in_msh_and_inp_exports() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"groups"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["2 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"geometry.nameFace","name":"loaded","of":"b","where":{"kind":"normal","normal":[1,0,0]}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"left-cell","where":{"kind":"bbox","min":["0 m","0 m","0 m"],"max":["1 m","1 m","1 m"]}}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"mid-plane","where":{"kind":"bbox","min":["1 m","0 m","0 m"],"max":["1 m","1 m","1 m"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}},"order":1}"#);
+
+    let Output::Export { text: msh_text, .. } = ok(&mut e, r#"{"cmd":"mesh.export","format":"msh"}"#).output else {
+        panic!("an MSH export")
+    };
+    let msh = femlab_engine::io::read_msh(&msh_text).unwrap();
+    assert_eq!(msh.elem_sets["left-cell"], [0], "a partial original element block survives");
+    let expected_left: Vec<u32> =
+        msh.coords.chunks_exact(3).enumerate().filter(|(_, xyz)| xyz[0] <= 1.0).map(|(node, _)| node as u32).collect();
+    let expected_mid: Vec<u32> =
+        msh.coords.chunks_exact(3).enumerate().filter(|(_, xyz)| xyz[0] == 1.0).map(|(node, _)| node as u32).collect();
+    let expected_loaded: Vec<u32> =
+        msh.coords.chunks_exact(3).enumerate().filter(|(_, xyz)| xyz[0] == 2.0).map(|(node, _)| node as u32).collect();
+    assert_eq!(msh.node_sets["left-cell"], expected_left, "an element region also keeps its nodes");
+    assert_eq!(msh.node_sets["mid-plane"], expected_mid, "the node-only region survives");
+    assert_eq!(msh.node_sets["loaded"], expected_loaded, "a face Set also keeps its nodes");
+    assert_eq!(msh.face_sets["loaded"].len(), 1);
+    assert_eq!(msh.face_sets["loaded"][0].elem, 1);
+
+    let Output::Export { text: inp, .. } = ok(&mut e, r#"{"cmd":"mesh.export","format":"inp"}"#).output else {
+        panic!("an INP export")
+    };
+    let records = |header: &str| -> Vec<&str> {
+        inp.split_once(header)
+            .map(|(_, rest)| rest.lines().take_while(|line| !line.starts_with('*')).collect())
+            .unwrap_or_default()
+    };
+    assert_eq!(records("*ELSET, ELSET=left-cell\n"), ["1"]);
+    let node_ids = |name: &str| -> Vec<u32> {
+        records(&format!("*NSET, NSET={name}\n"))
+            .iter()
+            .flat_map(|line| line.split(", "))
+            .map(|id| id.parse().unwrap())
+            .collect()
+    };
+    assert_eq!(node_ids("left-cell"), expected_left.iter().map(|node| node + 1).collect::<Vec<_>>());
+    assert_eq!(node_ids("mid-plane"), expected_mid.iter().map(|node| node + 1).collect::<Vec<_>>());
+    assert_eq!(node_ids("loaded"), expected_loaded.iter().map(|node| node + 1).collect::<Vec<_>>());
+    assert_eq!(records("*SURFACE, TYPE=ELEMENT, NAME=loaded\n"), ["2, S4"]);
+}
+
+#[test]
 fn a_host_reads_a_field_straight_off_the_result() {
     let mut e = engine();
     solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
