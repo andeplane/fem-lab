@@ -1,3 +1,4 @@
+import { browserScriptValidator } from './script-validation-host';
 // Boot (plan B §7.4): capabilities → engine Worker → Registry → `window.fem` → `<App/>`.
 // The shell renders first and the engine arrives into it, so the start screen is on screen
 // before the 3.2 MB wasm module has finished downloading.
@@ -52,6 +53,7 @@ async function boot(): Promise<void> {
     () => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }),
     (p) => late.dispatch(p as { cmd: string }),
     (p) => late.query(p as { query: string }),
+    browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })),
   );
 
   const results = new ResultsView(store, transport, viewer);
@@ -63,6 +65,7 @@ async function boot(): Promise<void> {
   // a lazy chunk) asks for everything again, so an example that opened solved is drawn solved.
   viewer.onReady = () => {
     viewer.current?.setMode(store.state.viewMode);
+    for (const [layer, visible] of Object.entries(store.state.layerVisibility)) viewer.current?.setLayer(layer, visible);
     viewer.current?.setVisible(store.state.hiddenBodies, false);
     void refresh().catch(() => undefined);
   };

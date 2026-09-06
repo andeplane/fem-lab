@@ -3,7 +3,7 @@
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
 import type { ModelSummary } from '@femlab/registry';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { fieldChoices, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
@@ -325,6 +325,18 @@ export function ModelTree({ s, dispatch, shapes = [] }: { s: UiState; dispatch: 
   const groups = treeGroups(s, shapes);
   const stepNames = (s.model?.steps ?? []).map((x) => x.name);
   const selected = s.form ? String(s.form.values['name'] ?? '') : '';
+  useEffect(() => {
+    if (adding === null) return undefined;
+    const closeOnEscape = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setAdding(null);
+      document.querySelector<HTMLButtonElement>('.add-row .chip-add')?.focus();
+    };
+    window.addEventListener('keydown', closeOnEscape, true);
+    return () => window.removeEventListener('keydown', closeOnEscape, true);
+  }, [adding]);
   return (
     <aside class="panel tree">
       <div class="panel-head">

@@ -232,6 +232,73 @@ fn the_csr_spmv_matches_an_f64_sum_of_the_same_f32_numbers() {
     assert_eq!(differing, 0, "{differing} of {} components differ across the chunk split", k.n);
 }
 
+/// A9: an identity system converges in one iteration, before the rest of the GPU batch.
+/// Reuse each context with a zero RHS and then another load to check per-solve state resets.
+#[test]
+fn gpu_cg_preserves_exact_convergence_through_the_rest_of_a_batch() {
+    let g = gpu();
+    for n in [1, 7, 257] {
+        let k = Csr { n, row_ptr: (0..=n as u32).collect(), col_idx: (0..n as u32).collect(), vals: vec![1.0; n] };
+        let ctx = pollster::block_on(CgContext::new(&g, &k, &vec![1.0; n], Some(3))).unwrap();
+        for budget in [2, 25, 50] {
+            for load in [1.0, 0.0, -2.0] {
+                let b = vec![load; n];
+                let mut x = vec![f32::NAN; n];
+                let done = pollster::block_on(ctx.solve(&g, &b, 1e-5, budget, &mut x, &mut nop)).unwrap();
+                assert_eq!(done, budget.min(25));
+                assert_eq!(x, b, "identity, n={n}, budget={budget}, load={load}");
+            }
+        }
+    }
+}
+
+/// A9: Jacobi scaling turns every positive diagonal into an identity. The oracle is b_i/d_i,
+/// including the whole f64 refinement path and both CPU thread counts, never another solver.
+#[test]
+fn gpu_refinement_solves_positive_diagonals_without_a_spurious_stall() {
+    let g = gpu();
+    for n in [1, 7, 257] {
+        let k = Csr {
+            n,
+            row_ptr: (0..=n as u32).collect(),
+            col_idx: (0..n as u32).collect(),
+            vals: (0..n).map(|i| 4.0f64.powi((i % 4) as i32)).collect(),
+        };
+        for threads in [1, 2] {
+            let pool = Pool::new(threads);
+            for load in [1.0, 0.0] {
+                let opts = SolveOptions { solver: Solver::GpuPcg, max_iterations: 50, ..SolveOptions::default() };
+                let b = vec![load; n];
+                let (x, info) = pollster::block_on(solve(&k, &b, &opts, &pool, Some(&g), &mut nop)).unwrap();
+                assert_eq!(info.rel_residual, 0.0);
+                for (i, xi) in x.iter().enumerate() {
+                    assert_eq!(*xi, load / k.vals[i], "diagonal row {i}, n={n}, threads={threads}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn gpu_cg_handles_a_nonzero_beta_and_freezes_on_nonpositive_curvature() {
+    let g = gpu();
+    // [[1, 1/2], [1/2, 1]]^-1 [1, 0] = [4/3, -2/3]. CG needs two steps.
+    let k = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![1.0, 0.5, 0.5, 1.0] };
+    let ctx = pollster::block_on(CgContext::new(&g, &k, &[1.0, 0.5, 0.5, 1.0], None)).unwrap();
+    let mut x = [0.0; 2];
+    pollster::block_on(ctx.solve(&g, &[1.0, 0.0], 1e-5, 50, &mut x, &mut nop)).unwrap();
+    assert!((x[0] - 4.0 / 3.0).abs() < 1e-6);
+    assert!((x[1] + 2.0 / 3.0).abs() < 1e-6);
+
+    for diagonal in [0.0, -1.0] {
+        let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![diagonal as f64] };
+        let ctx = pollster::block_on(CgContext::new(&g, &k, &[diagonal], None)).unwrap();
+        let mut x = [f32::NAN];
+        pollster::block_on(ctx.solve(&g, &[1.0], 1e-5, 50, &mut x, &mut nop)).unwrap();
+        assert_eq!(x, [0.0], "no valid step exists for curvature {diagonal}");
+    }
+}
+
 /// D5's CI sibling: 66k degrees of freedom solved on the GPU inside the f64 refinement loop,
 /// against the direct factorisation of the same matrix. The wall time is printed, never
 /// asserted — software adapters are for correctness, not for timing (AGENTS.md).
