@@ -96,6 +96,12 @@ export interface OpenProject extends ProjectMeta {
   autosave: boolean;
 }
 
+/** The exact browser-project payload written by one successful explicit `project.save`. */
+export interface ProjectSaveReceipt extends OpenProject {
+  /** Normalized Journal captured when Save began, before the thumbnail or storage write awaited. */
+  journal: ModelFile['journal'];
+}
+
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
   transport: EngineTransport;
@@ -152,7 +158,7 @@ export interface HostContext {
     open(id: string): Promise<ProjectMeta>;
     rename(id: string | undefined, name: string): Promise<ProjectMeta>;
     delete(id: string): Promise<void>;
-    save(): Promise<OpenProject | null>;
+    save(): Promise<ProjectSaveReceipt | null>;
     list(): ProjectMeta[];
     current(): OpenProject | null;
   };
@@ -384,14 +390,18 @@ export const HOST_COMMANDS: HostDef[] = [
     'Open a saved project by id (query.projects lists them) and replay its Journal, so the Model, its history and its undo stack come back as they were left. Replaces whatever is open, which has already been saved under its own id.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.open(id)),
   def('project.rename',
-    'Rename a saved project, by default the one that is open. The name is what the top bar and the Recent projects list show; the Journal is not rewritten, so a file saved from it keeps the name the Model was created with.',
+    'Rename a saved project, by default the one that is open. The name appears in the Projects dialog and Recent projects list. This changes browser-project metadata only; use model.setName to edit the Model name shown in the top bar and saved in its Journal.',
     z.object({ id: z.string().optional(), name: z.string() }), ({ id, name }, ctx) => ctx.projects.rename(id, name)),
   def('project.delete',
     'Delete a saved project and its Journal from this browser for good. There is no undo and nothing was ever uploaded anywhere, so use file.save first if the model might be wanted again. Not a tool: deleting a person\u2019s work is theirs to do.',
     z.object({ id: z.string() }), ({ id }, ctx) => ctx.projects.delete(id), false),
   def('project.save',
-    'Write the open project now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the open project, or `null` when there is none yet. Use file.save to write a `femlab/1` file instead.',
-    none, (_, ctx) => ctx.projects.save()),
+    'Write the open project\'s current Journal now rather than waiting for the background save, and take a fresh thumbnail of the viewer for the Recent projects list. Returns the project and the exact normalized Journal that was written, or `null` when there is none yet. Use file.save to write a `femlab/1` file instead.',
+    none, async (_, ctx) => {
+      const saved = await ctx.projects.save();
+      if (saved) ctx.files.markSaved(saved.journal);
+      return saved;
+    }),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
   def('ai.setKey', 'Store the Anthropic API key for the AI assistant in this browser only (localStorage), or `null` to forget it. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable() }), ({ key }, ctx) => ctx.ai.setKey(key), false),

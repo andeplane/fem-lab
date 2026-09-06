@@ -270,7 +270,7 @@ describe('Registry', () => {
     // `id` defaults to the open project, which is what the top bar's inline field sends
     await expect(registry.dispatch({ cmd: 'project.rename', name: 'ULS' })).resolves.toMatchObject({ name: 'ULS' });
     expect(host.projects.rename).toHaveBeenCalledWith(undefined, 'ULS');
-    await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toMatchObject({ id: PROJECT.id, saving: false });
+    await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toMatchObject({ id: PROJECT.id, saving: false, journal: MODEL_FILE.journal });
 
     await registry.dispatch({ cmd: 'project.delete', id: PROJECT.id });
     expect(host.projects.delete).toHaveBeenCalledWith(PROJECT.id);
@@ -401,5 +401,29 @@ it('marks only successful explicit saves and imports, using the captured normali
   vi.mocked(host.files.markSaved).mockClear();
   vi.mocked(transport.importFile).mockRejectedValue(new Error('import failed'));
   await expect(registry.dispatch({ cmd: 'file.open', json: JSON.stringify(captured) })).rejects.toThrow('import failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+});
+
+it('marks exactly the successful project-save receipt, leaving failures and null saves unchanged', async () => {
+  const { registry, host, transport } = make();
+  const journal = { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'captured' }, hashAfter: 'captured' }] };
+  const receipt = { ...PROJECT, saving: false, autosave: false, journal };
+  let finish!: (value: typeof receipt) => void;
+  vi.mocked(host.projects.save).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = registry.dispatch({ cmd: 'project.save' });
+  await vi.waitFor(() => expect(host.projects.save).toHaveBeenCalledOnce());
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  // A later edit must not replace the payload that the project actually persisted.
+  vi.mocked(transport.exportFile).mockResolvedValue({ ...MODEL_FILE, journal: { entries: [] } });
+  finish(receipt);
+  await expect(pending).resolves.toEqual(receipt);
+  expect(host.files.markSaved).toHaveBeenCalledExactlyOnceWith(journal);
+  expect(transport.exportFile).not.toHaveBeenCalled();
+  vi.mocked(host.files.markSaved).mockClear();
+  vi.mocked(host.projects.save).mockRejectedValueOnce(new Error('storage failed'));
+  await expect(registry.dispatch({ cmd: 'project.save' })).rejects.toThrow('storage failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  vi.mocked(host.projects.save).mockResolvedValueOnce(null);
+  await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toBeNull();
   expect(host.files.markSaved).not.toHaveBeenCalled();
 });

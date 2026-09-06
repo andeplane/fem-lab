@@ -1,7 +1,7 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { FemError, type HostContext, type HostDef, type Journal, type JournalDiff, type ProjectMeta, type Selection } from '@femlab/registry';
+import { FemError, type HostContext, type HostDef, type Journal, type JournalDiff, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import type { HostCaps } from './capabilities';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
@@ -68,9 +68,9 @@ export async function primeProjects(): Promise<ProjectMeta[]> {
  * after every journaled Command and has just re-read the Model and the Journal. With no project
  * open and a non-empty Journal this is what creates one (issue #41).
  */
-export function noteProject(name: string, journal: { cmd: unknown }[], hash: string | null): void {
+export function noteProject(name: string, entries: JournalEntry[], hash: string | null): void {
   // Boot refreshes before any Command; an empty Journal is not a project yet (issue #48).
-  projects?.note(name, journal.map((e) => e.cmd) as ShareCommand[], hash);
+  projects?.note(name, { entries }, hash);
 }
 
 /** Called before every Command that replaces the whole Model, so the next one forks a project. */
@@ -87,7 +87,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       const ack = await transport.dispatch(cmd as never);
       if (String(cmd.cmd).startsWith('solve.') || cmd.cmd === 'study.converge') solved = ack;
     }
+    // Capture normalized replay output before Result restoration yields to another edit.
+    const opened = await transport.exportFile();
     if (solved) await results?.onAck(solved);
+    store.markSaved(opened.journal);
   };
   const own = makeProjects({
     // A browser with IndexedDB blocked (private mode, or a headless harness) keeps working:

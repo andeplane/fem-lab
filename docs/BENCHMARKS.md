@@ -89,6 +89,9 @@ while unequal increments are rejected with both Load names and the Body. A8's nu
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
+The Result-validity integration check also holds probe/path values and independently parsed
+VTU datasets identical across a display-only Model rename; a subsequent physics edit still
+refuses all three consumers as stale, including after another rename (#123, #133).
 
 A1 also runs all eight element families at length factors `1e-9`, `1e-6`, `1e-5`, `1e-3`,
 `1`, `1e3`, and `1e6`, with full and incompatible-mode formulations and every applicable

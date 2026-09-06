@@ -170,3 +170,22 @@ it('does not select an imported comparison until its live-engine hash matches di
   expect(s.store.state.comparisonBaseline).toEqual([second]);
   expect(s.store.state.journalComparison).toEqual(newer);
 });
+
+it('fences an imported reply when project.save establishes its exact receipt baseline', async () => {
+  const s = setup(); await s.compare(second);
+  const saved = deferred<Awaited<ReturnType<typeof s.ctx.projects.save>>>();
+  s.ctx.projects.save = vi.fn(() => saved.promise);
+  const saving = s.registry.dispatch({ cmd: 'project.save' });
+  const old = deferred<JournalDiff>(); s.query.mockReturnValueOnce(old.promise);
+  const pending = s.registry.query({ query: 'query.journalComparison' });
+  saved.resolve({ id: 'project', name: 'A', at: 1, createdAt: 0, commands: 1, hash: 'a', thumbnail: null,
+    saving: false, autosave: true, journal: { entries: [first] } });
+  await saving;
+  old.resolve(diff('colleague', 'a', [first]));
+  expect(await pending).toBeNull();
+  expect(s.store.state.savedBaseline).toEqual([first]);
+  expect(s.store.state.comparisonBaseline).toBeNull();
+  expect(s.store.state.journalComparison).toBeNull();
+  expect(await s.registry.query({ query: 'query.journalComparison' })).toEqual(diff());
+  expect(s.store.state.comparisonSource).toBe('saved');
+});

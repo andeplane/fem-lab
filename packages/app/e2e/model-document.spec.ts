@@ -22,7 +22,7 @@ test('@cpu editable Model name and explicit save baseline survive rename, undo a
   await page.setViewportSize({ width: 1800, height: 1000 });
   const before = await page.evaluate(() => window.fem.query.model());
   const journal = await page.evaluate(() => window.fem.query.journal());
-  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save', exact: true }).click()]);
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save as file', exact: true }).click()]);
   const saved = JSON.parse(await readFile((await download.path())!, 'utf8'));
   await expect(dirty).toBeHidden();
   await page.evaluate(async () => {
@@ -59,7 +59,7 @@ test('@cpu editable Model name and explicit save baseline survive rename, undo a
   await name.fill('Second save');
   await name.blur();
   await expect(dirty).toBeVisible();
-  await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save', exact: true }).click()]);
+  await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save as file', exact: true }).click()]);
   await expect(dirty).toBeHidden();
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
   await expect(name).toHaveValue('cantilever');

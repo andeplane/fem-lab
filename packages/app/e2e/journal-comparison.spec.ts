@@ -13,6 +13,7 @@ test('@cpu Journal comparison keeps the explicit baseline and does not import th
     await window.fem.model.new({ name: 'comparison' });
     await window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] });
   });
+  await expect(page.locator('.topbar [data-cmd="file.compare"]')).toBeInViewport();
   const download = page.waitForEvent('download');
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.save' }));
   const saved = await (await download).path();
@@ -157,4 +158,33 @@ test('@cpu a live-engine comparison waits for the displayed Journal to hydrate',
   expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.journalComparison' })))
     .toMatchObject({ sharedEntries: 2, added: [{ cmd: { cmd: 'model.setName', name: 'ahead of hydration' } }] });
   expect(await page.locator('.comparison-added .no').allTextContents()).toEqual(['2']);
+});
+
+test('@cpu project Save establishes its receipt baseline and rejects a late imported comparison', async ({ page }) => {
+  await ready(page); await installReplyGate(page);
+  await page.evaluate(async () => {
+    await window.fem.model.new({ name: 'browser project' });
+    await window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '1 m', '1 m'] });
+  });
+  const download = page.waitForEvent('download');
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'file.save' }));
+  const { readFile } = await import('node:fs/promises');
+  const imported = await readFile((await (await download).path())!, 'utf8');
+  await page.evaluate(async json => {
+    await window.fem.model.setName({ name: 'later edit' });
+    await window.fem.dispatch({ cmd: 'file.compare', json });
+    const gate = (window as unknown as { comparisonGate: ReplyGate }).comparisonGate;
+    gate.op = 'query.journalDiff'; gate.pending = window.fem.registry.query({ query: 'query.journalComparison' });
+  }, imported);
+  await page.waitForFunction(() => (window as unknown as { comparisonGate: ReplyGate }).comparisonGate.held === 1);
+  expect(await page.evaluate(() => window.fem.dispatch({ cmd: 'project.save' })))
+    .toMatchObject({ journal: { entries: [{ cmd: { cmd: 'model.new' } }, { cmd: { cmd: 'geometry.addBox' } }, { cmd: { cmd: 'model.setName', name: 'later edit' } }] } });
+  expect(await page.evaluate(async () => {
+    const gate = (window as unknown as { comparisonGate: ReplyGate }).comparisonGate;
+    gate.release(); return gate.pending;
+  })).toBeNull();
+  expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.journalComparison' })))
+    .toMatchObject({ sharedEntries: 3, added: [], removed: [] });
+  await expect(page.locator('[aria-label="Unsaved changes"]')).toHaveCount(0);
+  await expect(page.locator('.comparison-label')).toContainText('Since last explicit save/open');
 });

@@ -2164,7 +2164,6 @@ input.model-name:focus {
 @media (min-width: 1180px) and (max-width: 1299px) {
   .model-title { flex-basis: 96px; max-width: 96px; }
 }
-
 /* Plan F · #42: what was solved, spanning both Result columns. */
 .result-header {
   grid-column: 1 / -1;

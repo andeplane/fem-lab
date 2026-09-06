@@ -93,6 +93,7 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         <i /> FEM Lab
       </div>
       <ModelName name={s.model?.name ?? 'no model'} dirty={dirty} dispatch={dispatch} />
+      <ProjectSaved s={s} />
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">
         <span>Search commands or ask in plain words</span>
         <span class="key">⌘K</span>
@@ -156,11 +157,20 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
-/**
- * The project name, editable in place (`project.rename` on blur or Enter), and the saved chip
- * next to it. There is no "unsaved" dot: the Journal is written into the open project after
- * every Command, so there is no unsaved state, and a dot that lies is worse than no dot.
- */
+/** Browser autosave status is separate from the document's explicit-save baseline. */
+function ProjectSaved({ s }: { s: UiState }) {
+  const p = s.project;
+  if (!p) return null;
+  const chip = p.autosave === false ? 'autosave off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const tone = p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
+  return (
+    <span class={`saved-chip ${tone}`} title={`${p.name}: ${chip} — ${p.commands} Commands in this browser`}>
+      <span class="dot" />
+      <span class="saved-text">{chip}</span>
+    </span>
+  );
+}
+
 /** The design's 32 px blocker strip: W-code chip, plain-language cause, one mono fix Command. */
 function Banner({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   if (s.lastError) {

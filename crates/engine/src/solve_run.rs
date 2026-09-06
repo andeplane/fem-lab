@@ -279,7 +279,7 @@ impl Engine {
         // node count, which a field-length check cannot distinguish from a compatible Result.
         let prev = match &step.after {
             Some(name) => {
-                let current_hash = self.model_hash();
+                let current_hash = crate::hash::result_hash(&self.model);
                 let (hash, result) = self.results.get(name).ok_or_else(|| {
                     Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
                         .at(format!("step '{}'", step.name))
@@ -479,10 +479,10 @@ impl Engine {
     }
 
     /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
-    /// changed coordinates or connectivity; the Model hash covers every mesh input.
+    /// changed coordinates or connectivity; the Result-validity hash covers every mesh input.
     pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
         let (name, hash, result) = self.stored(step)?;
-        if *hash != self.model_hash() {
+        if *hash != crate::hash::result_hash(&self.model) {
             return Err(Error::new(
                 ErrorCode::ResultStale,
                 format!("step '{name}' has a Result that does not match the current Model state"),
