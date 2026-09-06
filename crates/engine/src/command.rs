@@ -820,6 +820,8 @@ pub enum Command {
     /// stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
     /// id and the Body index as cell data. Name a `step` to add that Step's result fields as
     /// point data — displacement, reaction, stress and von Mises — so ParaView colours by them.
+    /// Result fields require the Model state they were solved on; `result.stale` means run
+    /// `solve.run` on that Step again before exporting it with the current Mesh.
     /// `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
     #[serde(rename = "mesh.export", rename_all = "camelCase")]
     MeshExport {
@@ -885,6 +887,7 @@ pub enum Command {
 
     /// A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
     /// producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
+    /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.
     /// Disjoint Bodies compose independently, each using its own reference. Overlapping
     /// assignments must produce exactly the same increment; otherwise `solve.run` returns
     /// `model.ill-posed` naming both Loads and the Body. Equal increments are not added.
@@ -912,6 +915,8 @@ pub enum Command {
 
     /// A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
     /// It is a density, not a total: the heat delivered is `q` times each Body's volume.
+    /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
+    /// for a plane-stress Sheet, the volume includes its specified thickness.
     #[serde(rename = "load.heatSource", rename_all = "camelCase")]
     LoadHeatSource { name: String, bodies: Vec<String>, q: Q<HeatSource> },
 
@@ -927,7 +932,9 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit.
+    /// `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
+    /// conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
+    /// `theta` must lie in [0, 1].
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,

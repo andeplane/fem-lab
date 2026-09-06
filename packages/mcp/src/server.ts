@@ -11,6 +11,10 @@ import {
 import {
   FemError,
   HOST_COMMANDS,
+  HOST_QUERIES,
+  type ScriptValidator,
+  RUN_SCRIPT,
+  type ScriptResult,
   Registry,
   assertInside,
   toToolDefinitions,
@@ -27,6 +31,7 @@ import { z } from 'zod';
 import engineSchema from '../../registry/src/generated/engine.schema.json' with { type: 'json' };
 import type { EngineHandle } from './engine';
 import { runScript, type ScriptDeps } from './script';
+import { nodeScriptValidator } from './script-validation';
 
 export const SCHEMA = engineSchema as unknown as EngineSchema;
 export const SERVER_NAME = 'femlab';
@@ -39,6 +44,7 @@ export type ExportFormat = (typeof EXPORT_FORMATS)[number];
 export interface ServerDeps {
   engine: EngineHandle;
   script?: ScriptDeps;
+  validator?: Pick<ScriptValidator, 'validate'>;
   /** Absolute path of the folder `export.file` may write into; without one it refuses. */
   project?: string | undefined;
 }
@@ -127,9 +133,11 @@ function exportFileCommand(deps: ServerDeps): HostDef {
  */
 export function createRegistry(deps: ServerDeps): Registry {
   let registry: Registry;
+  const validator = deps.validator ?? nodeScriptValidator();
   const host = {
     transport: deps.engine as unknown as EngineTransport,
     script: {
+      validate: (code: string, timeoutMs?: number) => validator.validate(code, timeoutMs),
       run: (code: string, timeoutMs?: number) =>
         runScript(
           code,
@@ -142,9 +150,9 @@ export function createRegistry(deps: ServerDeps): Registry {
   } as unknown as HostContext;
   const script = HOST_COMMANDS.filter((d) => d.name === 'script.run').map((d) => ({
     ...d,
-    description: 'Run TypeScript against the asynchronous fem API in an isolated QuickJS runtime. Only registry Commands/Queries, console and setTimeout/clearTimeout are available; no Node globals, imports, filesystem or network APIs. File exports use export.file and its host project policy. timeoutMs is greater than 0 and at most 30000 (default 30000), including startup. Timeout terminates the script and refuses further Commands; already admitted Commands may finish and are not rolled back. Nested script.run is refused. Returns { result, console, error? }; Commands enter the Journal like any other.',
+    description: 'First parse and type-check against the generated fem API with a separate 10000 ms validation deadline; invalid source returns diagnostics without executing. Then run TypeScript against the asynchronous fem API in an isolated QuickJS runtime. Only registry Commands/Queries, console and setTimeout/clearTimeout are available; no Node globals, imports, filesystem or network APIs. File exports use export.file and its host project policy. timeoutMs is greater than 0 and at most 30000 (default 30000), including startup. Timeout terminates the script and refuses further Commands; already admitted Commands may finish and are not rolled back. Nested script.run is refused. Returns { result, console, error? }; Commands enter the Journal like any other.',
   }));
-  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, exportFileCommand(deps)], hostQueries: [] });
+  registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, exportFileCommand(deps)], hostQueries: HOST_QUERIES.filter((d) => d.name === 'query.validateScript') });
   return registry;
 }
 
@@ -190,7 +198,7 @@ export function createServer(deps: ServerDeps): { server: Server; registry: Regi
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     try {
       const value = await callTool(registry, req.params.name, req.params.arguments ?? {});
-      return { content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
+      return { ...(req.params.name === RUN_SCRIPT && (value as ScriptResult)?.error ? { isError: true } : {}), content: [{ type: 'text' as const, text: JSON.stringify(value, null, 2) }] };
     } catch (e) {
       return { isError: true, content: [{ type: 'text' as const, text: errorText(e) }] };
     }

@@ -3,7 +3,8 @@
 // wired to nothing, fails here rather than in front of a person.
 import { HOST_COMMANDS, Registry, type EngineSchema, type ModelSummary } from '@femlab/registry';
 import { h, render } from 'preact';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'preact/test-utils';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
@@ -44,8 +45,8 @@ const transport = { dispatch: async () => undefined, query: async () => undefine
  */
 function mount(
   patch: Partial<Parameters<Store['set']>[0]> = {},
-  dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> = async () => undefined,
-): { root: HTMLElement; registry: Registry; store: Store } {
+  dispatch: (cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown> = vi.fn(async () => undefined),
+): { root: HTMLElement; registry: Registry; store: Store; dispatch: typeof dispatch } {
   const store = new Store();
   const viewer = { current: null };
   const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
@@ -58,19 +59,37 @@ function mount(
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
-  render(<App store={store} dispatch={dispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root);
-  return { root, registry, store };
+  act(() => render(<App store={store} dispatch={dispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root));
+  return { root, registry, store, dispatch };
+}
+
+async function cleanupShells() {
+  // Removing DOM alone leaves subscriptions, effects and lazy imports alive past the test.
+  await act(async () => {
+    for (const root of [...document.body.children]) render(null, root);
+  });
+  document.body.replaceChildren();
 }
 
 describe('the shell', () => {
-  beforeEach(() => {
-    document.body.innerHTML = '';
+  afterEach(cleanupShells);
+
+  it('releases shell keyboard handlers before removing its DOM', async () => {
+    const { dispatch } = mount();
+    await act(async () => {});
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({ cmd: 'panel.toggle', panel: 'palette' });
+    await cleanupShells();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(document.body.children).toHaveLength(0);
   });
 
-  it('names only Commands the registry has on every clickable, in every panel', () => {
+  it('names only Commands the registry has on every clickable, in every panel', async () => {
     const seen = new Set<string>();
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
-      document.body.innerHTML = '';
+      await cleanupShells();
       const { root, registry } = mount({ tab, panels: { palette: true } });
       const { commands, queries } = registry.list();
       const known = new Set([...commands, ...queries].map((d) => d.name));
@@ -296,11 +315,11 @@ describe('the shell', () => {
     expect(bar).toContain('file.save');
   });
 
-  it('says the project is saving, and says so plainly when the background save is off', () => {
+  it('says the project is saving, and says so plainly when the background save is off', async () => {
     const at = Date.now();
     const meta = { id: 'a', name: 'x', at, createdAt: at, commands: 1, hash: null, thumbnail: null };
     expect(mount({ project: { ...meta, saving: true, autosave: true } }).root.querySelector('.saved-chip')!.textContent).toContain('saving…');
-    document.body.innerHTML = '';
+    await cleanupShells();
     expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('not saved — storage is off');
   });
 
