@@ -30,11 +30,25 @@ cross-checked against the GPU path, but both are checked against the independent
 - 100 % coverage is a threshold on the core, not a claim about the renderer; the render and
   DOM layers are covered by the browser smoke test and by keeping them thin.
 
-## Status 2026-09-05
+## Status 2026-09-06
 
 The first kernel (`dot.wgsl`, `crates/engine/shaders/`) runs on Metal locally with results
 inside the f32 bound and bit-identical across runs for every tested size, and `src/gpu/` is
-at 100 % coverage under `--features gpu-tests`. The Mesa lavapipe lane is the `gpu` job in
-`ci.yml`, `continue-on-error: true` until it has been green three runs in a row; until then the
-`rust` job's coverage gate excludes `src/gpu/` as a bridge. The Chromium + SwiftShader lane
-lands with the browser shell.
+at 100 % coverage under `--features gpu-tests`. The Chromium + SwiftShader lane runs with the
+browser shell.
+
+The 2026-09-06 promotion audit read the job and step conclusions for all 75 completed,
+non-cancelled Actions runs recorded since the GPU and Windows lanes first appeared. Windows
+completed `cargo test --workspace` successfully in all 64 runs that received a runner, with no
+test failure, so #271 makes it required. Eleven runs failed to allocate any runner for Windows,
+GPU, Linux and macOS alike and contain zero steps; these are service-level failures rather than
+hidden test results.
+
+Lavapipe is not ready for promotion under the week-long rule. Its job completed successfully 57
+times, but seven earlier executions failed in the coverage step while that lane's release/debug
+instrumentation was being corrected. Since the last executed failure it has 42 successful runs,
+from 2026-09-06 01:46 UTC through 07:47 UTC, plus the same eleven service-level no-run failures.
+That is hours of evidence, not a week. Issue #19 therefore remains open, the job retains
+`continue-on-error: true`, and the required CPU coverage job continues to exclude `src/gpu/` as
+its bridge. Re-audit no earlier than 2026-09-13; once a full week is green, make the GPU job
+required and remove the CPU exclusion in the same change.
