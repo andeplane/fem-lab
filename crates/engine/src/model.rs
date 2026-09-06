@@ -247,6 +247,28 @@ pub enum Sweep {
 }
 
 impl MesherSettings {
+    /// Rename the Body identity owned or referenced by this mesher, including sweep bases.
+    pub fn rename_body(&mut self, from: &str, to: &str) {
+        match self {
+            Self::Mapped { body, .. } | Self::Free { of: body, .. } => {
+                if body == from {
+                    *body = to.into();
+                }
+            }
+            Self::Sweep { base, .. } => base.rename_body(from, to),
+            Self::Lattice { .. } => {}
+        }
+    }
+
+    /// An explicit Body used as geometry, rather than the implicit Body a mesher owns.
+    pub fn source_body(&self) -> Option<&str> {
+        match self {
+            Self::Free { of, .. } => Some(of),
+            Self::Sweep { base, .. } => base.source_body(),
+            Self::Mapped { .. } | Self::Lattice { .. } => None,
+        }
+    }
+
     /// The Body a mesher makes on its own, without a `geometry.add`: the mapped mesher's.
     pub fn implicit_body(&self) -> Option<&str> {
         match self {
@@ -382,7 +404,7 @@ impl Model {
     /// Names of every object of a kind, in Model order.
     pub fn names(&self, kind: ObjectKind) -> Vec<&str> {
         match kind {
-            ObjectKind::Body => self.bodies.iter().map(|b| b.name.as_str()).collect(),
+            ObjectKind::Body => self.bodies.iter().map(|b| b.name.as_str()).chain(self.implicit_body()).collect(),
             ObjectKind::Material => self.materials.iter().map(|m| m.name.as_str()).collect(),
             ObjectKind::Set => self.sets.iter().map(|s| s.name.as_str()).collect(),
             ObjectKind::Constraint => self.constraints.iter().map(|c| c.name.as_str()).collect(),

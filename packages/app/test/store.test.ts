@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Store, consoleReducer, initialState, panelsReducer, refsOf, selectionReducer } from '../src/store';
+import { DEFAULT_PANEL_SIZES, Store, clampPanelSize, consoleReducer, initialState, panelsReducer, refsOf, selectionReducer, visibilityReducer } from '../src/store';
 
 const sel = (bodies: string[] = [], faces: string[] = [], sets: string[] = []) => ({ bodies, faces, sets, refs: refsOf({ bodies, faces, sets }) });
 
@@ -23,6 +23,11 @@ describe('selectionReducer', () => {
   it('expands refs the way @selection does', () => {
     expect(selectionReducer(sel(), { bodies: ['beam'], faces: ['beam.top'], sets: ['s'] }).refs).toEqual(['body:beam', 'face:beam.top', 'set:s']);
   });
+
+  it('keeps semantic object refs separate from drawable selection names', () => {
+    expect(selectionReducer(sel(), { refs: ['material:steel', 'constraint:fix'] })).toEqual({ bodies: [], faces: [], sets: [], refs: ['material:steel', 'constraint:fix'] });
+    expect(selectionReducer({ bodies: [], faces: [], sets: [], refs: ['material:steel'] }, { bodies: ['beam'], mode: 'add' }).refs).toEqual(['material:steel', 'body:beam']);
+  });
 });
 
 describe('consoleReducer', () => {
@@ -40,6 +45,38 @@ describe('panelsReducer', () => {
     expect(panelsReducer({}, 'examples')['examples']).toBe(true);
     expect(panelsReducer({ examples: true }, 'examples')['examples']).toBe(false);
     expect(panelsReducer({ examples: true }, 'examples', true)['examples']).toBe(true);
+  });
+
+  it('keeps one tree menu open and gives tree groups a real open default', () => {
+    const a = panelsReducer(initialState.panels, 'tree.menu.body:a', true);
+    const b = panelsReducer(a, 'tree.menu.body:b', true);
+    expect(b['tree.menu.body:a']).toBe(false);
+    expect(b['tree.menu.body:b']).toBe(true);
+    expect(panelsReducer(initialState.panels, 'tree.geometry')['tree.geometry']).toBe(false);
+  });
+});
+
+describe('visibilityReducer', () => {
+  it('hides without duplicates and shows only the named bodies', () => {
+    expect(visibilityReducer(['column'], ['beam', 'beam'], false)).toEqual(['column', 'beam']);
+    expect(visibilityReducer(['column', 'beam'], ['beam'], true)).toEqual(['column']);
+  });
+});
+
+describe('panel sizing', () => {
+  it('starts with the designed dimensions and clamps host or gesture values', () => {
+    expect(initialState.panelSizes).toEqual(DEFAULT_PANEL_SIZES);
+    expect(clampPanelSize('tree', 1)).toBe(180);
+    expect(clampPanelSize('properties', 999)).toBe(440);
+    expect(clampPanelSize('bottom', 184.4)).toBe(184);
+  });
+
+  it('keeps layout state in the Store without touching model state', () => {
+    const store = new Store();
+    const model = store.state.model;
+    store.resizePanel('properties', 372);
+    expect(store.state.panelSizes.properties).toBe(372);
+    expect(store.state.model).toBe(model);
   });
 });
 

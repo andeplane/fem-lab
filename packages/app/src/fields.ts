@@ -12,6 +12,7 @@ import type { Field, UnitSet } from '@femlab/registry';
 export const SI_UNIT: Record<string, string> = {
   length: 'm',
   force: 'N',
+  power: 'W',
   stress: 'Pa',
   temperature: 'K',
   dimensionless: '',
@@ -29,22 +30,23 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
 };
 
 /** `mode:3` is a displacement; a safety factor and a utilisation are pure numbers. */
-export function dimensionOf(field: string): keyof typeof SI_UNIT {
+export function dimensionOf(field: string, reactionQuantity: 'force' | 'power' = 'force'): keyof typeof SI_UNIT {
+  if (field === 'reaction') return reactionQuantity;
   if (field.startsWith('mode:')) return 'length';
   if (field === 'safety' || field === 'utilisation') return 'dimensionless';
   return FIELD_DIMENSION[field as Field] ?? 'dimensionless';
 }
 
 /** The SI unit a raw `transport.field` array is in. */
-export function siUnitOf(field: string): string {
-  return SI_UNIT[dimensionOf(field)] ?? '';
+export function siUnitOf(field: string, reactionQuantity: 'force' | 'power' = 'force'): string {
+  return SI_UNIT[dimensionOf(field, reactionQuantity)] ?? '';
 }
 
 /** The unit the Model displays that dimension in, falling back to SI when it names none. */
-export function displayUnitOf(field: string, units: UnitSet | undefined): string {
-  const dim = dimensionOf(field);
+export function displayUnitOf(field: string, units: UnitSet | undefined, reactionQuantity: 'force' | 'power' = 'force'): string {
+  const dim = dimensionOf(field, reactionQuantity);
   const named = (units as Record<string, string | null | undefined> | undefined)?.[dim];
-  return named ?? siUnitOf(field);
+  return named ?? siUnitOf(field, reactionQuantity);
 }
 
 /** One entry of the legend's field picker: what to fetch and what to call it. */

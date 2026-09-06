@@ -1,5 +1,6 @@
 import type { JournalDump, ModelSummary, ProbeResult, ResultSummary, StudyReport, Valued } from '@femlab/registry';
 import { FemError } from '@femlab/registry';
+import type { ExampleDifficulty } from './store';
 
 export interface ExampleEntry {
   name: string;
@@ -8,6 +9,9 @@ export interface ExampleEntry {
   title: string;
   tag: string;
   theory: string;
+  tags: string[];
+  difficulty: ExampleDifficulty;
+  thumbnail: string | null;
   expected: { quantity: string; value: number | number[]; unit: string; reference: string };
 }
 

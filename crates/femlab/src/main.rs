@@ -48,6 +48,10 @@ enum Cmd {
         /// Print the summary as JSON.
         #[arg(long)]
         json: bool,
+        /// Answer this schema-owned Query after replay, as an ordered JSON result array.
+        /// Repeat for multiple Queries. Solves run unless --skip-solves is explicitly set.
+        #[arg(long = "query", value_parser = parse_query, conflicts_with_all = ["hashes", "as_script", "journal", "json"])]
+        queries: Vec<femlab_engine::Query>,
         /// CPU threads for the engine (default: all cores).
         #[arg(long)]
         threads: Option<usize>,
@@ -125,6 +129,10 @@ enum Cmd {
     },
 }
 
+fn parse_query(text: &str) -> Result<femlab_engine::Query, String> {
+    serde_json::from_str(text).map_err(|e| femlab_engine::Error::from(e).to_string())
+}
+
 fn main() {
     let cli = Cli::parse();
     let code = match cli.cmd {
@@ -137,9 +145,10 @@ fn main() {
             );
             0
         }
-        Cmd::Run { file, hashes, skip_solves, verify, as_script, journal, json, threads, cpu } => {
-            run::run(&file, run::RunOptions { hashes, skip_solves, verify, as_script, journal, json, threads, cpu })
-        }
+        Cmd::Run { file, hashes, skip_solves, verify, as_script, journal, json, queries, threads, cpu } => run::run(
+            &file,
+            run::RunOptions { hashes, skip_solves, verify, as_script, journal, json, queries, threads, cpu },
+        ),
         Cmd::Bench { cases, filter, json, markdown, update_docs, threads, cpu } => {
             bench::bench(cases.as_deref(), filter.as_deref(), json, markdown, update_docs.as_deref(), threads, cpu)
         }

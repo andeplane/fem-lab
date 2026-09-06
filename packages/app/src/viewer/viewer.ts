@@ -2,6 +2,7 @@
 // ground grid, flat grey geometry, quad edges, axis triad, z-up, hemisphere plus two
 // directional lights. It draws what the engine hands it and never changes Model state — every
 // change of view arrives as a `view.*` Command, every pick leaves as `selection.set`.
+import { FemError } from '@femlab/registry';
 import {
   AxesHelper,
   Box3,
@@ -38,6 +39,11 @@ export interface CameraState {
   target: [number, number, number];
   up?: [number, number, number];
 }
+export interface AnimationState {
+  playing: boolean;
+  phase: number;
+  speed: number;
+}
 export type ViewPreset = 'iso' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 export interface Pick {
   face: string | null;
@@ -55,8 +61,6 @@ export interface LegendBurn {
   min: number;
   max: number;
   colormap: ColormapName;
-  /** Pixels per CSS pixel for a saved image: the export dialog's 1× / 2×. */
-  scale?: number;
 }
 
 const GREY_GEOMETRY = 0.58;
@@ -96,6 +100,10 @@ export class Viewer {
   private triad: AxesHelper | null = null;
   private mesh: Mesh | null = null;
   private edges: LineSegments | null = null;
+  private outlines: LineSegments | null = null;
+  private readonly outlineMaterial = new LineBasicMaterial({ vertexColors: true });
+  /** Original edge index per drawn outline segment. */
+  private line = new Uint32Array(0);
 
   private surface: AppSurface | null = null;
   /** Original triangle index per drawn triangle, and original vertex index per drawn vertex. */
@@ -110,6 +118,10 @@ export class Viewer {
   /** Design state 6: a stale Result keeps its contours, at 42 % so nobody trusts them. */
   private dim = false;
   private hoverFace: string | null = null;
+  private selectedBodies = new Set<string>();
+  private selectedFaces = new Set<string>();
+  private highlightedBodies = new Set<string>();
+  private highlightedFaces = new Set<string>();
   private readonly hidden = new Set<string>();
   /** Visibility survives the replacement of mesh, edge, grid and axis objects. */
   private readonly layerVisibility = new Map<string, boolean>();
@@ -117,6 +129,7 @@ export class Viewer {
   private pickCb: ((p: Pick | null) => void) | null = null;
   private frame = 0;
   private disposed = false;
+  private animation: AnimationState = { playing: false, phase: 0.25, speed: 1 };
   private readonly click = (e: MouseEvent) => this.pickCb?.(this.pick(e.clientX, e.clientY));
   private readonly pointerMove = (e: PointerEvent) => this.hoverAt(e);
   /** The last displacement handed to `setDeformed`, and the scale it was drawn at, so the
@@ -157,6 +170,29 @@ export class Viewer {
     this.pickCb = cb;
   }
 
+  /** Persistent selection and transient Journal hover share the same drawable name boundary. */
+  setSelection(s: { bodies: string[]; faces: string[]; sets: string[] }): void {
+    this.selectedBodies = new Set(s.bodies);
+    this.selectedFaces = new Set([...s.faces, ...s.sets]);
+    this.paint();
+    this.render();
+  }
+
+  setHighlight(s: { bodies?: string[]; faces?: string[]; sets?: string[] }): void {
+    this.highlightedBodies = new Set(s.bodies ?? []);
+    this.highlightedFaces = new Set([...(s.faces ?? []), ...(s.sets ?? [])]);
+    this.paint();
+    this.render();
+  }
+
+  private matchesSet(surface: AppSurface, triangle: number, names: Set<string>): boolean {
+    const start = surface.triSetOffsets?.[triangle];
+    const end = surface.triSetOffsets?.[triangle + 1];
+    if (start === undefined || end === undefined || !surface.triSets || !surface.setNames) return false;
+    for (let i = start; i < end; i++) if (names.has(surface.setNames[surface.triSets[i]!] ?? '')) return true;
+    return false;
+  }
+
   resize(): void {
     const w = this.canvas.clientWidth || 640;
     const h = this.canvas.clientHeight || 480;
@@ -171,8 +207,7 @@ export class Viewer {
     if (!this.disposed) this.renderer.render(this.scene, this.camera);
   }
 
-  /** False until the first `setSurface`: until then `this.box` is a placeholder and anything
-   *  measured against the model's size — `autoScale` above all — would be nonsense. */
+  /** False until the first `setSurface`: until then `this.box` is a placeholder. */
   get hasSurface(): boolean {
     return this.surface !== null;
   }
@@ -202,9 +237,8 @@ export class Viewer {
       }
     });
     this.base = pos;
-    // This rebuilds the position buffer from `base`, so a deformation already on screen would be
-    // wiped — and the host re-pushes the surface after *every* Command, `setVisible` routes
-    // through here too (#42). Keep it, unless the mesh itself changed under it.
+    // Rebuilding the geometry from `base` would otherwise wipe an existing deformation. Keep it
+    // only when the new surface has the same vertex shape; a changed mesh must redraw undeformed.
     if (!fitsSurface(this.deformation, s.positions)) this.deformation = null;
 
     const geom = new BufferGeometry();
@@ -217,12 +251,37 @@ export class Viewer {
     this.disposeSurface();
     this.mesh = new Mesh(geom, this.material);
     this.edges = this.buildEdges();
-    this.layers.add(this.mesh, this.edges);
+    this.outlines = this.buildOutlines(s);
+    this.layers.add(this.mesh, this.edges, this.outlines);
+    const outlineBox = this.outlines.geometry.boundingBox;
+    if (outlineBox && this.line.length > 0) {
+      this.box = keep.length > 0 ? this.box.union(outlineBox) : outlineBox.clone();
+    }
     this.applyLayerVisibility();
     this.paint();
-    if (this.deformation) this.drawDeformed(this.deformation, this.deformScale);
     this.setChrome();
-    this.render();
+    this.drawDeformed(this.deformation, this.deformScale);
+  }
+
+  /** The engine supplies the actual Sheet boundaries, including hole edges and their names. */
+  private buildOutlines(s: AppSurface): LineSegments {
+    const keep: number[] = [];
+    for (let i = 0; i < (s.edges?.length ?? 0) / 2; i++) {
+      if (!this.hidden.has(s.bodyNames[s.edgeBody?.[i] ?? -1] ?? '')) keep.push(i);
+    }
+    this.line = Uint32Array.from(keep);
+    const positions = new Float32Array(keep.length * 6);
+    keep.forEach((edge, i) => {
+      for (let k = 0; k < 2; k++) {
+        const node = s.edges![edge * 2 + k]!;
+        positions.set(s.positions.subarray(node * 3, node * 3 + 3), i * 6 + k * 3);
+      }
+    });
+    const geom = new BufferGeometry();
+    geom.setAttribute('position', new BufferAttribute(positions, 3));
+    geom.setAttribute('color', new BufferAttribute(new Float32Array(positions.length), 3));
+    geom.computeBoundingBox();
+    return new LineSegments(geom, this.outlineMaterial);
   }
 
   /** Surface meshes share the viewer material; edges own theirs. */
@@ -233,6 +292,11 @@ export class Viewer {
       this.mesh = null;
     }
     this.disposeEdges();
+    if (this.outlines) {
+      this.layers.remove(this.outlines);
+      this.outlines.geometry.dispose();
+      this.outlines = null;
+    }
   }
 
   private disposeEdges(): void {
@@ -254,12 +318,7 @@ export class Viewer {
     this.triad = null;
   }
 
-  /**
-   * The wireframe is built from `base` and `drawDeformed` never touches it, so while the mesh is
-   * drawn exaggerated the edges already *are* the undeformed outline: colour them as a ghost so
-   * a person can see how far the drawing departs from the body. `view.toggle { layer: 'edges' }`
-   * turns it off.
-   */
+  /** Colour the undeformed mesh edge as a ghost while an exaggerated shape is shown. */
   private edgeColour(): number {
     if (this.deformation !== null && this.deformScale !== 1) return EDGE_GHOST;
     return this.mode === 'mesh' ? EDGE_MESH : EDGE_GEOMETRY;
@@ -288,7 +347,12 @@ export class Viewer {
     for (let i = 0; i < this.tri.length; i++) {
       const t = this.tri[i]!;
       const faceName = s.faceNames[s.triFace[t]!] ?? null;
-      const hot = faceName !== null && faceName === this.hoverFace;
+      const bodyName = s.bodyNames[s.triBody[t]!] ?? null;
+      const selected = (bodyName !== null && this.selectedBodies.has(bodyName)) || (faceName !== null && this.selectedFaces.has(faceName)) || this.matchesSet(s, t, this.selectedFaces);
+      const hot =
+        (faceName !== null && (faceName === this.hoverFace || this.highlightedFaces.has(faceName))) ||
+        (bodyName !== null && this.highlightedBodies.has(bodyName)) ||
+        this.matchesSet(s, t, this.highlightedFaces);
       for (let k = 0; k < 3; k++) {
         const vertex = i * 3 + k;
         if (this.mode === 'results' && this.field) {
@@ -299,12 +363,23 @@ export class Viewer {
         } else {
           c.setScalar(grey).lerp(bodyTint(s.triBody[t]!), 0.14);
         }
+        if (selected) c.lerp(HIGHLIGHT, 0.28);
         if (hot) c.lerp(HIGHLIGHT, 0.45);
         if (this.dim) c.multiplyScalar(0.42);
         colour.setXYZ(vertex, c.r, c.g, c.b);
       }
     }
     colour.needsUpdate = true;
+    const outlineColour = this.outlines?.geometry.getAttribute('color') as BufferAttribute | undefined;
+    if (outlineColour) {
+      for (let i = 0; i < this.line.length; i++) {
+        const edge = this.line[i]!;
+        const hot = (s.faceNames[s.edgeFace?.[edge] ?? -1] ?? null) === this.hoverFace && this.hoverFace !== null;
+        c.set(hot ? HIGHLIGHT : 0xbac3d0);
+        for (let k = 0; k < 2; k++) outlineColour.setXYZ(i * 2 + k, c.r, c.g, c.b);
+      }
+      outlineColour.needsUpdate = true;
+    }
   }
 
   /** Ground grid at the model's scale with round ticks, and an axis triad beside it. */
@@ -335,6 +410,7 @@ export class Viewer {
       const target = this.layerTarget(layer);
       if (target) target.visible = this.layerVisibility.get(layer) ?? true;
     }
+    if (this.outlines) this.outlines.visible = this.layerVisibility.get('edges') ?? true;
   }
 
   // ── view Commands ───────────────────────────────────────────────────────────────────────
@@ -373,8 +449,7 @@ export class Viewer {
 
   /**
    * `"auto"`: the exaggeration that makes the largest displacement a twentieth of the model —
-   * modest enough to still read as the body — snapped to a round 1/2/5·10^k so the legend and
-   * the slider can both say it honestly.
+   * modest enough to still read as the body — snapped to a round 1/2/5·10^k.
    */
   autoScale(displacement: Float32Array): number {
     let max = 0;
@@ -406,12 +481,14 @@ export class Viewer {
 
   private drawDeformed(displacement: Float32Array | null, scale: number): void {
     const geom = this.mesh?.geometry;
-    if (!geom) return;
+    const s = this.surface;
+    if (!geom || !s) return;
+    const active = s.source === 'mesh' && displacement?.length === s.positions.length ? displacement : null;
     const pos = geom.getAttribute('position') as BufferAttribute;
     for (let v = 0; v < this.vert.length; v++) {
       const src = this.vert[v]! * 3;
       for (let k = 0; k < 3; k++) {
-        (pos.array as Float32Array)[v * 3 + k] = this.base[v * 3 + k]! + (displacement ? scale * displacement[src + k]! : 0);
+        (pos.array as Float32Array)[v * 3 + k] = this.base[v * 3 + k]! + (active ? scale * active[src + k]! : 0);
       }
     }
     pos.needsUpdate = true;
@@ -420,12 +497,37 @@ export class Viewer {
     // `this.box` is a separate undeformed copy used for framing and auto exaggeration.
     geom.computeBoundingBox();
     geom.computeBoundingSphere();
+    const outlineGeom = this.outlines?.geometry;
+    const outlinePos = outlineGeom?.getAttribute('position') as BufferAttribute | undefined;
+    if (outlinePos) {
+      for (let i = 0; i < this.line.length; i++) {
+        const edge = this.line[i]!;
+        for (let k = 0; k < 2; k++) {
+          const node = s.edges?.[edge * 2 + k];
+          if (node === undefined) continue;
+          const src = node * 3;
+          outlinePos.setXYZ(
+            i * 2 + k,
+            s.positions[src]! + (active ? scale * active[src]! : 0),
+            s.positions[src + 1]! + (active ? scale * active[src + 1]! : 0),
+            s.positions[src + 2]! + (active ? scale * active[src + 2]! : 0),
+          );
+        }
+      }
+      outlinePos.needsUpdate = true;
+      // three.js caches both bounds. A result deformation can move the whole boundary outside
+      // the original cache, where rendering and line raycasts would otherwise cull it.
+      outlineGeom!.computeBoundingBox();
+      outlineGeom!.computeBoundingSphere();
+    }
     this.render();
   }
 
   setClip(plane: { normal: [number, number, number]; offset: number } | null): void {
     this.material.clippingPlanes = plane ? [new Plane(new Vector3(...plane.normal).normalize(), -plane.offset)] : [];
     this.material.needsUpdate = true;
+    this.outlineMaterial.clippingPlanes = this.material.clippingPlanes;
+    this.outlineMaterial.needsUpdate = true;
     this.render();
   }
 
@@ -434,6 +536,7 @@ export class Viewer {
     this.layerVisibility.set(layer, visible);
     const target = this.layerTarget(layer);
     if (target) target.visible = visible;
+    if (layer === 'edges' && this.outlines) this.outlines.visible = visible;
     this.render();
     return visible;
   }
@@ -469,12 +572,23 @@ export class Viewer {
    * Pausing puts the shape back where `setDeformed` left it, so a paused viewer and a viewer
    * that never played show the same picture.
    */
-  animate(playing: boolean, speed = 1): void {
+  animate(playing: boolean, speed = 1, phase?: number): void {
     cancelAnimationFrame(this.frame);
-    if (!playing) return void this.drawDeformed(this.deformation, this.deformScale);
-    const t0 = performance.now();
+    if (!playing) {
+      if (phase !== undefined) return this.setPhase(phase);
+      this.animation = { playing: false, phase: 0.25, speed };
+      return void this.drawDeformed(this.deformation, this.deformScale);
+    }
+    this.startAnimation(speed, phase ?? 0);
+  }
+
+  private startAnimation(speed: number, phase: number): void {
+    this.animation = { playing: true, phase, speed };
+    const t0 = performance.now() - (phase / speed) * 1000;
     const step = () => {
-      this.drawDeformed(this.deformation, this.deformScale * Math.sin(((performance.now() - t0) / 1000) * speed * 2 * Math.PI));
+      const turns = (((performance.now() - t0) / 1000) * speed) % 1;
+      this.animation.phase = turns;
+      this.drawDeformed(this.deformation, this.deformScale * Math.sin(turns * 2 * Math.PI));
       this.frame = requestAnimationFrame(step);
     };
     this.frame = requestAnimationFrame(step);
@@ -483,7 +597,35 @@ export class Viewer {
   /** Where in one sweep the shape sits, as a phase in turns: what the scrub slider sets. */
   setPhase(turns: number): void {
     cancelAnimationFrame(this.frame);
+    this.animation = { playing: false, phase: turns, speed: this.animation.speed };
     this.drawDeformed(this.deformation, this.deformScale * Math.sin(turns * 2 * Math.PI));
+  }
+
+  animationState(): AnimationState {
+    return { ...this.animation };
+  }
+
+  restoreAnimation(state: AnimationState): void {
+    cancelAnimationFrame(this.frame);
+    if (state.playing) this.startAnimation(state.speed, state.phase);
+    else this.setPhase(state.phase);
+  }
+
+  /** Render into an exact-size canvas while `task` records it, then restore the live viewport. */
+  async atCaptureSize<T>(width: number, height: number, task: (canvas: HTMLCanvasElement) => Promise<T>): Promise<T> {
+    const ratio = this.renderer.getPixelRatio();
+    try {
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(width, height, false);
+      this.perspective.aspect = width / height;
+      this.perspective.updateProjectionMatrix();
+      this.frameOrtho(width / height);
+      this.render();
+      return await task(this.canvas);
+    } finally {
+      this.renderer.setPixelRatio(ratio);
+      this.resize();
+    }
   }
 
   fit(): void {
@@ -520,33 +662,49 @@ export class Viewer {
    * painted into the right-hand edge when one is given: a saved image has to be readable on
    * its own, and the HTML legend is not part of the WebGL canvas.
    */
-  screenshot(legend?: LegendBurn): string {
-    const scale = Math.max(1, Math.min(4, legend?.scale ?? 1));
-    // ponytail: 2× re-renders at double the drawing-buffer size and puts it back. Enough for a
-    // report figure; a genuinely large plate (4× of a 4k canvas) wants an offscreen target.
-    const restore = scale === 1 ? null : this.renderer.getPixelRatio();
-    if (restore !== null) {
-      this.renderer.setPixelRatio(restore * scale);
-      this.renderer.setSize(this.canvas.clientWidth || 640, this.canvas.clientHeight || 480, false);
-    }
-    this.render();
-    const png = this.burn(legend);
-    if (restore !== null) {
-      this.renderer.setPixelRatio(restore);
+  screenshot(legend?: LegendBurn, options: { width?: number; height?: number; title?: string } = {}): string {
+    const size = this.renderer.getDrawingBufferSize(new Vector2());
+    const width = options.width ?? (options.height === undefined ? size.x : Math.max(1, Math.round(options.height * size.x / size.y)));
+    const height = options.height ?? (options.width === undefined ? size.y : Math.max(1, Math.round(options.width * size.y / size.x)));
+    const gl = this.renderer.getContext();
+    const limit = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number;
+    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width > limit || height > limit)
+      throw new FemError('schema', `image dimensions must be positive whole pixels, at most ${limit} on this device`, 'query.screenshot', 'query.screenshot with a smaller width and height');
+    const ratio = this.renderer.getPixelRatio();
+    try {
+      // Render at the requested pixel dimensions, including its aspect ratio. CSS size and
+      // camera position stay untouched; finally restores the interactive backing buffer.
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(width, height, false);
+      this.perspective.aspect = width / height;
+      this.perspective.updateProjectionMatrix();
+      this.frameOrtho(width / height);
+      this.render();
+      return this.burn(legend, options.title);
+    } finally {
+      this.renderer.setPixelRatio(ratio);
       this.resize();
     }
-    return png;
   }
 
-  private burn(legend?: LegendBurn): string {
-    if (!legend) return this.canvas.toDataURL('image/png');
+  private burn(legend?: LegendBurn, title?: string): string {
+    if (!legend && !title) return this.canvas.toDataURL('image/png');
     const out = document.createElement('canvas');
     out.width = this.canvas.width;
     out.height = this.canvas.height;
     const g = out.getContext('2d');
-    if (!g) return this.canvas.toDataURL('image/png');
+    if (!g) throw new FemError('unsupported', 'a 2D canvas is required to draw the requested legend or title', 'query.screenshot', 'query.screenshot without a legend or title');
     g.drawImage(this.canvas, 0, 0);
-    drawLegend(g, out.width, out.height, legend);
+    // A title owns the first line. Start the legend beneath it so both remain distinct even in
+    // a small requested image; the colour bar contracts before it clips at the bottom.
+    if (legend) drawLegend(g, out.width, out.height, legend, title ? 78 : 56);
+    if (title) {
+      g.font = '16px sans-serif';
+      g.fillStyle = '#101218ee';
+      g.fillRect(12, 12, Math.max(0, Math.min(out.width - 24, g.measureText(title).width + 20)), 30);
+      g.fillStyle = '#e9edf3';
+      g.fillText(title, 22, 33, Math.max(1, out.width - 44));
+    }
     return out.toDataURL('image/png');
   }
 
@@ -569,6 +727,8 @@ export class Viewer {
     this.vert = new Uint32Array(0);
     this.tri = new Uint32Array(0);
     this.renderer.dispose();
+    this.outlineMaterial.dispose();
+    this.line = new Uint32Array(0);
   }
 
   // ── picking ─────────────────────────────────────────────────────────────────────────────
@@ -578,8 +738,35 @@ export class Viewer {
     const rect = this.canvas.getBoundingClientRect();
     const ndc = new Vector2(((x - rect.left) / rect.width) * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
-    const hit = this.raycaster.intersectObject(this.mesh, false)[0];
-    if (!hit || hit.faceIndex === undefined || hit.faceIndex === null) return null;
+    // A fixed screen-space picking tolerance remains usable at any zoom and model scale.
+    const height = this.camera === this.orthographic
+      ? (this.orthographic.top - this.orthographic.bottom) / this.orthographic.zoom
+      : 2 * this.camera.position.distanceTo(this.box.getCenter(new Vector3())) * Math.tan(this.perspective.getEffectiveFOV() * Math.PI / 360);
+    this.raycaster.params.Line.threshold = 6 * height / Math.max(rect.height, 1);
+    const objects = this.outlines?.visible ? [this.mesh, this.outlines] : [this.mesh];
+    const hits = this.raycaster.intersectObjects(objects, false);
+    const triangle = hits.find((h) => h.object === this.mesh);
+    const outline = hits.find((h) => h.object === this.outlines);
+    // A Sheet outline is coplanar with its triangles. Prefer it when both hits are at the same
+    // depth, so the named boundary wins without allowing a line hidden behind a nearer body.
+    const sameDepth = outline && triangle
+      ? outline.distance <= triangle.distance + 1e-6 * Math.max(1, outline.distance, triangle.distance)
+      : false;
+    const hit = outline && (!triangle || sameDepth) ? outline : triangle;
+    if (!hit) return null;
+    if (hit.object === this.outlines && hit.index !== undefined) {
+      const segment = Math.floor(hit.index / 2);
+      const edge = this.line[segment]!;
+      const node = this.nearestOutlineNode(segment, edge, hit.point);
+      return {
+        face: s.faceNames[s.edgeFace?.[edge] ?? -1] ?? null,
+        body: s.bodyNames[s.edgeBody?.[edge] ?? -1] ?? null,
+        point: [hit.point.x, hit.point.y, hit.point.z],
+        node,
+        value: node !== null && this.field ? (this.field[node] ?? null) : null,
+      };
+    }
+    if (hit.faceIndex === undefined || hit.faceIndex === null) return null;
     const t = this.tri[hit.faceIndex]!;
     const node = this.nearestNode(hit.faceIndex, hit.point);
     return {
@@ -589,6 +776,24 @@ export class Viewer {
       node,
       value: node !== null && this.field ? (this.field[node] ?? null) : null,
     };
+  }
+
+  /** A meshed Sheet outline retains the original node ids carried by its indexed edge. */
+  private nearestOutlineNode(segment: number, edge: number, at: Vector3): number | null {
+    const s = this.surface;
+    const pos = this.outlines?.geometry.getAttribute('position');
+    if (!s || s.source !== 'mesh' || !pos) return null;
+    let best: number | null = null;
+    let nearest = Infinity;
+    for (let k = 0; k < 2; k++) {
+      const drawn = segment * 2 + k;
+      const d = at.distanceToSquared(new Vector3(pos.getX(drawn), pos.getY(drawn), pos.getZ(drawn)));
+      if (d < nearest) {
+        nearest = d;
+        best = s.edges?.[edge * 2 + k] ?? null;
+      }
+    }
+    return best;
   }
 
   /**
@@ -619,19 +824,17 @@ export class Viewer {
     this.render();
   }
 
-  private frameOrtho(): void {
+  private frameOrtho(aspect = (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480)): void {
     const h = Math.max(this.box.getSize(new Vector3()).length() * 0.7, 1e-6);
-    const aspect = (this.canvas.clientWidth || 640) / (this.canvas.clientHeight || 480);
     Object.assign(this.orthographic, { left: -h * aspect, right: h * aspect, top: h, bottom: -h });
     this.orthographic.updateProjectionMatrix();
   }
 }
 
 /** The legend the screenshot burns in: gradient bar, title, unit and six ticks, in one column. */
-function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: LegendBurn): void {
+function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: LegendBurn, top = 56): void {
   const x = w - 132;
-  const top = 56;
-  const barH = Math.max(120, Math.min(300, h - 160));
+  const barH = Math.max(24, Math.min(300, h - top - 104));
   const stops = MAPS[l.colormap];
   const grad = g.createLinearGradient(0, top + barH, 0, top);
   stops.forEach((c, i) => grad.addColorStop(i / (stops.length - 1), c));
@@ -643,8 +846,9 @@ function drawLegend(g: CanvasRenderingContext2D, w: number, h: number, l: Legend
   g.font = '13px ui-monospace, monospace';
   g.fillText(`${l.title} ${l.unit}`.trim(), x - 8, top - 14);
   g.font = '11px ui-monospace, monospace';
-  for (let i = 0; i < 6; i++) {
-    const t = i / 5;
+  const ticks = Math.max(2, Math.min(6, Math.floor(barH / 18) + 1));
+  for (let i = 0; i < ticks; i++) {
+    const t = i / (ticks - 1);
     g.fillStyle = i === 0 ? '#e2703a' : '#8b929d';
     g.fillText(String(Number((l.max - (l.max - l.min) * t).toPrecision(4))), x + 22, top + barH * t + 4);
   }

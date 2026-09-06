@@ -24,13 +24,16 @@ import { waitFor } from './wait-for';
 const journals = path.resolve(import.meta.dirname, '../../../crates/engine/benches/journals');
 const mm = (value: number): Valued => ({ value, unit: 'mm' });
 const result = (extremes: ResultSummary['extremes'] = []): ResultSummary =>
-  ({ step: 'static', revision: 9, stale: false, solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 1, extremes, reactions: [], appliedTotal: [mm(0), mm(0), mm(0)], balance: 0 }) as ResultSummary;
+  ({ step: 'static', revision: 9, stale: false, solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 1, extremes, reactions: [], reactionQuantity: 'force', appliedTotal: [mm(0), mm(0), mm(0)], balance: 0 }) as ResultSummary;
 const example = (name = 'cantilever'): ExampleEntry => ({
   name,
   commands: 10,
   summary: 'A benchmark.',
   title: 'Cantilever beam',
   tag: 'P1 · verify',
+  tags: ['static', 'beam'],
+  difficulty: 1,
+  thumbnail: null,
   theory: 'Beam theory gives $\\delta = PL^3/(3EI)$.',
   expected: { quantity: 'tip deflection', value: -0.1901, unit: 'mm', reference: 'Timoshenko: 0.1919619 mm' },
 });
