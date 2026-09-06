@@ -1705,6 +1705,8 @@ fn a_triangle_section_cannot_be_swept_into_hexes() {
     let er = e.query(Query::Mesh {}).unwrap_err();
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("mesher.sweep")));
     assert!(er.cause.contains("quad4 or quad8 base mesh"), "{}", er.cause);
+    // Keep the explicit source under a distinct name; the mapped block owns its geometry.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"ring","to":"source"}"#);
     // the same section as one mapped block sweeps fine
     ok(
         &mut e,
@@ -3897,4 +3899,292 @@ fn unknown_selector_bodies_list_the_mapped_body_and_preserve_the_journal() {
         assert!(suggestion.contains("query.model"));
         assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
     }
+}
+
+/// Renaming is a geometry identity change, not a physical change: the independent
+/// uniaxial solution survives rename, undo/redo, remeshing and Journal replay.
+#[test]
+fn implicit_body_rename_preserves_the_exact_patch_and_replay() {
+    for swept in [false, true] {
+        for order in [1, 2] {
+            for n in [1, 2] {
+                let mut e = engine();
+                selector_patch(&mut e, order, swept);
+                selector_mesh(&mut e, n, order, swept);
+                let before = e.model_hash();
+                ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"panel"}"#);
+                let renamed = e.model_hash();
+                assert_eq!(e.model().implicit_body(), Some("panel"));
+                assert_eq!(e.model().material_of_body("panel"), Some("solid"));
+                assert_eq!(e.model().material_of_body("sheet"), None);
+                assert_eq!(e.model().names(ObjectKind::Body), ["panel"]);
+                ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+                assert_eq!(e.model_hash(), before);
+                ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+                assert_eq!(e.model_hash(), renamed);
+                let built = e.mesh().unwrap();
+                assert!(built.sets.contains_key("panel.left"));
+                assert!(!built.sets.contains_key("sheet.left"));
+                assert_eq!(built.sets["domain"].elems.len(), built.mesh.n_elems());
+                assert!((set_info(&mut e, "domain").measure.value - if swept { 6.0 } else { 2.0 }).abs() < 1e-9);
+                ok(&mut e, r#"{"cmd":"solve.run","step":"axial"}"#);
+                let u = e.field(Some("axial"), Field::Displacement).unwrap().clone();
+                let stress = e.field(Some("axial"), Field::Stress).unwrap().clone();
+                let mesh = &e.mesh().unwrap().mesh;
+                for node in 0..mesh.n_nodes() {
+                    for (component, &x) in mesh.node(node as u32).iter().take(mesh.dim).enumerate() {
+                        let strain = if component == 0 { 1e-4 } else { -2.5e-5 };
+                        assert!((u.data[node * u.comps + component] - strain * x).abs() < 1e-12);
+                    }
+                    for component in 0..stress.comps {
+                        let expected = if component == 0 { 20e6 } else { 0.0 };
+                        assert!((stress.data[node * stress.comps + component] - expected).abs() < 1e-3);
+                    }
+                }
+                assert!(result_of(&mut e, Some("axial")).balance < 1e-10);
+                let mut replay = engine();
+                pollster::block_on(replay.replay(&e.export_file().journal.entries, false, true)).unwrap();
+                assert_eq!(replay.model_hash(), e.model_hash());
+                assert_eq!(replay.field(Some("axial"), Field::Displacement).unwrap().data, u.data);
+            }
+        }
+    }
+}
+
+#[test]
+fn implicit_body_auto_references_and_removal_guards_are_atomic() {
+    for swept in [false, true] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"lifecycle"}"#);
+        selector_mesh(&mut e, 1, 1, swept);
+        let mut replacement = serde_json::to_value(&e.journal().entries.last().unwrap().cmd).unwrap();
+        if swept {
+            replacement["mesher"]["base"]["body"] = "replacement".into();
+        } else {
+            replacement["mesher"]["body"] = "replacement".into();
+        }
+        ok(&mut e, r#"{"cmd":"constraint.fix","name":"support","on":"sheet.left"}"#);
+        ok(&mut e, r#"{"cmd":"load.traction","name":"pull","on":"sheet.right","total":["1 N","0 N","0 N"]}"#);
+        ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"sheet.top","h":"2 W/m^2/K","tInf":"300 K"}"#);
+        ok(&mut e, r#"{"cmd":"load.heatFlux","name":"heat","on":"sheet.bottom","q":"3 W/m^2"}"#);
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"panel"}"#);
+        assert_eq!(e.model().constraint("support").unwrap().on, "panel.left");
+        for (name, face) in [("pull", "right"), ("film", "top"), ("heat", "bottom")] {
+            assert_eq!(e.model().load(name).unwrap().kind.set(), Some(format!("panel.{face}").as_str()));
+        }
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        for cmd in [
+            r#"{"cmd":"geometry.remove","name":"panel"}"#,
+            r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#,
+        ] {
+            let error = err(&mut e, cmd);
+            assert_eq!(error.code, ErrorCode::InUse);
+            for user in ["support", "pull", "film", "heat"] {
+                assert!(error.cause.contains(user));
+            }
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        }
+        assert_eq!(err(&mut e, &replacement.to_string()).code, ErrorCode::InUse);
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        let error = err(&mut e, r#"{"cmd":"model.duplicate","kind":"body","name":"panel","as":"copy"}"#);
+        assert_eq!(error.code, ErrorCode::Unsupported);
+        assert!(error.suggestion.unwrap().contains("mesh.set"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        ok(&mut e, r#"{"cmd":"constraint.remove","name":"support"}"#);
+        for name in ["pull", "film", "heat"] {
+            ok(&mut e, &format!(r#"{{"cmd":"load.remove","name":"{name}"}}"#));
+        }
+        ok(
+            &mut e,
+            r#"{"cmd":"geometry.nameFace","name":"edge","of":"panel","where":{"kind":"normal","normal":[-1,0,0]}}"#,
+        );
+        ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"panel"}}"#);
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        let error = err(&mut e, r#"{"cmd":"geometry.remove","name":"panel"}"#);
+        assert_eq!(error.code, ErrorCode::InUse);
+        assert!(error.cause.contains("edge") && error.cause.contains("whole"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        for name in ["edge", "whole"] {
+            ok(&mut e, &format!(r#"{{"cmd":"geometry.remove","name":"{name}"}}"#));
+        }
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"panel"}"#);
+        assert!(e.model().mesh.is_none());
+    }
+}
+
+#[test]
+fn implicit_body_replacement_and_removal_preserve_unrelated_geometry() {
+    for swept in [false, true] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"lifecycle"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"]}"#);
+        ok(&mut e, r#"{"cmd":"material.add","name":"solid","E":"200 GPa","nu":0.25}"#);
+        ok(&mut e, r#"{"cmd":"material.assign","material":"solid","bodies":["other"]}"#);
+        selector_mesh(&mut e, 1, 1, swept);
+        ok(&mut e, r#"{"cmd":"material.assign","material":"solid","bodies":["sheet"]}"#);
+        selector_mesh(&mut e, 2, 2, swept);
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"other","to":"unrelated"}"#);
+        assert_eq!(e.model().implicit_body(), Some("sheet"));
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"unrelated","to":"other"}"#);
+        assert_eq!(e.model().material_of_body("sheet"), Some("solid"));
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        for cmd in [
+            r#"{"cmd":"geometry.addBox","name":"sheet","size":["1 m","1 m","1 m"]}"#,
+            r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"other"}"#,
+            r#"{"cmd":"model.duplicate","kind":"body","name":"other","as":"sheet"}"#,
+        ] {
+            assert_eq!(err(&mut e, cmd).code, ErrorCode::NameTaken);
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        }
+        let before = e.model_hash();
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"sheet"}"#);
+        assert!(e.model().mesh.is_none());
+        assert!(e.model().mesher_material.is_none());
+        assert_eq!(e.model().material_of_body("other"), Some("solid"));
+        assert_eq!(e.model().bodies.len(), 1);
+        let removed = e.model_hash();
+        ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+        assert_eq!(e.model_hash(), before);
+        ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+        assert_eq!(e.model_hash(), removed);
+        ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+        assert!(e.model().mesher_material.is_none());
+        assert_eq!(e.model().material_of_body("other"), Some("solid"));
+        selector_mesh(&mut e, 1, 1, swept);
+        assert_eq!(e.model().material_of_body("sheet"), None);
+        ok(&mut e, r#"{"cmd":"material.assign","material":"solid","bodies":["sheet"]}"#);
+        // Replacing the owned name is removal plus creation, so assignment cannot leak.
+        let mut command = serde_json::to_value(&e.journal().entries[e.journal().entries.len() - 2].cmd).unwrap();
+        let mesher = &mut command["mesher"];
+        if swept {
+            mesher["base"]["body"] = "fresh".into();
+        } else {
+            mesher["body"] = "fresh".into();
+        }
+        ok(&mut e, &command.to_string());
+        assert_eq!(e.model().implicit_body(), Some("fresh"));
+        assert!(e.model().mesher_material.is_none());
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"other"}"#);
+        assert_eq!(e.model().implicit_body(), Some("fresh"));
+        let mut replay = engine();
+        pollster::block_on(replay.replay(&e.export_file().journal.entries, false, true)).unwrap();
+        assert_eq!(replay.model_hash(), e.model_hash());
+    }
+}
+
+#[test]
+fn implicit_body_mesh_names_cannot_shadow_explicit_geometry() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"names"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"sheet","size":["1 m","1 m","1 m"]}"#);
+    let mapped = serde_json::json!({"kind":"mapped","body":"sheet","blocks":[{"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]],"n":[1,1]}]});
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    for swept in [false, true] {
+        let mesher = if swept {
+            serde_json::json!({"kind":"sweep","base":mapped,"sweep":{"kind":"extrude","layers":1,"height":"1 m"}})
+        } else {
+            mapped.clone()
+        };
+        let error = err(&mut e, &serde_json::json!({"cmd":"mesh.set","mesher":mesher}).to_string());
+        assert_eq!(error.code, ErrorCode::NameTaken);
+        assert!(error.suggestion.unwrap().contains("mesh.set"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+    let mut invalid = mapped;
+    invalid["body"] = "".into();
+    assert_eq!(
+        err(&mut e, &serde_json::json!({"cmd":"mesh.set","mesher":invalid}).to_string()).code,
+        ErrorCode::Schema
+    );
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+}
+
+#[test]
+fn free_mesher_body_references_follow_rename_and_guard_removal() {
+    for swept in [false, true] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"free-reference"}"#);
+        if !swept {
+            ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+        }
+        ok(&mut e, PLATE);
+        let base = serde_json::json!({"kind":"free","of":"plate","size":"2 m"});
+        let mesher = if swept {
+            serde_json::json!({"kind":"sweep","base":base,"sweep":{"kind":"extrude","layers":1,"height":"1 m"}})
+        } else {
+            base
+        };
+        ok(&mut e, &serde_json::json!({"cmd":"mesh.set","mesher":mesher}).to_string());
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"plate","to":"panel"}"#);
+        assert_eq!(e.model().mesh.as_ref().unwrap().mesher.source_body(), Some("panel"));
+        if swept {
+            // Triangle-to-wedge sweeping remains unsupported, but its geometry reference
+            // must still follow rename instead of becoming a misleading not-found error.
+            let error = e.query(Query::Mesh {}).unwrap_err();
+            assert_eq!(error.code, ErrorCode::MeshFailed);
+            assert!(error.cause.contains("quad4 or quad8"));
+        } else {
+            assert!(e.mesh().unwrap().sets.contains_key("panel.xmin"));
+        }
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        let error = err(&mut e, r#"{"cmd":"geometry.remove","name":"panel"}"#);
+        assert_eq!(error.code, ErrorCode::InUse);
+        assert!(error.cause.contains("mesher geometry"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+        ok(&mut e, r#"{"cmd":"geometry.remove","name":"panel"}"#);
+    }
+}
+
+#[test]
+fn implicit_body_cut_boundaries_keep_identity_and_return_structured_errors() {
+    for swept in [false, true] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"cuts"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["2 m","2 m","2 m"]}"#);
+        ok(
+            &mut e,
+            r#"{"cmd":"geometry.subtractBox","name":"hole","from":"other","size":["1 m","1 m","1 m"],"at":["0 m","0 m","0 m"]}"#,
+        );
+        selector_mesh(&mut e, 1, 1, swept);
+        let mut command = serde_json::to_value(&e.journal().entries.last().unwrap().cmd).unwrap();
+        if swept {
+            command["mesher"]["base"]["body"] = "hole".into();
+        } else {
+            command["mesher"]["body"] = "hole".into();
+        }
+        let before = serde_json::to_value(e.export_file()).unwrap();
+        for cmd in [
+            command.to_string(),
+            r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"hole"}"#.into(),
+            r#"{"cmd":"geometry.subtractBox","name":"sheet","from":"other","size":["1 m","1 m","1 m"],"at":["0 m","0 m","0 m"]}"#.into(),
+        ] {
+            assert_eq!(err(&mut e, &cmd).code, ErrorCode::NameTaken);
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        }
+        let rename = err(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"sheet","to":"hole"}"#);
+        assert!(rename.suggestion.unwrap().contains("model.rename"));
+        for cmd in [
+            r#"{"cmd":"geometry.subtractBox","name":"cut","from":"sheet","size":["1 m","1 m","1 m"],"at":["0 m","0 m","0 m"]}"#,
+            r#"{"cmd":"geometry.subtract","name":"cut","from":"sheet","shape":{"kind":"box","size":["1 m","1 m","1 m"]}}"#,
+        ] {
+            let error = err(&mut e, cmd);
+            assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::Unsupported, Some("from")));
+            assert!(error.suggestion.unwrap().contains("mesh.set"));
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn body_removal_reports_volumetric_heat_dependencies() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"1 W/m^3"}"#);
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let error = err(&mut e, r#"{"cmd":"geometry.remove","name":"bar"}"#);
+    assert_eq!(error.code, ErrorCode::InUse);
+    assert!(error.cause.contains("source"));
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
 }
