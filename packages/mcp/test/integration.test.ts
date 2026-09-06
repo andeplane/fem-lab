@@ -91,3 +91,15 @@ it('builds and solves the cantilever through tool calls, with no browser', async
   // an error comes back as the engine's structured shape, not as a crash
   await expect(call('constraint_fix', { name: 'x', on: 'nope' })).rejects.toThrow('not-found');
 });
+
+it('leaves the real Model unchanged after a timed-out script schedules a delayed Command', async () => {
+  const before = await call('query_model', {});
+  const timed = await call('run_script', {
+    code: 'console.log("waiting"); await new Promise(r => setTimeout(r, 1200)); await fem.model.new({ name: "too late" });',
+    timeoutMs: 800,
+  }) as { console: string[]; error: string };
+  expect(timed.console).toEqual(['waiting']);
+  expect(timed.error).toContain('did not finish');
+  await new Promise((resolve) => setTimeout(resolve, 1300));
+  expect(await call('query_model', {})).toEqual(before);
+});

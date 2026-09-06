@@ -1,7 +1,7 @@
-// The full-screen states of docs/design/README.md that are not the workspace: the start screen's
-// four paths, the examples gallery and the ⌘K command palette. The palette is the registry made
+// The full-screen states of docs/design/README.md that are not the workspace: the start screen
+// (issue #41), the examples gallery and the ⌘K command palette. The palette is the registry made
 // visible — every row is one Command with its doc string, which is also the AI's tool description.
-import type { CommandDef } from '@femlab/registry';
+import type { CommandDef, ProjectMeta } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { engineChip } from '../capabilities';
 import type { UiState } from '../store';
@@ -151,58 +151,199 @@ export function Examples({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
+/** "4 minutes ago", "2 days ago" — a card wants the age, not a timestamp to parse. */
+export function ago(at: number, now = Date.now()): string {
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  const units: [number, string][] = [
+    [86_400, 'day'],
+    [3600, 'hour'],
+    [60, 'minute'],
+  ];
+  const unit = units.find(([size]) => seconds >= size);
+  if (!unit) return 'just now';
+  const n = Math.floor(seconds / unit[0]);
+  return `${n} ${unit[1]}${n === 1 ? '' : 's'} ago`;
+}
+
+/** One Recent card: the whole card opens the project, with rename and delete sitting on it. */
+function RecentCard({ p, dispatch }: { p: ProjectMeta; dispatch: Dispatch }) {
+  const [confirming, setConfirming] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  return (
+    <div class="recent">
+      <Cmd dispatch={dispatch} cmd="project.open" class="recent-open" args={{ id: p.id }} title={`project.open ${p.name}`}>
+        {p.thumbnail ? <img class="recent-thumb" src={p.thumbnail} alt="" /> : <span class="recent-thumb empty" />}
+        <span class="recent-name mono">{p.name}</span>
+        <span class="recent-meta mono">
+          {p.commands} Command{p.commands === 1 ? '' : 's'} · edited {ago(p.at)}
+        </span>
+      </Cmd>
+      <div class="recent-tools">
+        {renaming === null ? null : (
+          <input
+            class="mono rename-field"
+            aria-label={`rename ${p.name}`}
+            data-cmd="project.rename"
+            autoFocus
+            value={renaming}
+            onClick={(e) => e.stopPropagation()}
+            onInput={(e) => setRenaming((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setRenaming(null);
+              if (e.key !== 'Enter') return;
+              const name = renaming.trim();
+              setRenaming(null);
+              if (name) void dispatch({ cmd: 'project.rename', id: p.id, name }).catch(() => undefined);
+            }}
+          />
+        )}
+        <Cmd dispatch={dispatch} cmd="project.rename" args={{ id: p.id, name: p.name }} title="project.rename" onRun={() => setRenaming(renaming === null ? p.name : null)}>
+          rename
+        </Cmd>
+        <Cmd
+          dispatch={dispatch}
+          cmd="project.delete"
+          class={confirming ? 'danger' : ''}
+          args={{ id: p.id }}
+          title={confirming ? 'there is no undo' : 'project.delete'}
+          onRun={() => {
+            if (!confirming) return setConfirming(true);
+            setConfirming(false);
+            void dispatch({ cmd: 'project.delete', id: p.id }).catch(() => undefined);
+          }}
+        >
+          {confirming ? 'really delete' : 'delete'}
+        </Cmd>
+      </div>
+    </div>
+  );
+}
+
+/** Where a project goes, said in the capability line rather than discovered when one is lost. */
+export function storageLine(s: Pick<UiState, 'project'>): string {
+  if (s.project?.autosave === false) return 'saving is off — use Save as file';
+  if (typeof indexedDB === 'undefined') return 'projects need browser storage; use Save as file';
+  return 'projects saved in this browser';
+}
+
+/**
+ * The start screen of issue #41, in the issue's own reading order: say what you want in words,
+ * start a project, come back to one, open a file, browse examples, take a tutorial.
+ *
+ * The composer is a real input rather than a card that toggles a panel, because describing the
+ * part is the thing a person is most likely to want. It opens the drawer and sends the line as
+ * two Commands; with no API key the drawer answers by opening its Settings, and the line stays
+ * here in the composer so nothing typed is lost.
+ */
 export function Start({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const [name, setName] = useState('model');
+  const [ask, setAsk] = useState('');
+  const [all, setAll] = useState(false);
+  const recent = all ? s.projects : s.projects.slice(0, 6);
+  const send = (): void => {
+    if (!ask.trim()) return;
+    void dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true })
+      .then(() => dispatch({ cmd: 'chat.send', text: ask.trim() }))
+      .catch(() => undefined);
+  };
   return (
     <div class="start">
       <h1>
         <i /> FEM Lab
       </h1>
       <p class="pitch">A finite-element editor and solver in a browser tab. No install, no server, nothing leaves this page.</p>
+
+      <div class="ask">
+        <input
+          class="ask-field"
+          aria-label="describe the part"
+          data-cmd="chat.send"
+          placeholder="Describe the part — a 1 m steel cantilever, 50×100 mm, 10 kN at the tip…"
+          value={ask}
+          onInput={(e) => setAsk((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.preventDefault(), send());
+          }}
+        />
+        <Cmd dispatch={dispatch} cmd="chat.send" class="ask-send" args={{ text: ask }} disabled={ask.trim() === ''} title="chat.send" onRun={send}>
+          Send
+        </Cmd>
+      </div>
+      <div class="ask-note">the Assistant builds it as visible Commands; you can take over at any step</div>
+
+      <div class="section">
+        <span class="section-head">New project</span>
+        <div class="new-project">
+          <input class="mono new-name" aria-label="project name" data-cmd="project.new" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
+          <Cmd dispatch={dispatch} cmd="project.new" opens="model.new" class="apply" args={{ name }} disabled={!s.ready} title="project.new">
+            New project
+          </Cmd>
+          <span class="faint">an empty Model, saved from the first Command</span>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head">
+          <span>Recent projects</span>
+          {s.projects.length > 6 ? (
+            <span class="link show-all" role="button" tabIndex={0} onClick={() => setAll(!all)} onKeyDown={(e) => e.key === 'Enter' && setAll(!all)}>
+              {all ? 'show six' : `show all (${s.projects.length})`}
+            </span>
+          ) : null}
+        </div>
+        {recent.length > 0 ? (
+          <div class="recents">
+            {recent.map((p) => (
+              <RecentCard key={p.id} p={p} dispatch={dispatch} />
+            ))}
+          </div>
+        ) : (
+          <div class="faint no-projects">Projects you start are kept in this browser. Nothing is uploaded.</div>
+        )}
+      </div>
+
       <div class="cards">
-        <Cmd dispatch={dispatch} cmd="panel.toggle" class="card cue" args={{ panel: 'assistant' }}>
-          <b>Ask the Assistant</b>
-          <span>Describe the part in words. It builds the geometry, meshes, solves and checks it — every step lands in the Journal.</span>
-          <i class="mono cue-yellow">⇧A · shares this Model with you</i>
+        <Cmd dispatch={dispatch} cmd="file.open" class="card" args={{ picker: true }} title="file.open">
+          <b>Open a file</b>
+          <span>A femlab/1 file saved from here or from the CLI; it becomes a project when you edit it.</span>
+          <i class="mono cue-cyan">file.open(picker)</i>
         </Cmd>
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" args={{ panel: 'examples' }}>
-          <b>Open an example</b>
+          <b>Examples</b>
           <span>Worked benchmarks with reference values, each opened as its own Journal.</span>
-          <i class="mono cue-cyan">file.openExample(…)</i>
-        </Cmd>
-        <Cmd dispatch={dispatch} cmd="model.new" class="card" args={{ name }} disabled={!s.ready} title="model.new">
-          <b>Start from geometry</b>
-          <span>An empty Model; add a Body, a Material, a Mesh, a Constraint, a Load and a Step, then solve.</span>
-          <input
-            class="mono start-name"
-            aria-label="model name"
-            data-cmd="model.new"
-            value={name}
-            onClick={(e) => e.stopPropagation()}
-            onInput={(e) => setName((e.target as HTMLInputElement).value)}
-          />
+          <i class="mono cue-cyan">panel.toggle(examples)</i>
         </Cmd>
         <Cmd dispatch={dispatch} cmd="panel.toggle" class="card" args={{ panel: 'tutorial' }}>
-          <b>Start a tutorial</b>
+          <b>Tutorials</b>
           <span>Nine guided walks, one Command at a time with the reason for each: a cantilever, a plate with a hole, heat, modes, a convergence study.</span>
-          <i class="mono">tutorials · step by step</i>
+          <i class="mono">panel.toggle(tutorial)</i>
         </Cmd>
-        {s.autosave ? (
-          <Cmd dispatch={dispatch} cmd="file.restore" class="card" title="file.restore">
-            <b>Restore the last model</b>
-            <span>
-              {s.autosave.name} · {s.autosave.commands} Commands, autosaved in this browser {new Date(s.autosave.at).toLocaleString()}.
-            </span>
-            <i class="mono">file.restore()</i>
-          </Cmd>
-        ) : null}
       </div>
+
       <div class="caps mono">
         {s.ready ? '●' : '○'} {s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…'} · {s.hostCaps?.webgpu ? 'WebGPU available' : 'no WebGPU'} ·{' '}
-        {s.hostCaps?.crossOriginIsolated ? 'cross-origin isolated' : 'not isolated'} · no install · no server · nothing leaves the tab
+        {s.hostCaps?.crossOriginIsolated ? 'cross-origin isolated' : 'not isolated'} · {storageLine(s)} · no server · nothing leaves the tab
       </div>
       {s.notes.length > 0 ? <div class="notes">{s.notes.join(' · ')}</div> : null}
       {s.lastError ? <div class="notes bad">{`${s.lastError.code}: ${s.lastError.cause}`}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * The same screen as an overlay, so the top bar's **Projects** button gets a person from a
+ * workspace back to the list without a `project.close` Command having to exist.
+ */
+export function Projects({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  if (s.panels['projects'] !== true) return null;
+  return (
+    <div class="overlay wide" onClick={() => void dispatch({ cmd: 'panel.toggle', panel: 'projects', open: false })}>
+      <div class="projects-modal" role="dialog" aria-modal="true" aria-label="Projects" onClick={(e) => e.stopPropagation()}>
+        <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton close" args={{ panel: 'projects', open: false }}>
+          ×
+        </Cmd>
+        <Start s={s} dispatch={dispatch} />
+      </div>
     </div>
   );
 }

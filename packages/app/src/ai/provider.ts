@@ -32,9 +32,16 @@ export interface ToolResultBlock {
 }
 export type Block = TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock;
 
+/** Opaque provider wire state, retained with its assistant message and never shown in the UI. */
+export interface Continuation {
+  provider: ProviderId;
+  value: unknown;
+}
+
 export interface Message {
   role: 'user' | 'assistant';
   content: Block[];
+  continuation?: Continuation;
 }
 
 export interface ChatRequest {
@@ -54,6 +61,7 @@ export interface Usage {
 export type ChatEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'continuation'; continuation: Continuation }
   | { type: 'usage'; usage: Usage }
   | { type: 'done'; stopReason: string }
   | { type: 'error'; message: string };
