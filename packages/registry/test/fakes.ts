@@ -74,6 +74,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       setClip: vi.fn(),
       toggle: vi.fn(),
       setVisible: vi.fn(),
+      highlight: vi.fn(),
       setTheme: vi.fn(),
       animate: vi.fn(),
       playTransient: vi.fn(),

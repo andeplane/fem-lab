@@ -14,6 +14,7 @@ import { type Autosave, type ShareCommand, applyShared, indexedDbStore, makeAuto
 import { EMPTY_SELECTION, type ExampleDifficulty, type Store, type ViewMode, visibilityReducer } from './store';
 import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
+import { treeGroups } from './ui/Tree';
 import type { TransientInput } from './transient';
 
 /**
@@ -203,6 +204,7 @@ export function makeHostContext(
         v().setVisible(bodies, on);
         store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, bodies, on) });
       },
+      highlight: (s) => viewer.current?.setHighlight(s),
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
@@ -247,8 +249,18 @@ export function makeHostContext(
       cancelAnimationCapture: () => capture.cancel(),
     },
     selection: {
-      set: (s) => store.select(s),
-      clear: () => store.set({ selection: EMPTY_SELECTION }),
+      set: async (s) => {
+        invalidateDefinition(store);
+        store.select(s);
+        const ref = s.refs?.[0];
+        const item = ref ? treeGroups(store.state).flatMap((group) => group.items).find((candidate) => `${candidate.kind}:${candidate.name}` === ref) : undefined;
+        if (item?.cmd === 'form.edit') await editDefinition(store, transport, item.args as DefinitionTarget);
+        else if (item && !item.run) store.openForm(item.cmd, item.args);
+      },
+      clear: () => {
+        invalidateDefinition(store);
+        store.set({ selection: EMPTY_SELECTION });
+      },
       setPickTarget: (t) => store.set({ pickTarget: t }),
       get: (): Selection => store.state.selection,
     },
@@ -403,6 +415,26 @@ export function makeHostContext(
   };
 }
 
+type DefinitionTarget = { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+const definitionRequests = new WeakMap<Store, number>();
+
+function invalidateDefinition(store: Store): number {
+  const request = (definitionRequests.get(store) ?? 0) + 1;
+  definitionRequests.set(store, request);
+  return request;
+}
+
+/** Journal selection and form.edit share one request fence and the complete engine definition. */
+async function editDefinition(store: Store, transport: EngineTransport, target: DefinitionTarget): Promise<void> {
+  const request = invalidateDefinition(store);
+  const previousForm = store.state.form;
+  const revision = store.state.revision;
+  const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+  if (request !== definitionRequests.get(store) || store.state.form !== previousForm || store.state.revision !== revision) return;
+  const { cmd, ...args } = command;
+  store.openForm(cmd, args);
+}
+
 /**
  * Four Commands the design's shell needs that `@femlab/registry` does not declare: the display
  * mode segmented control, opening a bundled example that is a Journal rather than a saved
@@ -411,7 +443,6 @@ export function makeHostContext(
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
-  let editRequest = 0;
   let intentRun = 0;
   return [
     {
@@ -453,16 +484,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
       schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
       tool: true,
-      run: async (input) => {
-        const target = input as { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
-        const request = ++editRequest;
-        const previousForm = store.state.form;
-        const revision = store.state.revision;
-        const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
-        if (request !== editRequest || store.state.form !== previousForm || store.state.revision !== revision) return;
-        const { cmd, ...args } = command;
-        store.openForm(cmd, args);
-      },
+      run: (input) => editDefinition(store, transport, input as DefinitionTarget),
     },
     {
       name: 'chat.setDraft',

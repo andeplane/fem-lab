@@ -526,6 +526,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         return;
       }
       viewer.current = v;
+      v.setSelection(store.state.selection);
       viewer.onReady?.();
       v.onPick((p) => {
         const frame = store.state.transient?.frame;
@@ -550,7 +551,9 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       viewer.current = null;
       v.dispose();
     };
-  }, [viewer, dispatch]);
+  }, [viewer, dispatch, store]);
+
+  useEffect(() => viewer.current?.setSelection(s.selection), [viewer, s.selection]);
 
   const ref = s.selection.refs[0];
   const stale = s.result?.stale === true;
@@ -596,7 +599,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       {stale ? (
         <div class="stale-banner" role="status">
           <span>
-            Result is stale — Model changed after journal line {s.result!.revision}.
+            Result is stale — Model changed after revision {s.result!.revision}.
             {s.study ? ' The convergence table reports separate study solves; it does not refresh these stale contours. Re-solve to display the current Model.' : ''}
           </span>
           <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }}>

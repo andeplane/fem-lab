@@ -2247,13 +2247,28 @@ fn a_solve_refuses_a_model_it_cannot_answer_for() {
 fn a_result_goes_stale_when_the_model_changes_and_undo_orphans_it() {
     let mut e = engine();
     solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    let first_solve = result(&mut e).revision;
+    assert_eq!(first_solve, e.revision(), "the producing solve's Journal line is stable provenance");
     assert!(!result(&mut e).stale);
     // an edit that does not touch the mesh still stales the Result: the Model hash moved
     ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
-    assert!(result(&mut e).stale, "the Result predates the edit");
+    let stale = result(&mut e);
+    assert!(stale.stale, "the Result predates the edit");
+    assert_eq!(stale.revision, first_solve, "an edit does not rewrite Result provenance");
     // undoing back to the solved Model makes it current again
     ok(&mut e, r#"{"cmd":"journal.undo"}"#);
     assert!(!result(&mut e).stale);
+    // A later solve of the same Step replaces the cached Result. Undo removes its producing
+    // line, but the cache keeps that exact provenance instead of falling back to the old solve.
+    ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 N","0 N","-2 kN"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let second_solve = result(&mut e).revision;
+    assert!(second_solve > first_solve);
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    let orphaned = result(&mut e);
+    assert!(!orphaned.stale, "undo restored the Model solved by the cached Result");
+    assert_eq!(orphaned.revision, second_solve);
+    assert!(e.journal().entries.iter().all(|entry| entry.seq + 1 != second_solve));
     // undoing past the solve orphans the Result: it survives, and says it is stale
     ok(&mut e, r#"{"cmd":"journal.undo","steps":3}"#);
     // the Step is gone from the Model, so only its name reaches the Result it orphaned
@@ -2261,6 +2276,7 @@ fn a_result_goes_stale_when_the_model_changes_and_undo_orphans_it() {
     let QueryResult::Result(r) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
     assert!(r.stale, "the Step it belongs to is gone");
     assert_eq!(r.step, "static");
+    assert_eq!(r.revision, second_solve);
     // model.new throws Results away entirely
     ok(&mut e, r#"{"cmd":"model.new","name":"other"}"#);
     assert_eq!(e.query(Query::Result { step: None }).expect_err("cleared").code, ErrorCode::NotFound);
@@ -4460,7 +4476,9 @@ fn a_convergence_study_scales_a_mapped_mesh_and_can_keep_the_finest() {
     assert!(rel(r.extrapolated.expect("a limit"), 23.9) < 0.02, "Cook's membrane: {:?}", r.extrapolated);
     let QueryResult::Mesh(m) = e.query(Query::Mesh {}).expect("meshed") else { panic!("a MeshSummary") };
     assert_eq!(m.elements, 16 * 16, "restore: false leaves the finest mesh in place");
-    assert!(!result(&mut e).stale, "and its Result with it");
+    let kept = result(&mut e);
+    assert!(!kept.stale, "and its Result with it");
+    assert_eq!(kept.revision, e.revision(), "the non-restoring study is the Result producer");
 }
 
 /// The extremes a study can follow instead of a point, and what two sizes alone can say: a

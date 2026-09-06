@@ -43,11 +43,13 @@ export const TransientPlayback = z.object({
   ]).optional(),
 });
 export const SelectionInput = z.object({
+  refs: z.array(z.string()).optional(),
   bodies: z.array(z.string()).optional(),
   faces: z.array(z.string()).optional(),
   sets: z.array(z.string()).optional(),
   mode: z.enum(['replace', 'add', 'remove']).optional(),
 });
+export const HighlightInput = SelectionInput.omit({ refs: true, mode: true });
 export const PickTarget = z.enum(['face', 'body', 'off']);
 /** Resizable shell panels. Their sizes are view state and never enter the Journal. */
 export const PanelTarget = z.enum(['tree', 'properties', 'bottom', 'assistant']);
@@ -72,7 +74,7 @@ export interface Selection {
   bodies: string[];
   faces: string[];
   sets: string[];
-  /** What `@selection` expands to: `face:beam.top`, `body:beam`, … */
+  /** What `@selection` expands to: stable `kind:name` Model object references. */
   refs: string[];
 }
 /** The open project *folder* on disk, as `query.folder` reports it. */
@@ -147,6 +149,7 @@ export interface HostContext {
     setClip(p: z.output<typeof ClipPlane> | null): void;
     toggle(layer: z.output<typeof Layer>, on?: boolean): void;
     setVisible(bodies: string[], on: boolean): void;
+    highlight(s: z.output<typeof HighlightInput>): void;
     setTheme(t: z.output<typeof Theme>): void;
     animate(a: z.output<typeof Animation>): void | Promise<void>;
     playTransient(a: z.output<typeof TransientPlayback>): void | Promise<void>;
@@ -156,7 +159,7 @@ export interface HostContext {
     cancelAnimationCapture(): boolean;
   };
   selection: {
-    set(s: z.output<typeof SelectionInput>): void;
+    set(s: z.output<typeof SelectionInput>): void | Promise<void>;
     clear(): void;
     setPickTarget(t: z.output<typeof PickTarget>): void;
     get(): Selection;
@@ -383,10 +386,11 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.setClip', 'Cut the view with a section plane `{ normal, offset }` in metres to look inside a body, or `{ plane: null }` to remove the cut. Contours are drawn on the cut surface too.', z.object({ plane: ClipPlane.nullable() }), ({ plane }, ctx) => ctx.view.setClip(plane)),
   def('view.toggle', 'Show or hide an overlay layer: mesh, edges, loads, constraints, sets, legend, axes or grid. Omit `on` to flip the current state.', z.object({ layer: Layer, on: z.boolean().optional() }), ({ layer, on }, ctx) => ctx.view.toggle(layer, on)),
   def('view.setVisible', 'Show or hide the named bodies in the viewer (the tree\'s eye icon). Hidden bodies stay in the Model and in every solve; only the display changes.', z.object({ bodies: z.array(z.string()), on: z.boolean() }), ({ bodies, on }, ctx) => ctx.view.setVisible(bodies, on)),
+  def('view.highlight', 'Temporarily highlight named bodies, faces or Sets in the viewer. Pass an empty object to clear the highlight. This is transient hover state: it never changes the selection, Model or Journal.', HighlightInput, (s, ctx) => ctx.view.highlight(s)),
   def('view.setTheme', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
   def('view.animate', 'Play, pause or scrub the displacement amplitude of a solved Step. mode selects a one-based modal shape; speed is positive cycles per second. frame is phase from 0 to 100 percent of a sinusoidal cycle, including while paused. Use view.playTransient for retained physical-time fields. No Model or Journal change.', Animation, (a, ctx) => ctx.view.animate(a)),
   def('view.playTransient', 'Play, pause or select actual retained fields of a solved transient Step. speed is positive simulated seconds per wall second. sample selects a zero-based retained frame or a unit-bearing time resolved by the engine with exact/nearest sampling. Playback holds stored fields until the next retained time, stops at the endpoint, and synchronizes temperature or displacement contours, deformation, legend and probes. Historical derived fields are unavailable. Display only; no Model or Journal change.', TransientPlayback, (a, ctx) => ctx.view.playTransient(a)),
-  def('selection.set', 'Select bodies, faces (named face Sets) and Sets by name, never by id. `mode` is replace (default), add or remove, like shift-click; the selection drives `view.fit` and `@selection` in the chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
+  def('selection.set', 'Select Model objects by stable `kind:name` refs, or select drawable bodies, faces and Sets by name. `mode` is replace (default), add or remove. The selection drives Properties, `view.fit` and `@selection` in chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
   def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
   def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
