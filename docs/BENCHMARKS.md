@@ -73,6 +73,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | A6 | Free thermal expansion of a block | ε = αΔT, σ = 0 | 1e-10 | thermal strain path | engine test |
 | A7 | Reaction balance, every case | Σ reactions = −Σ applied loads | 1e-9 rel | Dirichlet handling and reaction recovery | engine test + green |
 | A8 | Journal replay, every case | Model hash identical after replay | exact | the engine is deterministic and scriptable | engine test |
+| A9 | GPU CG early convergence on identity and positive diagonal systems, 1 / 7 / 257 equations | `x_i = b_i / d_i`, including zero RHS | exact for powers-of-four diagonals | converged corrections survive the rest of a 25-iteration submission; reused contexts reset correctly | GPU test |
 
 A5 is run for all eight element kinds, driven by a prescribed end displacement so the reaction
 *is* `F`; A7's scale is the largest force that flows through the model, because a Step driven by
@@ -89,6 +90,14 @@ while unequal increments are rejected with both Load names and the Body. A8's nu
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
+
+A9 runs the shipped CG shaders on the adapter with budgets of 2, 25 and 50 iterations,
+including matrix chunks of three rows and a vector crossing the 256-thread workgroup boundary.
+The positive diagonal cases also pass through Jacobi scaling and f64 refinement at 1 and 2 CPU
+threads. These are algebraic identities at every tested size, so no mesh convergence rate
+applies. A coupled 2×2 SPD system checks the nonzero beta recurrence against its closed-form
+inverse; zero and negative curvature check that a broken-down batch preserves its last finite
+correction instead of dividing by an invalid denominator.
 
 A1 also runs all eight element families at length factors `1e-9`, `1e-6`, `1e-5`, `1e-3`,
 `1`, `1e3`, and `1e6`, with full and incompatible-mode formulations and every applicable
