@@ -186,12 +186,12 @@ function field(name: string, raw: JsonSchema, defs: Defs, required: boolean, pat
   return { ...base, tag: 'json', kind: 'json' };
 }
 
-/** Every property of an object schema except the `cmd`/`query`/`kind` discriminator. */
+/** Hide constant discriminators, preserving ordinary fields such as ObjectKind. */
 function propertyFields(node: JsonSchema, defs: Defs, path: string[], depth: number): Field[] {
   const props = (node['properties'] ?? {}) as Record<string, JsonSchema>;
   const required = new Set((node['required'] as string[] | undefined) ?? []);
   return Object.entries(props)
-    .filter(([name]) => name !== 'cmd' && name !== 'query' && name !== 'kind')
+    .filter(([name, prop]) => !(['cmd', 'query', 'kind'].includes(name) && resolve(prop, defs)['const'] !== undefined))
     .map(([name, prop]) => field(name, prop, defs, required.has(name), [...path, name], depth));
 }
 
@@ -234,14 +234,16 @@ export const getAt = (obj: unknown, path: string[]): unknown => path.reduce<unkn
  * Materialise the first variant of a tagged union when the schema requires the union, or when
  * an optional union is already present. The form draws that first variant as selected, so the
  * values it previews and dispatches must carry the same discriminator. An untouched optional
- * union stays absent.
+ * union stays absent. Required multi-pickers start as empty lists, matching their empty UI.
  */
-export function defaultTaggedUnions(values: Record<string, unknown>, fields: Field[]): Record<string, unknown> {
+export function defaultFormValues(values: Record<string, unknown>, fields: Field[]): Record<string, unknown> {
   let out = values;
   for (const field of fields) {
     const value = getAt(out, field.path);
     const present = value !== undefined && value !== null;
-    if (field.kind === 'union') {
+    if (!present && field.required && (field.kind === 'ref' || field.kind === 'enum') && field.multi) {
+      out = setAt(out, field.path, []);
+    } else if (field.kind === 'union') {
       if (!present && !field.required) continue;
       if (present && (typeof value !== 'object' || Array.isArray(value))) continue;
       let kind = getAt(out, [...field.path, 'kind']);
@@ -250,15 +252,15 @@ export function defaultTaggedUnions(values: Record<string, unknown>, fields: Fie
         out = setAt(out, [...field.path, 'kind'], kind);
       }
       const chosen = field.variants.find((variant) => variant.kind === kind);
-      if (chosen) out = defaultTaggedUnions(out, chosen.fields);
+      if (chosen) out = defaultFormValues(out, chosen.fields);
     } else if (field.kind === 'object' && (present || field.required)) {
-      out = defaultTaggedUnions(out, field.fields);
+      out = defaultFormValues(out, field.fields);
     }
   }
   return out;
 }
 
-/** Immutable set-by-path; an empty string, empty array or undefined removes the key entirely. */
+/** Immutable set-by-path; empty collections are values, while empty text/undefined clears a key. */
 export function setAt(obj: Record<string, unknown>, path: string[], value: unknown): Record<string, unknown> {
   const [head, ...rest] = path;
   if (head === undefined) return obj;
@@ -267,7 +269,7 @@ export function setAt(obj: Record<string, unknown>, path: string[], value: unkno
     out[head] = setAt((out[head] ?? {}) as Record<string, unknown>, rest, value);
     return out;
   }
-  if (value === undefined || value === '' || (Array.isArray(value) && value.length === 0)) delete out[head];
+  if (value === undefined || value === '') delete out[head];
   else out[head] = value;
   return out;
 }
