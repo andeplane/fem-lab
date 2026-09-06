@@ -1,7 +1,7 @@
 // The MCP host with a fake engine: the tool list is the registry, every tool call routes to a
 // Command or a Query, `run_script` runs TypeScript, and `export_file` stays inside --project.
 import { RUN_SCRIPT, toolNameFor } from '@femlab/registry';
-import { mkdtemp, readFile, symlink, mkdir } from 'node:fs/promises';
+import { mkdtemp, readFile, symlink, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -144,6 +144,38 @@ describe('export_file', () => {
     expect(await readFile(path.join(root, 'deep', 'mesh.msh'), 'utf8')).toBe('<msh>');
     // and a bad format is a schema error from the registry, before anything is written
     await expect(callTool(registry, 'export_file', { format: 'png', path: 'x.png' })).rejects.toMatchObject({ code: 'schema' });
+  });
+
+  it('rejects file links, including dangling links, without changing their targets', async () => {
+    const root = await scratch();
+    const outside = await scratch();
+    const registry = createRegistry({ engine: fakeEngine(), project: root });
+    const victim = path.join(outside, 'victim.md');
+    await writeFile(victim, 'keep me');
+    await symlink(victim, path.join(root, 'report.md'), 'file');
+    await expect(callTool(registry, 'export_file', { format: 'report', path: 'report.md' })).rejects.toMatchObject({ code: 'file.scope' });
+    expect(await readFile(victim, 'utf8')).toBe('keep me');
+    await symlink(path.join(outside, 'missing.md'), path.join(root, 'dangling.md'), 'file');
+    await expect(callTool(registry, 'export_file', { format: 'report', path: 'dangling.md' })).rejects.toMatchObject({ code: 'file.scope' });
+    expect(await readdir(outside)).toEqual(['victim.md']);
+    await writeFile(path.join(root, 'regular.md'), 'a longer old report');
+    await callTool(registry, 'export_file', { format: 'report', path: 'regular.md' });
+    expect(await readFile(path.join(root, 'regular.md'), 'utf8')).toBe('<report>');
+    await symlink(path.join(root, 'regular.md'), path.join(root, 'internal.md'), 'file');
+    await expect(callTool(registry, 'export_file', { format: 'report', path: 'internal.md' })).rejects.toMatchObject({ code: 'file.scope' });
+  });
+
+  it('validates existing directory links before creating nested directories', async () => {
+    const root = await scratch();
+    const outside = await scratch();
+    const registry = createRegistry({ engine: fakeEngine(), project: root });
+    await symlink(outside, path.join(root, 'escape'), 'dir');
+    await expect(callTool(registry, 'export_file', { format: 'report', path: 'escape/new/deep/report.md' })).rejects.toMatchObject({ code: 'file.scope' });
+    expect(await readdir(outside)).toEqual([]);
+    await callTool(registry, 'export_file', { format: 'report', path: 'new/deep/report.md' });
+    expect(await readFile(path.join(root, 'new/deep/report.md'), 'utf8')).toBe('<report>');
+    await writeFile(path.join(root, 'file'), 'not a directory');
+    await expect(resolveInProject(root, 'file/child/report.md')).rejects.toMatchObject({ code: 'ENOTDIR' });
   });
 
   it('refuses every write when the server was started without a project folder', async () => {
