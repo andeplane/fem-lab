@@ -156,7 +156,14 @@ impl Engine {
         (seq, hash)
     }
 
-    fn undo(&mut self, steps: u32) -> Result<Output, Error> {
+    fn undo(&mut self, steps: u32, expected_journal: Option<&String>) -> Result<Output, Error> {
+        if let Some(expected) = expected_journal {
+            if expected != &self.journal.hash() {
+                return Err(Error::new(ErrorCode::InUse, "the Journal changed after this turn")
+                    .at("expectedJournal")
+                    .suggest("query.journal to inspect later changes before journal.undo"));
+            }
+        }
         if steps == 0 || self.undo.len() < steps as usize {
             return Err(Error::new(
                 ErrorCode::NotFound,
@@ -775,7 +782,9 @@ impl Engine {
                 self.study_converge(step, sizes, quantity, *restore, on_progress).await
             }
             Command::PluginLoad { .. } => Err(Error::unsupported("plugin.load (phase P)")),
-            Command::JournalUndo { steps } => self.undo(steps.unwrap_or(1)),
+            Command::JournalUndo { steps, expected_journal } => {
+                self.undo(steps.unwrap_or(1), expected_journal.as_ref())
+            }
             Command::JournalRedo { steps } => self.redo(steps.unwrap_or(1)),
         }
     }
