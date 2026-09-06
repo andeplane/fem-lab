@@ -96,6 +96,15 @@ pub enum Query {
         from_seq: Option<u32>,
     },
 
+    /// Compare this Model's Journal with a supplied base Journal. Returns the shared causal
+    /// prefix and each ordered divergent tail: removed entries belong to `base`, added entries
+    /// to the current Journal. Entry identity is the typed Command plus `hashAfter`; `seq` is
+    /// only a displayed location and is ignored. Entries after the first divergence are not
+    /// re-aligned. This read never replays either Journal.
+    #[serde(rename = "query.journalDiff", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "JournalDiff"))]
+    JournalDiff { base: crate::journal::Journal },
+
     /// The Journal as a TypeScript script against the `fem` API that reproduces the Model line by
     /// line; what the Script panel shows and what script.run accepts back.
     #[serde(rename = "query.script")]
@@ -467,6 +476,22 @@ pub struct JournalDump {
     pub can_redo: bool,
 }
 
+/// `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
+/// comparison rather than a text diff that aligns similar Commands after histories diverge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalDiff {
+    /// Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied
+    /// `seq` can therefore change this hash without changing `sharedEntries`.
+    pub base_hash: String,
+    pub current_hash: String,
+    pub shared_entries: u32,
+    /// The base Journal's ordered tail after `sharedEntries`.
+    pub removed: Vec<crate::journal::JournalEntry>,
+    /// The current Journal's ordered tail after `sharedEntries`.
+    pub added: Vec<crate::journal::JournalEntry>,
+}
+
 /// `query.script` response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScriptText {
@@ -530,6 +555,7 @@ pub enum QueryResult {
     Path(PathResult),
     Cost(CostEstimate),
     Journal(JournalDump),
+    JournalDiff(JournalDiff),
     Script(ScriptText),
     Converted(Converted),
     MaterialLibrary(MaterialLibrary),
