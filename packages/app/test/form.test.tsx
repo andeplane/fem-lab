@@ -67,6 +67,34 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('teaches linear mesh accuracy and previews a quadratic fix as one Command', () => {
+    const values = { mesher: { kind: 'free', of: 'plate', size: '10 mm' } };
+    const { root, sent, store } = mount('mesh.set', values);
+    expect(field(root, 'order').querySelector('[role="status"]')!.textContent).toContain('Linear triangles');
+    root.querySelector<HTMLButtonElement>('[role="status"] button')!.click();
+    expect(sent).toEqual([{ cmd: 'form.open', command: 'mesh.set', args: { ...values, order: 2 }, keepInitial: true }]);
+    expect(store.state.form!.initial).toEqual(values);
+    expect(root.querySelector('[role="status"]')).toBeNull();
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('order: 2');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'mesh.set', ...values, order: 2 });
+  });
+
+  it('warns for full linear quad/hex formulations, not quadratic or incompatible modes', () => {
+    for (const kind of ['lattice', 'mapped', 'sweep']) {
+      const { root } = mount('mesh.set', { mesher: { kind }, order: 1, formulation: 'full' });
+      expect(root.querySelector('[role="status"]')!.textContent).toContain('can lock in bending');
+    }
+    for (const values of [
+      { mesher: { kind: 'lattice' } },
+      { mesher: { kind: 'mapped' }, order: 1, formulation: 'incompatible-modes' },
+      { mesher: { kind: 'free' }, order: 2 },
+      { mesher: { kind: 'lattice' }, order: 2, formulation: 'full' },
+    ]) {
+      expect(mount('mesh.set', values).root.querySelector('[role="status"]')).toBeNull();
+    }
+  });
+
   beforeEach(() => {
     document.body.innerHTML = '';
   });
@@ -221,6 +249,56 @@ describe('SchemaForm', () => {
     expect(store.state.form!.values['restore']).toBe(true);
     field(root, 'quantity').querySelector<HTMLButtonElement>('button')!.click();
     expect(store.state.form!.values['quantity']).toEqual({ kind: 'max' });
+  });
+
+  // Issue #43: every primitive in the form, the sketch as an editor, and no Apply until it can work.
+  it('draws the fields of whichever shape kind is picked', () => {
+    const { root, store } = mount('geometry.add', { name: 'pin' });
+    const kinds = [...field(root, 'shape').querySelectorAll<HTMLButtonElement>('.segmented button')].map((b) => b.textContent);
+    expect(kinds).toEqual(['box', 'cylinder', 'sphere', 'sheet', 'extrude', 'revolve', 'union', 'subtract', 'intersect', 'transform']);
+    kinds.forEach((k, i) => k === 'cylinder' && field(root, 'shape').querySelectorAll<HTMLButtonElement>('.segmented button')[i]!.click());
+    expect(store.state.form!.values['shape']).toEqual({ kind: 'cylinder' });
+    expect(field(root, 'shape.radius')).not.toBeNull();
+    expect(field(root, 'shape.height')).not.toBeNull();
+  });
+
+  it('offers a sketch editor rather than a JSON textarea, and emits a valid SketchSpec', () => {
+    const { root, store } = mount('geometry.add', { name: 'plate', shape: { kind: 'sheet' } });
+    const sketch = field(root, 'shape.sketch');
+    expect(sketch.querySelector('textarea')).toBeNull();
+    expect(sketch.querySelector('.sketch-view')).not.toBeNull();
+    sketch.querySelector<HTMLButtonElement>('[title^="a 1 × 1"]')!.click();
+    const value = (store.state.form!.values['shape'] as { sketch: { outer: { kind: string; to: string[] }[] } }).sketch;
+    expect(value.outer).toHaveLength(4);
+    expect(value.outer[0]).toEqual({ kind: 'line', to: ['1 mm', '0 mm'] });
+    // The preview closes the loop by wrapping, so four segments draw four sides.
+    expect(root.querySelector('.sketch-view path')!.getAttribute('d')).toBe('M 0 0 L 1 0 L 1 1 L 0 1 L 0 0 Z');
+    [...root.querySelectorAll<HTMLButtonElement>('.sketch-add button')].find((b) => b.textContent === '+ arc')!.click();
+    const grown = (store.state.form!.values['shape'] as { sketch: { outer: { kind: string }[] } }).sketch.outer;
+    expect(grown).toHaveLength(5);
+    expect(grown[4]).toMatchObject({ kind: 'arc', ccw: true });
+  });
+
+  it('will not Add body — by button or by ↵ — until the required fields are filled', () => {
+    const { root, store, sent } = mount('geometry.add');
+    const apply = root.querySelector<HTMLButtonElement>('.apply')!;
+    expect(apply.disabled).toBe(true);
+    expect(apply.title).toBe('fill in Name, Size');
+    // A real <form>, so ↵ submits whatever the button says: the rule has to be in `apply` too.
+    root.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(sent.filter((c) => c.cmd === 'geometry.add')).toEqual([]);
+    expect(store.state.formError).toMatchObject({ code: 'incomplete', cause: 'fill in Name, Size' });
+    type(field(root, 'name').querySelector('input')!, 'beam');
+    for (const [i, input] of [...field(root, 'shape.size').querySelectorAll('input')].entries()) type(input as HTMLInputElement, `${i + 1} mm`);
+    expect(root.querySelector<HTMLButtonElement>('.apply')!.disabled).toBe(false);
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toMatchObject({ cmd: 'geometry.add', name: 'beam' });
+  });
+
+  it('puts the Model\'s own length unit in an empty quantity box', () => {
+    const { root } = mount('geometry.addBox');
+    expect(field(root, 'size').querySelector('input')!.placeholder).toBe('0 mm');
+    expect(field(root, 'at').querySelector('input')!.placeholder).toBe('0 mm');
   });
 
   it('takes a number as a number and a free-form object as JSON', () => {

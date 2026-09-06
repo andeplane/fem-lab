@@ -21,7 +21,9 @@ export function exampleFor(node: JsonSchema, defs = schema.commands.$defs as Rec
   if (type === 'array') {
     const tuple = node['prefixItems'];
     if (Array.isArray(tuple)) return tuple.map(v => exampleFor(v, defs));
-    return Array.from({ length: Number(node['minItems'] ?? 0) }, () => exampleFor(node['items'] as JsonSchema, defs));
+    // A required array without minItems still needs a witness for the form's Apply gate. Empty
+    // arrays are valid where the schema permits them, but they do not exercise a required field.
+    return Array.from({ length: Number(node['minItems'] ?? 1) }, () => exampleFor(node['items'] as JsonSchema, defs));
   }
   if (type === 'number' || type === 'integer') return Number(node['minimum'] ?? node['exclusiveMinimum'] ?? 0) + 1;
   if (type === 'boolean') return true;

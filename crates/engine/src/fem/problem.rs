@@ -48,6 +48,7 @@ pub struct Problem<'a> {
     pub constraints: Vec<Constraint>,
     pub loads: Vec<Load>,
     /// Nodal temperature and the reference temperature; `None` is no thermal strain.
+    /// Registry Loads with different Body references use increments with a zero reference.
     pub temperature: Option<(Vec<f64>, f64)>,
     /// True when the unknown is temperature rather than displacement: one DOF per node, the
     /// heat kernels instead of the elastic ones, and `constraints[i].dofs[0]` the only

@@ -43,10 +43,18 @@ const paint = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r,
 
 async function type(root: HTMLElement, text: string) {
   const box = root.querySelector('textarea')!;
+  // A person focuses the box before typing in it, and that is what loads the mention index.
+  box.dispatchEvent(new Event('focus', { bubbles: true }));
+  await tick();
   box.value = text;
   box.dispatchEvent(new Event('input', { bubbles: true }));
   await tick();
   return box;
+}
+
+/** One key in the composer, the way the picker's arrows and ↵ arrive. */
+function press(box: HTMLTextAreaElement, key: string): void {
+  box.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
 }
 
 describe('the assistant drawer', () => {
@@ -172,6 +180,53 @@ describe('the assistant drawer', () => {
     const { root } = await mount();
     await type(root, '/beam');
     expect(root.querySelector('.popover')!.textContent).toContain('beam-theory-check');
+  });
+
+  // Issue #39: `@` alone opened nothing, and an `@` after any word never matched at all.
+  it('opens the picker on a bare @, and on an @ in the middle of a line', async () => {
+    const { root } = await mount();
+    await type(root, '@');
+    expect(root.querySelector('.popover')).not.toBeNull();
+    expect(root.querySelector('.popover')!.textContent).toContain('beam');
+    await type(root, 'ask about @be');
+    expect(root.querySelector('.popover')!.textContent).toContain('beam');
+    await type(root, 'ask about @zzz');
+    expect(root.querySelector('.popover')).toBeNull();
+  });
+
+  it('groups the candidates by kind, with the two context rows pinned above them', async () => {
+    const { root, store } = await mount();
+    store.select({ bodies: ['beam'] });
+    await tick();
+    await type(root, '@');
+    expect([...root.querySelectorAll('.popover .group-label')].map((l) => l.textContent)).toEqual(['context', 'bodies']);
+    expect([...root.querySelectorAll('.popover .group:first-child .name')].map((n) => n.textContent)).toEqual(['selection', 'view']);
+  });
+
+  it('walks the list with the arrows and picks with ↵, leaving no orphan @ in the draft', async () => {
+    const { root, store } = await mount();
+    store.select({ bodies: ['beam'] });
+    await tick();
+    const box = await type(root, 'check @be');
+    press(box, 'ArrowDown');
+    press(box, 'ArrowDown');
+    await tick();
+    press(box, 'Enter');
+    await tick();
+    expect(root.querySelector('.token')!.textContent).toContain('@body:beam');
+    expect(box.value).toBe('check ');
+    expect(root.querySelector('.popover')).toBeNull();
+  });
+
+  it('closes on Escape without touching the draft, and comes back on the next letter', async () => {
+    const { root } = await mount();
+    const box = await type(root, 'about @b');
+    press(box, 'Escape');
+    await tick();
+    expect(root.querySelector('.popover')).toBeNull();
+    expect(box.value).toBe('about @b');
+    await type(root, 'about @be');
+    expect(root.querySelector('.popover')).not.toBeNull();
   });
 
   it('hands chat.send from a script to the same code the Send button runs', async () => {
