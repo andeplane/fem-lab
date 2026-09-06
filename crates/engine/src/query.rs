@@ -58,7 +58,10 @@ pub enum Query {
         step: Option<String>,
     },
 
-    /// One retained transient primary field, by zero-based retained index. Values are SI,
+    /// One retained transient primary field. Supply exactly one of zero-based retained index
+    /// or sample (retained index / physical time with exact or nearest selection). Time
+    /// selection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation
+    /// policy as sampled probe/path. Values are SI,
     /// component-fastest, with three components per node, matching final FieldData: a 2D
     /// displacement has zero z; temperature occupies x with zero y/z. Defaults to the retained
     /// primary field. Derived fields were not retained and are refused. Refuses result.stale.
@@ -67,7 +70,10 @@ pub enum Query {
     Frame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
-        index: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sample: Option<FrameSample>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         field: Option<Field>,
     },

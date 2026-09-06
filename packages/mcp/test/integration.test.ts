@@ -103,3 +103,32 @@ it('leaves the real Model unchanged after a timed-out script schedules a delayed
   await new Promise((resolve) => setTimeout(resolve, 1300));
   expect(await call('query_model', {})).toEqual(before);
 });
+
+it('serves retained transient frames and sampled values through the actual MCP tools', async () => {
+  for (const kind of ['heat', 'explicit-2d', 'explicit-3d']) for (const order of [1, 2]) for (const nx of [2, 4]) {
+    const commands = JSON.parse(await readFile(path.join(here, `../../../tools/fixtures/transient-${kind}.json`), 'utf8')) as Record<string, unknown>[];
+    const mesh = commands.find(c => c['cmd'] === 'mesh.set')! as { order: number; mesher: { kind: string; blocks: { n: number[] }[]; size: { nx: number } } };
+    mesh.order = order;
+    if (mesh.mesher.kind === 'mapped') mesh.mesher.blocks[0]!.n[0] = nx;
+    else mesh.mesher.size.nx = nx;
+    for (const { cmd, ...args } of commands) await call(String(cmd).replaceAll('.', '_'), args);
+    const before = await call('query_journal', {});
+    const catalogue = await call('query_frames', {}) as { frames: { index: number; timeSi: number }[] };
+    expect(catalogue.frames.length).toBeGreaterThanOrEqual(3);
+    const heat = kind === 'heat';
+    for (const stamp of catalogue.frames) {
+      const sample = { kind: 'time', time: `${stamp.timeSi} s`, sampling: 'exact' };
+      const frame = await call('query_frame', { sample }) as { values: number[]; unit: string; sample: { frame: { index: number } } };
+      const expected = heat ? stamp.timeSi : -4.905 * stamp.timeSi ** 2;
+      expect(frame.unit).toBe(heat ? 'K' : 'm');
+      expect(frame.sample.frame.index).toBe(stamp.index);
+      for (let i = 0; i < frame.values.length; i++) expect(Math.abs(frame.values[i]! - (i % 3 === (heat ? 0 : 1) ? expected : 0))).toBeLessThan(heat ? 1e-10 : 1e-12);
+      const probe = await call('query_probe', { field: heat ? 'temperature' : 'displacement', component: heat ? 0 : 1, at: ['0.5 m', '0.05 m', kind === 'explicit-2d' ? '0 m' : '0.05 m'], sample }) as { value: { value: number }; sample: unknown };
+      expect(probe.sample).toEqual(frame.sample);
+      expect(Math.abs(probe.value.value - (heat ? expected - 273.15 : expected * 1000))).toBeLessThan(1e-9);
+    }
+    expect(await call('query_journal', {})).toEqual(before);
+    await expect(call('query_frame', { index: 999 })).rejects.toThrow('not-found');
+    await expect(call('query_frame', { index: 0, field: 'stress' })).rejects.toThrow('unsupported');
+  }
+});

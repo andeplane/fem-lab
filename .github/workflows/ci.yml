@@ -92,6 +92,7 @@ jobs:
       - run: node tools/build-wasm.mjs
       - run: node tools/test-units-wasm.mjs
       - run: cargo build -p femlab --release
+      - run: node tools/test-transient-replay.mjs
       - run: ./target/release/femlab schema --out engine.schema.json
       - name: replay every fixture natively and in wasm
         run: |
@@ -110,6 +111,7 @@ jobs:
             packages/app/src/generated/wasm
             tools/wasm-node
             engine.schema.json
+            target/release/femlab
 
   windows:
     name: windows (allowed to fail until gated)
@@ -174,6 +176,11 @@ jobs:
         with:
           name: dist
           path: packages/app/dist
+      # The browser-recorded transient Journals replay in both real headless hosts below.
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+      - run: chmod +x target/release/femlab
       - name: playwright version
         id: pw
         run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
