@@ -2,6 +2,9 @@
 //! for bulk data (added with the mesh and results). Errors are thrown as the engine's
 //! structured `Error` object, never as a bare string.
 
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use femlab_engine::{Command, Host, JournalEntry, ModelFile, Progress, Query};
 use wasm_bindgen::prelude::*;
 
@@ -32,20 +35,27 @@ fn strings(v: &[String]) -> JsValue {
 }
 
 /** CSR face-Set memberships for surface triangles. A triangle may keep every overlapping alias. */
-fn face_memberships<T: PartialEq>(
+fn face_memberships<T: Copy + Eq + Hash>(
     tri_faces: &[Option<u32>],
     faces: &[T],
     sets: &[(&str, &[T])],
 ) -> (Vec<u32>, Vec<u32>) {
+    // Resolve each Set face once. Looking up a surface triangle is then proportional to that
+    // face's actual overlapping memberships, rather than to every face in every Set.
+    let mut by_face: HashMap<T, Vec<u32>> = HashMap::new();
+    for (set_index, (_, set_faces)) in sets.iter().enumerate() {
+        for &face in *set_faces {
+            let memberships = by_face.entry(face).or_default();
+            if memberships.last() != Some(&(set_index as u32)) {
+                memberships.push(set_index as u32);
+            }
+        }
+    }
     let mut offsets = vec![0];
     let mut members = Vec::new();
     for face in tri_faces {
-        if let Some(face) = face.map(|index| &faces[index as usize]) {
-            for (index, (_, set_faces)) in sets.iter().enumerate() {
-                if set_faces.contains(face) {
-                    members.push(index as u32);
-                }
-            }
+        if let Some(face) = face.map(|index| faces[index as usize]) {
+            members.extend(by_face.get(&face).into_iter().flatten().copied());
         }
         offsets.push(members.len() as u32);
     }
@@ -243,7 +253,28 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::{Hash, Hasher};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::face_memberships;
+
+    static COMPARISONS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Clone, Copy, Eq)]
+    struct Counted(u32);
+
+    impl PartialEq for Counted {
+        fn eq(&self, other: &Self) -> bool {
+            COMPARISONS.fetch_add(1, Ordering::Relaxed);
+            self.0 == other.0
+        }
+    }
+
+    impl Hash for Counted {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.0.hash(state);
+        }
+    }
 
     #[test]
     fn surface_memberships_keep_overlapping_aliases_and_empty_triangles() {
@@ -267,6 +298,27 @@ mod tests {
         let (empty_offsets, empty_members) = face_memberships(&[Some(0), None], &faces, &[]);
         assert_eq!(empty_offsets, [0, 0, 0]);
         assert!(empty_members.is_empty());
+    }
+
+    #[test]
+    fn surface_memberships_index_many_faces_before_triangle_lookup() {
+        let faces: Vec<Counted> = (0..10_000).map(Counted).collect();
+        let all = faces.clone();
+        let thirds: Vec<Counted> = faces.iter().step_by(3).copied().collect();
+        let tri_faces: Vec<Option<u32>> = (0..faces.len() as u32).map(Some).collect();
+        COMPARISONS.store(0, Ordering::Relaxed);
+
+        let (offsets, members) =
+            face_memberships(&tri_faces, &faces, &[("all", all.as_slice()), ("thirds", thirds.as_slice())]);
+
+        assert_eq!(offsets.len(), 10_001);
+        assert_eq!(offsets[1], 2);
+        assert_eq!(offsets[2], 3);
+        assert_eq!(offsets[10_000], 13_334);
+        assert_eq!(&members[..5], [0, 1, 0, 0, 0]);
+        // The comparison count is a deterministic algorithmic bound, not a machine-timing
+        // assertion. A triangle × Set × face scan performs tens of millions here.
+        assert!(COMPARISONS.load(Ordering::Relaxed) < 100_000);
     }
 }
 
