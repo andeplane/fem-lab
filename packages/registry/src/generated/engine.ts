@@ -1592,6 +1592,10 @@ export type Query =
       query: "query.journal";
     }
   | {
+      base: Journal;
+      query: "query.journalDiff";
+    }
+  | {
       query: "query.script";
     }
   | {
@@ -1614,10 +1618,6 @@ export type Query =
     }
   | {
       query: "query.capabilities";
-    }
-  | {
-      base: Journal;
-      query: "query.journalDiff";
     };
 /**
  * How to select retained output; there is no temporal interpolation or extrapolation.
@@ -1647,20 +1647,6 @@ export type FrameSample =
  * Both reject times outside the retained interval (except endpoint conversion roundoff).
  */
 export type TimeSampling = "exact" | "nearest";
-/**
- * A number with a unit, as text or as parts.
- */
-export type Quantity =
-  | string
-  | {
-      value: number;
-      unit: string;
-    };
-/**
- * One section of the Markdown report. `query.report` writes the ones asked for in this order.
- */
-export type ReportSection =
-  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
 /**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  */
@@ -2515,6 +2501,20 @@ export type RegionPredicate2 =
       kind: "body";
     };
 /**
+ * A number with a unit, as text or as parts.
+ */
+export type Quantity =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * One section of the Markdown report. `query.report` writes the ones asked for in this order.
+ */
+export type ReportSection =
+  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
+/**
  * Any Query response.
  */
 export type QueryResult =
@@ -2529,13 +2529,13 @@ export type QueryResult =
   | PathResult
   | CostEstimate
   | JournalDump
+  | JournalDiff
   | ScriptText
   | Converted
   | MaterialLibrary
   | ObjectList
   | Capabilities
-  | ReportText
-  | JournalDiff;
+  | ReportText;
 /**
  * Mesher settings, SI.
  */
@@ -3640,6 +3640,27 @@ export interface JournalDump {
   canRedo: boolean;
 }
 /**
+ * `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
+ * comparison rather than a text diff that aligns similar Commands after histories diverge.
+ */
+export interface JournalDiff {
+  /**
+   * Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied
+   * `seq` can therefore change this hash without changing `sharedEntries`.
+   */
+  baseHash: string;
+  currentHash: string;
+  sharedEntries: number;
+  /**
+   * The base Journal's ordered tail after `sharedEntries`.
+   */
+  removed: JournalEntry[];
+  /**
+   * The current Journal's ordered tail after `sharedEntries`.
+   */
+  added: JournalEntry[];
+}
+/**
  * `query.script` response.
  */
 export interface ScriptText {
@@ -3854,27 +3875,6 @@ export interface Capabilities {
 export interface ReportText {
   markdown: string;
   sections: string[];
-}
-/**
- * `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
- * comparison rather than a text diff that aligns similar Commands after histories diverge.
- */
-export interface JournalDiff {
-  /**
-   * Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied
-   * `seq` can therefore change this hash without changing `sharedEntries`.
-   */
-  baseHash: string;
-  currentHash: string;
-  sharedEntries: number;
-  /**
-   * The base Journal's ordered tail after `sharedEntries`.
-   */
-  removed: JournalEntry[];
-  /**
-   * The current Journal's ordered tail after `sharedEntries`.
-   */
-  added: JournalEntry[];
 }
 /**
  * Acknowledgement of a dispatched Command.

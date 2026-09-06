@@ -386,6 +386,14 @@ export interface Fem {
      */
     journal(args?: Omit<Extract<Query, { query: 'query.journal' }>, 'query'>): Promise<JournalDump>;
     /**
+     * Compare this Model's Journal with a supplied base Journal. Returns the shared causal
+     * prefix and each ordered divergent tail: removed entries belong to `base`, added entries
+     * to the current Journal. Entry identity is the typed Command plus `hashAfter`; `seq` is
+     * only a displayed location and is ignored. Entries after the first divergence are not
+     * re-aligned. This read never replays either Journal.
+     */
+    journalDiff(args: Omit<Extract<Query, { query: 'query.journalDiff' }>, 'query'>): Promise<JournalDiff>;
+    /**
      * The Journal as a TypeScript script against the `fem` API that reproduces the Model line by
      * line; what the Script panel shows and what script.run accepts back.
      */
@@ -424,13 +432,5 @@ export interface Fem {
      * schema versions. Hosts add browser facts (cross-origin isolation, local or remote engine).
      */
     capabilities(): Promise<Capabilities>;
-    /**
-     * Compare this Model's Journal with a supplied base Journal. Returns the shared causal
-     * prefix and each ordered divergent tail: removed entries belong to `base`, added entries
-     * to the current Journal. Entry identity is the typed Command plus `hashAfter`; `seq` is
-     * only a displayed location and is ignored. Entries after the first divergence are not
-     * re-aligned. This read never replays either Journal.
-     */
-    journalDiff(args: Omit<Extract<Query, { query: 'query.journalDiff' }>, 'query'>): Promise<JournalDiff>;
   };
 }

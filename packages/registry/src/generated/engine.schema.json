@@ -3091,6 +3091,24 @@
         "x-returns": "JournalDump"
       },
       {
+        "description": "Compare this Model's Journal with a supplied base Journal. Returns the shared causal\nprefix and each ordered divergent tail: removed entries belong to `base`, added entries\nto the current Journal. Entry identity is the typed Command plus `hashAfter`; `seq` is\nonly a displayed location and is ignored. Entries after the first divergence are not\nre-aligned. This read never replays either Journal.",
+        "type": "object",
+        "properties": {
+          "base": {
+            "$ref": "#/$defs/Journal"
+          },
+          "query": {
+            "type": "string",
+            "const": "query.journalDiff"
+          }
+        },
+        "required": [
+          "query",
+          "base"
+        ],
+        "x-returns": "JournalDiff"
+      },
+      {
         "description": "The Journal as a TypeScript script against the `fem` API that reproduces the Model line by\nline; what the Script panel shows and what script.run accepts back.",
         "type": "object",
         "properties": {
@@ -3211,24 +3229,6 @@
           "query"
         ],
         "x-returns": "Capabilities"
-      },
-      {
-        "description": "Compare this Model's Journal with a supplied base Journal. Returns the shared causal\nprefix and each ordered divergent tail: removed entries belong to `base`, added entries\nto the current Journal. Entry identity is the typed Command plus `hashAfter`; `seq` is\nonly a displayed location and is ignored. Entries after the first divergence are not\nre-aligned. This read never replays either Journal.",
-        "type": "object",
-        "properties": {
-          "base": {
-            "$ref": "#/$defs/Journal"
-          },
-          "query": {
-            "type": "string",
-            "const": "query.journalDiff"
-          }
-        },
-        "required": [
-          "query",
-          "base"
-        ],
-        "x-returns": "JournalDiff"
       }
     ],
     "$defs": {
@@ -6177,6 +6177,9 @@
         "$ref": "#/$defs/JournalDump"
       },
       {
+        "$ref": "#/$defs/JournalDiff"
+      },
+      {
         "$ref": "#/$defs/ScriptText"
       },
       {
@@ -6193,9 +6196,6 @@
       },
       {
         "$ref": "#/$defs/ReportText"
-      },
-      {
-        "$ref": "#/$defs/JournalDiff"
       }
     ],
     "$defs": {
