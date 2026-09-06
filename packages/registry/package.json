@@ -4,20 +4,21 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./script-validation": "./src/script-validation.ts"
   },
   "scripts": {
     "test": "vitest run --coverage",
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
-    "zod": "^4.5.4"
+    "zod": "^4.5.4",
+    "typescript": "~5.9.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "^5.0.0",
     "json-schema-to-typescript": "^16.0.0",
-    "typescript": "~5.9.3",
     "vitest": "^5.0.0"
   }
 }
