@@ -16,10 +16,11 @@
     "typecheck": "tsc -p . --noEmit",
     "pretest": "node ../../tools/build-script-declarations.mjs && npm run build",
     "prebuild": "node ../../tools/build-script-declarations.mjs",
-    "pretypecheck": "node ../../tools/build-script-declarations.mjs"
+    "pretypecheck": "node ../../tools/build-script-declarations.mjs",
+    "prepack": "npm run build && node ../../tools/package-mcp.mjs",
+    "test:package": "node ../../tools/test-mcp-package.mjs"
   },
   "dependencies": {
-    "@femlab/registry": "*",
     "@modelcontextprotocol/sdk": "1.30.0",
     "quickjs-emscripten": "^0.32.0",
     "sucrase": "^3.35.0",
@@ -30,6 +31,10 @@
     "@types/node": "^22.20.1",
     "@vitest/coverage-v8": "^5.0.0",
     "esbuild": "^0.25.12",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "@femlab/registry": "*"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
