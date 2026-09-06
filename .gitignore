@@ -8,3 +8,6 @@ packages/app/src/generated/wasm/
 tools/wasm-node/
 proptest-regressions/
 packages/registry/src/generated/script-declarations*.json
+
+/release/
+/tools/__pycache__/

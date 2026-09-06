@@ -38,6 +38,8 @@ impl Engine {
     pub fn query(&mut self, q: Query) -> Result<QueryResult, Error> {
         match q {
             Query::Model {} => self.query_model().map(QueryResult::Model),
+            Query::Definition { kind, name } => crate::definition::command(&self.model, kind, &name)
+                .map(|command| QueryResult::Definition(ObjectDefinition { command })),
             Query::Journal { from_seq } => {
                 let from = from_seq.unwrap_or(0);
                 Ok(QueryResult::Journal(JournalDump {
@@ -375,18 +377,20 @@ impl Engine {
         })
     }
 
-    /// The nodal field a probe or a path samples, plus its display unit, refusing a Result
+    /// The nodal field a probe or a path samples, plus its physical dimension, refusing a Result
     /// whose Mesh is no longer the one it was solved on.
-    fn sampled(&mut self, step: Option<&str>, field: Field) -> Result<(FieldData, String), Error> {
-        self.current_result(step)?;
+    fn sampled(&mut self, step: Option<&str>, field: Field) -> Result<(FieldData, Dimension), Error> {
+        // Every sampled query must reject a Result from an older Model revision. Keep the
+        // Result's reaction quantity so thermal reaction fields retain their power dimension.
+        let reaction_quantity = self.current_result(step)?.reaction_quantity;
         let f = self.field(step, field)?.clone();
         if f.per != crate::post::Per::Node {
             return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal field"))
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
-        let unit = display(&self.model, 0.0, crate::solve_run::field_dimension(field)).unit;
+        let dim = crate::solve_run::field_dimension(field, reaction_quantity);
         self.mesh().expect("a Result with the current Model hash was solved on this Mesh");
-        Ok((f, unit))
+        Ok((f, dim))
     }
 
     /// One component of a sampled value: the named one, or the magnitude of a vector.
@@ -405,14 +409,14 @@ impl Engine {
         component: Option<u8>,
         at: [Q<Length>; 3],
     ) -> Result<ProbeResult, Error> {
-        let (f, unit) = self.sampled(step, field)?;
+        let (f, dim) = self.sampled(step, field)?;
         let x = si3(&at)?;
         let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
         let (elem, v) = crate::post::probe::probe(mesh, &f, x).ok_or_else(|| {
             Error::new(ErrorCode::NotFound, "the point is outside the mesh").at("at").suggest("query.mesh reports bbox")
         })?;
-        let value = display(&self.model, Engine::pick(&v, component), crate::solve_run::field_dimension(field));
-        Ok(ProbeResult { value: Valued { value: value.value, unit }, element: elem, interpolated: true })
+        let value = display(&self.model, Engine::pick(&v, component), dim);
+        Ok(ProbeResult { value, element: elem, interpolated: true })
     }
 
     /// `query.path`: a field sampled along a line.
@@ -425,9 +429,9 @@ impl Engine {
         to: [Q<Length>; 3],
         n: u32,
     ) -> Result<PathResult, Error> {
-        let (f, unit) = self.sampled(step, field)?;
+        let (f, dim) = self.sampled(step, field)?;
         let (a, b) = (si3(&from)?, si3(&to)?);
-        let dim = crate::solve_run::field_dimension(field);
+        let unit = display(&self.model, 0.0, dim).unit;
         let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
         let samples = crate::post::probe::path(mesh, &f, a, b, n as usize);
         Ok(PathResult {

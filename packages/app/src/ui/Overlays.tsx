@@ -56,7 +56,9 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
   const rows = rankCommands(query, commands).slice(0, 60);
   const active = rows[Math.min(cursor, rows.length - 1)];
   if (!s.panels['palette']) return null;
-  const fill = (def: CommandDef): void => void dispatch({ cmd: 'form.open', command: def.name }).then(() => dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })).catch(() => undefined);
+  const fill = (def: CommandDef): void => void dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })
+    .then(() => dispatch({ cmd: 'form.open', command: def.name }))
+    .catch(() => undefined);
   const run = (def: CommandDef): void =>
     void (requiredOf(def).length === 0 ? dispatch({ cmd: def.name }).then(() => dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })) : Promise.resolve(fill(def))).catch(() => undefined);
   return (
@@ -74,7 +76,12 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
               if (e.key === 'ArrowDown') setCursor((c) => Math.min(c + 1, rows.length - 1));
               else if (e.key === 'ArrowUp') setCursor((c) => Math.max(c - 1, 0));
               else if (e.key === 'Tab' && active && !e.shiftKey) (e.preventDefault(), fill(active));
-              else if (e.key === 'Enter' && active) run(active);
+              else if (e.key === 'Enter' && active) {
+                // The dialog restores focus to its opener when it closes. Consume Enter so
+                // Chromium cannot activate that newly focused button and reopen the palette.
+                e.preventDefault();
+                run(active);
+              }
             }}
           />
           <span class="palette-note">every entry is one Command</span>

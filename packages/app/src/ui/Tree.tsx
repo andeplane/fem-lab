@@ -2,7 +2,6 @@
 // with a glyph, a mono name and a one-line summary in display units, the `@` reference button and
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
-import type { ModelSummary } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import { fieldChoices, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
@@ -94,13 +93,6 @@ const GROUP_OF: Record<string, string> = {
 type Valued = { value: number; unit: string } | undefined;
 const q = (v: Valued): string => (v ? `${Number(v.value.toPrecision(4))} ${v.unit}` : '');
 
-/** `size` and `at` read back out of a Body's bounding box, in the Model's display units. */
-function boxArgs(b: ModelSummary['bodies'][number]): Record<string, unknown> {
-  const [x0, y0, z0, x1, y1, z1] = b.bbox as unknown as Valued[];
-  const span = (a: Valued, c: Valued) => (a && c ? `${Number((c.value - a.value).toPrecision(6))} ${c.unit}` : '');
-  return { name: b.name, size: [span(x0, x1), span(y0, y1), span(z0, z1)], at: [q(x0), q(y0), q(z0)] };
-}
-
 /**
  * The design's Results group: one row per scalar the Result can be contoured by — the fields
  * the Step computed, then its mode shapes, then the two derived checks once a Material names a
@@ -154,7 +146,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       badgeClass: n > 0 ? 'badge warn' : items.length > 0 ? 'badge ok' : 'badge',
     };
   };
-  const faces = (m?.sets ?? []).filter((x) => x.kind === 'face');
+  const namedSets = m?.sets ?? [];
   return [
     group(
       'Geometry',
@@ -162,8 +154,9 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       { what: 'body', cmd: 'geometry.addBox', ...(shapes.length > 0 ? { menu: shapeMenu(shapes) } : {}) },
       [
         ...(m?.bodies ?? []).map((b) => ({
-          cmd: 'geometry.addBox',
-          args: boxArgs(b),
+          cmd: 'form.edit',
+          args: { kind: 'body', name: b.name },
+          run: true,
           kind: 'body',
           glyph: '◈',
           glyphClass: 'glyph low',
@@ -172,9 +165,10 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
           select: { bodies: [b.name] },
           remove: 'geometry.remove',
         })),
-        ...faces.map((f) => ({
-          cmd: 'geometry.nameFace',
-          args: { name: f.name },
+        ...namedSets.map((f) => ({
+          cmd: 'form.edit',
+          args: { kind: 'set', name: f.name },
+          run: true,
           kind: 'set',
           glyph: '▣',
           glyphClass: 'glyph cyan',
@@ -190,8 +184,9 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       'Nothing carries stiffness yet. Every Body needs a Material before a Step can start.',
       { what: 'material', cmd: 'material.add' },
       (m?.materials ?? []).map((x) => ({
-        cmd: 'material.add',
-        args: { name: x.name, E: q(x.E), nu: x.nu, ...(x.rho ? { rho: q(x.rho) } : {}) },
+        cmd: 'form.edit',
+        args: { kind: 'material', name: x.name },
+        run: true,
         kind: 'material',
         glyph: '●',
         glyphClass: 'glyph mat',
@@ -227,8 +222,9 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       'Fix, symmetry or a prescribed displacement on a named face. Without one the body floats.',
       { what: 'constraint', cmd: 'constraint.fix' },
       (m?.constraints ?? []).map((x) => ({
-        cmd: 'constraint.fix',
-        args: { name: x.name, on: x.on },
+        cmd: 'form.edit',
+        args: { kind: 'constraint', name: x.name },
+        run: true,
         kind: 'constraint',
         glyph: '△',
         glyphClass: 'glyph cyan',
@@ -243,8 +239,9 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       'Pressure, traction, total force, gravity or temperature on a named face — each with its total.',
       { what: 'load', cmd: 'load.pressure' },
       (m?.loads ?? []).map((x) => ({
-        cmd: `load.${x.kind}`,
-        args: { name: x.name, ...(x.on ? { on: x.on } : {}) },
+        cmd: 'form.edit',
+        args: { kind: 'load', name: x.name },
+        run: true,
         kind: 'load',
         glyph: x.kind === 'gravity' ? '→' : '↓',
         glyphClass: 'glyph load',
@@ -259,8 +256,9 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       'Static now, modal and transient later. A Step says which Constraints and Loads are active.',
       { what: 'step', cmd: 'step.add' },
       (m?.steps ?? []).map((x) => ({
-        cmd: 'step.add',
-        args: { name: x.name, procedure: x.procedure, constraints: x.constraints, loads: x.loads },
+        cmd: 'form.edit',
+        args: { kind: 'step', name: x.name },
+        run: true,
         kind: 'step',
         glyph: '▶',
         glyphClass: x.solved ? 'glyph green' : 'glyph low',

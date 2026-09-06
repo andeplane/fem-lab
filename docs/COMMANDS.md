@@ -297,7 +297,8 @@ singular stresses near the node; prefer load.traction on a face unless you mean 
 ### load.gravity
 
 Gravity (or any uniform acceleration) as a body force on every Body whose Material has
-a density; Bodies without one are skipped and listed in the warnings.
+a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
+apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -538,7 +539,7 @@ solid bodies; mixing them makes the Model ill-posed.
 
 ### model.setUnits
 
-Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage
+Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage
 stays SI and every input may still use any unit of the right dimension; this only
 changes how values are reported back.
 
@@ -650,6 +651,12 @@ the observed convergence rate and a Richardson estimate of the converged value. 
 may have unequal refinement ratios. Three distinct positive sizes are needed for a
 finite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate
 are unavailable. Restores the previous mesh settings afterwards unless `restore` is false.
+Uses the Step's actual procedure: static and steady heat measure equilibrium fields;
+transient heat and explicit dynamics measure the final field at the configured tEnd
+with the Step's time settings unchanged. Modal Steps are unsupported because a mode
+amplitude is not a mesh-independent quantity; compare frequencies with
+solve.run/query.result instead. Steps with after are unsupported: solve their
+dependencies and target at each mesh explicitly.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -1063,7 +1070,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
   "type": "string",
   "enum": [
     "displacement",
@@ -2470,6 +2477,13 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "null"
       ]
     },
+    "power": {
+      "description": "Thermal reaction and applied power display unit; defaults to W, independently of force.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "stress": {
       "type": [
         "string",
@@ -2517,6 +2531,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.capabilities](#queries-query-capabilities)
 - [query.convert](#queries-query-convert)
 - [query.cost](#queries-query-cost)
+- [query.definition](#queries-query-definition)
 - [query.journal](#queries-query-journal)
 - [query.materialLibrary](#queries-query-materialLibrary)
 - [query.mesh](#queries-query-mesh)
@@ -2573,6 +2588,23 @@ Returns: `CostEstimate`.
 | --- | --- | --- | --- |
 | step | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.cost"}</code> |  |
+
+<a id="queries-query-definition"></a>
+
+### query.definition
+
+The complete upsert Command for an existing object's current definition, with exact
+SI quantities. Use it to populate an edit form; change its arguments and dispatch it
+to apply. Display summaries are rounded and must never be used to reconstruct edits.
+Auto-generated Sets and mesher-owned Bodies have no editable object definition.
+
+Returns: `ObjectDefinition`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| kind | yes | <code>{"$ref":"#/$defs/ObjectKind"}</code> |  |
+| name | yes | <code>{"type":"string"}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.definition"}</code> |  |
 
 <a id="queries-query-journal"></a>
 
@@ -2755,7 +2787,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
   "type": "string",
   "enum": [
     "displacement",
