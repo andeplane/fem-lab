@@ -695,10 +695,17 @@ fn sourced_material_library_is_typed_applicable_and_host_independent() {
         panic!()
     };
     assert_eq!(library.entries.len(), 7);
-    assert_eq!(library.sources.len(), 7);
+    assert_eq!(library.sources.len(), 8);
     assert!(library.sources.iter().all(|source| {
         source.url.starts_with("https://") && source.retrieved_on == "2026-09-06" && !source.locator.is_empty()
     }));
+    let jrc = library.sources.iter().find(|source| source.id == "jrc-handbook-3").unwrap();
+    assert!(jrc.locator.contains("Table 2, PDF p. 135"));
+    assert!(jrc.locator.contains("Table 3, PDF p. 137") && jrc.locator.contains("Table 9, PDF p. 147"));
+    let jrc_concrete = library.sources.iter().find(|source| source.id == "jrc-bridge-worked-example").unwrap();
+    assert!(jrc_concrete.locator.contains("C30/37 Ecm = 33 GPa"));
+    let natureworks = library.sources.iter().find(|source| source.id == "natureworks-4043d").unwrap();
+    assert!(natureworks.url.contains("getContentAsset") && natureworks.locator.contains("NW4043DFILA_032415V1"));
     let source_ids: std::collections::BTreeSet<&str> =
         library.sources.iter().map(|source| source.id.as_str()).collect();
     for entry in &library.entries {
@@ -730,14 +737,27 @@ fn sourced_material_library_is_typed_applicable_and_host_independent() {
     assert!((aluminium.yield_.as_ref().unwrap().value.si().unwrap() - 248e6).abs() < 1.0);
     assert!(aluminium.temperature.is_none());
 
+    let concrete = library.entries.iter().find(|entry| entry.id == "c30-37").unwrap();
+    assert_eq!(concrete.e.as_ref().unwrap().source, "jrc-bridge-worked-example");
+    assert!((concrete.e.as_ref().unwrap().value.si().unwrap() - 33e9).abs() < 1.0);
+
     let abs = library.entries.iter().find(|entry| entry.id == "terluran-gp35").unwrap();
     assert!(abs.temperature.is_none() && abs.temperature_basis.contains("Yield strength is reported at 23 degC"));
     assert!((abs.e.as_ref().unwrap().value.si().unwrap() - 362.0 * 6_894_757.293_168).abs() < 1e-5);
     assert!(abs.nu.is_none() && abs.alpha.is_none() && abs.k.is_none() && abs.cp.is_none());
 
+    let pla = library.entries.iter().find(|entry| entry.id == "ingeo-4043d").unwrap();
+    assert!((pla.e.as_ref().unwrap().value.si().unwrap() - 524_000.0 * 6_894.757_293_168).abs() < 1e-5);
+    assert!((pla.yield_.as_ref().unwrap().value.si().unwrap() - 8700.0 * 6_894.757_293_168).abs() < 1e-5);
+    assert!(pla.e.as_ref().unwrap().basis.contains("ASTM D882"));
+
     let timber = library.entries.iter().find(|entry| entry.id == "c24-timber").unwrap();
     assert!(timber.nu.is_none() && timber.yield_.is_none());
     assert!(timber.limitations.iter().any(|text| text.contains("orthotropic")));
+    assert!(timber
+        .limitations
+        .iter()
+        .any(|text| text.contains("would not make the longitudinal E an isotropic default")));
     let wire = serde_json::to_value(timber).unwrap();
     assert!(wire["nu"].is_null() && wire["yield"].is_null() && wire["temperature"].is_null());
     assert_eq!(e.export_file(), before, "the list Query cannot mutate the Model or Journal");
@@ -783,7 +803,7 @@ fn material_library_aliases_are_stable_and_ambiguity_is_explicit() {
             panic!()
         };
         assert_eq!(found.entries.len(), 1);
-        assert_eq!(found.sources.len(), 7);
+        assert_eq!(found.sources.len(), 8);
     }
     let ambiguous = e.query(Query::MaterialLibrary { name: Some("steel".into()) }).unwrap_err();
     assert_eq!(ambiguous.code, ErrorCode::Schema);

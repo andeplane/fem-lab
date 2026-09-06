@@ -51,7 +51,14 @@ fn sources() -> Vec<MaterialCitation> {
             "European Commission Joint Research Centre",
             "Handbook 3: Action effects for buildings",
             "https://eurocodes.jrc.ec.europa.eu/sites/default/files/2021-12/handbook3.pdf",
-            "Annex A.3, Tables A.4 and A.5, pp. 134-136; concrete rules, p. 146",
+            "Annex 'Properties of selected Materials': steel Table 2, PDF p. 135; concrete Table 3, PDF p. 137, and Table 9, PDF p. 147",
+        ),
+        citation(
+            "jrc-bridge-worked-example",
+            "European Commission Joint Research Centre",
+            "Bridge Design to Eurocodes: Worked examples",
+            "https://eurocodes.jrc.ec.europa.eu/sites/default/files/2022-06/Bridge_Design-Eurocodes-Worked_examples.pdf",
+            "Chapter 8, Section 8.2.3, PDF p. 227 (printed p. 205): C30/37 Ecm = 33 GPa",
         ),
         citation(
             "arcelormittal-s355",
@@ -71,7 +78,7 @@ fn sources() -> Vec<MaterialCitation> {
             "nasa-6061",
             "NASA Marshall Space Flight Center",
             "JEM-EUSO Baseline Optical Design Lens and Frame Stress and Dynamics Analysis",
-            "https://ntrs.nasa.gov/api/citations/20120014854/downloads/20120014854.pdf",
+            "https://ntrs.nasa.gov/citations/20120014854",
             "Section 2, PDF p. 36, 6061-T6 sheet 0.01-0.25 in; linked source MMPDS-04 Table 3.6.2.0(b1)",
         ),
         citation(
@@ -85,15 +92,15 @@ fn sources() -> Vec<MaterialCitation> {
             "natureworks-4043d",
             "NatureWorks LLC",
             "Ingeo Biopolymer 4043D technical data sheet",
-            "https://www.natureworksllc.com/~/media/Technical_Resources/Technical_Data_Sheets/TechnicalDataSheet_4043D_3D-monofilament_pdf.pdf?la=en",
-            "Typical material properties for injection-molded amorphous bars",
+            "https://natureworksllc.com/getContentAsset/765a3b22-c447-4391-a11b-a4b209ecca33/53ffd608-340f-457b-b656-6b8cc0000bd4/TechnicalDataSheet_4043D_3D-monofilament.pdf?language=en",
+            "PDF p. 1, Typical Material Properties; document NW4043DFILA_032415V1",
         ),
         citation(
             "swedish-wood-c24",
             "Swedish Wood",
             "Design of timber structures, Volume 2",
             "https://www.swedishwood.com/siteassets/5-publikationer/pdfer/sw-design-of-timber-structures-vol2-2022.pdf",
-            "Table 3.3, C24 strength class; table according to EN 338:2016",
+            "Table 3.3, C24 strength class, PDF p. 10; table according to EN 338:2016",
         ),
     ]
 }
@@ -112,7 +119,7 @@ fn steel_entry(
         aliases: aliases.iter().map(|s| (*s).into()).collect(),
         specification: condition.into(),
         product_form: "Hot-rolled plate or section, transverse specimen, 5-16 mm thickness".into(),
-        condition: "As specified; structural design values at normal temperature".into(),
+        condition: "Grade and thickness as specified; generic structural-steel constants from JRC Table 2".into(),
         temperature: None,
         temperature_basis: "The cited design tables do not state a single test temperature".into(),
         e: Some(stress(210.0, "GPa", "Structural steel design value", "jrc-handbook-3")),
@@ -131,7 +138,7 @@ fn steel_entry(
             "Thermal conductivity and specific heat are absent because the cited grade sources do not report them".into(),
         ],
         material_add_source: format!(
-            "European Commission JRC Handbook 3 Annex A.3 and ArcelorMittal {name} property table (retrieved {RETRIEVED})"
+            "European Commission JRC Handbook 3, steel Table 2 (PDF p. 135), and ArcelorMittal {name} property table (retrieved {RETRIEVED})"
         ),
     }
 }
@@ -181,10 +188,15 @@ fn entries() -> Vec<MaterialLibraryEntry> {
             aliases: vec!["C30/37".into(), "C30 37".into(), "concrete C30/37".into()],
             specification: "EN 1992 concrete strength class C30/37".into(),
             product_form: "Plain normal-weight concrete".into(),
-            condition: "28-day standardized test values unless the cited table states otherwise".into(),
+            condition: "Ecm is a standardized 28-day mean value; nu, rho and alpha are design constants from Table 9".into(),
             temperature: None,
             temperature_basis: "The cited design tables do not state a single test temperature".into(),
-            e: Some(stress(33.0, "GPa", "Secant modulus Ecm for C30/37", "jrc-handbook-3")),
+            e: Some(stress(
+                33.0,
+                "GPa",
+                "Secant modulus Ecm for C30/37",
+                "jrc-bridge-worked-example",
+            )),
             nu: Some(ratio(0.2, "Uncracked concrete Poisson ratio", "jrc-handbook-3")),
             rho: Some(density(2400.0, "kg/m^3", "Plain concrete density", "jrc-handbook-3")),
             alpha: Some(expansion(10e-6, "1/K", "Concrete thermal expansion coefficient", "jrc-handbook-3")),
@@ -195,7 +207,9 @@ fn entries() -> Vec<MaterialLibraryEntry> {
                 "Concrete is not represented by a single tensile yield value; yield is null".into(),
                 "Thermal conductivity and specific heat are absent from the cited tables".into(),
             ],
-            material_add_source: format!("European Commission JRC Handbook 3 concrete tables (retrieved {RETRIEVED})"),
+            material_add_source: format!(
+                "European Commission JRC Bridge Design worked example, Section 8.2.3 (PDF p. 227), and Handbook 3, concrete Table 9 (PDF p. 147) (retrieved {RETRIEVED})"
+            ),
         },
         MaterialLibraryEntry {
             id: "terluran-gp35".into(),
@@ -230,18 +244,20 @@ fn entries() -> Vec<MaterialLibraryEntry> {
             condition: "Typical values, not specifications".into(),
             temperature: None,
             temperature_basis: "The cited rows do not state a test temperature".into(),
-            e: Some(stress(3.6, "GPa", "ASTM D638 tensile modulus", "natureworks-4043d")),
+            e: Some(stress(524_000.0, "psi", "ASTM D882 tensile modulus", "natureworks-4043d")),
             nu: None,
             rho: Some(density(1.24, "g/cm^3", "ASTM D792 specific gravity represented as density", "natureworks-4043d")),
             alpha: None,
             k: None,
             cp: None,
-            yield_: Some(stress(60.0, "MPa", "ASTM D638 tensile yield strength", "natureworks-4043d")),
+            yield_: Some(stress(8700.0, "psi", "ASTM D882 tensile yield strength", "natureworks-4043d")),
             limitations: vec![
                 "The cited values are for injection-molded amorphous bars, not printed-part directions".into(),
                 "Poisson ratio and thermal properties are absent from the cited data sheet".into(),
             ],
-            material_add_source: format!("NatureWorks Ingeo 4043D technical data sheet (retrieved {RETRIEVED})"),
+            material_add_source: format!(
+                "NatureWorks Ingeo 4043D technical data sheet NW4043DFILA_032415V1, PDF p. 1 (retrieved {RETRIEVED})"
+            ),
         },
         MaterialLibraryEntry {
             id: "c24-timber".into(),
@@ -261,10 +277,12 @@ fn entries() -> Vec<MaterialLibraryEntry> {
             yield_: None,
             limitations: vec![
                 "C24 timber is orthotropic; the reported E is parallel to grain and is not a generic isotropic modulus".into(),
-                "The current isotropic material.add needs a separately sourced Poisson ratio before use; do not infer one".into(),
+                "The current isotropic material.add cannot represent general C24 behavior; a separately sourced Poisson ratio would not make the longitudinal E an isotropic default".into(),
                 "No single yield strength represents the directional timber strength table".into(),
             ],
-            material_add_source: format!("Swedish Wood, Design of timber structures Volume 2, Table 3.3 (retrieved {RETRIEVED})"),
+            material_add_source: format!(
+                "Swedish Wood, Design of timber structures Volume 2, Table 3.3, PDF p. 10 (retrieved {RETRIEVED})"
+            ),
         },
     ]
 }
