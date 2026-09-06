@@ -230,6 +230,34 @@ export function applyLabel(cmd: string): string {
 
 export const getAt = (obj: unknown, path: string[]): unknown => path.reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], obj);
 
+/**
+ * Materialise the first variant of a tagged union when the schema requires the union, or when
+ * an optional union is already present. The form draws that first variant as selected, so the
+ * values it previews and dispatches must carry the same discriminator. An untouched optional
+ * union stays absent.
+ */
+export function defaultTaggedUnions(values: Record<string, unknown>, fields: Field[]): Record<string, unknown> {
+  let out = values;
+  for (const field of fields) {
+    const value = getAt(out, field.path);
+    const present = value !== undefined && value !== null;
+    if (field.kind === 'union') {
+      if (!present && !field.required) continue;
+      if (present && (typeof value !== 'object' || Array.isArray(value))) continue;
+      let kind = getAt(out, [...field.path, 'kind']);
+      if (kind === undefined && field.variants[0]) {
+        kind = field.variants[0].kind;
+        out = setAt(out, [...field.path, 'kind'], kind);
+      }
+      const chosen = field.variants.find((variant) => variant.kind === kind);
+      if (chosen) out = defaultTaggedUnions(out, chosen.fields);
+    } else if (field.kind === 'object' && (present || field.required)) {
+      out = defaultTaggedUnions(out, field.fields);
+    }
+  }
+  return out;
+}
+
 /** Immutable set-by-path; an empty string, empty array or undefined removes the key entirely. */
 export function setAt(obj: Record<string, unknown>, path: string[], value: unknown): Record<string, unknown> {
   const [head, ...rest] = path;
