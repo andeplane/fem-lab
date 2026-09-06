@@ -31,6 +31,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { ViewMode } from '../store';
 import type { AppSurface } from '../worker-transport';
 import { MAPS, type ColormapName, sample } from './colormap';
+import { fitsSurface, nice, niceTick } from './scale';
 
 export interface CameraState {
   position: [number, number, number];
@@ -62,6 +63,8 @@ const GREY_GEOMETRY = 0.58;
 const GREY_MESH = 0.46;
 const EDGE_GEOMETRY = 0x272b33;
 const EDGE_MESH = 0x5b6472;
+/** The undeformed outline under an exaggerated shape: visible, but plainly not the body (#42). */
+const EDGE_GHOST = 0x4a5260;
 const HIGHLIGHT = new Color(0x58b7d6);
 
 const DIRECTIONS: Record<ViewPreset, [number, number, number]> = {
@@ -77,15 +80,6 @@ const DIRECTIONS: Record<ViewPreset, [number, number, number]> = {
 /** A stable hue per body, mixed into the flat grey just enough to tell two bodies apart. */
 function bodyTint(i: number): Color {
   return new Color().setHSL((i * 0.137) % 1, 0.45, 0.5);
-}
-
-/** The round 1/2/5·10^k tick that puts roughly twenty divisions across `extent`. */
-export function niceTick(extent: number): number {
-  if (!(extent > 0)) return 1;
-  const raw = extent / 20;
-  const pow = 10 ** Math.floor(Math.log10(raw));
-  const n = raw / pow;
-  return (n >= 5 ? 5 : n >= 2 ? 2 : 1) * pow;
 }
 
 export class Viewer {
@@ -117,9 +111,14 @@ export class Viewer {
   private dim = false;
   private hoverFace: string | null = null;
   private readonly hidden = new Set<string>();
+  /** Visibility survives the replacement of mesh, edge, grid and axis objects. */
+  private readonly layerVisibility = new Map<string, boolean>();
   private box = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
   private pickCb: ((p: Pick | null) => void) | null = null;
   private frame = 0;
+  private disposed = false;
+  private readonly click = (e: MouseEvent) => this.pickCb?.(this.pick(e.clientX, e.clientY));
+  private readonly pointerMove = (e: PointerEvent) => this.hoverAt(e);
   /** The last displacement handed to `setDeformed`, and the scale it was drawn at, so the
    *  animation can sweep the same array without the host re-fetching it every frame. */
   private deformation: Float32Array | null = null;
@@ -147,8 +146,8 @@ export class Viewer {
     this.controls.enableDamping = false;
     this.controls.addEventListener('change', () => this.render());
 
-    canvas.addEventListener('click', (e) => this.pickCb?.(this.pick(e.clientX, e.clientY)));
-    canvas.addEventListener('pointermove', (e) => this.hoverAt(e));
+    canvas.addEventListener('click', this.click);
+    canvas.addEventListener('pointermove', this.pointerMove);
     this.setChrome();
     this.resize();
     this.fit();
@@ -169,7 +168,13 @@ export class Viewer {
   }
 
   render(): void {
-    this.renderer.render(this.scene, this.camera);
+    if (!this.disposed) this.renderer.render(this.scene, this.camera);
+  }
+
+  /** False until the first `setSurface`: until then `this.box` is a placeholder and anything
+   *  measured against the model's size — `autoScale` above all — would be nonsense. */
+  get hasSurface(): boolean {
+    return this.surface !== null;
   }
 
   // ── geometry ────────────────────────────────────────────────────────────────────────────
@@ -197,6 +202,10 @@ export class Viewer {
       }
     });
     this.base = pos;
+    // This rebuilds the position buffer from `base`, so a deformation already on screen would be
+    // wiped — and the host re-pushes the surface after *every* Command, `setVisible` routes
+    // through here too (#42). Keep it, unless the mesh itself changed under it.
+    if (!fitsSurface(this.deformation, s.positions)) this.deformation = null;
 
     const geom = new BufferGeometry();
     geom.setAttribute('position', new BufferAttribute(pos.slice(), 3));
@@ -205,17 +214,55 @@ export class Viewer {
     geom.computeBoundingBox();
     if (geom.boundingBox && keep.length > 0) this.box = geom.boundingBox.clone();
 
-    for (const old of [this.mesh, this.edges]) {
-      if (!old) continue;
-      this.layers.remove(old);
-      old.geometry.dispose();
-    }
+    this.disposeSurface();
     this.mesh = new Mesh(geom, this.material);
     this.edges = this.buildEdges();
     this.layers.add(this.mesh, this.edges);
+    this.applyLayerVisibility();
     this.paint();
+    if (this.deformation) this.drawDeformed(this.deformation, this.deformScale);
     this.setChrome();
     this.render();
+  }
+
+  /** Surface meshes share the viewer material; edges own theirs. */
+  private disposeSurface(): void {
+    if (this.mesh) {
+      this.layers.remove(this.mesh);
+      this.mesh.geometry.dispose();
+      this.mesh = null;
+    }
+    this.disposeEdges();
+  }
+
+  private disposeEdges(): void {
+    if (!this.edges) return;
+    this.layers.remove(this.edges);
+    this.edges.geometry.dispose();
+    const materials = Array.isArray(this.edges.material) ? this.edges.material : [this.edges.material];
+    for (const material of materials) material.dispose();
+    this.edges = null;
+  }
+
+  private disposeChrome(): void {
+    for (const helper of [this.grid, this.triad]) {
+      if (!helper) continue;
+      this.scene.remove(helper);
+      helper.dispose();
+    }
+    this.grid = null;
+    this.triad = null;
+  }
+
+  /**
+   * The wireframe is built from `base` and `drawDeformed` never touches it, so while the mesh is
+   * drawn exaggerated the edges already *are* the undeformed outline: colour them as a ghost so
+   * a person can see how far the drawing departs from the body. `view.toggle { layer: 'edges' }`
+   * turns it off.
+   */
+  private edgeColour(): number {
+    if (this.deformation !== null && this.deformScale !== 1) return EDGE_GHOST;
+    return this.mode === 'mesh' ? EDGE_MESH : EDGE_GEOMETRY;
   }
 
   private buildEdges(): LineSegments {
@@ -225,7 +272,7 @@ export class Viewer {
     // exposes element faces instead of a triangle soup.
     const geom = this.mode === 'mesh' ? new WireframeGeometry(indexed) : new EdgesGeometry(indexed, 1);
     indexed.dispose();
-    return new LineSegments(geom, new LineBasicMaterial({ color: this.mode === 'mesh' ? EDGE_MESH : EDGE_GEOMETRY }));
+    return new LineSegments(geom, new LineBasicMaterial({ color: this.edgeColour() }));
   }
 
   /** Vertex colours for the current mode: body tint, mesh grey, or the field through the LUT. */
@@ -262,7 +309,7 @@ export class Viewer {
 
   /** Ground grid at the model's scale with round ticks, and an axis triad beside it. */
   private setChrome(): void {
-    for (const old of [this.grid, this.triad]) if (old) this.scene.remove(old);
+    this.disposeChrome();
     const size = this.box.getSize(new Vector3());
     const extent = Math.max(size.x, size.y, size.z, 1e-6) * 3;
     const tick = niceTick(extent);
@@ -276,16 +323,28 @@ export class Viewer {
     this.grid = grid;
     this.triad = triad;
     this.scene.add(grid, triad);
+    this.applyLayerVisibility();
+  }
+
+  private layerTarget(layer: string): GridHelper | AxesHelper | Mesh | LineSegments | null {
+    return layer === 'grid' ? this.grid : layer === 'axes' ? this.triad : layer === 'edges' ? this.edges : layer === 'mesh' ? this.mesh : null;
+  }
+
+  private applyLayerVisibility(): void {
+    for (const layer of ['grid', 'axes', 'edges', 'mesh']) {
+      const target = this.layerTarget(layer);
+      if (target) target.visible = this.layerVisibility.get(layer) ?? true;
+    }
   }
 
   // ── view Commands ───────────────────────────────────────────────────────────────────────
   setMode(mode: ViewMode): void {
     this.mode = mode;
     if (this.edges) {
-      this.layers.remove(this.edges);
-      this.edges.geometry.dispose();
+      this.disposeEdges();
       this.edges = this.buildEdges();
       this.layers.add(this.edges);
+      this.applyLayerVisibility();
     }
     this.paint();
     this.render();
@@ -312,7 +371,11 @@ export class Viewer {
     this.render();
   }
 
-  /** The exaggeration that makes the largest displacement a tenth of the model: `"auto"`. */
+  /**
+   * `"auto"`: the exaggeration that makes the largest displacement a twentieth of the model —
+   * modest enough to still read as the body — snapped to a round 1/2/5·10^k so the legend and
+   * the slider can both say it honestly.
+   */
   autoScale(displacement: Float32Array): number {
     let max = 0;
     for (let n = 0; n < displacement.length; n += 3) {
@@ -323,15 +386,22 @@ export class Viewer {
     if (!(max > 0)) return 1;
     // A mass-normalised mode shape is already about the size of the model, so the exaggeration
     // it wants is a fraction: rounding that to an integer would draw it at zero.
-    const want = (0.1 * diagonal) / max;
-    return want >= 1 ? Math.round(want) : Number(want.toPrecision(2));
+    const want = (0.05 * diagonal) / max;
+    return want >= 1 ? nice(want) : Number(want.toPrecision(2));
   }
 
   /** `position = X + scale·u`, on the CPU; the Result never changes, only the drawing. */
   setDeformed(displacement: Float32Array | null, scale: number): void {
     this.deformation = displacement;
     this.deformScale = scale;
+    (this.edges?.material as LineBasicMaterial | undefined)?.color.setHex(this.edgeColour());
     this.drawDeformed(displacement, scale);
+  }
+
+  /** Preview a host gesture using the existing displacement; the host commits on release. */
+  previewDeformScale(scale: number): void {
+    this.deformScale = scale;
+    this.drawDeformed(this.deformation, scale);
   }
 
   private drawDeformed(displacement: Float32Array | null, scale: number): void {
@@ -346,6 +416,10 @@ export class Viewer {
     }
     pos.needsUpdate = true;
     geom.computeVertexNormals();
+    // Raycasting and frustum culling cache these bounds. They must follow the drawn shape;
+    // `this.box` is a separate undeformed copy used for framing and auto exaggeration.
+    geom.computeBoundingBox();
+    geom.computeBoundingSphere();
     this.render();
   }
 
@@ -355,10 +429,13 @@ export class Viewer {
     this.render();
   }
 
-  setLayer(layer: string, on: boolean): void {
-    const target = layer === 'grid' ? this.grid : layer === 'axes' ? this.triad : layer === 'edges' ? this.edges : layer === 'mesh' ? this.mesh : null;
-    if (target) target.visible = on;
+  setLayer(layer: string, on?: boolean): boolean {
+    const visible = on ?? !(this.layerVisibility.get(layer) ?? true);
+    this.layerVisibility.set(layer, visible);
+    const target = this.layerTarget(layer);
+    if (target) target.visible = visible;
     this.render();
+    return visible;
   }
 
   setVisible(bodies: string[], on: boolean): void {
@@ -474,8 +551,23 @@ export class Viewer {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     cancelAnimationFrame(this.frame);
+    this.canvas.removeEventListener('click', this.click);
+    this.canvas.removeEventListener('pointermove', this.pointerMove);
+    this.pickCb = null;
     this.controls.dispose();
+    this.disposeSurface();
+    this.disposeChrome();
+    this.material.dispose();
+    this.scene.clear();
+    this.surface = null;
+    this.field = null;
+    this.deformation = null;
+    this.base = new Float32Array(0);
+    this.vert = new Uint32Array(0);
+    this.tri = new Uint32Array(0);
     this.renderer.dispose();
   }
 

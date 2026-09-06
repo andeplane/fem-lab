@@ -1,6 +1,6 @@
 // Issue #40, in the built app: the Assistant drawer opens on the start screen, and it is still
 // there — with the same conversation — once the first Command brings the workspace up around it.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
@@ -9,6 +9,7 @@ async function ready(page: Page): Promise<void> {
 
 test.describe('@cpu the Assistant before a Model exists', () => {
   test('opens over the start screen and survives the workspace appearing', async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
     await page.goto('./');
     await ready(page);
 
@@ -35,7 +36,8 @@ test.describe('@cpu the Assistant before a Model exists', () => {
     await expect(page.locator('.shell')).toBeVisible();
     await expect(drawer).toBeVisible();
     await expect(drawer).toContainText('API key');
-    // Reserved, not overlaid: the workspace still shows Properties beside it.
-    await expect(page.locator('.under-bar.with-assistant')).toHaveCount(1);
+    // Reserved, not overlaid: at this width the workspace gives the drawer its 392 px, so the
+    // Properties panel is still beside it rather than under it.
+    expect(await page.locator('.workspace').evaluate((el) => getComputedStyle(el).marginRight)).toBe('392px');
   });
 });

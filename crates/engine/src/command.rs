@@ -741,7 +741,9 @@ pub enum Command {
 
     /// Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any
     /// of those) so constraints and loads can target it. Rules are re-evaluated after every
-    /// remesh, so the Set survives refinement. Prefer the auto face names when one fits.
+    /// remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
+    /// implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
+    /// Body's actual mesh boundary. Prefer the auto face names when one fits.
     #[serde(rename = "geometry.nameFace", rename_all = "camelCase")]
     GeometryNameFace {
         name: String,
@@ -752,7 +754,8 @@ pub enum Command {
 
     /// Name a node/element Set by a region rule (a box or a whole Body), for point-like
     /// constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
-    /// use a box slightly larger than the points you mean.
+    /// use a box slightly larger than the points you mean. A whole-Body rule also accepts
+    /// the implicit Body defined by a mapped or swept mapped mesher.
     #[serde(rename = "geometry.nameRegion", rename_all = "camelCase")]
     GeometryNameRegion {
         name: String,
@@ -761,7 +764,8 @@ pub enum Command {
     },
 
     /// Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-    /// and material assignments that still reference it; remove or retarget those first.
+    /// (including temperature and volumetric heat sources), and named Sets that still reference
+    /// it; remove or retarget those first.
     #[serde(rename = "geometry.remove", rename_all = "camelCase")]
     GeometryRemove { name: String },
 
@@ -816,6 +820,8 @@ pub enum Command {
     /// stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
     /// id and the Body index as cell data. Name a `step` to add that Step's result fields as
     /// point data — displacement, reaction, stress and von Mises — so ParaView colours by them.
+    /// Result fields require the Model state they were solved on; `result.stale` means run
+    /// `solve.run` on that Step again before exporting it with the current Mesh.
     /// `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
     #[serde(rename = "mesh.export", rename_all = "camelCase")]
     MeshExport {
@@ -881,6 +887,12 @@ pub enum Command {
 
     /// A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
     /// producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
+    /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.
+    /// Disjoint Bodies compose independently, each using its own reference. Overlapping
+    /// assignments must produce exactly the same increment; otherwise `solve.run` returns
+    /// `model.ill-posed` naming both Loads and the Body. Equal increments are not added.
+    /// When continuing a heat Step, its nodal temperatures replace `value`; these per-Body
+    /// references still apply, with 293.15 K on Bodies without a temperature Load.
     #[serde(rename = "load.temperature", rename_all = "camelCase")]
     LoadTemperature {
         name: String,
@@ -903,6 +915,8 @@ pub enum Command {
 
     /// A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
     /// It is a density, not a total: the heat delivered is `q` times each Body's volume.
+    /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
+    /// for a plane-stress Sheet, the volume includes its specified thickness.
     #[serde(rename = "load.heatSource", rename_all = "camelCase")]
     LoadHeatSource { name: String, bodies: Vec<String>, q: Q<HeatSource> },
 
@@ -918,7 +932,9 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit.
+    /// `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
+    /// conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
+    /// `theta` must lie in [0, 1].
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -933,6 +949,8 @@ pub enum Command {
         n_modes: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shift: Option<f64>,
+        /// Maximum heat-transient time increment. A uniform increment no larger than dt is
+        /// chosen to finish exactly at tEnd; the Result reports the increment actually used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt: Option<Q<Time>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -941,6 +959,8 @@ pub enum Command {
         theta: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_every: Option<u32>,
+        /// Maximum fraction of the explicit critical time step (usually 0.9). The increment
+        /// may be reduced uniformly to finish exactly at tEnd.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt_factor: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -950,7 +970,8 @@ pub enum Command {
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
-    /// stay in the Model and can be reused by other Steps.
+    /// stay in the Model and can be reused by other Steps. Fails with `in-use` while another
+    /// Step names it in `after`; re-issue that dependent Step without the reference first.
     #[serde(rename = "step.remove", rename_all = "camelCase")]
     StepRemove { name: String },
 
@@ -961,7 +982,9 @@ pub enum Command {
 
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
     /// element quality) and refuses with a suggested fix. Returns extremes and reactions;
-    /// always check that reactions balance the applied loads before trusting a stress.
+    /// always check that reactions balance the applied loads before trusting a stress. A Step
+    /// with `after` requires its predecessor's Result to match the current Model state;
+    /// after an edit, solve the predecessor again before continuing the chain.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,
@@ -987,11 +1010,15 @@ pub enum Command {
     },
 
     /// Undo the last `steps` Commands (default 1), restoring the Model and orphaning any
-    /// Result produced after that point. Not recorded in the Journal.
+    /// Result produced after that point. Not recorded in the Journal. If `expectedJournal` is
+    /// supplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise
+    /// nothing is undone. Use this guard for a saved turn boundary while other callers can edit.
     #[serde(rename = "journal.undo", rename_all = "camelCase")]
     JournalUndo {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_journal: Option<String>,
     },
 
     /// Redo the last `steps` undone Commands (default 1) by re-applying them; a redone solve
@@ -1042,7 +1069,7 @@ mod tests {
         };
         assert_eq!(c.name(), "geometry.addBox");
         assert!(c.is_journaled());
-        assert!(!Command::JournalUndo { steps: None }.is_journaled());
+        assert!(!Command::JournalUndo { steps: None, expected_journal: None }.is_journaled());
         assert!(!Command::JournalRedo { steps: Some(2) }.is_journaled());
         let j = serde_json::to_string(&c).unwrap();
         assert_eq!(j, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);
