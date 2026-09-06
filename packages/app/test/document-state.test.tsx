@@ -109,3 +109,37 @@ it('does not include an edit made while an opened example restores its Result', 
   expect(store.state.savedJournal).toBe(journalIdentity(opened));
   expect(unsaved(store.state)).toBe(true);
 });
+
+it('opens a browser project against its captured Journal without marking a later edit saved', async () => {
+  const { makeHostContext, noteProject } = await import('../src/host');
+  const { readHostCaps } = await import('../src/capabilities');
+  vi.stubGlobal('indexedDB', undefined);
+  const opened = [
+    { seq: 0, cmd: { cmd: 'model.new' as const, name: 'project' }, hashAfter: 'opened' },
+    { seq: 1, cmd: { cmd: 'solve.run' as const, step: 'static' }, hashAfter: 'opened' },
+  ];
+  const edited = [...opened, { seq: 2, cmd: { cmd: 'model.setName' as const, name: 'later' }, hashAfter: 'edited' }];
+  const store = new Store();
+  const dispatch = vi.fn(async () => ({ output: { kind: 'solve' } }));
+  const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: opened } })) } as unknown as WorkerTransport;
+  let finish!: () => void;
+  const onAck = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const ctx = makeHostContext(store, transport, { current: null }, readHostCaps({ navigator: { userAgent: 'Chrome/1' } }), undefined, { onAck } as never);
+  const project = await ctx.projects.new('project');
+  noteProject('project', opened, 'opened');
+  await ctx.projects.save();
+  store.set({ savedJournal: 'previous' });
+  const pending = ctx.projects.open(project.id);
+  await vi.waitFor(() => expect(onAck).toHaveBeenCalledOnce());
+  expect(store.state.savedJournal).toBe('previous');
+  store.set({ journal: { entries: edited, revision: 3, hash: 'edited', canUndo: true, canRedo: false } });
+  finish();
+  await pending;
+  expect(store.state.savedJournal).toBe(journalIdentity(opened));
+  expect(unsaved(store.state)).toBe(true);
+  store.set({ savedJournal: 'previous failed-open baseline' });
+  dispatch.mockRejectedValueOnce(new Error('replay failed'));
+  await expect(ctx.projects.open(project.id)).rejects.toThrow('replay failed');
+  expect(store.state.savedJournal).toBe('previous failed-open baseline');
+  vi.unstubAllGlobals();
+});

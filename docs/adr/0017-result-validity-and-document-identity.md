@@ -13,7 +13,8 @@ saved-file hashes.
 Keep the full Model and Journal hashes unchanged. Introduce a separate, internal
 Result-validity fingerprint: hash the same Model parameters with only `name` replaced by
 an empty string. Store that fingerprint when solving or completing a convergence study,
-and compare it when reporting whether a cached Result is stale. Other fields remain in
+and compare it when reporting whether a cached Result is stale or accepting a predecessor
+Result for a chained Step. Other fields remain in
 this conservative fingerprint; this change does not introduce a general classification of
 all metadata or alter numerical inputs.
 

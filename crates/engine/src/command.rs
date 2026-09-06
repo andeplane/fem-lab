@@ -747,7 +747,9 @@ pub enum Command {
 
     /// Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any
     /// of those) so constraints and loads can target it. Rules are re-evaluated after every
-    /// remesh, so the Set survives refinement. Prefer the auto face names when one fits.
+    /// remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
+    /// implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
+    /// Body's actual mesh boundary. Prefer the auto face names when one fits.
     #[serde(rename = "geometry.nameFace", rename_all = "camelCase")]
     GeometryNameFace {
         name: String,
@@ -758,7 +760,8 @@ pub enum Command {
 
     /// Name a node/element Set by a region rule (a box or a whole Body), for point-like
     /// constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
-    /// use a box slightly larger than the points you mean.
+    /// use a box slightly larger than the points you mean. A whole-Body rule also accepts
+    /// the implicit Body defined by a mapped or swept mapped mesher.
     #[serde(rename = "geometry.nameRegion", rename_all = "camelCase")]
     GeometryNameRegion {
         name: String,
@@ -767,7 +770,8 @@ pub enum Command {
     },
 
     /// Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-    /// and material assignments that still reference it; remove or retarget those first.
+    /// (including temperature and volumetric heat sources), and named Sets that still reference
+    /// it; remove or retarget those first.
     #[serde(rename = "geometry.remove", rename_all = "camelCase")]
     GeometryRemove { name: String },
 
@@ -889,6 +893,11 @@ pub enum Command {
 
     /// A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
     /// producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
+    /// Disjoint Bodies compose independently, each using its own reference. Overlapping
+    /// assignments must produce exactly the same increment; otherwise `solve.run` returns
+    /// `model.ill-posed` naming both Loads and the Body. Equal increments are not added.
+    /// When continuing a heat Step, its nodal temperatures replace `value`; these per-Body
+    /// references still apply, with 293.15 K on Bodies without a temperature Load.
     #[serde(rename = "load.temperature", rename_all = "camelCase")]
     LoadTemperature {
         name: String,
@@ -962,7 +971,8 @@ pub enum Command {
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
-    /// stay in the Model and can be reused by other Steps.
+    /// stay in the Model and can be reused by other Steps. Fails with `in-use` while another
+    /// Step names it in `after`; re-issue that dependent Step without the reference first.
     #[serde(rename = "step.remove", rename_all = "camelCase")]
     StepRemove { name: String },
 
@@ -973,7 +983,9 @@ pub enum Command {
 
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
     /// element quality) and refuses with a suggested fix. Returns extremes and reactions;
-    /// always check that reactions balance the applied loads before trusting a stress.
+    /// always check that reactions balance the applied loads before trusting a stress. A Step
+    /// with `after` requires its predecessor's Result to match the current Model state;
+    /// after an edit, solve the predecessor again before continuing the chain.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,

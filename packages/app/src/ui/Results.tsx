@@ -374,6 +374,29 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
   );
 }
 
+/**
+ * What was solved, above the two columns (#42): a Result *exists*, this is the Step and the
+ * procedure it came from, and the shape in the viewer is drawn exaggerated — said here too, so
+ * a person reading the numbers is not left to infer it from the legend. Everything on it is
+ * already in the store: a header is no place to start a Query, and the Checks tab is where the
+ * DOF count lives.
+ */
+function ResultHeader({ s }: { s: UiState }) {
+  const r = s.result!;
+  const procedure = s.model?.steps.find((st) => st.name === r.step)?.procedure;
+  return (
+    <div class={r.stale ? 'result-header stale' : 'result-header'}>
+      <span class="mono">Result · step {r.step}</span>
+      {procedure ? <span class="faint">{procedure}</span> : null}
+      <span class="faint">
+        {r.solver} · {Math.round(r.timeMs)} ms
+      </span>
+      <span class="faint">{r.stale ? `solved at rev ${r.revision}, before the edits since` : `solved at rev ${r.revision}`}</span>
+      <span class="faint">{s.deformScale === 1 ? 'drawn at true scale' : `drawn exaggerated ×${formatNumber(s.deformScale)}`}</span>
+    </div>
+  );
+}
+
 export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
   const next = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0)[0];
   if (!s.result) {
@@ -394,10 +417,9 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
   }
   return (
     <div class="results">
+      <ResultHeader s={s} />
       <div class="rcol">
-        <div class="section-label">
-          Extremes · {s.result.step} · {s.result.solver} · {Math.round(s.result.timeMs)} ms
-        </div>
+        <div class="section-label">Extremes</div>
         <Extremes s={s} dispatch={dispatch} />
         <Frequencies s={s} dispatch={dispatch} />
         <Sample s={s} query={query} />
