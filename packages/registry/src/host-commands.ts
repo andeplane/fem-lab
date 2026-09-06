@@ -35,11 +35,13 @@ export const Layer = z.enum(['mesh', 'edges', 'loads', 'constraints', 'sets', 'l
 export const Theme = z.enum(['dark', 'light']);
 export const Animation = z.object({ step: z.string(), mode: int.optional(), playing: z.boolean(), speed: z.number().optional(), frame: int.optional() });
 export const SelectionInput = z.object({
+  refs: z.array(z.string()).optional(),
   bodies: z.array(z.string()).optional(),
   faces: z.array(z.string()).optional(),
   sets: z.array(z.string()).optional(),
   mode: z.enum(['replace', 'add', 'remove']).optional(),
 });
+export const HighlightInput = SelectionInput.omit({ refs: true, mode: true });
 export const PickTarget = z.enum(['face', 'body', 'off']);
 /** Resizable shell panels. Their sizes are view state and never enter the Journal. */
 export const PanelTarget = z.enum(['tree', 'properties', 'bottom', 'assistant']);
@@ -57,7 +59,7 @@ export interface Selection {
   bodies: string[];
   faces: string[];
   sets: string[];
-  /** What `@selection` expands to: `face:beam.top`, `body:beam`, … */
+  /** What `@selection` expands to: stable `kind:name` Model object references. */
   refs: string[];
 }
 /** The open project *folder* on disk, as `query.folder` reports it. */
@@ -119,6 +121,7 @@ export interface HostContext {
     setClip(p: z.output<typeof ClipPlane> | null): void;
     toggle(layer: z.output<typeof Layer>, on?: boolean): void;
     setVisible(bodies: string[], on: boolean): void;
+    highlight(s: z.output<typeof HighlightInput>): void;
     setTheme(t: z.output<typeof Theme>): void;
     animate(a: z.output<typeof Animation>): void;
     camera(): z.output<typeof CameraState>;
@@ -321,9 +324,10 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.setClip', 'Cut the view with a section plane `{ normal, offset }` in metres to look inside a body, or `{ plane: null }` to remove the cut. Contours are drawn on the cut surface too.', z.object({ plane: ClipPlane.nullable() }), ({ plane }, ctx) => ctx.view.setClip(plane)),
   def('view.toggle', 'Show or hide an overlay layer: mesh, edges, loads, constraints, sets, legend, axes or grid. Omit `on` to flip the current state.', z.object({ layer: Layer, on: z.boolean().optional() }), ({ layer, on }, ctx) => ctx.view.toggle(layer, on)),
   def('view.setVisible', 'Show or hide the named bodies in the viewer (the tree\'s eye icon). Hidden bodies stay in the Model and in every solve; only the display changes.', z.object({ bodies: z.array(z.string()), on: z.boolean() }), ({ bodies, on }, ctx) => ctx.view.setVisible(bodies, on)),
+  def('view.highlight', 'Temporarily highlight named bodies, faces or Sets in the viewer. Pass an empty object to clear the highlight. This is transient hover state: it never changes the selection, Model or Journal.', HighlightInput, (s, ctx) => ctx.view.highlight(s)),
   def('view.setTheme', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
   def('view.animate', 'Play, pause or scrub an animation of a Step: a mode shape (`mode`) or a transient history, with `speed` and an explicit `frame`. Available once dynamics land; the row exists so the control has a Command.', Animation, (a, ctx) => ctx.view.animate(a)),
-  def('selection.set', 'Select bodies, faces (named face Sets) and Sets by name, never by id. `mode` is replace (default), add or remove, like shift-click; the selection drives `view.fit` and `@selection` in the chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
+  def('selection.set', 'Select Model objects by stable `kind:name` refs, or select drawable bodies, faces and Sets by name. `mode` is replace (default), add or remove. The selection drives Properties, `view.fit` and `@selection` in chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
   def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
   def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
