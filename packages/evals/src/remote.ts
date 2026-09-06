@@ -69,14 +69,15 @@ function traces(calls: ToolCall[], validation: { before: string; after: string }
   let validateAt = 0;
   return calls.map((call) => {
     const snapshot = call.command === 'query.validateScript' ? validation[validateAt++] : undefined;
+    const ok = call.status === 'succeeded';
     return {
       name: call.command,
       command: call.command,
       input: call.input,
-      output: call.ok ? parsed(call.result) : undefined,
-      error: call.ok ? undefined : parsed(call.result),
+      output: ok ? parsed(call.result) : undefined,
+      error: ok ? undefined : parsed(call.result),
       ms: call.ms,
-      ok: call.ok,
+      ok,
       ...(snapshot === undefined ? {} : { journalBefore: snapshot.before, journalAfter: snapshot.after }),
     };
   });
