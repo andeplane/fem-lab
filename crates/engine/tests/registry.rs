@@ -2217,10 +2217,13 @@ fn the_three_heat_loads_report_themselves_and_hold_a_step_on_their_own() {
     assert!(m.loads[1].summary.starts_with('1'), "{}", m.loads[1].summary);
     assert!(m.loads[2].summary.ends_with("on bar"), "{}", m.loads[2].summary);
 
-    // A rename follows the Set of a face load and the Body list of a source alike.
+    // Keep an automatic face reference too: Body rename must still rewrite it while the
+    // explicitly named Sets keep their names and the volumetric source follows the Body.
+    ok(&mut e, r#"{"cmd":"load.convection","name":"autoFilm","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
     ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"bar","to":"rod"}"#);
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
     assert_eq!(m.loads[0].on.as_deref(), Some("filmBoundary"));
+    assert_eq!(e.model().load("autoFilm").unwrap().kind.set(), Some("rod.xmax"));
     assert!(m.loads[2].summary.ends_with("on rod"), "{}", m.loads[2].summary);
 
     ok(
