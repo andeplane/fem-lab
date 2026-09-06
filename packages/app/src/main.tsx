@@ -104,25 +104,26 @@ async function boot(): Promise<void> {
   const REPLACES_MODEL = new Set(['model.new', 'file.open', 'file.openExample', 'example.open']);
   /**
    * Host Commands after which the Model, the Journal or the project has changed and the shell
-   * has to catch up. `file.open` and `example.open` replace the whole Model through the
+   * has to catch up. `file.open` replaces the whole Model through the
    * transport, so without this the tree, the Journal and the new project all lag a Command
-   * behind; `file.openExample` refreshes on its own way out and needs no row here.
+   * behind; both example-open Commands refresh internally and need no row here.
    */
-  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'example.open', 'project.new', 'project.open']);
+  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'project.new', 'project.open']);
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
   const dispatch: Registry['dispatch'] = async (cmd) => {
     store.set({ lastError: null });
-    // Before, not after: `file.openExample` refreshes on its own way out, and by then the fork
-    // has to have happened or the example is written over the project it replaced.
-    if (cmd.cmd === 'file.openExample') forkProject();
+    // Both example Commands refresh internally, so the fork must happen before dispatch: it
+    // prevents that refresh from writing over the project being replaced.
+    const opensExample = cmd.cmd === 'file.openExample' || cmd.cmd === 'example.open';
+    if (opensExample) forkProject();
     if (registry.describe(cmd.cmd).provider === 'engine' || ['file.open', 'file.restore', 'example.open', 'script.run'].includes(cmd.cmd)) results.invalidateTransient();
     // A long Command owns the Solve button and the solving card until it settles either way.
     const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
       const ack = await registry.dispatch(cmd);
-      if (REPLACES_MODEL.has(cmd.cmd) && cmd.cmd !== 'file.openExample') forkProject();
+      if (REPLACES_MODEL.has(cmd.cmd) && !opensExample) forkProject();
       store.log('command', cmd.cmd);
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, and `file.open` / `example.open` replace the engine Model and
