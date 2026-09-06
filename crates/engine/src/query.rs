@@ -29,6 +29,14 @@ pub enum Query {
     #[schemars(extend("x-returns" = "ModelSummary"))]
     Model {},
 
+    /// The complete upsert Command for an existing object's current definition, with exact
+    /// SI quantities. Use it to populate an edit form; change its arguments and dispatch it
+    /// to apply. Display summaries are rounded and must never be used to reconstruct edits.
+    /// Auto-generated Sets and mesher-owned Bodies have no editable object definition.
+    #[serde(rename = "query.definition", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "ObjectDefinition"))]
+    Definition { kind: ObjectKind, name: String },
+
     /// Counts and sanity of the current Mesh (nodes, elements, element kind, DOF, bounding box,
     /// edge lengths, Sets with their resolved sizes, quality). Builds the Mesh if needed.
     #[serde(rename = "query.mesh")]
@@ -116,9 +124,10 @@ pub enum Query {
         n: u32,
     },
 
-    /// Cost before solving: DOF, matrix non-zero bounds and mandatory assembly memory lower
-    /// bound. Counting uses at most 16 MiB scratch after meshing. Feasibility is false above
-    /// a fixed 1.5 GiB planning budget, otherwise unknown: solver fill/workspace are excluded.
+    /// Cost before solving: DOF, matrix non-zero bounds, exact retained-frame schedule and
+    /// counted peak memory. Counting uses at most 16 MiB scratch after meshing. Feasibility is
+    /// false above a fixed 1.5 GiB planning budget, otherwise unknown because solver fill,
+    /// allocator overhead and host serialization are excluded.
     /// Use before large solves; this query does not promise that a solve fits the current host.
     #[serde(rename = "query.cost", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "CostEstimate"))]
@@ -423,7 +432,10 @@ pub struct ResultSummary {
     pub residual: f64,
     pub time_ms: f64,
     pub extremes: Vec<Extreme>,
+    /// Force for structural Results; power for thermal Results, retained with the solved state.
+    pub reaction_quantity: crate::units::ReactionQuantity,
     pub reactions: Vec<ReactionRow>,
+    /// Applied force vector or thermal power in component 0 (remaining components zero).
     pub applied_total: [Valued; 3],
     /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
     /// shape is the Result field named `mode:k`.
@@ -432,7 +444,7 @@ pub struct ResultSummary {
     /// One row per output time of a transient Step: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
-    /// |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+    /// |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
     /// by a prescribed displacement — where both totals are zero — still reports a meaningful
     /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
     pub balance: f64,
@@ -554,13 +566,31 @@ pub struct CostEstimate {
     pub nnz: u64,
     /// Lower bound on matrix non-zeros.
     pub nnz_lower: u64,
-    /// Mandatory assembly storage lower bound in bytes, including element slots and two CSRs.
-    /// Excludes mesh/model, element buffers, reduction, solver storage/fill and time history.
+    /// Estimated peak of the counted solve and frame-read phases. It includes mandatory
+    /// assembly storage, retained primary values, a conservative transient f64 working-vector
+    /// allowance and known native/browser frame-response storage. It is incomplete because
+    /// solver fill, JSON and allocator overhead are not known before solving.
     pub bytes: u64,
+    /// Mandatory assembly storage before transient-specific values are added.
+    pub assembly_bytes: u64,
+    /// Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
+    pub retained_frames: u64,
+    /// Logical f64 bytes for retained times and unpadded primary values.
+    pub retained_bytes: u64,
+    /// Conservative full-field allowance for procedure working f64 vectors live with History.
+    /// Free-DOF vectors are charged at the full nodal length.
+    pub transient_work_bytes: u64,
+    /// One normalized three-component f64 frame owned by a native Query result.
+    pub transport_staging_bytes: u64,
+    /// Known lower bound for the WASM/Worker frame route while two normalized three-component
+    /// numeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.
+    pub wasm_transport_staging_bytes: u64,
+    /// False while the generic JSON route has value- and runtime-dependent allocation overhead.
+    pub wasm_transport_staging_complete: bool,
     /// Fixed 1.5 GiB planning budget; not measured free memory on the current host.
     pub budget_bytes: u64,
-    /// False if mandatory storage exceeds the planning budget; null means feasibility is
-    /// unknown. Fitting a lower bound does not establish that assembly or factorisation fits.
+    /// False if the counted conservative estimate exceeds the planning budget; null means
+    /// feasibility is unknown. Fitting it does not establish that assembly or factorisation fits.
     pub feasible: Option<bool>,
     pub note: String,
 }
@@ -633,6 +663,7 @@ pub struct Capabilities {
 #[serde(untagged)]
 pub enum QueryResult {
     Model(ModelSummary),
+    Definition(ObjectDefinition),
     Mesh(MeshSummary),
     Set(SetInfo),
     Result(ResultSummary),
@@ -648,6 +679,12 @@ pub enum QueryResult {
     Objects(ObjectList),
     Capabilities(Capabilities),
     Report(ReportText),
+}
+
+/// Lossless input for editing one Model object through the same Command used to create it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ObjectDefinition {
+    pub command: Command,
 }
 
 /// Acknowledgement of a dispatched Command.

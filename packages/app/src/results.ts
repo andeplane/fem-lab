@@ -118,8 +118,9 @@ export class ResultsView {
 
   /** display = SI × scale + offset, derived from the engine once per unit pair. */
   private async conversion(field: string): Promise<{ scale: number; offset: number }> {
-    const si = siUnitOf(field);
-    const to = displayUnitOf(field, this.store.state.model?.units);
+    const reactionQuantity = this.store.state.result?.reactionQuantity;
+    const si = siUnitOf(field, reactionQuantity);
+    const to = displayUnitOf(field, this.store.state.model?.units, reactionQuantity);
     if (si === to) return { scale: 1, offset: 0 };
     const key = `${si}→${to}`;
     const hit = this.conversions.get(key);
@@ -242,7 +243,7 @@ export class ResultsView {
     const values = magnitude(raw, choice.magnitude === true);
     for (let i = 0; i < values.length; i++) values[i] = values[i]! * scale + offset;
     const [min, max] = extent(values);
-    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units) };
+    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units, this.store.state.result?.reactionQuantity) };
   }
 
   /** `view.showField`: `{ field: null }` turns contours off, anything else picks a scalar. */

@@ -1,7 +1,7 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
+import type { AutosaveState, AutosaveVersion, Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
@@ -10,10 +10,22 @@ import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 import type { TransientState } from './transient';
 
-export { TABS, type Tab };
-
 export type ViewMode = 'geometry' | 'mesh' | 'results';
+export { TABS, type Tab } from './ui/tabs';
+export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
+export type PanelSizes = Record<ResizablePanel, number>;
+export const DEFAULT_PANEL_SIZES: PanelSizes = { tree: 274, properties: 308, bottom: 252, assistant: 392 };
+export const PANEL_SIZE_LIMITS: Record<ResizablePanel, { min: number; max: number }> = {
+  tree: { min: 180, max: 420 },
+  properties: { min: 240, max: 440 },
+  bottom: { min: 184, max: 480 },
+  assistant: { min: 320, max: 520 },
+};
 
+export function clampPanelSize(panel: ResizablePanel, size: number): number {
+  const limits = PANEL_SIZE_LIMITS[panel];
+  return Math.round(Math.min(limits.max, Math.max(limits.min, size)));
+}
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
   cmd: string;
@@ -35,6 +47,10 @@ export interface LastError {
 }
 
 export interface UiState {
+  autosave: AutosaveState['saved'];
+  autosaves: AutosaveVersion[];
+  /** Session mirror of the ai.setModel host Command, shared with the Assistant. */
+  assistantModel: string | null;
   /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
   folder: ProjectFolder | null;
   /** One available catalog; project skills override built-ins by name. */
@@ -52,6 +68,8 @@ export interface UiState {
   deformScale: number;
   /** Panel id → open. Panels absent from the map are closed. */
   panels: Record<string, boolean>;
+  /** View-only panel dimensions in CSS pixels; resizing never changes the Model or Journal. */
+  panelSizes: PanelSizes;
   /** Body names hidden only in the viewer by `view.setVisible`; the Model is unchanged. */
   hiddenBodies: string[];
   tab: Tab;
@@ -146,6 +164,9 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
+  autosave: null,
+  autosaves: [],
+  assistantModel: null,
   folder: null,
   skills: BUILTIN_SKILLS,
   ready: false,
@@ -173,6 +194,7 @@ export const initialState: UiState = {
     'tree.results': true,
     'tree.plugins': true,
   },
+  panelSizes: { ...DEFAULT_PANEL_SIZES },
   hiddenBodies: [],
   tab: 'journal',
   objects: [],
@@ -205,11 +227,11 @@ export const initialState: UiState = {
   playing: false,
   phase: 0,
   screenshotScale: 1,
+  animationSpeed: 1,
   // --- plan D ---
   projects: [],
   project: null,
   formHints: null,
-  animationSpeed: 1,
   transient: null,
 };
 
@@ -313,6 +335,10 @@ export class Store {
   togglePanel(panel: string, open?: boolean): void {
     if ((TABS as string[]).includes(panel)) return this.set({ tab: panel as Tab });
     this.set({ panels: panelsReducer(this.state.panels, panel, open) });
+  }
+
+  resizePanel(panel: ResizablePanel, size: number): void {
+    this.set({ panelSizes: { ...this.state.panelSizes, [panel]: clampPanelSize(panel, size) } });
   }
 
   fail(e: unknown): void {

@@ -40,6 +40,7 @@ const MODEL: ModelSummary = {
 };
 
 const RESULT: ResultSummary = {
+  reactionQuantity: 'force',
   step: 'static',
   revision: 10,
   stale: false,
@@ -132,6 +133,24 @@ describe('the Results tab', () => {
   it('writes the balance as a percentage and passes at zero', () => {
     expect(balanceLine(RESULT)).toEqual({ pass: true, text: 'Σ reactions = −Σ loads · 0.0000 %' });
     expect(balanceLine({ ...RESULT, balance: 0.0123 })).toEqual({ pass: false, text: 'Σ reactions = −Σ loads · 1.2300 %' });
+  });
+
+  it('keeps thermal reactions as power through the legend and reaction table', () => {
+    expect(siUnitOf('reaction', 'power')).toBe('W');
+    expect(displayUnitOf('reaction', { force: 'kN' }, 'power')).toBe('W');
+    expect(displayUnitOf('reaction', { force: 'N', power: 'kW' }, 'power')).toBe('kW');
+    expect(displayUnitOf('reaction', { force: 'kN', power: 'W' }, 'force')).toBe('kN');
+    const kw = (value: number): Valued => ({ value, unit: 'kW' });
+    const result: ResultSummary = { ...RESULT, reactionQuantity: 'power',
+      reactions: [{ constraint: 'cold', total: [kw(0.01), kw(0), kw(0)] }],
+      appliedTotal: [kw(0.01), kw(0), kw(0)], extremes: [] };
+    const root = document.createElement('div');
+    render(<Results s={{ ...initialState, result }} dispatch={vi.fn()} query={vi.fn()} />, root);
+    expect(root.textContent).toContain('Power kW');
+    expect(root.textContent).not.toContain('Fx');
+    const table = [...root.querySelectorAll('table')].find((t) => t.textContent?.includes('Power kW'))!;
+    expect([...table.querySelectorAll('tbody tr')].map((r) => r.children.length)).toEqual([2, 2, 2]);
+    expect(table.textContent).toContain('cold0.01');
   });
 
   it('leads with the extreme of the largest magnitude', () => {
@@ -245,6 +264,48 @@ function registryHarness(result: ResultSummary) {
 }
 
 describe('ResultsView', () => {
+  it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
+    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
+    await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
+    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
+    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 0.5, 0.75);
+    expect(store.state).toMatchObject({ playing: false, phase: 0.75, animationSpeed: 0.5, fieldKey: 'mode:2', viewMode: 'results' });
+    await results.animate({ step: 'modes', mode: 2, playing: true, speed: 2 });
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(true, 2, undefined);
+    expect(store.state.playing).toBe(true);
+    await results.refresh();
+    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
+    await expect(results.animate({ step: 'modes', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
+    expect(store.state.fieldKey).toBe('mode:2');
+  });
+
+  it('keeps a newer pause when an older play finishes loading afterward', async () => {
+    const modal = { ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] };
+    const { store, viewer, results, transport } = harness(modal);
+    let finishLoad!: () => void;
+    const loadPending = new Promise<void>((resolve) => { finishLoad = resolve; });
+    transport.field.mockImplementationOnce(async () => {
+      await loadPending;
+      return { values: Float32Array.from([0, 0, 0, 0, 0, -0.0001919]), min: 0, max: 1, unit: '' };
+    });
+
+    const play = results.animate({ step: 'modes', mode: 1, playing: true });
+    await vi.waitFor(() => expect(transport.field).toHaveBeenCalledWith('modes', 'mode:1', undefined));
+    await results.animate({ step: 'modes', mode: 1, playing: false });
+    finishLoad();
+    await play;
+
+    expect(viewer.current.animate).toHaveBeenCalledTimes(1);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, undefined);
+    expect(store.state.playing).toBe(false);
+  });
+
+  it('reports missing displacement without pretending a thermal field can be animated', async () => {
+    const { results, viewer } = harness({ ...RESULT, extremes: [] });
+    await expect(results.animate({ step: 'heat', playing: true })).rejects.toThrow('has no displacement');
+    expect(viewer.current.animate).not.toHaveBeenCalled();
+  });
   it('uses current material yields in display units, independent of historical Journal entries', async () => {
     const { store, results, transport } = harness();
     transport.query.mockImplementation(async (q) => {
@@ -271,27 +332,6 @@ describe('ResultsView', () => {
     expect(store.state.yieldStress).toBeNull();
   });
 
-  it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
-    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
-    await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
-    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
-    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined);
-    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 0.5, 0.75);
-    expect(store.state).toMatchObject({ playing: false, phase: 0.75, animationSpeed: 0.5, fieldKey: 'mode:2', viewMode: 'results' });
-    await results.animate({ step: 'modes', mode: 2, playing: true, speed: 2 });
-    expect(viewer.current.animate).toHaveBeenLastCalledWith(true, 2, undefined);
-    expect(store.state.playing).toBe(true);
-    await results.refresh();
-    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
-    await expect(results.animate({ step: 'modes', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
-    expect(store.state.fieldKey).toBe('mode:2');
-  });
-
-  it('reports missing displacement without pretending a thermal field can be animated', async () => {
-    const { results, viewer } = harness({ ...RESULT, extremes: [] });
-    await expect(results.animate({ step: 'heat', playing: true })).rejects.toThrow('has no displacement');
-    expect(viewer.current.animate).not.toHaveBeenCalled();
-  });
   it('loads the contoured scalar in display units and the displacement in SI', async () => {
     const { store, viewer, results } = harness();
     await results.refresh();
@@ -307,7 +347,7 @@ describe('ResultsView', () => {
   it('converts Kelvin contours and legends using scale plus offset, cached by unit pair', async () => {
     const heat = { ...RESULT, extremes: [{ ...RESULT.extremes[0]!, field: 'temperature' }] };
     const { store, viewer, results, transport } = harness(heat);
-    store.set({ model: { units: { temperature: 'degC', length: 'm' } } as never });
+    store.set({ model: { ...MODEL, units: { temperature: 'degC', length: 'm' } } });
     const { Engine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as { Engine: new (threads: number) => { query(json: string): string } };
     const engine = new Engine(1);
     const conversions = vi.fn(async (q: { query: string; quantity?: { value: number }; to?: string }) => {
@@ -326,10 +366,30 @@ describe('ResultsView', () => {
     expect(conversions.mock.calls.filter(([q]) => q.query === 'query.convert')).toHaveLength(2);
     await results.refresh(true);
     expect(conversions.mock.calls.filter(([q]) => q.query === 'query.convert')).toHaveLength(2);
-    store.set({ model: { units: { temperature: 'K', length: 'm' } } as never });
+    store.set({ model: { ...MODEL, units: { temperature: 'K', length: 'm' } } });
     await results.refresh(true);
     expect(viewer.current.setField.mock.calls.at(-1)![0]).toEqual(Float32Array.from([273.15, 293.15, 373.15]));
     expect(store.state.legend?.unit).toBe('K');
+  });
+
+  it('uses the thermal result quantity when converting a reaction contour', async () => {
+    const thermal = { ...RESULT, reactionQuantity: 'power' as const };
+    const { store, results, transport } = harness(thermal);
+    store.set({ result: thermal, model: { ...MODEL, units: { power: 'kW', length: 'm' } } });
+    transport.query.mockImplementation(async (q: { query: string; quantity?: { value: number; unit?: string }; to?: string }) => {
+      if (q.query !== 'query.convert') return thermal;
+      expect(q.quantity?.unit).toBe('W');
+      expect(q.to).toBe('kW');
+      return { value: q.quantity!.value / 1000, unit: 'kW' };
+    });
+    type Contour = { values: Float32Array; range: [number, number]; unit: string };
+    const contour = (results as unknown as {
+      contour: (choice: { field: string; component: number | null }, raw: Float32Array) => Promise<Contour>;
+    }).contour;
+    const output = await contour.call(results, { field: 'reaction', component: 0 }, Float32Array.from([1000, 2000]));
+    expect(output.values).toEqual(Float32Array.from([1, 2]));
+    expect(output.range).toEqual([1, 2]);
+    expect(output.unit).toBe('kW');
   });
 
   it('does the second refresh without refetching, and a forced one with', async () => {
@@ -448,7 +508,7 @@ describe('ResultsView', () => {
   // Issue #42: the shape a person sees must not depend on which chain got there first.
   it('pushes the same exaggeration for every field, memoised path and forced path alike', async () => {
     const { viewer, results } = harness();
-    await results.refresh(true);
+    await results.refresh(); // Hydrate the current Result before requesting one of its fields.
     await results.showField({ field: 'vonMises' });
     const first = viewer.current.setDeformed.mock.calls.at(-1)![1];
     await results.showField({ field: 'displacement', component: null });
@@ -539,7 +599,10 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
   const { waitForText } = await import('./wait-for');
   const root = document.createElement('div');
   const cost: CostEstimate = {
-    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, budgetBytes: 1_610_612_736,
+    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000,
+    retainedFrames: 3, retainedBytes: 900_000, transientWorkBytes: 50_000, transportStagingBytes: 864,
+    wasmTransportStagingBytes: 1728, wasmTransportStagingComplete: false,
+    budgetBytes: 1_610_612_736,
     feasible, note: 'Excludes direct-factor fill/workspace.',
   };
   const model = { bodies: [], warnings: [], meshSettings: {}, steps: [{ name: 'static' }] } as unknown as ModelSummary;
@@ -549,7 +612,11 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
     const text = await waitForText(() => root, feasible === false ? 'over budget' : 'not established');
     expect(query).toHaveBeenCalledWith({ query: 'query.cost', step: 'static' });
     expect(text).toContain('matrix non-zeros (upper bound)1296');
-    expect(text).toContain('mandatory memory (at least)1.7 GB');
+    expect(text).toContain('counted peak memory estimate1.7 GB');
+    expect(text).toContain('retained frames3');
+    expect(text).toContain('retained primary fields900 kB');
+    expect(text).toContain('native frame staging1 kB');
+    expect(text).toContain('browser frame staging≥ 2 kB + JSON/JS overhead');
     expect(text).toContain('planning budget1.6 GB');
     expect(text).toContain('Excludes direct-factor fill/workspace.');
     expect(text).not.toContain('feasible here');
