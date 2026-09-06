@@ -31,6 +31,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { ViewMode } from '../store';
 import type { AppSurface } from '../worker-transport';
 import { MAPS, type ColormapName, sample } from './colormap';
+import { fitsSurface, nice, niceTick } from './scale';
 
 export interface CameraState {
   position: [number, number, number];
@@ -62,6 +63,8 @@ const GREY_GEOMETRY = 0.58;
 const GREY_MESH = 0.46;
 const EDGE_GEOMETRY = 0x272b33;
 const EDGE_MESH = 0x5b6472;
+/** The undeformed outline under an exaggerated shape: visible, but plainly not the body (#42). */
+const EDGE_GHOST = 0x4a5260;
 const HIGHLIGHT = new Color(0x58b7d6);
 
 const DIRECTIONS: Record<ViewPreset, [number, number, number]> = {
@@ -77,15 +80,6 @@ const DIRECTIONS: Record<ViewPreset, [number, number, number]> = {
 /** A stable hue per body, mixed into the flat grey just enough to tell two bodies apart. */
 function bodyTint(i: number): Color {
   return new Color().setHSL((i * 0.137) % 1, 0.45, 0.5);
-}
-
-/** The round 1/2/5·10^k tick that puts roughly twenty divisions across `extent`. */
-export function niceTick(extent: number): number {
-  if (!(extent > 0)) return 1;
-  const raw = extent / 20;
-  const pow = 10 ** Math.floor(Math.log10(raw));
-  const n = raw / pow;
-  return (n >= 5 ? 5 : n >= 2 ? 2 : 1) * pow;
 }
 
 export class Viewer {
@@ -172,6 +166,12 @@ export class Viewer {
     this.renderer.render(this.scene, this.camera);
   }
 
+  /** False until the first `setSurface`: until then `this.box` is a placeholder and anything
+   *  measured against the model's size — `autoScale` above all — would be nonsense. */
+  get hasSurface(): boolean {
+    return this.surface !== null;
+  }
+
   // ── geometry ────────────────────────────────────────────────────────────────────────────
   /**
    * The surface arrives indexed; we expand it so every triangle owns its three vertices. That
@@ -197,6 +197,10 @@ export class Viewer {
       }
     });
     this.base = pos;
+    // This rebuilds the position buffer from `base`, so a deformation already on screen would be
+    // wiped — and the host re-pushes the surface after *every* Command, `setVisible` routes
+    // through here too (#42). Keep it, unless the mesh itself changed under it.
+    if (!fitsSurface(this.deformation, s.positions)) this.deformation = null;
 
     const geom = new BufferGeometry();
     geom.setAttribute('position', new BufferAttribute(pos.slice(), 3));
@@ -214,8 +218,20 @@ export class Viewer {
     this.edges = this.buildEdges();
     this.layers.add(this.mesh, this.edges);
     this.paint();
+    if (this.deformation) this.drawDeformed(this.deformation, this.deformScale);
     this.setChrome();
     this.render();
+  }
+
+  /**
+   * The wireframe is built from `base` and `drawDeformed` never touches it, so while the mesh is
+   * drawn exaggerated the edges already *are* the undeformed outline: colour them as a ghost so
+   * a person can see how far the drawing departs from the body. `view.toggle { layer: 'edges' }`
+   * turns it off.
+   */
+  private edgeColour(): number {
+    if (this.deformation !== null && this.deformScale !== 1) return EDGE_GHOST;
+    return this.mode === 'mesh' ? EDGE_MESH : EDGE_GEOMETRY;
   }
 
   private buildEdges(): LineSegments {
@@ -225,7 +241,7 @@ export class Viewer {
     // exposes element faces instead of a triangle soup.
     const geom = this.mode === 'mesh' ? new WireframeGeometry(indexed) : new EdgesGeometry(indexed, 1);
     indexed.dispose();
-    return new LineSegments(geom, new LineBasicMaterial({ color: this.mode === 'mesh' ? EDGE_MESH : EDGE_GEOMETRY }));
+    return new LineSegments(geom, new LineBasicMaterial({ color: this.edgeColour() }));
   }
 
   /** Vertex colours for the current mode: body tint, mesh grey, or the field through the LUT. */
@@ -312,7 +328,11 @@ export class Viewer {
     this.render();
   }
 
-  /** The exaggeration that makes the largest displacement a tenth of the model: `"auto"`. */
+  /**
+   * `"auto"`: the exaggeration that makes the largest displacement a twentieth of the model —
+   * modest enough to still read as the body — snapped to a round 1/2/5·10^k so the legend and
+   * the slider can both say it honestly.
+   */
   autoScale(displacement: Float32Array): number {
     let max = 0;
     for (let n = 0; n < displacement.length; n += 3) {
@@ -323,14 +343,15 @@ export class Viewer {
     if (!(max > 0)) return 1;
     // A mass-normalised mode shape is already about the size of the model, so the exaggeration
     // it wants is a fraction: rounding that to an integer would draw it at zero.
-    const want = (0.1 * diagonal) / max;
-    return want >= 1 ? Math.round(want) : Number(want.toPrecision(2));
+    const want = (0.05 * diagonal) / max;
+    return want >= 1 ? nice(want) : Number(want.toPrecision(2));
   }
 
   /** `position = X + scale·u`, on the CPU; the Result never changes, only the drawing. */
   setDeformed(displacement: Float32Array | null, scale: number): void {
     this.deformation = displacement;
     this.deformScale = scale;
+    (this.edges?.material as LineBasicMaterial | undefined)?.color.setHex(this.edgeColour());
     this.drawDeformed(displacement, scale);
   }
 

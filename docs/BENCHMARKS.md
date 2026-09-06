@@ -77,7 +77,15 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 A5 is run for all eight element kinds, driven by a prescribed end displacement so the reaction
 *is* `F`; A7's scale is the largest force that flows through the model, because a Step driven by
 a displacement or a temperature has no applied total to be relative to. A6 covers hex8, hex20, a
-plane-stress sheet and an axisymmetric ring. A8's numerics half is
+plane-stress sheet and an axisymmetric ring. A6 also runs three independently supported unit
+cubes at 1, 2 and 3 hex8 divisions per edge through the registry (#146). Their temperature
+increments are +80 K, −40 K and 0 K, from distinct references. Free expansion has
+`u = α ΔT (x − x₀)` and zero stress; a preceding uniform heat solve with both x ends held gives
+`σxx = −E α ΔT`, `σyy = σzz = 0` and lateral strain `(1 + ν) α ΔT`. With E = 210 GPa and
+α = 1.2e-5 /K, the two heated cubes carry −201.6 MPa and +100.8 MPa. Every nodal displacement
+is within 1e-12 m and stress component within 1e-3 Pa of the closed form on all three meshes.
+Reversing disjoint Load order is bit-identical; equal overlapping increments are idempotent,
+while unequal increments are rejected with both Load names and the Body. A8's numerics half is
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
@@ -146,6 +154,7 @@ Harder's parallelogram specimen *is* a parallelogram, whose own converged answer
 | C6 | NAFEMS FV32 cantilevered tapered membrane, modal | 44.623, 130.03, 162.70, 246.05, 379.90, 391.44 Hz | 1 % | 2D eigen | engine test |
 | C7 | NAFEMS T4 steady conduction + convection | T(E) = 18.3 °C (converged 18.25) | 0.5 °C | convection BC | engine test + green |
 | C8 | Thermal → structural chain, restrained plate (**substitute for NAFEMS T1**) | σxx = −E α ΔT/(1−ν) = −150 MPa at mid-height | 2 % | thermal → structural coupling | green |
+| C9 | Free 2D mesh with overlapping refinement boxes | finer overlap mean triangle area ≤ 0.5 · 0.25²; outside the coarse box, a triangle area > 0.9 · 0.5 · 2² | exact | centroid-based refinement selection, input-order determinism | geometry test |
 
 **C1's finite width is 3 %, not 1.6 %.** Plan C's half-width of 10 hole radii was measured and
 extrapolates to K_t = 3.094 — three per cent above Kirsch's infinite-plate 3.00, not the 1.6 %
@@ -173,6 +182,14 @@ n = 4, 8, 16, 32 quad8 gives 23.969 in plane stress and 21.526 in plane strain, 
 23.9 and arXiv 1806.07500's 21.520 respectively. The monitored point is C = (48, 52), the midpoint
 of the loaded edge, which is what the literature values belong to; plans A and C say the top corner
 (48, 60), which is a different quantity — 25.18 and 22.63 by the same extrapolation.
+
+**C9 checks local refinement selection independently of the implementation.** A 10 m square uses
+a global size of 2 m, a coarse box of size 1 m, and a nested box of size 0.25 m. The test computes
+each triangle's area directly from its node coordinates with the shoelace formula, groups triangles
+by their independently computed centroids, and checks the fine-overlap mean against 0.5 · 0.25²
+(measured 0.0283569 m²) and the outside maximum against the global behavior (1.953125 m² > 1.8 m²).
+Both box orders must produce exactly equal mesh points and connectivity, so order independence is
+checked beyond aggregate counts.
 
 ## D. Three-dimensional solids (phase 2–3)
 
@@ -225,6 +242,12 @@ of the whole temperature. The temporal rate study is in
 `the_theta_method_converges_at_its_own_order_in_time`: Crank–Nicolson ≥ 1.8, backward Euler
 ≥ 0.8, against the same problem at Δt = 0.0625 s.
 
+E3 also checks the exact uniform-heating solution `T(x,t) = t` with source `q/(ρc_p) = 1 K/s`
+and a matching prescribed-temperature ramp, on two mesh sizes with both θ = 0.5 and θ = 1.
+Requested `(dt, tEnd)` pairs `(0.6, 1)`, `(0.4, 0.9)`, and `(2, 0.25)` must reach exactly
+`tEnd` in the saved history and the correct temperature at every node. The requested step is
+an upper bound; a uniform adjusted step preserves one reusable factorisation.
+
 ## F. Dynamics and explicit (phase 2, 6)
 
 | # | Case | Reference | Tolerance | Proves | Status |
@@ -234,6 +257,11 @@ of the whole temperature. The temporal rate study is in
 | F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
 | F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) | |
 | F4 | Two-block tie / bonded contact patch test | continuous stress across the tie | 1e-8 | constraints between bodies (phase 6) | |
+
+F2b's endpoint regression adds `u(t) = v₀t + gt²/2` on two mesh sizes at end times of 0.25,
+1.6 and 2.25 nominal stable steps. The final history time is exactly the requested endpoint,
+the whole displacement history follows the closed form, and the adjusted increment never
+exceeds `dtFactor · dt_crit`, including floating-point rounding at an almost-integral ratio.
 
 F1's initial velocity is `v₀ + ω × (x − c)`, which is in the null space of `K`, so a correct
 integrator translates and spins the block and never strains it: momentum and energy are
@@ -293,6 +321,26 @@ against a *closed form* rather than a printed number:
 Both rows revert to the NAFEMS cases the moment the published data is at hand; the chaining they
 prove is the same either way.
 
+## Named Sets on mesher-defined Bodies (#239)
+
+The registry patch `mapped_and_swept_bodies_resolve_face_and_body_selectors_for_an_exact_patch`
+uses a 2 × 1 m mapped rectangle (0.1 m plane-stress thickness) and its 3 m extrusion.
+For both element orders and subdivision scales 1, 2 and 4, geometric face rules resolve the
+actual left/right boundaries, and a whole-Body region contains every element and node. Face
+counts, nodal coordinates, boundary measures (1 m / 3 m²) and domain measures (2 m² / 6 m³)
+provide independent membership oracles after each remesh.
+
+A named right-face traction produces σxx = 20 MPa with E = 200 GPa and ν = 0.25. Named
+symmetry constraints permit the exact affine solution ux = σxx x/E and uy,z = −ν σxx y,z/E.
+Every node agrees within 1e-12 m and every stress component within 1e-3 Pa on all meshes;
+force balance is below 1e-10. A separate whole-Body nodal force adds 10 N to the 2 MN traction:
+applied force and support reactions independently recover 2,000,010 N and its negative.
+
+The lifecycle regression checks named Set query visibility, dependency errors, rename and
+copy, removal after dependent Commands are removed, undo/redo, and deterministic exported
+Journal replay with identical memberships and displacement. Unknown Bodies give structured
+errors identifying the selector argument and leave the Model and Journal unchanged.
+
 ## Where the reference values are published
 
 - NAFEMS "The Standard NAFEMS Benchmarks" P18 (1990); FV set in R0015 (1987). Values as
@@ -324,3 +372,20 @@ Modal amplitude studies and chained Steps explicitly return `unsupported` before
 changing Model, Journal or stored fields. Frequencies need a mode-aware quantity;
 chained studies need dependency results recomputed on each refinement. The current
 command instead directs callers to explicit per-mesh solve.run sequences.
+
+### Automatic hand-reference applicability (#149)
+
+`automatic_hand_checks_require_the_steps_actual_supports_and_end_load` checks the
+report's cantilever reference at 10 and 20 axial divisions: for L = 1 m, b = h =
+0.1 m, E = 210 GPa and P = 1 kN, PL³/(3EI) = 0.190476190476 mm. The existing
+axial case independently checks FL/(EA) = 0.047619047619 mm at F = 100 kN.
+These are analytical reference values, separate from the finite-element response.
+
+At both meshes, an inactive global load, a midpoint-loaded cantilever, and a
+simply supported midpoint-loaded beam receive no cantilever reference. Pure
+applicability checks also cover reversed ends, partial supports, stale Results,
+chained Steps, cuts, mixed or zero forces, missing definitions and independent
+mapped geometry. The hook only recognizes uncut, axis-aligned 3D lattice boxes
+with one fully fixed end and one single-component force at the opposite end.
+Other geometries and boundary conditions explicitly report no applicable
+automatic reference; their verification belongs to a dedicated Benchmark.
