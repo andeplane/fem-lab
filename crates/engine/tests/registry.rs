@@ -5159,3 +5159,46 @@ fn implicit_body_thermal_loads_are_transactional_and_survive_undo_and_replay() {
         assert_implicit_source(&mut replay, 2, 2, swept);
     }
 }
+
+#[test]
+fn body_rename_and_duplicate_reject_cut_names_without_mutation() {
+    let mut e = engine();
+    for cmd in [
+        r#"{"cmd":"model.new","name":"cut identities"}"#,
+        r#"{"cmd":"geometry.addBox","name":"source","size":["1 m","1 m","1 m"]}"#,
+        r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"],"at":["2 m","0 m","0 m"]}"#,
+        r#"{"cmd":"geometry.subtractBox","name":"ownCut","from":"source","size":["0.2 m","0.2 m","2 m"],"at":["0.4 m","0.4 m","-0.5 m"]}"#,
+        r#"{"cmd":"geometry.subtractBox","name":"otherCut","from":"other","size":["0.2 m","0.2 m","2 m"],"at":["2.4 m","0.4 m","-0.5 m"]}"#,
+        r#"{"cmd":"geometry.nameFace","name":"top","of":"source","where":{"kind":"normal","normal":[0,0,1]}}"#,
+    ] {
+        ok(&mut e, cmd);
+    }
+    let surface = e.geometry_surface().unwrap();
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let model_query = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    for target in ["ownCut", "otherCut"] {
+        for (command, key) in [("model.rename", "to"), ("model.duplicate", "as")] {
+            let input = serde_json::json!({"cmd":command,"kind":"body","name":"source",key:target});
+            let error = err(&mut e, &input.to_string());
+            assert_eq!(error.code, ErrorCode::NameTaken);
+            assert_eq!(error.where_, Some(format!("body '{target}'")));
+            assert_eq!(e.geometry_surface().unwrap(), surface);
+            assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+            assert_eq!(serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap(), model_query);
+        }
+    }
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"source","to":"renamed"}"#);
+    assert_eq!(e.model().cuts[0].from, "renamed");
+    ok(&mut e, r#"{"cmd":"model.duplicate","kind":"body","name":"renamed","as":"copy"}"#);
+    assert_eq!(e.model().bodies[2].name, "copy");
+    assert_eq!(e.model().cuts[2].name, "copy.ownCut");
+    assert_eq!(e.model().cuts[2].from, "copy");
+    let after = serde_json::to_value(e.export_file()).unwrap();
+    ok(&mut e, r#"{"cmd":"journal.undo","steps":2}"#);
+    assert_eq!(serde_json::to_value(e.model()).unwrap(), before["model"]);
+    ok(&mut e, r#"{"cmd":"journal.redo","steps":2}"#);
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), after);
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
+    assert_eq!(serde_json::to_value(replayed.export_file()).unwrap(), after);
+}
