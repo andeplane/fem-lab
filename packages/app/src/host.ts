@@ -288,6 +288,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, refresh: () => Promise<void>, results?: ResultsView): HostDef[] {
+  let editRequest = 0;
   return [
     {
       name: 'view.setMode',
@@ -298,6 +299,22 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
         const { mode } = input as { mode: ViewMode };
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
+      },
+    },
+    {
+      name: 'form.edit',
+      description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
+      schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
+      tool: true,
+      run: async (input) => {
+        const target = input as { kind: 'body' | 'material' | 'set' | 'constraint' | 'load' | 'step'; name: string };
+        const request = ++editRequest;
+        const previousForm = store.state.form;
+        const revision = store.state.revision;
+        const { command } = await transport.query({ query: 'query.definition', ...target }) as { command: { cmd: string } & Record<string, unknown> };
+        if (request !== editRequest || store.state.form !== previousForm || store.state.revision !== revision) return;
+        const { cmd, ...args } = command;
+        store.openForm(cmd, args);
       },
     },
     {
