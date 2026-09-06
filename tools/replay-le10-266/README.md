@@ -6,7 +6,7 @@ The earlier Windows/default direct job returned LE10 Hex20 relative residual
 four logical processors. Those separate jobs do not distinguish CPU/SIMD model
 from thread-count effects.
 
-`diagnose-le10-266.yml` therefore runs all of these on one Windows machine:
+This reproducer therefore runs all of these on one Windows machine:
 
 1. The immutable, unguarded CLI at `dab97bca748f3ff72527a60ae80737ff3d546d93`,
    using default, one and four threads. Its original diagnostic script keeps the
