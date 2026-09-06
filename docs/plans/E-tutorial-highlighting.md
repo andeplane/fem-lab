@@ -2,8 +2,8 @@
 Note (2026-09-06): PR #51 already landed a first fix for #37/#47/#48 — `TutorialRunner.resume(tutorial, deps, entries, hash)` now proves the saved step against the Journal, `store.dispatch` carries the app's wrapped dispatch, and 'Do it for me' is disabled while pending. Build on that: replace the seq watermark with the index baseline described here.
 
 Closes #38 and #46; finishes #12. **#37 and #47 are already CLOSED** by PR #51 — this plan does not
-close them, and the runner-baseline defect below (§1 A and B) needs a `bug` + `tutorials` issue of
-its own before anyone starts (AGENTS: no work without an issue). #43 stays open and is plan F's.
+close them, and the runner-baseline defect below (§1 A and B) has its own `bug` + `tutorials` issue,
+**#87** (AGENTS: no work without an issue). #43 stays open and is plan F's.
 
 ## 1 · Diagnosis of #37
 

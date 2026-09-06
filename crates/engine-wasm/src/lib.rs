@@ -193,6 +193,8 @@ impl Engine {
 
     /// Replay a Journal (JSON array of entries) onto a fresh Model; returns the per-entry hash
     /// list as a JSON array. `verify` fails on the first divergence from the recorded hashes.
+    /// `skip_solves` omits numerical work but preserves Model changes and undo history, including
+    /// the final mesh settings of a non-restoring convergence study.
     pub async fn replay_hashes(
         &mut self,
         journal_json: String,
