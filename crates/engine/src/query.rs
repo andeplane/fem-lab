@@ -1,5 +1,5 @@
 //! The Query enum: every read of the Model, Mesh or Results. Queries never mutate the Model.
-//! Values come back in the Model's display units as `{ value, unit }`.
+//! Scalar values use Model display units; bulk frame arrays explicitly carry their SI unit.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::command::{Command, Field, ObjectKind};
 use crate::error::Warning;
 use crate::units::{
-    Conductivity, Density, Dimensionless, Length, Quantity, SpecificHeat, Stress, Temperature, ThermalExpansion, Q,
+    Conductivity, Density, Dimensionless, Length, Quantity, SpecificHeat, Stress, Temperature, ThermalExpansion, Time,
+    Q,
 };
 
 /// A value with its display unit.
@@ -27,6 +28,14 @@ pub enum Query {
     #[serde(rename = "query.model")]
     #[schemars(extend("x-returns" = "ModelSummary"))]
     Model {},
+
+    /// The complete upsert Command for an existing object's current definition, with exact
+    /// SI quantities. Use it to populate an edit form; change its arguments and dispatch it
+    /// to apply. Display summaries are rounded and must never be used to reconstruct edits.
+    /// Auto-generated Sets and mesher-owned Bodies have no editable object definition.
+    #[serde(rename = "query.definition", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "ObjectDefinition"))]
+    Definition { kind: ObjectKind, name: String },
 
     /// Counts and sanity of the current Mesh (nodes, elements, element kind, DOF, bounding box,
     /// edge lengths, Sets with their resolved sizes, quality). Builds the Mesh if needed.
@@ -50,8 +59,39 @@ pub enum Query {
         step: Option<String>,
     },
 
+    /// Catalogue of retained transient primary-field frames (default: last solved Step).
+    /// Index 0 is the initial state; indices count retained frames, not integration steps.
+    /// Metadata remains available for stale Results. No nodal values are copied by this Query.
+    #[serde(rename = "query.frames", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "FramesResult"))]
+    Frames {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
+    },
+
+    /// One retained transient primary field. Supply exactly one of zero-based retained index
+    /// or sample (retained index / physical time with exact or nearest selection). Time
+    /// selection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation
+    /// policy as sampled probe/path. Values are SI,
+    /// component-fastest, with three components per node, matching final FieldData: a 2D
+    /// displacement has zero z; temperature occupies x with zero y/z. Defaults to the retained
+    /// primary field. Derived fields were not retained and are refused. Refuses result.stale.
+    #[serde(rename = "query.frame", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "FrameResult"))]
+    Frame {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sample: Option<FrameSample>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        field: Option<Field>,
+    },
+
     /// A field value interpolated at a point (default: the last solved Step). Component
     /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+    /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
     #[serde(rename = "query.probe", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ProbeResult"))]
@@ -61,10 +101,13 @@ pub enum Query {
         field: Field,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         component: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sample: Option<FrameSample>,
         at: [Q<Length>; 3],
     },
 
     /// A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+    /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
     #[serde(rename = "query.path", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "PathResult"))]
@@ -74,6 +117,8 @@ pub enum Query {
         field: Field,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         component: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sample: Option<FrameSample>,
         from: [Q<Length>; 3],
         to: [Q<Length>; 3],
         n: u32,
@@ -389,6 +434,8 @@ pub struct Extreme {
 #[serde(rename_all = "camelCase")]
 pub struct ResultSummary {
     pub step: String,
+    /// The Journal revision after the Command that produced this Result. It stays fixed while
+    /// later edits make the Result stale and when undo removes that producing Command.
     pub revision: u32,
     pub stale: bool,
     pub solver: String,
@@ -396,7 +443,10 @@ pub struct ResultSummary {
     pub residual: f64,
     pub time_ms: f64,
     pub extremes: Vec<Extreme>,
+    /// Force for structural Results; power for thermal Results, retained with the solved state.
+    pub reaction_quantity: crate::units::ReactionQuantity,
     pub reactions: Vec<ReactionRow>,
+    /// Applied force vector or thermal power in component 0 (remaining components zero).
     pub applied_total: [Valued; 3],
     /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
     /// shape is the Result field named `mode:k`.
@@ -405,7 +455,7 @@ pub struct ResultSummary {
     /// One row per output time of a transient Step: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
-    /// |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+    /// |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
     /// by a prescribed displacement — where both totals are zero — still reports a meaningful
     /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
     pub balance: f64,
@@ -427,10 +477,81 @@ pub struct ReactionRow {
     pub total: [Valued; 3],
 }
 
+/// How to select retained output; there is no temporal interpolation or extrapolation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FrameSample {
+    Frame { index: u32 },
+    Time { time: Q<Time>, sampling: TimeSampling },
+}
+
+/// Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.
+/// Nearest explicitly selects a retained time; equal-distance ties (within the same relative
+/// roundoff bound on the distances) choose the earlier frame.
+/// Both reject times outside the retained interval (except endpoint conversion roundoff).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum TimeSampling {
+    Exact,
+    Nearest,
+}
+
+/// One retained frame's zero-based index and time in seconds and Model display units.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameStamp {
+    pub index: u32,
+    pub time_si: f64,
+    pub time: Valued,
+}
+
+/// Result identity and the actual resolved sample. The solved Model hash is not a solve-instance
+/// counter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedFrame {
+    pub step: String,
+    pub model_hash: String,
+    pub frame: FrameStamp,
+}
+
+/// `query.frames` response; stored components describe the unpadded History storage.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FramesResult {
+    pub step: String,
+    pub model_hash: String,
+    pub stale: bool,
+    pub node_count: usize,
+    pub field: Field,
+    /// Public field layout, matching final FieldData (three components, zero-padded).
+    pub components: usize,
+    pub stored_components: usize,
+    /// Logical bytes of retained f64 times and unpadded primary values; excludes allocator
+    /// overhead, spare capacity, final derived fields and temporary Query response copies.
+    pub retained_bytes: u64,
+    pub frames: Vec<FrameStamp>,
+}
+
+/// `query.frame` response: SI values in the existing component-fastest FieldData layout.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameResult {
+    pub sample: ResolvedFrame,
+    pub field: Field,
+    pub components: usize,
+    pub node_count: usize,
+    /// SI unit for values: K for temperature, m for displacement, never a display unit.
+    pub unit: String,
+    pub values: Vec<f64>,
+}
+
 /// `query.probe` response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<ResolvedFrame>,
     pub value: Valued,
     pub element: u32,
     pub interpolated: bool,
@@ -440,6 +561,8 @@ pub struct ProbeResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PathResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample: Option<ResolvedFrame>,
     pub s: Vec<f64>,
     pub values: Vec<Option<f64>>,
     pub unit: String,
@@ -567,9 +690,12 @@ pub struct Capabilities {
 #[serde(untagged)]
 pub enum QueryResult {
     Model(ModelSummary),
+    Definition(ObjectDefinition),
     Mesh(MeshSummary),
     Set(SetInfo),
     Result(ResultSummary),
+    Frames(FramesResult),
+    Frame(FrameResult),
     Probe(ProbeResult),
     Path(PathResult),
     Cost(CostEstimate),
@@ -581,6 +707,12 @@ pub enum QueryResult {
     Objects(ObjectList),
     Capabilities(Capabilities),
     Report(ReportText),
+}
+
+/// Lossless input for editing one Model object through the same Command used to create it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ObjectDefinition {
+    pub command: Command,
 }
 
 /// Acknowledgement of a dispatched Command.

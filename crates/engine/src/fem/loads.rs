@@ -81,6 +81,17 @@ pub fn face_set_area(p: &Problem<'_>, faces: &str) -> Result<f64, Error> {
 
 /// Add every Load's consistent nodal forces into `f` and report the total applied force.
 pub fn assemble_loads(p: &Problem<'_>, f: &mut [f64]) -> Result<LoadTotals, Error> {
+    assemble(p, f, None)
+}
+
+/// Explicit dynamics uses its own lumped inertia for gravity: f_i = m_i g. Mixing the
+/// consistent gravity vector with HRZ inertia accelerates higher-order nodes differently.
+/// All other Loads keep the same assembly as a static Step. Mass is one value per DOF.
+pub(crate) fn assemble_lumped_loads(p: &Problem<'_>, f: &mut [f64], mass: &[f64]) -> Result<LoadTotals, Error> {
+    assemble(p, f, Some(mass))
+}
+
+fn assemble(p: &Problem<'_>, f: &mut [f64], mass: Option<&[f64]>) -> Result<LoadTotals, Error> {
     let dpn = p.dofs_per_node();
     let mut totals = [0.0; 3];
     for load in &p.loads {
@@ -95,7 +106,16 @@ pub fn assemble_loads(p: &Problem<'_>, f: &mut [f64]) -> Result<LoadTotals, Erro
                     }
                 }
             }
-            Load::Gravity { g } => body_load(p, *g, f, &mut totals)?,
+            Load::Gravity { g } => match mass {
+                Some(mass) => {
+                    for (i, (force, m)) in f.iter_mut().zip(mass).enumerate() {
+                        let value = m * g[i % dpn];
+                        *force += value;
+                        totals[i % dpn] += value;
+                    }
+                }
+                None => body_load(p, *g, f, &mut totals)?,
+            },
         }
     }
     Ok(LoadTotals { force: totals })

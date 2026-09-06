@@ -315,6 +315,29 @@ Requested `(dt, tEnd)` pairs `(0.6, 1)`, `(0.4, 0.9)`, and `(2, 0.25)` must reac
 `tEnd` in the saved history and the correct temperature at every node. The requested step is
 an upper bound; a uniform adjusted step preserves one reusable factorisation.
 
+The retained-frame registry checks (#243) read every uniform-heating value through
+`query.frames`/`query.frame`: both orders, 2/4 axial cells, zero/normal/oversized retention
+strides, integral and nonintegral endpoint ratios, and initial/final-only output. The values
+must equal `T=t` K within `1e-10 K`; SI arrays remain labelled K when Model display units
+are Celsius. The final frame is exactly the final primary FieldData, including zero padding.
+The document-name regression (#123) repeats both orders and 2/4 axial cells: rename,
+undo/redo and full replay preserve the original solved Model hash, frame catalogue and
+`T(0.4 s)=0.4 K` values, while sampled probes/paths stay unchanged. A subsequent heat-source
+edit remains stale even after another rename, and sampled access rejects it.
+
+An independent cooled-slab Fourier series checks every retained node at 0.05, 0.10 and 0.15 s:
+`T(x,t) = Σ_(odd n) 400/(nπ) sin(nπx) exp(−n²π²t)` K for a 1 m slab initially at 100 K,
+with zero-temperature end faces and diffusivity 1 m²/s. Both element orders refine through
+8/16/32 cells with Crank–Nicolson at dt=0.0001 s; maximum nodal errors decrease on each mesh
+and stay below 2 K, with observed spatial rates at least 1.8/3.5 for linear/quadratic elements.
+The implementation sums the 50 odd terms `n=1..99`. For every tested `x` and `t≥0.05 s`,
+the omitted tail is bounded by
+`(400/π) exp(−a·101²) / (101·(1−exp(−203a)))`, where `a=π²·0.05`; this bounds even
+terms too and is therefore conservative. Its base-10 logarithm is `−2186.13`, so the
+truncation error is below `1e−2186 K` (and hence below the numerical tolerances).
+Backward-Euler steps 0.01/0.005/0.0025 s on 32 cells reduce errors by at
+least 1.7 per halving at each retained time. Public frame-aware line samples independently
+match the same continuum solution in Celsius. The existing NAFEMS T3 check remains in place.
 The simplex E5 regression (`simplex_transient_capacity_converges_to_the_forced_slab_fourier_solution`)
 starts at zero, holds both ends at zero, and applies a unit volumetric source with
 k=ρ=cₚ=L=1. The sides are insulated. It refines the axial mesh n=4,8,16 for tri3,
@@ -325,6 +348,16 @@ The polynomial steady contribution is integrated in closed form, so the exponent
 40-term series has negligible truncation error. No numerical reference mesh is the oracle.
 
 ## F. Dynamics and explicit (phase 2, 6)
+
+Retained playback (#246) exercises the real Chromium WASM/Worker path using E3 uniform
+heating `T=t` and F2b rigid free fall `uy=-g*t²/2`. Distinct retained times update temperature
+contours and scientific probes, or displacement contours and the drawn geometry from the
+same field. Probe time and displayed Model units remain explicit. Browser checks cover
+overlapping selections, pause/resume, speed, endpoint stop, stale-Result invalidation, and
+Escape/pointer-cancel versus one committed scrub Command; all leave the engine Journal
+unchanged. Deterministic injected-clock checks use an irregular retained grid and verify
+elapsed physical time across pauses/rate changes. Delayed frame, legacy animation and solve
+hydration replies cannot overwrite a newer selection; modal phase controls remain covered.
 
 | # | Case | Reference | Tolerance | Proves | Status |
 |---|---|---|---|---|---|
@@ -345,6 +378,57 @@ conserved to roundoff and the total momentum is the block's mass times `v₀`. F
 monitor is an energy balance — for a linear undamped system the energy in the model can never
 exceed the work the loads have done, so `E > 1e3 · max(E₀, |W|)` is the test — which is what
 lets a Step that starts from rest under a load be watched at all.
+
+F1/F2b also regress uniform gravity with the same HRZ inertia used by explicit dynamics (#278).
+Every retained nodal displacement equals `v₀ t + g t²/2` within `1e-10 tEnd` m for all eight
+structural element families, every applicable idealisation (axial translation for axisymmetry),
+1/2/4 cells along the bar, two CFL factors and two endpoint ratios. Total momentum matches the
+independent weight impulse `ρ V g (t + dt/2)` plus initial momentum; the reported velocity is
+staggered by half a step. One- and four-thread histories must be bit-identical. Public mapped
+and swept Commands additionally check free fall from rest at three requested times for quad4,
+quad8, hex8 and hex20, with 1/2/4 cells and a `1e-12 m` displacement tolerance.
+
+The consistent static/modal gravity distribution remains unchanged: an affine unit quad8 has
+corner loads `−ρ A g/12` and midside loads `ρ A g/3`, checked individually. Using that distribution
+with positive HRZ masses in explicit dynamics previously made quadratic corner nodes move
+against gravity. Explicit now assembles `m_i g` using its actual inertia; other load types retain
+the common consistent assembly.
+
+The retained-frame free-fall Query check (#243) reads every node at every saved time through
+the public registry and compares displacement with `u_y=−9.81 t²/2`, within `1e-12 m`.
+Mapped quad4/quad8 and lattice hex8/hex20 use 1/2/4 axial cells, two CFL factors and a
+nonintegral requested endpoint. Sampled probes read the same retained fields in millimetres.
+2D History stores two components and the response pads z to zero, exactly matching final
+FieldData. These tests depend on the separate #278 correction to quadratic gravity inertia.
+
+The host-parity check (#245), `tools/test-transient-replay.mjs`, records the uniform-heating
+and 2D/3D free-fall fixtures in Node WASM, then replays their full Journals natively with
+1/4 threads and in Node WASM. Chromium records the same cases through the real Worker and
+runs the same replay check on those exact entries. Both orders and 2/4 axial cells are
+checked at every retained time: model hashes and catalogue times are exact; fields must
+match both the independent `T=t` / `u_y=−4.905t²` oracles and each other within `1e-10 K` /
+`1e-12 m`. Probe/path values use the declared display units and `1e-9` absolute tolerance
+in Celsius/millimetres. Heat's requested dt=0.1 s and tEnd=0.35 s give four equal integration
+steps and retained times 0, 0.175, 0.35 s. Explicit ends at the SI conversion of 1.3 ms.
+Native CLI `run --query` accepts repeated schema-owned Queries and returns results in request
+order; MCP tool calls check the same analytical frame/probe values. Skip-solves replay must
+report missing Results. All frame reads leave the Journal unchanged.
+
+`query.frame` accepts exactly one of `index` or `sample`; time selection delegates the same
+Rust resolver as sampled probes/paths. A native regression checks exact unit conversion,
+nearest selection, an earlier midpoint tie, rejected missing/conflicting selectors and
+out-of-range/dimension errors against the uniform-heating oracle.
+
+The real WASM ownership test transfers each fresh f64 staging buffer, observes detachment,
+mutates the receiver's copy and verifies an unchanged repeated engine read. Chromium observes
+an 8-byte-per-value transferred Worker payload and an ordinary `number[]` public response.
+The normalized Rust response and JS f64 staging each contain `3*nodeCount` values; transfer
+moves the JS buffer, then the receiving host constructs the schema's `number[]`. That last
+allocation and its engine-dependent JS object overhead count in staging costs. This test
+measures payload byte lengths and ownership, **not** total process peak memory or garbage
+collection timing; #244 owns the allocation budget. The transport retains no frame cache.
+A repeated solve can retain the same `modelHash`, so playback hosts must invalidate their
+payload caches on every Solve Ack even when that hash is unchanged.
 
 ## G. Shells and plates (phase 8)
 
@@ -417,6 +501,22 @@ copy, removal after dependent Commands are removed, undo/redo, and deterministic
 Journal replay with identical memberships and displacement. Unknown Bodies give structured
 errors identifying the selector argument and leave the Model and Journal unchanged.
 
+The lifecycle regression `implicit_body_rename_preserves_the_exact_patch_and_replay` repeats
+that independent uniaxial solution after renaming the implicit Body, for mapped quad4/quad8
+and swept hex8/hex20 meshes at two mesh densities. It checks every displacement against
+`ux=1e-4 x`, `uy,uz=-2.5e-5 y,z` within 1e-12 m and stress against 20 MPa within 1e-3 Pa;
+force balance remains below 1e-10. Whole-Body measure remains 2 m² or 6 m³. Undo/redo restore
+the exact Model hash and Journal replay reproduces the solution bit-for-bit. This verifies
+that renamed material and named/auto selectors retain their physical meaning, rather than
+only checking rewritten strings.
+
+Companion lifecycle cases cover direct mechanical and thermal auto-face references, named
+Face and Body-region dependencies, structured unsupported duplication, same-name remeshing,
+replacement/removal with unrelated explicit geometry, name collisions and unchanged Model
+and Journal on rejection. Free and swept-free source references follow explicit Body rename
+and block removal until the mesher changes. See ADR 0016 and
+[#251](https://github.com/andeplane/fem-lab/issues/251).
+
 ## Thermal Body loads on mapped and swept meshers (#260)
 
 The registry regressions use a 2 × 1 m mapped rectangle with 0.25 m plane-stress thickness
@@ -447,6 +547,54 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+## Unmeshed Sheet preview (#154)
+
+The tagged square-with-hole fixture has outer area 4 m² and hole area 1 m².
+An in-plane scale (2, 3), quarter turn, and translation (5, 7) produce signed loop
+areas +24 and −6 m², net 18 m², and bounds [−1, 5] × [7, 11] m. Independent
+shoelace and vertex-degree checks exercise both native geometry and the real wasm
+transport before `mesh.set`. Chromium checks rendered pixels, all four named outer
+edges, the hole boundary, an empty hole interior and hidden-body picking; these
+queries and view actions must leave the three-command Journal unchanged. The preview
+is an outline, not a mesh or a solver discretisation.
+
+### Procedure-aware convergence studies (#115)
+
+`convergence_studies_use_the_heat_operator_and_one_temperature_dof` uses a 1 m
+rod with 0°C ends, conductivity 45 W/(m K) and source 900 W/m³. The independent
+solution is T(x)=10x(1−x) °C. At x=1/3 m, linear interpolation on h=1/2, 1/4,
+1/8 m meshes has error 20h²/9 °C: the study must report second-order convergence
+and extrapolate to 20/9 °C. Its thermal DOF counts are 12, 45 and 225, with one
+unknown per node. Both restore modes preserve the intended mesh/Result pairing.
+
+`convergence_studies_keep_transient_initial_time_and_amplitude_settings` checks
+uniform T=10t K heating with q=ρc·10 and matching end ramps. The time integrator
+is exact for this linear function: all three meshes reach 20 K at 2 s and 40 K
+at 4 s, retaining the configured zero initial state, 0.25 s time step and output
+cadence. `convergence_studies_use_explicit_dynamics_for_a_falling_block` checks
+u_z=−gt²/2 at t=1 ms on 1³, 2³ and 4³ meshes, within 1%, without static supports.
+
+Modal amplitude studies and chained Steps explicitly return `unsupported` before
+changing Model, Journal or stored fields. Frequencies need a mode-aware quantity;
+chained studies need dependency results recomputed on each refinement. The current
+command instead directs callers to explicit per-mesh solve.run sequences.
+
+### Thermal reaction power and display units (#120)
+
+For a `1 × 0.1 × 0.1 m` bar with `k=45 W/(m K)`, a `1000 W/m²` end flux
+removes exactly `10 W` at the held cold end. With convection instead (`h=50 W/(m² K)`,
+`T_inf=100 °C`, cold end `0 °C`), the exact series thermal resistance gives
+`Q=A*(T_inf-T_cold)/(L/k+1/h)=23.6842105263 W`. Both cases run on two and four axial
+elements. Reaction sums and each of four equal cold-node shares match these independent
+power values to `1e-9 W`; positive reaction retains the current removed-heat convention.
+
+Result totals/extremes, probes and paths report W independently of force=N/kN and convert
+to kW when the power display unit changes. The raw field stays SI, the VTU array is labelled
+`ReactionPower_W`, and the report/viewer label its scalar as power. Mechanical reactions
+retain force units and their vector components. [Issue #208](https://github.com/andeplane/fem-lab/issues/208)
+separately tracks the existing balance diagnostic sign, net-convection and transient-storage
+defects; the physical reaction checks here do not treat that diagnostic as an oracle.
 
 ### Automatic hand-reference applicability (#149)
 

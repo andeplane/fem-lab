@@ -14,7 +14,15 @@ export interface Surface {
   indices: Uint32Array;
   triBody: Uint32Array;
   triFace: Uint32Array;
+  /** Optional tagged Sheet boundary edges. Mesh edges index original nodes in `positions`. */
+  edges?: Uint32Array;
+  edgeFace?: Uint32Array;
+  edgeBody?: Uint32Array;
   faceNames: string[];
+  /** All face-Set memberships, CSR by original surface triangle; includes named predicate Sets. */
+  setNames?: string[];
+  triSetOffsets?: Uint32Array;
+  triSets?: Uint32Array;
   bodyNames: string[];
 }
 export interface FieldData {
@@ -57,7 +65,7 @@ export interface Req {
   op: Op;
   payload: unknown;
 }
-export type Dtype = 'f32' | 'u32' | 'u8';
+export type Dtype = 'f64' | 'f32' | 'u32' | 'u8';
 export interface BufferSpec {
   name: string;
   dtype: Dtype;
@@ -68,7 +76,7 @@ export type Res =
   | { id: number; ok: false; error: EngineError }
   | { id: number; progress: Progress };
 
-const VIEW = { f32: Float32Array, u32: Uint32Array, u8: Uint8Array } as const;
+const VIEW = { f64: Float64Array, f32: Float32Array, u32: Uint32Array, u8: Uint8Array } as const;
 
 /**
  * A bulk reply is a JSON header whose `buffers` list names, dtypes and lengths, followed by the

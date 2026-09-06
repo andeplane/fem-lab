@@ -1307,7 +1307,9 @@ export type Axis = "x" | "y" | "z";
  */
 export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
 /**
- * Result fields.
+ * Result fields. Reaction is support force in N for structural Results and removed heat
+ * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
+ * display units.
  */
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
@@ -1428,6 +1430,11 @@ export type Query =
       query: "query.model";
     }
   | {
+      kind: ObjectKind;
+      name: string;
+      query: "query.definition";
+    }
+  | {
       query: "query.mesh";
     }
   | {
@@ -1440,8 +1447,20 @@ export type Query =
     }
   | {
       step?: string | null;
+      query: "query.frames";
+    }
+  | {
+      step?: string | null;
+      index?: number | null;
+      sample?: FrameSample | null;
+      field?: Field | null;
+      query: "query.frame";
+    }
+  | {
+      step?: string | null;
       field: Field;
       component?: number | null;
+      sample?: FrameSample | null;
       /**
        * @minItems 3
        * @maxItems 3
@@ -1477,6 +1496,7 @@ export type Query =
       step?: string | null;
       field: Field;
       component?: number | null;
+      sample?: FrameSample | null;
       /**
        * @minItems 3
        * @maxItems 3
@@ -1547,10 +1567,6 @@ export type Query =
       query: "query.journal";
     }
   | {
-      base: Journal;
-      query: "query.journalDiff";
-    }
-  | {
       query: "query.script";
     }
   | {
@@ -1573,7 +1589,53 @@ export type Query =
     }
   | {
       query: "query.capabilities";
+    }
+  | {
+      base: Journal;
+      query: "query.journalDiff";
     };
+/**
+ * How to select retained output; there is no temporal interpolation or extrapolation.
+ */
+export type FrameSample =
+  | {
+      index: number;
+      kind: "frame";
+    }
+  | {
+      /**
+       * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
+       */
+      time:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      sampling: TimeSampling;
+      kind: "time";
+    };
+/**
+ * Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.
+ * Nearest explicitly selects a retained time; equal-distance ties (within the same relative
+ * roundoff bound on the distances) choose the earlier frame.
+ * Both reject times outside the retained interval (except endpoint conversion roundoff).
+ */
+export type TimeSampling = "exact" | "nearest";
+/**
+ * A number with a unit, as text or as parts.
+ */
+export type Quantity =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * One section of the Markdown report. `query.report` writes the ones asked for in this order.
+ */
+export type ReportSection =
+  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
 /**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  */
@@ -2403,38 +2465,27 @@ export type RegionPredicate2 =
       kind: "body";
     };
 /**
- * A number with a unit, as text or as parts.
- */
-export type Quantity =
-  | string
-  | {
-      value: number;
-      unit: string;
-    };
-/**
- * One section of the Markdown report. `query.report` writes the ones asked for in this order.
- */
-export type ReportSection =
-  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
-/**
  * Any Query response.
  */
 export type QueryResult =
   | ModelSummary
+  | ObjectDefinition
   | MeshSummary
   | SetInfo
   | ResultSummary
+  | FramesResult
+  | FrameResult
   | ProbeResult
   | PathResult
   | CostEstimate
   | JournalDump
-  | JournalDiff
   | ScriptText
   | Converted
   | MaterialLibrary
   | ObjectList
   | Capabilities
-  | ReportText;
+  | ReportText
+  | JournalDiff;
 /**
  * Mesher settings, SI.
  */
@@ -2856,6 +2907,10 @@ export interface Engine {
 export interface UnitSet {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;
@@ -3241,6 +3296,12 @@ export interface Warning {
   where?: string | null;
 }
 /**
+ * Lossless input for editing one Model object through the same Command used to create it.
+ */
+export interface ObjectDefinition {
+  command: Command;
+}
+/**
  * `query.mesh` response.
  */
 export interface MeshSummary {
@@ -3304,6 +3365,10 @@ export interface SetInfo {
  */
 export interface ResultSummary {
   step: string;
+  /**
+   * The Journal revision after the Command that produced this Result. It stays fixed while
+   * later edits make the Result stale and when undo removes that producing Command.
+   */
   revision: number;
   stale: boolean;
   solver: string;
@@ -3311,8 +3376,14 @@ export interface ResultSummary {
   residual: number;
   timeMs: number;
   extremes: Extreme[];
+  /**
+   * Force for structural Results; power for thermal Results, retained with the solved state.
+   */
+  reactionQuantity: "force" | "power";
   reactions: ReactionRow[];
   /**
+   * Applied force vector or thermal power in component 0 (remaining components zero).
+   *
    * @minItems 3
    * @maxItems 3
    */
@@ -3327,7 +3398,7 @@ export interface ResultSummary {
    */
   history?: HistoryRow[];
   /**
-   * |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+   * |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
    * by a prescribed displacement — where both totals are zero — still reports a meaningful
    * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
    */
@@ -3369,9 +3440,62 @@ export interface HistoryRow {
   max: Valued;
 }
 /**
+ * `query.frames` response; stored components describe the unpadded History storage.
+ */
+export interface FramesResult {
+  step: string;
+  modelHash: string;
+  stale: boolean;
+  nodeCount: number;
+  field: Field;
+  /**
+   * Public field layout, matching final FieldData (three components, zero-padded).
+   */
+  components: number;
+  storedComponents: number;
+  /**
+   * Logical bytes of retained f64 times and unpadded primary values; excludes allocator
+   * overhead, spare capacity, final derived fields and temporary Query response copies.
+   */
+  retainedBytes: number;
+  frames: FrameStamp[];
+}
+/**
+ * One retained frame's zero-based index and time in seconds and Model display units.
+ */
+export interface FrameStamp {
+  index: number;
+  timeSi: number;
+  time: Valued;
+}
+/**
+ * `query.frame` response: SI values in the existing component-fastest FieldData layout.
+ */
+export interface FrameResult {
+  sample: ResolvedFrame;
+  field: Field;
+  components: number;
+  nodeCount: number;
+  /**
+   * SI unit for values: K for temperature, m for displacement, never a display unit.
+   */
+  unit: string;
+  values: number[];
+}
+/**
+ * Result identity and the actual resolved sample. The solved Model hash is not a solve-instance
+ * counter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.
+ */
+export interface ResolvedFrame {
+  step: string;
+  modelHash: string;
+  frame: FrameStamp;
+}
+/**
  * `query.probe` response.
  */
 export interface ProbeResult {
+  sample?: ResolvedFrame | null;
   value: Valued;
   element: number;
   interpolated: boolean;
@@ -3380,6 +3504,7 @@ export interface ProbeResult {
  * `query.path` response.
  */
 export interface PathResult {
+  sample?: ResolvedFrame | null;
   s: number[];
   values: (number | null)[];
   unit: string;
@@ -3457,27 +3582,6 @@ export interface JournalDump {
   revision: number;
   canUndo: boolean;
   canRedo: boolean;
-}
-/**
- * `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
- * comparison rather than a text diff that aligns similar Commands after histories diverge.
- */
-export interface JournalDiff {
-  /**
-   * Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied
-   * `seq` can therefore change this hash without changing `sharedEntries`.
-   */
-  baseHash: string;
-  currentHash: string;
-  sharedEntries: number;
-  /**
-   * The base Journal's ordered tail after `sharedEntries`.
-   */
-  removed: JournalEntry[];
-  /**
-   * The current Journal's ordered tail after `sharedEntries`.
-   */
-  added: JournalEntry[];
 }
 /**
  * `query.script` response.
@@ -3696,6 +3800,27 @@ export interface ReportText {
   sections: string[];
 }
 /**
+ * `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
+ * comparison rather than a text diff that aligns similar Commands after histories diverge.
+ */
+export interface JournalDiff {
+  /**
+   * Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied
+   * `seq` can therefore change this hash without changing `sharedEntries`.
+   */
+  baseHash: string;
+  currentHash: string;
+  sharedEntries: number;
+  /**
+   * The base Journal's ordered tail after `sharedEntries`.
+   */
+  removed: JournalEntry[];
+  /**
+   * The current Journal's ordered tail after `sharedEntries`.
+   */
+  added: JournalEntry[];
+}
+/**
  * Acknowledgement of a dispatched Command.
  */
 export interface Ack {
@@ -3819,6 +3944,10 @@ export interface Model {
 export interface UnitSet1 {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;

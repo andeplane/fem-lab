@@ -397,3 +397,44 @@ fn mcp_runs_the_node_server_or_says_how_to_install_it() {
         .success()
         .stderr(contains(format!("stub --project {}", dir.display())));
 }
+
+#[test]
+fn run_answers_ordered_transient_queries_after_a_full_solve() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/fixtures/transient-heat.json");
+    let file = fixture.to_str().unwrap();
+    let output = femlab()
+        .args([
+            "run", file, "--cpu", "--query", r#"{"query":"query.frames"}"#,
+            "--query", r#"{"query":"query.frame","index":1}"#,
+            "--query", r#"{"query":"query.probe","field":"temperature","at":["0.5 m","0.05 m","0.05 m"],"sample":{"kind":"time","time":"175 ms","sampling":"exact"}}"#,
+        ])
+        .assert().success();
+    let results: Vec<serde_json::Value> = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0]["frames"][1]["timeSi"], 0.175);
+    assert_eq!(results[1]["sample"]["frame"]["index"], 1);
+    assert_eq!(results[1]["unit"], "K");
+    // Conservation rho*cp*dT/dt=q gives T=t K everywhere, independent of the solver.
+    for node in results[1]["values"].as_array().unwrap().chunks_exact(3) {
+        assert!((node[0].as_f64().unwrap() - 0.175).abs() < 1e-10);
+        assert_eq!((node[1].as_f64().unwrap(), node[2].as_f64().unwrap()), (0.0, 0.0));
+    }
+    assert_eq!(results[2]["value"]["unit"], "degC");
+    assert!((results[2]["value"]["value"].as_f64().unwrap() - (0.175 - 273.15)).abs() < 1e-10);
+    femlab()
+        .args(["run", file, "--cpu", "--skip-solves", "--query", r#"{"query":"query.frames"}"#])
+        .assert()
+        .code(1)
+        .stderr(contains("not-found"));
+    femlab()
+        .args(["run", file, "--cpu", "--query", r#"{"query":"query.frame","index":999}"#])
+        .assert()
+        .code(1)
+        .stderr(contains("index"));
+    femlab().args(["run", file, "--query", "not JSON"]).assert().code(2).stderr(contains("schema"));
+    femlab()
+        .args(["run", file, "--hashes", "--query", r#"{"query":"query.frames"}"#])
+        .assert()
+        .code(2)
+        .stderr(contains("cannot be used with"));
+}
