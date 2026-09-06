@@ -4,7 +4,7 @@
 // be that fixture's last `hashAfter` — a UI that fills the forms wrongly cannot pass this.
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 const SHOTS = path.join(import.meta.dirname, 'screenshots');
 const FIXTURE = path.join(import.meta.dirname, '../../../crates/engine/benches/journals/cantilever.json');
@@ -46,8 +46,6 @@ test.describe('@cpu the cantilever, built through the UI', () => {
   test.setTimeout(180_000);
 
   test('nine forms produce the fixture Journal, hash for hash', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
@@ -139,7 +137,6 @@ test.describe('@cpu the cantilever, built through the UI', () => {
     // Nothing blocks a solve any more, so the banner is gone and Solve is live.
     await expect(page.locator('.banner')).toHaveCount(0);
     await expect(page.locator('button.solve')).toBeEnabled();
-    expect(errors).toEqual([]);
   });
 });
 

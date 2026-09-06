@@ -4,7 +4,7 @@
 // 0.1919619 mm from Timoshenko, which a 25 mm lattice of incompatible-modes hexes meets to 2 %.
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 const SHOTS = path.join(import.meta.dirname, 'screenshots');
 const TIMOSHENKO_MM = 0.1919619;
@@ -23,8 +23,6 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
   test.setTimeout(240_000);
 
   test('Solve → Results → export → stale → Re-solve', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
@@ -89,7 +87,6 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
     });
     // Twice the load on a linear model is twice the deflection.
     expect(Math.abs(doubled / uz.value - 2)).toBeLessThan(0.01);
-    expect(errors).toEqual([]);
   });
 
   test('the Checks tab reads the mesh and the cost before any solve', async ({ page }) => {

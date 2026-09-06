@@ -1,6 +1,6 @@
 // Issue #40, in the built app: the Assistant drawer opens on the start screen, and it is still
 // there — with the same conversation — once the first Command brings the workspace up around it.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });

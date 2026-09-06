@@ -1,6 +1,6 @@
 // The three smokes of plan B §8. They drive the app the way the AI and the DevTools MCP do —
 // through `window.fem` — and then check that what a person sees agrees with what the engine says.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 // `window.fem` is typed by `src/main.tsx`'s `declare global`, so these calls are checked against
 // the generated schema exactly as a user's script would be.
@@ -79,8 +79,6 @@ test.describe('@cpu the shell', () => {
   });
 
   test('boots, builds a Model from window.fem, and shows it', async ({ page }, testInfo) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     const t0 = Date.now();
     await page.goto('./');
 
@@ -134,7 +132,6 @@ test.describe('@cpu the shell', () => {
     expect(unknown).toEqual([]);
 
     await testInfo.attach('shell.png', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
-    expect(errors).toEqual([]);
   });
 
   test('collapsing the Assistant preserves its draft, references and transcript', async ({ page }) => {

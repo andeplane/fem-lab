@@ -2,7 +2,7 @@
 // step through the app's own dispatch (so the tree and the viewer catch up), and a step done by
 // hand through `window.fem` satisfies the runner exactly the same way — the Journal is the only
 // thing it watches.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
@@ -40,8 +40,6 @@ test.describe('@cpu the guided tutorial', () => {
   });
 
   test('runs the whole cantilever tutorial with "Do it for me" and ends solved', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
     await page.goto('./');
     await ready(page);
@@ -60,7 +58,6 @@ test.describe('@cpu the guided tutorial', () => {
     await expect(page.locator('.jrow')).toHaveCount(0); // the Results tab is open, not the Journal
     await page.locator('.tutorial-btn.primary', { hasText: 'Next' }).click();
     await expect(page.locator('.tutorial-title')).toContainText('done');
-    expect(errors).toEqual([]);
   });
 
   test('a stale saved position with no Model starts the tutorial over', async ({ page }) => {
