@@ -23,11 +23,12 @@ import { blockers, type Defs, shapeKinds } from './schema';
 
 export type { Dispatch } from './cmd';
 
-// Three chunks that must not be on the boot path: the two AI SDKs, the tutorial runner and (in
-// `ViewerPane` below) three.js. Same import sites as before, one `import()` later.
+// Chunks that must not be on the boot path: the two AI SDKs, the tutorial runner, the report
+// renderer and (in `ViewerPane` below) three.js. Same import sites as before, one `import()` later.
 const AssistantPanel = lazy(() => import('../ai').then((m) => m.AssistantPanel));
 const TutorialPanel = lazy(() => import('../tutorial').then((m) => m.TutorialPanel));
 const Tour = lazy(() => import('../tutorial').then((m) => m.Tour));
+const Report = lazy(() => import('./Report').then((m) => m.Report));
 
 export interface AppProps {
   store: Store;
@@ -732,11 +733,15 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
           </div>
         </div>
       ) : (
-        <Start s={s} dispatch={dispatch} />
+        <div class={s.form ? 'start-layout with-properties' : 'start-layout'} style={`--properties-width:${s.panelSizes.properties}px;--assistant-width:${s.panelSizes.assistant}px`}>
+          <Start s={s} dispatch={dispatch} />
+          {s.form ? <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} /> : null}
+        </div>
       )}
       <Examples s={s} dispatch={dispatch} />
       <Projects s={s} dispatch={dispatch} />
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
+      {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
       {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
