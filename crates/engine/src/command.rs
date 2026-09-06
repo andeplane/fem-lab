@@ -741,7 +741,9 @@ pub enum Command {
 
     /// Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any
     /// of those) so constraints and loads can target it. Rules are re-evaluated after every
-    /// remesh, so the Set survives refinement. Prefer the auto face names when one fits.
+    /// remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
+    /// implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
+    /// Body's actual mesh boundary. Prefer the auto face names when one fits.
     #[serde(rename = "geometry.nameFace", rename_all = "camelCase")]
     GeometryNameFace {
         name: String,
@@ -752,7 +754,8 @@ pub enum Command {
 
     /// Name a node/element Set by a region rule (a box or a whole Body), for point-like
     /// constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
-    /// use a box slightly larger than the points you mean.
+    /// use a box slightly larger than the points you mean. A whole-Body rule also accepts
+    /// the implicit Body defined by a mapped or swept mapped mesher.
     #[serde(rename = "geometry.nameRegion", rename_all = "camelCase")]
     GeometryNameRegion {
         name: String,
