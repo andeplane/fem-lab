@@ -387,7 +387,7 @@ impl Engine {
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
         let dim = crate::solve_run::field_dimension(field, reaction_quantity);
-        self.mesh()?;
+        self.mesh().expect("a Result with the current Model hash was solved on this Mesh");
         Ok((f, dim))
     }
 
