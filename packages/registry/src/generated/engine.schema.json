@@ -906,6 +906,7 @@
             "format": "double"
           },
           "dt": {
+            "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Q_time"
@@ -941,6 +942,7 @@
             "minimum": 0
           },
           "dtFactor": {
+            "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
             "type": [
               "number",
               "null"
@@ -5271,6 +5273,7 @@
                 "format": "double"
               },
               "dt": {
+                "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/Q_time"
@@ -5306,6 +5309,7 @@
                 "minimum": 0
               },
               "dtFactor": {
+                "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
                 "type": [
                   "number",
                   "null"
@@ -10557,6 +10561,7 @@
                 "format": "double"
               },
               "dt": {
+                "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/Q_time"
@@ -10592,6 +10597,7 @@
                 "minimum": 0
               },
               "dtFactor": {
+                "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
                 "type": [
                   "number",
                   "null"
