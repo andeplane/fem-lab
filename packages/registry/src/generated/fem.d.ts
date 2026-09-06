@@ -74,7 +74,8 @@ export interface Fem {
     nameRegion(args: Omit<Extract<Command, { cmd: 'geometry.nameRegion' }>, 'cmd'>): Promise<Ack>;
     /**
      * Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-     * and material assignments that still reference it; remove or retarget those first.
+     * (including temperature and volumetric heat sources), and named Sets that still reference
+     * it; remove or retarget those first.
      */
     remove(args: Omit<Extract<Command, { cmd: 'geometry.remove' }>, 'cmd'>): Promise<Ack>;
   };
