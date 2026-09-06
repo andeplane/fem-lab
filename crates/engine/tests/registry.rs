@@ -3703,3 +3703,181 @@ fn journal_guard_uses_full_history_even_for_filtered_queries() {
     ok(&mut e, &guarded);
     assert_eq!(e.revision(), 1);
 }
+
+fn selector_mesh(e: &mut Engine, n: u32, order: u32, swept: bool) {
+    let base = serde_json::json!({"kind":"mapped","body":"sheet","blocks":[{
+        "corners":[["0 m","0 m"],["2 m","0 m"],["2 m","1 m"],["0 m","1 m"]],
+        "n":[2*n,n],"tags":["bottom","right","top","left"]
+    }]});
+    let mesher = if swept {
+        serde_json::json!({"kind":"sweep","base":base,"sweep":{"kind":"extrude","layers":n,"height":"3 m"}})
+    } else {
+        base
+    };
+    ok(e, &serde_json::json!({"cmd":"mesh.set","mesher":mesher,"order":order}).to_string());
+}
+
+fn selector_patch(e: &mut Engine, order: u32, swept: bool) {
+    ok(e, r#"{"cmd":"model.new","name":"mapped-selectors"}"#);
+    if !swept {
+        ok(e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"0.1 m"}}"#);
+    }
+    selector_mesh(e, 1, order, swept);
+    ok(e, r#"{"cmd":"geometry.nameFace","name":"left","of":"sheet","where":{"kind":"normal","normal":[-1,0,0]}}"#);
+    ok(e, r#"{"cmd":"geometry.nameFace","name":"right","of":"sheet","where":{"kind":"normal","normal":[1,0,0]}}"#);
+    ok(e, r#"{"cmd":"geometry.nameFace","name":"floor","of":"sheet","where":{"kind":"normal","normal":[0,-1,0]}}"#);
+    ok(e, r#"{"cmd":"geometry.nameRegion","name":"domain","where":{"kind":"body","name":"sheet"}}"#);
+    ok(e, r#"{"cmd":"material.add","name":"solid","E":"200 GPa","nu":0.25}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"solid","bodies":["sheet"]}"#);
+    ok(e, r#"{"cmd":"constraint.fix","name":"root","on":"left","dofs":["ux"]}"#);
+    ok(e, r#"{"cmd":"constraint.fix","name":"symmetryY","on":"floor","dofs":["uy"]}"#);
+    let mut constraints = vec!["root", "symmetryY"];
+    if swept {
+        ok(e, r#"{"cmd":"geometry.nameFace","name":"back","of":"sheet","where":{"kind":"normal","normal":[0,0,-1]}}"#);
+        ok(e, r#"{"cmd":"constraint.fix","name":"symmetryZ","on":"back","dofs":["uz"]}"#);
+        constraints.push("symmetryZ");
+    }
+    let force = if swept { "60 MN" } else { "2 MN" };
+    ok(
+        e,
+        &serde_json::json!({"cmd":"load.traction","name":"pull","on":"right","total":[force,"0 N","0 N"]}).to_string(),
+    );
+    ok(e, &serde_json::json!({"cmd":"step.add","name":"axial","procedure":"static","constraints":constraints,"loads":["pull"]}).to_string());
+}
+
+/// Exact uniaxial stress sigma=20MPa: ux=sigma*x/E, uy,z=-nu*sigma*y,z/E.
+/// The named constraints remove rigid motion without blocking Poisson contraction.
+#[test]
+fn mapped_and_swept_bodies_resolve_face_and_body_selectors_for_an_exact_patch() {
+    for swept in [false, true] {
+        for order in [1, 2] {
+            let mut e = engine();
+            selector_patch(&mut e, order, swept);
+            for n in [1, 2, 4] {
+                selector_mesh(&mut e, n, order, swept);
+                let face_count = if swept { n * n } else { n } as usize;
+                let built = e.mesh().unwrap();
+                assert_eq!(built.sets["left"].faces.len(), face_count);
+                assert_eq!(built.sets["right"].faces.len(), face_count);
+                assert!(built.sets["left"].nodes.iter().all(|&node| built.mesh.node(node)[0] == 0.0));
+                assert!(built.sets["right"].nodes.iter().all(|&node| built.mesh.node(node)[0] == 2.0));
+                assert_eq!(built.sets["domain"].elems.len(), built.mesh.n_elems());
+                assert_eq!(built.sets["domain"].nodes.len(), built.mesh.n_nodes());
+                assert!((set_info(&mut e, "domain").measure.value - if swept { 6.0 } else { 2.0 }).abs() < 1e-9);
+                assert!((set_info(&mut e, "left").measure.value - if swept { 3.0 } else { 1.0 }).abs() < 1e-9);
+                let QueryResult::Objects(objects) =
+                    e.query(Query::Objects { kinds: Some(vec![ObjectKind::Set]) }).unwrap()
+                else {
+                    panic!("objects")
+                };
+                for name in ["left", "right", "floor", "domain"] {
+                    assert!(objects.objects.iter().any(|o| o.name == name));
+                }
+                let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+                assert!(model.bodies.iter().any(|b| b.name == "sheet"));
+                ok(&mut e, r#"{"cmd":"solve.run","step":"axial"}"#);
+                let u = e.field(Some("axial"), Field::Displacement).unwrap().clone();
+                let stress = e.field(Some("axial"), Field::Stress).unwrap().clone();
+                let mesh = &e.mesh().unwrap().mesh;
+                for node in 0..mesh.n_nodes() {
+                    let p = mesh.node(node as u32);
+                    for (component, &x) in p.iter().take(mesh.dim).enumerate() {
+                        let strain = if component == 0 { 1e-4 } else { -2.5e-5 };
+                        assert!((u.data[node * u.comps + component] - strain * x).abs() < 1e-12);
+                    }
+                    for component in 0..stress.comps {
+                        let expected = if component == 0 { 20e6 } else { 0.0 };
+                        assert!((stress.data[node * stress.comps + component] - expected).abs() < 1e-3);
+                    }
+                }
+                assert!(result_of(&mut e, Some("axial")).balance < 1e-10);
+            }
+        }
+    }
+}
+
+#[test]
+fn implicit_body_selectors_keep_named_set_dependencies_and_journal_semantics() {
+    let mut e = engine();
+    selector_patch(&mut e, 1, false);
+    selector_mesh(&mut e, 2, 1, false);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"axial"}"#);
+    ok(&mut e, r#"{"cmd":"load.force","name":"bodyforce","on":"domain","total":["10 N","0 N","0 N"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"axial","procedure":"static","constraints":["root","symmetryY"],"loads":["pull","bodyforce"]}"#,
+    );
+    for (name, user) in [("left", "root"), ("right", "pull"), ("domain", "bodyforce")] {
+        let before = e.model_hash();
+        let error = err(&mut e, &format!(r#"{{"cmd":"geometry.remove","name":"{name}"}}"#));
+        assert_eq!(error.code, ErrorCode::InUse);
+        assert!(error.cause.contains(user));
+        assert_eq!(e.model_hash(), before);
+    }
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"left","to":"support"}"#);
+    let renamed_hash = e.model_hash();
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model().constraint("root").unwrap().on, "left");
+    assert!(e.mesh().unwrap().sets.contains_key("left"));
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.model_hash(), renamed_hash);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"right","to":"loaded"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"domain","to":"whole"}"#);
+    assert_eq!(e.model().constraint("root").unwrap().on, "support");
+    assert_eq!(e.model().load("pull").unwrap().kind.set(), Some("loaded"));
+    assert_eq!(e.model().load("bodyforce").unwrap().kind.set(), Some("whole"));
+    assert_eq!(e.query(Query::Set { name: "left".into() }).unwrap_err().code, ErrorCode::NotFound);
+    ok(&mut e, r#"{"cmd":"model.duplicate","kind":"set","name":"loaded","as":"copy"}"#);
+    let loaded = e.mesh().unwrap().sets["loaded"].clone();
+    assert_eq!(e.mesh().unwrap().sets["copy"], loaded);
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"copy"}"#);
+    let removed_hash = e.model_hash();
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.mesh().unwrap().sets["copy"], loaded);
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.model_hash(), removed_hash);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"axial"}"#);
+    let result = result_of(&mut e, Some("axial"));
+    assert!((result.applied_total[0].value - 2_000_010.0).abs() < 1e-8);
+    let reaction: f64 = result.reactions.iter().map(|r| r.total[0].value).sum();
+    assert!((reaction + 2_000_010.0).abs() < 1e-5);
+    assert!(result.balance < 1e-10);
+    let u = e.field(Some("axial"), Field::Displacement).unwrap().data.clone();
+    let file = e.export_file();
+    let mut replay = engine();
+    pollster::block_on(replay.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(replay.model_hash(), e.model_hash());
+    assert_eq!(replay.mesh().unwrap().sets, e.mesh().unwrap().sets);
+    assert_eq!(replay.field(Some("axial"), Field::Displacement).unwrap().data, u);
+    ok(&mut e, r#"{"cmd":"step.remove","name":"axial"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.remove","name":"root"}"#);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"pull"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"support"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"loaded"}"#);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"bodyforce"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"whole"}"#);
+    assert_eq!(e.query(Query::Set { name: "whole".into() }).unwrap_err().code, ErrorCode::NotFound);
+}
+
+#[test]
+fn unknown_selector_bodies_list_the_mapped_body_and_preserve_the_journal() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"mapped-errors"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    selector_mesh(&mut e, 1, 1, false);
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    for (cmd, location) in [
+        (
+            r#"{"cmd":"geometry.nameFace","name":"bad","of":"missing","where":{"kind":"normal","normal":[-1,0,0]}}"#,
+            "of",
+        ),
+        (r#"{"cmd":"geometry.nameRegion","name":"bad","where":{"kind":"body","name":"missing"}}"#, "where.name"),
+    ] {
+        let error = err(&mut e, cmd);
+        assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::NotFound, Some(location)));
+        let suggestion = error.suggestion.unwrap();
+        assert!(suggestion.contains("sheet"));
+        assert!(suggestion.contains("query.model"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+}
