@@ -150,6 +150,7 @@ test.describe('@cpu the guided tutorial', () => {
         await target.click();
         await page.locator('.palette input').fill(cmd);
         await page.keyboard.press('Enter');
+        await expect(page.locator('.palette')).toHaveCount(0);
       } else {
         await target.click();
       }

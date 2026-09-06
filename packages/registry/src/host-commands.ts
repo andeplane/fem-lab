@@ -33,7 +33,15 @@ export const DeformScale = z.union([z.number(), z.literal('auto'), z.literal('tr
 export const ClipPlane = z.object({ normal: vec3, offset: z.number() });
 export const Layer = z.enum(['mesh', 'edges', 'loads', 'constraints', 'sets', 'legend', 'axes', 'grid']);
 export const Theme = z.enum(['dark', 'light']);
-export const Animation = z.object({ step: z.string(), mode: int.optional(), playing: z.boolean(), speed: z.number().optional(), frame: int.optional() });
+export const Animation = z.object({ step: z.string(), mode: int.positive().optional(), playing: z.boolean(), speed: z.number().positive().optional(), frame: int.min(0).max(100).optional() });
+const TimeQuantity = z.union([z.string(), z.object({ value: z.number(), unit: z.string() })]);
+export const TransientPlayback = z.object({
+  step: z.string(), playing: z.boolean(), speed: z.number().positive().optional(),
+  sample: z.union([
+    z.object({ kind: z.literal('frame'), index: int.nonnegative() }),
+    z.object({ kind: z.literal('time'), time: TimeQuantity, sampling: z.enum(['exact', 'nearest']) }),
+  ]).optional(),
+});
 export const SelectionInput = z.object({
   bodies: z.array(z.string()).optional(),
   faces: z.array(z.string()).optional(),
@@ -41,7 +49,10 @@ export const SelectionInput = z.object({
   mode: z.enum(['replace', 'add', 'remove']).optional(),
 });
 export const PickTarget = z.enum(['face', 'body', 'off']);
-export const ScreenshotOptions = z.object({ width: int.optional(), height: int.optional(), legend: z.boolean().optional(), title: z.string().optional() });
+/** Resizable shell panels. Their sizes are view state and never enter the Journal. */
+export const PanelTarget = z.enum(['tree', 'properties', 'bottom', 'assistant']);
+export const ScreenshotOptions = z.object({ width: int.positive().optional(), height: int.positive().optional(), legend: z.boolean().optional(), title: z.string().optional() });
+export type AiProvider = 'anthropic' | 'openai';
 export const CopyWhat = z.union([
   z.object({ kind: z.literal('selection') }),
   z.object({ kind: z.literal('mention'), ref: z.string() }),
@@ -102,6 +113,19 @@ export interface ProjectSaveReceipt extends OpenProject {
   journal: ModelFile['journal'];
 }
 
+/** The autosave state exposed through `query.autosave`. */
+export interface AutosaveState {
+  enabled: boolean;
+  /** The model name, when it was written, and how many Commands it holds; `null` if none. */
+  saved: { name: string; at: number; commands: number } | null;
+}
+export interface AutosaveVersion {
+  id: string;
+  name: string;
+  at: number;
+  commands: number;
+}
+
 /** What the app hands the registry: every side effect a host Command can have, as an interface. */
 export interface HostContext {
   transport: EngineTransport;
@@ -118,7 +142,8 @@ export interface HostContext {
     toggle(layer: z.output<typeof Layer>, on?: boolean): void;
     setVisible(bodies: string[], on: boolean): void;
     setTheme(t: z.output<typeof Theme>): void;
-    animate(a: z.output<typeof Animation>): void;
+    animate(a: z.output<typeof Animation>): void | Promise<void>;
+    playTransient(a: z.output<typeof TransientPlayback>): void | Promise<void>;
     camera(): z.output<typeof CameraState>;
     screenshot(o: z.output<typeof ScreenshotOptions>): Promise<{ png: string }>;
   };
@@ -128,14 +153,14 @@ export interface HostContext {
     setPickTarget(t: z.output<typeof PickTarget>): void;
     get(): Selection;
   };
-  panels: { toggle(panel: string, open?: boolean): void };
+  panels: { toggle(panel: string, open?: boolean): void; resize(panel: z.output<typeof PanelTarget>, size: number): void };
   script: {
     validate(code: string, timeoutMs?: number): Promise<ScriptValidation>;
     run(code: string, timeoutMs?: number): Promise<ScriptResult>;
     stop(): void;
     setSource(code: string, append?: boolean): void;
   };
-  chat: { send(text: string): void; insertMention(ref: string): void; clear(): void };
+  chat: { send(text: string): void; insertMention(ref: string): void; setDraft(text: string): void | Promise<void>; clear(): void };
   skills(): Skill[];
   clipboard: { writeText(text: string): Promise<void> };
   files: {
@@ -145,6 +170,12 @@ export interface HostContext {
     shareLink(file: ModelFile): Promise<{ url: string }>;
     /** Turn the background save into the open project on or off. The choice sticks in this browser. */
     setAutosave(on: boolean): void;
+    /** Replay one saved revision, or the newest revision when no id is supplied. */
+    restore(id?: string): Promise<AutosaveState['saved']>;
+    /** Whether autosave is on and the latest known revision, for `query.autosave`. */
+    autosave(): AutosaveState;
+    /** Bounded saved Journal revisions, newest first, for the history view. */
+    autosaves(): AutosaveVersion[];
   };
   /**
    * Projects in this browser's storage. `list` and `current` are **synchronous**: both answer
@@ -171,7 +202,7 @@ export interface HostContext {
     writeBytes(path: string, bytes: Uint8Array): Promise<void>;
   };
   examples: { fetch(name: string): Promise<string> };
-  ai: { setKey(key: string | null): void; setModel(model: string): void };
+  ai: { setKey(key: string | null, provider: AiProvider): void; setModel(model: string): void };
   env: { webgpu: boolean; crossOriginIsolated: boolean; threads: number; userAgent: string; engine: 'local' | 'remote' };
 }
 
@@ -194,7 +225,13 @@ async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, 
   return { name, to: dest };
 }
 
+/** Browser imports are bounded before JSON parsing or transfer to the engine Worker. */
+export const MAX_MODEL_FILE_BYTES = 16 * 1024 * 1024;
+
 async function importText(ctx: HostContext, text: string) {
+  if (text.length > MAX_MODEL_FILE_BYTES || new TextEncoder().encode(text).byteLength > MAX_MODEL_FILE_BYTES) {
+    throw new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'json', 'open a smaller file written by file.save');
+  }
   let file: ModelFile;
   try {
     file = JSON.parse(text) as ModelFile;
@@ -291,7 +328,13 @@ async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built> {
     return { filename: `${name}.femlab.json`, mime: 'application/json', data: JSON.stringify(await ctx.transport.exportFile(), null, 2) };
   }
   if (spec.format === 'png') {
-    const { png } = await ctx.view.screenshot({ legend: spec['legend'] !== false });
+    const options = ScreenshotOptions.parse({
+      legend: spec['legend'] !== false,
+      ...(spec['width'] === undefined ? {} : { width: spec['width'] }),
+      ...(spec['height'] === undefined ? {} : { height: spec['height'] }),
+      ...(spec['title'] === undefined ? {} : { title: spec['title'] }),
+    });
+    const { png } = await ctx.view.screenshot(options);
     return { filename: `${name}.png`, mime: 'image/png', data: dataUrlBytes(png) };
   }
   if (spec.format === 'csv') {
@@ -313,26 +356,28 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.setCamera', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up`. Use `view.preset` for the standard views; this is for a reproducible screenshot angle.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
   def('view.preset', 'Jump to a standard view (iso, front, back, left, right, top, bottom) framed on the mesh bounding box; the same as the view buttons and keys.', z.object({ view: ViewPreset }), ({ view }, ctx) => ctx.view.preset(view)),
   def('view.setProjection', 'Switch between perspective and orthographic projection. Orthographic is the right choice for dimensioned screenshots and for comparing deformed shapes.', z.object({ projection: Projection }), ({ projection }, ctx) => ctx.view.setProjection(projection)),
-  def('view.showField', 'Show a result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off.', FieldChoice, (f, ctx) => ctx.view.showField(f)),
+  def('view.showField', 'Show a browser-supported result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off. Unsupported fields or components return a structured `unsupported` error; choose a field and component from the Results picker.', FieldChoice, (f, ctx) => ctx.view.showField(f)),
   def('view.setLegend', 'Set the contour legend: colormap (viridis or rainbow), number of discrete bands (null for continuous) and the value range as `[min, max]` or `"auto"`.', LegendSpec, (l, ctx) => ctx.view.setLegend(l)),
   def('view.setDeformScale', 'Scale the displayed deformed shape: a number, `"auto"` (a visible exaggeration) or `"true"` (scale 1, the real displacement). Only the display changes; results do not.', z.object({ scale: DeformScale }), ({ scale }, ctx) => ctx.view.setDeformScale(scale)),
   def('view.setClip', 'Cut the view with a section plane `{ normal, offset }` in metres to look inside a body, or `{ plane: null }` to remove the cut. Contours are drawn on the cut surface too.', z.object({ plane: ClipPlane.nullable() }), ({ plane }, ctx) => ctx.view.setClip(plane)),
   def('view.toggle', 'Show or hide an overlay layer: mesh, edges, loads, constraints, sets, legend, axes or grid. Omit `on` to flip the current state.', z.object({ layer: Layer, on: z.boolean().optional() }), ({ layer, on }, ctx) => ctx.view.toggle(layer, on)),
   def('view.setVisible', 'Show or hide the named bodies in the viewer (the tree\'s eye icon). Hidden bodies stay in the Model and in every solve; only the display changes.', z.object({ bodies: z.array(z.string()), on: z.boolean() }), ({ bodies, on }, ctx) => ctx.view.setVisible(bodies, on)),
   def('view.setTheme', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
-  def('view.animate', 'Play, pause or scrub an animation of a Step: a mode shape (`mode`) or a transient history, with `speed` and an explicit `frame`. Available once dynamics land; the row exists so the control has a Command.', Animation, (a, ctx) => ctx.view.animate(a)),
+  def('view.animate', 'Play, pause or scrub the displacement amplitude of a solved Step. mode selects a one-based modal shape; speed is positive cycles per second. frame is phase from 0 to 100 percent of a sinusoidal cycle, including while paused. Use view.playTransient for retained physical-time fields. No Model or Journal change.', Animation, (a, ctx) => ctx.view.animate(a)),
+  def('view.playTransient', 'Play, pause or select actual retained fields of a solved transient Step. speed is positive simulated seconds per wall second. sample selects a zero-based retained frame or a unit-bearing time resolved by the engine with exact/nearest sampling. Playback holds stored fields until the next retained time, stops at the endpoint, and synchronizes temperature or displacement contours, deformation, legend and probes. Historical derived fields are unavailable. Display only; no Model or Journal change.', TransientPlayback, (a, ctx) => ctx.view.playTransient(a)),
   def('selection.set', 'Select bodies, faces (named face Sets) and Sets by name, never by id. `mode` is replace (default), add or remove, like shift-click; the selection drives `view.fit` and `@selection` in the chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
   def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
-  def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, the examples gallery, the report, the project folder and the export dialog.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
-  def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with an optional timeout in milliseconds. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), async ({ code, timeoutMs }, ctx) => {
+  def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
+  def('panel.resize', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
+  def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
     const validation = await ctx.script.validate(code);
     if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
     return ctx.script.run(code, timeoutMs);
   }, false),
   def('script.stop', 'Terminate the script that is currently running in the script Worker. Commands it already dispatched stay in the Journal; use journal.undo to take them back.', none, (_, ctx) => ctx.script.stop()),
   def('script.setSource', 'Put text into the Script editor, replacing its content or appending to it. Use it to hand a script to the person to review and edit rather than running it directly.', z.object({ code: z.string(), append: z.boolean().optional() }), ({ code, append }, ctx) => ctx.script.setSource(code, append)),
-  def('chat.send', 'Send a chat turn as the person would; the text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
+  def('chat.send', 'Send a chat turn, or queue it while the Assistant works. Empty text while a message is queued interrupts the current response and starts the next after any active tool finishes. The text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
   def('chat.insertMention', 'Insert an `@kind:name` chip into the chat input, as a viewer or tree click does while the chat is focused. Not a tool; the AI receives chips, it does not type them.', z.object({ ref: z.string() }), ({ ref }, ctx) => ctx.chat.insertMention(ref), false),
   def('chat.clear', 'Start a new conversation: clears the chat history and the AI context. The Model and Journal are untouched.', none, (_, ctx) => ctx.chat.clear(), false),
   def('skill.invoke', 'Load a skill by name and return its instructions (`{ name, body, source }`) so they enter the conversation at the point they are needed; `args` is the rest of the person\'s `/name` line. Use query.skills to see what exists.', z.object({ name: z.string(), args: z.string().optional() }), ({ name, args }, ctx) => {
@@ -350,7 +395,7 @@ export const HOST_COMMANDS: HostDef[] = [
     await ctx.clipboard.writeText(text);
     return { text };
   }),
-  def('file.open', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Replaces the current Model and Journal.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
+  def('file.open', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Accepts at most 16 MiB of UTF-8 JSON. Replaces the current Model and Journal after engine validation.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
     if ('json' in how) return importText(ctx, how.json);
     if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
     return importText(ctx, await ctx.files.pick());
@@ -368,6 +413,7 @@ export const HOST_COMMANDS: HostDef[] = [
     ctx.files.setAutosave(on);
     return { enabled: on };
   }),
+  def('file.restore', 'Reopen an autosaved Journal revision as a separate project without overwriting the currently saved project. Pass the `id` from query.autosaveHistory to reopen an earlier revision; omit it for the newest. Returns `{ name, at, commands }`, or `null` when this browser has nothing saved.', z.object({ id: z.string().optional() }), ({ id }, ctx) => ctx.files.restore(id)),
   def('file.read', 'Read a text file from the open project folder by relative path (AGENTS.md, a script, a report, a skill). Paths outside the folder are refused; files over 2 MB are not read.', z.object({ path: z.string() }), async ({ path }, ctx) => {
     const text = await ctx.folder.readText(assertInside(path).join('/'));
     if (text.length > MAX_TEXT) throw new FemError('unsupported', `'${path}' is larger than 2 MB`, `path '${path}'`, 'read a smaller file or export a summary instead');
@@ -394,13 +440,13 @@ export const HOST_COMMANDS: HostDef[] = [
     none, (_, ctx) => ctx.projects.save()),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
-  def('ai.setKey', 'Store the Anthropic API key for the AI assistant in this browser only (localStorage), or `null` to forget it. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable() }), ({ key }, ctx) => ctx.ai.setKey(key), false),
+  def('ai.setKey', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
   def('ai.setModel', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
 ];
 
 export const HOST_QUERIES: HostDef[] = [
   def('query.validateScript', 'Parse and type-check TypeScript against the generated fem API without executing it or changing the Model. Returns { ok, diagnostics: [{ code, cause, where: { line, column } | null, hint }] }. Source locations are one-based. Compilation runs in a worker with a separate default 10000 ms deadline (maximum 30000) and a 64000-character source limit. Passing validates types, not physical correctness or program termination. script.run performs this validation automatically before starting its execution timeout.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.validate(code, timeoutMs)),
-  def('query.screenshot', 'Render the current view to a PNG (base64) at the given size, optionally with the legend and a title. Use it to see what the person sees or to put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
+  def('query.screenshot', 'Render the current view to a PNG (base64) at the given positive integer pixel width and height, optionally with the legend and a title. A single dimension preserves the current aspect ratio; when neither is supplied, uses the current drawing-buffer size. Restores the interactive view after capture. Use it to see what the person sees or put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
   def('query.view', 'The current camera: position, target and up in metres. Save it with the model or hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
   def('query.capabilities', 'What this engine and browser can do: GPU and adapter, thread count, engine and schema versions, WebGPU and cross-origin isolation, and whether the engine runs locally or on a remote server.', none, async (_, ctx) => ({
     ...((await ctx.transport.query({ query: 'query.capabilities' })) as object),
@@ -413,6 +459,8 @@ export const HOST_QUERIES: HostDef[] = [
   def('query.projects',
     'Every project saved in this browser, most recently edited first: id, name, when it was last written, how many Commands its Journal holds, and a small thumbnail. The start screen\u2019s Recent projects list is a view of this Query.',
     none, (_, ctx) => ({ projects: ctx.projects.list() })),
+  def('query.autosave', 'Whether background autosave is on, and the latest locally known revision (`{ name, at, commands }` or `null`), including pending writes; file.restore reopens it.', none, (_, ctx) => ctx.files.autosave()),
+  def('query.autosaveHistory', 'List up to 20 locally known Journal revisions, newest first, including pending writes and retryable storage failures. Each `id` stays restorable through file.restore until history eviction or autosave clearing, including when model names and times tie. Pending revisions are not durable until their write commits and are discarded when autosave is disabled. Saved revisions remain available while autosave is off.', none, (_, ctx) => ({ enabled: ctx.files.autosave().enabled, revisions: ctx.files.autosaves() })),
   def('query.project',
     'The open project \u2014 id, name, when it was last written, how many Commands it holds and whether a write is in flight \u2014 or `null` when the Model is still empty and no project has been made yet. The top bar reads this.',
     none, (_, ctx) => ctx.projects.current()),

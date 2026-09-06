@@ -1,7 +1,7 @@
 // PLAN 4.4: a stored key wins, the dev server's shell key stands in while `vite dev` runs, and the
 // settings row can always say which of the two the current key came from.
 import { beforeEach, describe, expect, it } from 'vitest';
-import { defaultProvider, maskKey, resolveKey, storedModel, storeKey, KEY_SLOT } from '../src/ai/keys';
+import { migratePersistentKeys, defaultProvider, maskKey, resolveKey, storedModel, storeKey, KEY_SLOT } from '../src/ai/keys';
 
 const memory = (): Storage => {
   const map = new Map<string, string>();
@@ -86,5 +86,53 @@ describe('masking', () => {
   it('shows enough of a key to recognise it and not enough to use it', () => {
     expect(maskKey('sk-ant-api03-abcdefgh7f2a')).toBe('sk-ant-a…7f2a');
     expect(maskKey('short')).toBe('••••');
+  });
+});
+
+
+describe('session-only key storage', () => {
+  it('stores keys in the tab session and leaves model preferences persistent', () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    localStorage.setItem('femlab.ai.model', 'gpt-6-astra');
+    storeKey('openai', 'session-key');
+    expect(sessionStorage.getItem(KEY_SLOT.openai)).toBe('session-key');
+    expect(localStorage.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(defaultProvider(localStorage, null)).toBe('openai');
+    sessionStorage.clear();
+    expect(resolveKey('openai', sessionStorage, null).key).toBeNull();
+    expect(storedModel('openai')).toBe('gpt-6-astra');
+    localStorage.clear();
+  });
+
+  it('migrates persistent keys once without overwriting a newer session key', () => {
+    const session = memory();
+    storage.setItem(KEY_SLOT.anthropic, 'old-a');
+    storage.setItem(KEY_SLOT.openai, 'old-b');
+    storage.setItem('femlab.ai.model', 'gpt-6-astra');
+    session.setItem(KEY_SLOT.openai, 'new-b');
+    migratePersistentKeys(storage, session);
+    expect(session.getItem(KEY_SLOT.anthropic)).toBe('old-a');
+    expect(session.getItem(KEY_SLOT.openai)).toBe('new-b');
+    expect(storage.getItem(KEY_SLOT.anthropic)).toBeNull();
+    expect(storage.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(storage.getItem('femlab.ai.model')).toBe('gpt-6-astra');
+    migratePersistentKeys(storage, session);
+    expect(session.getItem(KEY_SLOT.openai)).toBe('new-b');
+  });
+
+  it('removes the persistent copy even if session storage refuses the migration', () => {
+    storage.setItem(KEY_SLOT.openai, 'old-key');
+    migratePersistentKeys(storage, hostile());
+    expect(storage.getItem(KEY_SLOT.openai)).toBeNull();
+    expect(() => migratePersistentKeys(hostile(), null)).not.toThrow();
+    expect(resolveKey('openai', null, null).key).toBeNull();
+  });
+
+  it('chooses the keyed session provider without using old persistent keys', () => {
+    const session = memory();
+    storage.setItem(KEY_SLOT.anthropic, 'old-a');
+    session.setItem(KEY_SLOT.openai, 'new-b');
+    expect(defaultProvider(storage, null, session)).toBe('openai');
   });
 });
