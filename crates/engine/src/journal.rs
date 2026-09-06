@@ -216,8 +216,10 @@ mod tests {
             Command::JournalUndo { steps: None, expected_journal: None },
             Command::MaterialAdd {
                 name: "steel".into(),
-                e: Q::text("210 GPa"),
-                nu: 0.3,
+                e: Some(Q::text("210 GPa")),
+                nu: Some(0.3),
+                orthotropic: None,
+                orientation: None,
                 rho: Some(Q::new(7850.0, "kg/m^3")),
                 alpha: None,
                 k: None,

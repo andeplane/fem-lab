@@ -153,8 +153,23 @@ impl Engine {
             .iter()
             .map(|mat| MaterialRow {
                 name: mat.name.clone(),
-                e: display(m, mat.e, Stress::DIM),
+                e: mat.e.map(|e| display(m, e, Stress::DIM)),
                 nu: mat.nu,
+                orthotropic: mat.orthotropic.map(|o| crate::query::OrthotropicRow {
+                    e1: display(m, o.e1, Stress::DIM),
+                    e2: display(m, o.e2, Stress::DIM),
+                    e3: display(m, o.e3, Stress::DIM),
+                    g12: display(m, o.g12, Stress::DIM),
+                    g13: display(m, o.g13, Stress::DIM),
+                    g23: display(m, o.g23, Stress::DIM),
+                    nu12: o.nu12,
+                    nu13: o.nu13,
+                    nu23: o.nu23,
+                }),
+                orientation: mat.orientation.map(|o| crate::query::OrientationRow {
+                    axis: o.axis,
+                    degrees: o.angle * 180.0 / std::f64::consts::PI,
+                }),
                 rho: mat.rho.map(|r| display(m, r, Density::DIM)),
                 yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)),
                 assigned_to: m
@@ -513,7 +528,19 @@ impl Engine {
                     ref_: format!("material:{}", mat.name),
                     kind: "material".into(),
                     name: mat.name.clone(),
-                    summary: format!("E = {} Pa, nu = {}", units::fmt_sig(mat.e, 4), mat.nu),
+                    summary: match &mat.orthotropic {
+                        Some(o) => format!(
+                            "orthotropic, E1 = {} Pa, E2 = {} Pa, E3 = {} Pa",
+                            units::fmt_sig(o.e1, 4),
+                            units::fmt_sig(o.e2, 4),
+                            units::fmt_sig(o.e3, 4)
+                        ),
+                        None => format!(
+                            "E = {} Pa, nu = {}",
+                            units::fmt_sig(mat.e.unwrap_or(0.0), 4),
+                            mat.nu.unwrap_or(0.0)
+                        ),
+                    },
                 });
             }
         }

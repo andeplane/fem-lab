@@ -225,15 +225,53 @@ pub struct BodyRow {
 #[serde(rename_all = "camelCase")]
 pub struct MaterialRow {
     pub name: String,
-    #[serde(rename = "E")]
-    pub e: Valued,
-    pub nu: f64,
+    /// Young's modulus, for an isotropic material; `orthotropic` carries the stiffness instead.
+    #[serde(rename = "E", default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<Valued>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nu: Option<f64>,
+    /// The nine orthotropic constants in the material axes, when the material is orthotropic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orthotropic: Option<OrthotropicRow>,
+    /// Where the material axes point, when they are not the global ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<OrientationRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rho: Option<Valued>,
     /// Current yield strength in the Model's display stress unit, when specified.
     #[serde(rename = "yield", default, skip_serializing_if = "Option::is_none")]
     pub yield_: Option<Valued>,
     pub assigned_to: Vec<String>,
+}
+
+/// The orthotropic constants of a Material, in the Model's display stress unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OrthotropicRow {
+    #[serde(rename = "E1")]
+    pub e1: Valued,
+    #[serde(rename = "E2")]
+    pub e2: Valued,
+    #[serde(rename = "E3")]
+    pub e3: Valued,
+    #[serde(rename = "G12")]
+    pub g12: Valued,
+    #[serde(rename = "G13")]
+    pub g13: Valued,
+    #[serde(rename = "G23")]
+    pub g23: Valued,
+    pub nu12: f64,
+    pub nu13: f64,
+    pub nu23: f64,
+}
+
+/// A Material's axes: `angle` degrees about the unit `axis`, which is how `material.add` took
+/// them and how the report and the tree read them back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OrientationRow {
+    pub axis: [f64; 3],
+    pub degrees: f64,
 }
 
 /// One primary source used by [`MaterialLibrary`]. Property `source` fields name its `id`.

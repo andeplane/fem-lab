@@ -89,13 +89,35 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
         }
         ObjectKind::Material => {
             let x = m.material(name).ok_or_else(missing)?;
+            // The three material-axis components come back on the orthotropic block when there
+            // is one and as a single isotropic value otherwise, which is where they can go.
+            let ortho = x.orthotropic.as_ref().map(|o| {
+                Box::new(crate::command::Orthotropic {
+                    e1: Q::new(o.e1, "Pa"),
+                    e2: Q::new(o.e2, "Pa"),
+                    e3: Q::new(o.e3, "Pa"),
+                    g12: Q::new(o.g12, "Pa"),
+                    g13: Q::new(o.g13, "Pa"),
+                    g23: Q::new(o.g23, "Pa"),
+                    nu12: o.nu12,
+                    nu13: o.nu13,
+                    nu23: o.nu23,
+                    alpha: x.alpha.map(|v| v.map(|c| Q::new(c, "1/K"))),
+                    k: x.k.map(|v| v.map(|c| Q::new(c, "W/(m K)"))),
+                })
+            });
+            let isotropic = ortho.is_none();
             Command::MaterialAdd {
                 name: x.name.clone(),
-                e: Q::new(x.e, "Pa"),
+                e: x.e.map(|v| Q::new(v, "Pa")),
                 nu: x.nu,
+                orientation: x
+                    .orientation
+                    .map(|o| crate::command::Orientation { axis: o.axis, angle: Q::new(o.angle, "1") }),
+                orthotropic: ortho,
                 rho: x.rho.map(|v| Q::new(v, "kg/m^3")),
-                alpha: x.alpha.map(|v| Q::new(v, "1/K")),
-                k: x.k.map(|v| Q::new(v, "W/(m K)")),
+                alpha: x.alpha.filter(|_| isotropic).map(|v| Q::new(v[0], "1/K")),
+                k: x.k.filter(|_| isotropic).map(|v| Q::new(v[0], "W/(m K)")),
                 cp: x.cp.map(|v| Q::new(v, "J/(kg K)")),
                 yield_: x.yield_.map(|v| Q::new(v, "Pa")),
                 source: x.source.clone(),

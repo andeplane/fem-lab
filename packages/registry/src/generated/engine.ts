@@ -182,16 +182,18 @@ export type Command =
     }
   | {
       name: string;
-      /**
-       * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-       */
-      E:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      nu: number;
+      E?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      nu?: number | null;
+      orthotropic?: Orthotropic | null;
+      orientation?: Orientation | null;
       rho?:
         | (
             | string
@@ -1928,16 +1930,18 @@ export type ModelFile_Command =
     }
   | {
       name: string;
-      /**
-       * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-       */
-      E:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      nu: number;
+      E?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      nu?: number | null;
+      orthotropic?: Orthotropic2 | null;
+      orientation?: Orientation2 | null;
       rho?:
         | (
             | string
@@ -3013,6 +3017,161 @@ export interface Placement {
   scale?: [number, number, number] | null;
 }
 /**
+ * Orthotropic stiffness in the material axes: three Young's moduli, three shear moduli and the
+ * three *major* Poisson ratios, which follow `nu_ij / E_i = nu_ji / E_j`, so `nu12` is the
+ * contraction along axis 2 caused by a pull along axis 1. Axis 1 is the strong direction — the
+ * fibre, the grain, the rolling direction — and `orientation` says where it points. The nine
+ * numbers must leave the compliance positive definite: roughly `|nu12| < sqrt(E1/E2)` and the
+ * same for the other two pairs, and `material.add` says so if they do not.
+ */
+export interface Orthotropic {
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  E1:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  E2:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  E3:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  G12:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  G13:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  G23:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  nu12: number;
+  nu13: number;
+  nu23: number;
+  /**
+   * Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on
+   * `material.add`, never both.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  alpha?:
+    | [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ]
+    | null;
+  /**
+   * Conductivity along the three material axes. Give this *or* the isotropic `k` on
+   * `material.add`, never both.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  k?:
+    | [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ]
+    | null;
+}
+/**
+ * Rotate the material axes by `angle` (e.g. `"30 deg"`) about `axis`, a global direction that
+ * is normalised for you and defaults to `[0, 0, 1]`. Material axis 1 is the one `E1`, `alpha`'s
+ * first component and `k`'s first component belong to, and a positive angle turns it towards
+ * the second axis. In a 2D idealisation — plane stress, plane strain or axisymmetric — the
+ * rotation axis must be the out-of-plane one, `[0, 0, 1]`, because any other rotation would
+ * couple the in-plane strains to the out-of-plane shears the idealisation does not carry.
+ */
+export interface Orientation {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  axis?: [number, number, number];
+  /**
+   * A dimensionless with unit, e.g. "0.3". Any unit of the right dimension is accepted.
+   */
+  angle:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+}
+/**
  * One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
  *
  * `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
@@ -3224,14 +3383,51 @@ export interface Valued1 {
 }
 export interface MaterialRow {
   name: string;
-  E: Valued;
-  nu: number;
+  /**
+   * Young's modulus, for an isotropic material; `orthotropic` carries the stiffness instead.
+   */
+  E?: Valued | null;
+  nu?: number | null;
+  /**
+   * The nine orthotropic constants in the material axes, when the material is orthotropic.
+   */
+  orthotropic?: OrthotropicRow | null;
+  /**
+   * Where the material axes point, when they are not the global ones.
+   */
+  orientation?: OrientationRow | null;
   rho?: Valued | null;
   /**
    * Current yield strength in the Model's display stress unit, when specified.
    */
   yield?: Valued | null;
   assignedTo: string[];
+}
+/**
+ * The orthotropic constants of a Material, in the Model's display stress unit.
+ */
+export interface OrthotropicRow {
+  E1: Valued;
+  E2: Valued;
+  E3: Valued;
+  G12: Valued;
+  G13: Valued;
+  G23: Valued;
+  nu12: number;
+  nu13: number;
+  nu23: number;
+}
+/**
+ * A Material's axes: `angle` degrees about the unit `axis`, which is how `material.add` took
+ * them and how the report and the tree read them back.
+ */
+export interface OrientationRow {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  axis: [number, number, number];
+  degrees: number;
 }
 export interface SetRow {
   name: string;
@@ -3619,6 +3815,161 @@ export interface JournalEntry {
   seq: number;
   cmd: ModelFile_Command;
   hashAfter: string;
+}
+/**
+ * Orthotropic stiffness in the material axes: three Young's moduli, three shear moduli and the
+ * three *major* Poisson ratios, which follow `nu_ij / E_i = nu_ji / E_j`, so `nu12` is the
+ * contraction along axis 2 caused by a pull along axis 1. Axis 1 is the strong direction — the
+ * fibre, the grain, the rolling direction — and `orientation` says where it points. The nine
+ * numbers must leave the compliance positive definite: roughly `|nu12| < sqrt(E1/E2)` and the
+ * same for the other two pairs, and `material.add` says so if they do not.
+ */
+export interface Orthotropic2 {
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  E1:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  E2:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  E3:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  G12:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  G13:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  G23:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  nu12: number;
+  nu13: number;
+  nu23: number;
+  /**
+   * Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on
+   * `material.add`, never both.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  alpha?:
+    | [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ]
+    | null;
+  /**
+   * Conductivity along the three material axes. Give this *or* the isotropic `k` on
+   * `material.add`, never both.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  k?:
+    | [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ]
+    | null;
+}
+/**
+ * Rotate the material axes by `angle` (e.g. `"30 deg"`) about `axis`, a global direction that
+ * is normalised for you and defaults to `[0, 0, 1]`. Material axis 1 is the one `E1`, `alpha`'s
+ * first component and `k`'s first component belong to, and a positive angle turns it towards
+ * the second axis. In a 2D idealisation — plane stress, plane strain or axisymmetric — the
+ * rotation axis must be the out-of-plane one, `[0, 0, 1]`, because any other rotation would
+ * couple the in-plane strains to the out-of-plane shears the idealisation does not carry.
+ */
+export interface Orientation2 {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  axis?: [number, number, number];
+  /**
+   * A dimensionless with unit, e.g. "0.3". Any unit of the right dimension is accepted.
+   */
+  angle:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
 }
 /**
  * `query.script` response.
@@ -4025,18 +4376,66 @@ export interface NamedSet {
   source: SetSource;
 }
 /**
- * An isotropic linear-elastic material, SI.
+ * A material, SI: isotropic or orthotropic, with optional axes.
  */
 export interface Material {
   name: string;
-  e: number;
-  nu: number;
+  /**
+   * Isotropic stiffness; `None` exactly when `orthotropic` is given.
+   */
+  e?: number | null;
+  nu?: number | null;
+  /**
+   * Orthotropic stiffness in the material axes; `None` exactly when `e`/`nu` are given.
+   */
+  orthotropic?: ModelFile_Orthotropic | null;
+  /**
+   * Where the material axes point; `None` means they are the global axes.
+   */
+  orientation?: ModelFile_Orientation | null;
   rho?: number | null;
-  alpha?: number | null;
-  k?: number | null;
+  /**
+   * Thermal expansion along the three material axes.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  alpha?: [number, number, number] | null;
+  /**
+   * Conductivity along the three material axes.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  k?: [number, number, number] | null;
   cp?: number | null;
   yield?: number | null;
   source?: string | null;
+}
+/**
+ * Orthotropic stiffness in the material axes, SI, major Poisson convention.
+ */
+export interface ModelFile_Orthotropic {
+  E1: number;
+  E2: number;
+  E3: number;
+  G12: number;
+  G13: number;
+  G23: number;
+  nu12: number;
+  nu13: number;
+  nu23: number;
+}
+/**
+ * Where a Material's axes point: `angle` radians about the unit `axis`, SI.
+ */
+export interface ModelFile_Orientation {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  axis: [number, number, number];
+  angle: number;
 }
 /**
  * A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;

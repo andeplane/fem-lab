@@ -66,8 +66,9 @@ fn builds_a_cantilever_and_reports_it() {
     assert!((m.bodies[0].mass.as_ref().unwrap().value - 78.5).abs() < 1e-9);
     assert_eq!(m.bodies[0].faces, ["beam.xmax", "beam.xmin", "beam.ymax", "beam.ymin", "beam.zmax", "beam.zmin"]);
     assert_eq!(m.bodies[0].bbox[3].value, 1000.0);
-    assert_eq!(m.materials[0].e.value, 210_000.0);
-    assert_eq!(m.materials[0].e.unit, "MPa");
+    let young = m.materials[0].e.as_ref().expect("an isotropic material reports E");
+    assert_eq!(young.value, 210_000.0);
+    assert_eq!(young.unit, "MPa");
     assert_eq!(m.materials[0].assigned_to, ["beam"]);
     assert_eq!(m.constraints[0].summary, "fix ux, uy, uz");
     assert_eq!(m.loads[0].kind, "traction");
@@ -341,7 +342,7 @@ fn upsert_edits_in_place_and_reports_replaced() {
     assert_eq!(e.model().loads.len(), 1);
     let a = ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
     assert_eq!(a.output, Output::Replaced { kind: ObjectKind::Material, name: "steel".into() });
-    assert_eq!(e.model().materials[0].e, 200e9);
+    assert_eq!(e.model().materials[0].e, Some(200e9));
     assert!(e.model().materials[0].rho.is_none());
     let a = ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["2 m","100 mm","100 mm"]}"#);
     assert_eq!(a.output, Output::Replaced { kind: ObjectKind::Body, name: "beam".into() });

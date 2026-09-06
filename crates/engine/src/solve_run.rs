@@ -23,8 +23,30 @@ use crate::query::{Extreme, HistoryRow, Output, ReactionRow, ResultSummary, Stud
 use crate::solve::SolveOptions;
 use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Q};
 
-/// The material law every Model material resolves to for now; plugins add their own later.
+/// The two built-in laws a Model material resolves to; plugins add their own later.
 const LAW: &str = "linear-elastic";
+const ORTHOTROPIC_LAW: &str = "orthotropic-elastic";
+
+/// One Model material as the numbers an element needs.
+///
+/// `material.add` guarantees exactly one of the isotropic and orthotropic forms is present. A
+/// Model that says neither — which only a hand-edited file can — resolves to a zero-stiffness
+/// isotropic material rather than panicking, and `fem::checks` reports the singular system.
+fn resolve_material(m: &crate::model::Material) -> Material {
+    let (id, props) = match &m.orthotropic {
+        Some(o) => (ORTHOTROPIC_LAW, o.props()),
+        None => (LAW, vec![m.e.unwrap_or(0.0), m.nu.unwrap_or(0.0)]),
+    };
+    Material {
+        law: crate::fem::material::builtin_law(id).expect("the built-in law"),
+        props,
+        rho: m.rho.unwrap_or(0.0),
+        alpha: m.alpha.unwrap_or([0.0; 3]),
+        k: m.k.unwrap_or([0.0; 3]),
+        cp: m.cp.unwrap_or(0.0),
+        axes: m.orientation.as_ref().map(crate::model::Orientation::rows),
+    }
+}
 
 /// The dimension a Result field carries, so a summary reports it in the Model's own units.
 pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
@@ -61,18 +83,7 @@ fn build_problem_with_temperature<'a>(
     previous: Option<&FieldData>,
 ) -> Result<Problem<'a>, Error> {
     let heat = matches!(step.procedure, Procedure::HeatSteady | Procedure::HeatTransient);
-    let materials: Vec<Material> = model
-        .materials
-        .iter()
-        .map(|m| Material {
-            law: crate::fem::material::builtin_law(LAW).expect("the built-in law"),
-            props: vec![m.e, m.nu],
-            rho: m.rho.unwrap_or(0.0),
-            alpha: m.alpha.unwrap_or(0.0),
-            k: m.k.unwrap_or(0.0),
-            cp: m.cp.unwrap_or(0.0),
-        })
-        .collect();
+    let materials: Vec<Material> = model.materials.iter().map(resolve_material).collect();
     let material_of_block = built
         .body_of_block
         .iter()

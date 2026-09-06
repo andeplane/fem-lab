@@ -749,9 +749,10 @@ fn steel() -> Material {
         law: builtin_law("linear-elastic").expect("built in"),
         props: vec![YOUNG, POISSON],
         rho: DENSITY,
-        alpha: EXPANSION,
-        k: 45.0,
+        alpha: [EXPANSION; 3],
+        k: [45.0; 3],
         cp: 460.0,
+        axes: None,
     }
 }
 
@@ -1128,7 +1129,7 @@ fn element_patch_and_integrals_are_valid_from_nanometres_to_megametres() {
                 let temperature: Vec<f64> = coords.iter().step_by(3).copied().collect();
                 let kt = mat_vec(&heat_k, nn, &temperature);
                 let energy: f64 = temperature.iter().zip(kt).map(|(t, q)| t * q).sum();
-                assert!((energy / (mat.k * volume) - 1.0).abs() < 1e-11, "{kind:?} {id:?} L={length}: heat");
+                assert!((energy / (mat.k[0] * volume) - 1.0).abs() < 1e-11, "{kind:?} {id:?} L={length}: heat");
                 for form in [Formulation::Full, Formulation::IncompatibleModes] {
                     let c = ctx(&coords, &mat, id.clone(), form);
                     let mut k = vec![0.0; nd * nd];
@@ -1464,9 +1465,10 @@ fn incompatible_modes_bend_a_one_element_cantilever_exactly() {
         law: builtin_law("linear-elastic").expect("built in"),
         props: vec![young, 0.0],
         rho: 1.0,
-        alpha: 0.0,
-        k: 0.0,
+        alpha: [0.0; 3],
+        k: [0.0; 3],
         cp: 0.0,
+        axes: None,
     };
     let coords = vec![0.0, 0.0, 0.0, l, 0.0, 0.0, l, h, 0.0, 0.0, h, 0.0];
     let el = element_for(ElementKind::Quad4);
@@ -1511,9 +1513,10 @@ fn a_material_with_the_wrong_props_fails_every_integral_that_calls_the_law() {
         law: builtin_law("linear-elastic").expect("built in"),
         props: vec![YOUNG],
         rho: DENSITY,
-        alpha: EXPANSION,
-        k: 0.0,
+        alpha: [EXPANSION; 3],
+        k: [0.0; 3],
         cp: 0.0,
+        axes: None,
     };
     let cases = [
         (ElementKind::Hex8, Idealisation::Solid3d),
@@ -3733,9 +3736,10 @@ fn conductor(k: f64, rho: f64, cp: f64) -> Material {
         law: builtin_law("linear-elastic").expect("built in"),
         props: vec![YOUNG, POISSON],
         rho,
-        alpha: 0.0,
-        k,
+        alpha: [0.0; 3],
+        k: [k; 3],
         cp,
+        axes: None,
     }
 }
 
@@ -4240,9 +4244,10 @@ fn nafems_fv32_tapered_membrane_has_the_published_frequencies() {
         law: builtin_law("linear-elastic").expect("built in"),
         props: vec![200e9, 0.3],
         rho: 8000.0,
-        alpha: 0.0,
-        k: 0.0,
+        alpha: [0.0; 3],
+        k: [0.0; 3],
         cp: 0.0,
+        axes: None,
     };
     let mut worst = Vec::new();
     for n in [[16, 8], [32, 16]] {
@@ -4275,7 +4280,7 @@ fn nafems_fv32_tapered_membrane_has_the_published_frequencies() {
 
 /// A copy of a Material, since `Material` holds a `&'static dyn MaterialLaw` and is not `Clone`.
 fn material_of(m: &Material) -> Material {
-    Material { law: m.law, props: m.props.clone(), rho: m.rho, alpha: m.alpha, k: m.k, cp: m.cp }
+    Material { law: m.law, props: m.props.clone(), rho: m.rho, alpha: m.alpha, k: m.k, cp: m.cp, axes: m.axes }
 }
 
 /// A completely free block has six frequencies at zero — the rigid modes — and the seventh is a

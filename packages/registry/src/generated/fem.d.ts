@@ -91,10 +91,13 @@ export interface Fem {
   };
   material: {
     /**
-     * Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio
-     * `nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for
-     * thermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came
-     * from. Re-issuing with an existing name edits the material in place.
+     * Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's
+     * ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one
+     * of the two. `orientation` turns the material axes (wood grain, fibre direction, rolling
+     * direction) away from the global axes; without it they are the global axes. Density `rho`
+     * is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
+     * heat transfer; `source` records where the numbers came from. Re-issuing with an existing
+     * name edits the material in place, so an omitted `orientation` clears the previous one.
      */
     add(args: Omit<Extract<Command, { cmd: 'material.add' }>, 'cmd'>): Promise<Ack>;
     /**
