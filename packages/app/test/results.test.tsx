@@ -184,12 +184,13 @@ describe('the Export dialog', () => {
     expect(specOf({ format: 'vtu' } as never, 'static')).toEqual({ format: 'vtu', step: 'static' });
     expect(specOf({ format: 'vtu' } as never, undefined)).toEqual({ format: 'vtu' });
     expect(specOf({ format: 'stl' } as never, 'static')).toEqual({ format: 'stl' });
+    expect(specOf({ format: 'png' } as never, 'static', { width: 1280, height: 720 })).toEqual({ format: 'png', width: 1280, height: 720 });
   });
 });
 
 /** A viewer stub: the four calls `ResultsView` makes, recorded. */
 function fakeViewer() {
-  return { setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), autoScale: vi.fn(() => 120) };
+  return { setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), autoScale: vi.fn(() => 120), animate: vi.fn() };
 }
 
 function harness(result: ResultSummary | null = RESULT) {
@@ -207,6 +208,27 @@ function harness(result: ResultSummary | null = RESULT) {
 }
 
 describe('ResultsView', () => {
+  it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
+    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
+    await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
+    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
+    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 0.5, 0.75);
+    expect(store.state).toMatchObject({ playing: false, phase: 0.75, animationSpeed: 0.5, fieldKey: 'mode:2', viewMode: 'results' });
+    await results.animate({ step: 'modes', mode: 2, playing: true, speed: 2 });
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(true, 2, undefined);
+    expect(store.state.playing).toBe(true);
+    await results.refresh();
+    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
+    await expect(results.animate({ step: 'modes', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
+    expect(store.state.fieldKey).toBe('mode:2');
+  });
+
+  it('reports missing displacement without pretending a thermal field can be animated', async () => {
+    const { results, viewer } = harness({ ...RESULT, extremes: [] });
+    await expect(results.animate({ step: 'heat', playing: true })).rejects.toThrow('has no displacement');
+    expect(viewer.current.animate).not.toHaveBeenCalled();
+  });
   it('loads the contoured scalar in display units and the displacement in SI', async () => {
     const { store, viewer, results } = harness();
     await results.refresh();

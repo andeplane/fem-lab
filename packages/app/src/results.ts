@@ -5,7 +5,7 @@
 // Values arrive from the engine in SI and are shown in the Model's own units, so the array the
 // viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
-import type { JournalDump, ResultSummary, StudyReport, Warning } from '@femlab/registry';
+import { FemError, type JournalDump, type ResultSummary, type StudyReport, type Warning } from '@femlab/registry';
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store } from './store';
@@ -73,6 +73,7 @@ export class ResultsView {
   private displacement: Float32Array | null = null;
   private loadedFor = '';
   private conversions = new Map<string, { scale: number; offset: number }>();
+  private selectedStep: string | undefined;
 
   constructor(
     private readonly store: Store,
@@ -144,8 +145,9 @@ export class ResultsView {
     // No Step has been solved is a normal state, not a failure: `query.result` says so with
     // `not-found`, which is the one error this call swallows.
     try {
-      return (await this.transport.query({ query: 'query.result' })) as ResultSummary;
+      return (await this.transport.query({ query: 'query.result', ...(this.selectedStep === undefined ? {} : { step: this.selectedStep }) })) as ResultSummary;
     } catch {
+      this.selectedStep = undefined;
       return null;
     }
   }
@@ -224,11 +226,30 @@ export class ResultsView {
     v?.setDeformed(this.displacement, scale);
   }
 
+  /** Select the requested solved Step/mode before applying playback speed or phase. */
+  async animate(a: { step: string; mode?: number; playing: boolean; speed?: number; frame?: number }): Promise<void> {
+    const result = await this.transport.query({ query: 'query.result', step: a.step }) as ResultSummary;
+    if (a.mode !== undefined && a.mode > (result.frequencies?.length ?? 0))
+      throw new FemError('not-found', `Step '${a.step}' has no mode ${a.mode}`, 'view.animate.mode', 'query.result for the available modes');
+    if (a.mode === undefined && !result.extremes.some((e) => e.field === 'displacement') && !result.frequencies?.length)
+      throw new FemError('unsupported', `Step '${a.step}' has no displacement to animate`, 'view.animate', 'view.showField to inspect its static field');
+    const fieldKey = a.mode === undefined ? available(this.store.state.fieldKey, result, this.store.state.yieldStress !== null) : `mode:${a.mode}`;
+    const needsLoad = this.selectedStep !== a.step || this.store.state.result?.step !== a.step || this.store.state.fieldKey !== fieldKey;
+    this.selectedStep = a.step;
+    this.store.set({ result, fieldKey, viewMode: 'results' });
+    this.viewer.current?.setMode('results');
+    if (needsLoad) await this.load(result);
+    const phase = a.frame === undefined ? undefined : a.frame / 100;
+    const speed = a.speed ?? this.store.state.animationSpeed;
+    this.viewer.current?.animate(a.playing, speed, phase);
+    this.store.set({ playing: a.playing, animationSpeed: speed, phase: phase ?? (a.playing ? 0 : 0.25) });
+  }
+
   /** What the legend burns into a screenshot; `null` outside Results mode. */
-  legendBurn(): { title: string; unit: string; min: number; max: number; colormap: string; scale: number } | null {
-    const { legend, fieldKey, colormap, viewMode, screenshotScale } = this.store.state;
+  legendBurn(): { title: string; unit: string; min: number; max: number; colormap: string } | null {
+    const { legend, fieldKey, colormap, viewMode } = this.store.state;
     if (!legend || viewMode !== 'results') return null;
-    return { title: choiceOf(fieldKey).label, unit: legend.unit, min: legend.min, max: legend.max, colormap, scale: screenshotScale };
+    return { title: choiceOf(fieldKey).label, unit: legend.unit, min: legend.min, max: legend.max, colormap };
   }
 
   /**
@@ -239,6 +260,7 @@ export class ResultsView {
     const out = (ack as { output?: { type?: string; report?: StudyReport } } | undefined)?.output;
     if (out?.type === 'study' && out.report) this.store.set({ study: out.report });
     if (out?.type !== 'solve') return;
+    this.selectedStep = undefined;
     const warnings = (ack as { warnings?: Warning[] }).warnings ?? [];
     this.store.set({ tab: 'results', viewMode: 'results', assumptions: warnings });
     this.viewer.current?.setMode('results');

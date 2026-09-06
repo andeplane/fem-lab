@@ -282,6 +282,27 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
  * than a replay of the history, and the bar's own title says so.
  */
 function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+  const phaseStart = useRef<{ phase: number; playing: boolean } | null>(null);
+  const phaseEpoch = useRef(0);
+  const step = s.result?.step ?? '';
+  const mode = choiceOf(s.fieldKey).mode;
+  const target = `${step}\u0000${String(mode)}`;
+  const phaseTarget = useRef(target);
+  // A Command may change the shown Step/mode while a native range gesture still owns the
+  // pointer. Its eventual pointerup belongs to the old target and must not pause the new one.
+  if (phaseTarget.current !== target) {
+    phaseTarget.current = target;
+    phaseStart.current = null;
+    phaseEpoch.current++;
+  }
+  const cancelPhase = (): void => {
+    const start = phaseStart.current;
+    if (!start) return;
+    phaseStart.current = null;
+    phaseEpoch.current++;
+    store.set(start);
+    viewer.current?.animate(start.playing, store.state.animationSpeed, start.phase);
+  };
   const previewStart = useRef<number | null>(null);
   const preview = (scale: number): void => {
     previewStart.current ??= store.state.deformScale;
@@ -296,8 +317,6 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
     store.set({ deformScale: scale });
     viewer.current?.previewDeformScale(scale);
   };
-  const step = s.result?.step ?? '';
-  const mode = choiceOf(s.fieldKey).mode;
   const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
   const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
   return (
@@ -309,10 +328,6 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
         args={{ step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }}
         pressed={s.playing}
         title={s.playing ? 'pause' : `sweep ${what}`}
-        onRun={() => {
-          store.set({ playing: !s.playing });
-          void dispatch({ cmd: 'view.animate', step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
-        }}
       >
         {s.playing ? '❚❚' : '▶'}
       </Cmd>
@@ -322,18 +337,36 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
           class="phase"
           min="0"
           max="100"
-          step="2"
+          step="1"
           aria-label="animation phase"
           data-cmd="view.animate"
           value={String(Math.round(s.phase * 100))}
           onInput={(e) => {
             const turns = Number((e.target as HTMLInputElement).value) / 100;
-            // The Command carries the frame so a script and the AI can scrub too; the local
-            // call is what makes it visible until the host forwards `frame` to the viewer.
+            if (!phaseStart.current) {
+              phaseStart.current = { phase: store.state.phase, playing: store.state.playing };
+              phaseEpoch.current++;
+            }
             store.set({ phase: turns, playing: false });
             viewer.current?.setPhase(turns);
-            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
           }}
+          onChange={(e) => {
+            const start = phaseStart.current;
+            if (!start) return;
+            const turns = Number((e.target as HTMLInputElement).value) / 100;
+            phaseStart.current = null;
+            if (turns === start.phase && !start.playing) return;
+            const epoch = phaseEpoch.current;
+            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => {
+              // A later gesture or target change owns the viewer now. Only roll back while this
+              // rejected preview is still the state on screen.
+              if (phaseEpoch.current !== epoch || phaseTarget.current !== target || store.state.phase !== turns || store.state.playing) return;
+              store.set(start);
+              viewer.current?.animate(start.playing, store.state.animationSpeed, start.phase);
+            });
+          }}
+          onPointerCancel={cancelPhase}
+          onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelPhase(); } }}
         />
       ) : null}
       <span class="faint">deformation</span>
