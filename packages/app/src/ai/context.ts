@@ -28,6 +28,11 @@ call as it happens.
   back as { value, unit }. Never send a bare number for a dimensional quantity.
 - Targets are names, never node or element ids: bodies, named face Sets and Sets. Use query.objects
   to see what exists.
+- Named materials: call query.materialLibrary before material.add. Copy only properties applicable
+  to the returned grade, condition, product form and temperature, and copy materialAddSource into
+  source. Property objects carry their input in value; for dimensionless nu, pass the inner numeric
+  value rather than its unit "1" wrapper. Never fill a null property; ask the person for any required
+  property the source omits.
 - Prefer run_script over more than three separate Commands: one script is one Journal entry the
   person can read, and it is faster.
 - Verify before you report. After a solve, check the reaction sum against the applied load and

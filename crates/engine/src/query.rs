@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::command::{Command, Field, ObjectKind};
 use crate::error::Warning;
-use crate::units::{Length, Quantity, Q};
+use crate::units::{
+    Conductivity, Density, Dimensionless, Length, Quantity, SpecificHeat, Stress, Temperature, ThermalExpansion, Q,
+};
 
 /// A value with its display unit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -102,6 +104,18 @@ pub enum Query {
     #[schemars(extend("x-returns" = "Converted"))]
     Convert { quantity: Quantity, to: String },
 
+    /// Primary-source material data with dimensions, grade, condition, temperature and a source
+    /// for every reported property. With no `name`, lists the stable catalogue. With a canonical
+    /// id, name or unambiguous alias, returns that entry. Missing properties are explicit nulls:
+    /// never infer them before material.add. Copy the entry's `materialAddSource` into that
+    /// Command's `source` so the Journal preserves provenance.
+    #[serde(rename = "query.materialLibrary", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "MaterialLibrary"))]
+    MaterialLibrary {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+
     /// Every nameable thing in the Model as `@`-mention references (`body:beam`, `set:beam.top`,
     /// `material:steel`, `journal:12`), with a one-line summary each; the mention picker's index.
     #[serde(rename = "query.objects", rename_all = "camelCase")]
@@ -165,6 +179,74 @@ pub struct MaterialRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rho: Option<Valued>,
     pub assigned_to: Vec<String>,
+}
+
+/// One primary source used by [`MaterialLibrary`]. Property `source` fields name its `id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialCitation {
+    pub id: String,
+    pub organization: String,
+    pub title: String,
+    pub url: String,
+    pub locator: String,
+    pub retrieved_on: String,
+}
+
+macro_rules! sourced_quantity {
+    ($name:ident, $dim:ty) => {
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+        #[serde(rename_all = "camelCase")]
+        pub struct $name {
+            pub value: Q<$dim>,
+            /// The exact grade, direction, statistic or test condition to which the value applies.
+            pub basis: String,
+            /// A [`MaterialCitation::id`].
+            pub source: String,
+        }
+    };
+}
+
+sourced_quantity!(SourcedStress, Stress);
+sourced_quantity!(SourcedDensity, Density);
+sourced_quantity!(SourcedRatio, Dimensionless);
+sourced_quantity!(SourcedThermalExpansion, ThermalExpansion);
+sourced_quantity!(SourcedConductivity, Conductivity);
+sourced_quantity!(SourcedSpecificHeat, SpecificHeat);
+
+/// A documented catalogue entry. Every optional property serializes as a value or `null`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialLibraryEntry {
+    pub id: String,
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub specification: String,
+    pub product_form: String,
+    pub condition: String,
+    pub temperature: Option<Q<Temperature>>,
+    pub temperature_basis: String,
+    #[serde(rename = "E")]
+    pub e: Option<SourcedStress>,
+    pub nu: Option<SourcedRatio>,
+    pub rho: Option<SourcedDensity>,
+    pub alpha: Option<SourcedThermalExpansion>,
+    pub k: Option<SourcedConductivity>,
+    pub cp: Option<SourcedSpecificHeat>,
+    #[serde(rename = "yield")]
+    pub yield_: Option<SourcedStress>,
+    /// Limitations that prevent a reported value from being treated as a generic default.
+    pub limitations: Vec<String>,
+    /// Ready to copy into `material.add.source` with the applicable reported values.
+    pub material_add_source: String,
+}
+
+/// `query.materialLibrary` response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialLibrary {
+    pub entries: Vec<MaterialLibraryEntry>,
+    pub sources: Vec<MaterialCitation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -432,6 +514,7 @@ pub enum QueryResult {
     Journal(JournalDump),
     Script(ScriptText),
     Converted(Converted),
+    MaterialLibrary(MaterialLibrary),
     Objects(ObjectList),
     Capabilities(Capabilities),
     Report(ReportText),
@@ -524,6 +607,7 @@ mod tests {
     fn names_and_schema_document() {
         assert_eq!(Query::Model {}.name(), "query.model");
         assert_eq!(Query::Convert { quantity: Quantity::text("1 m"), to: "mm".into() }.name(), "query.convert");
+        assert_eq!(Query::MaterialLibrary { name: None }.name(), "query.materialLibrary");
         let doc = schema_document();
         assert_eq!(doc["schemaVersion"], crate::SCHEMA_VERSION);
         let variants = doc["commands"]["oneOf"].as_array().unwrap();
