@@ -18,6 +18,7 @@ const MODEL = {
   materials: [{ name: 'steel', E: v(210_000, 'MPa'), nu: 0.3, rho: v(7850, 'kg/m^3'), assignedTo: ['beam'] }],
   sets: [{ name: 'tip_face', kind: 'face', summary: 'rule: x == 1000 mm' }],
   constraints: [{ name: 'root', on: 'beam.xmin', summary: 'fix ux, uy, uz' }],
+  connections: [{ name: 'weld', kind: 'bonded', master: 'beam.xmax', slave: 'plate.xmin', summary: 'bonded, pairing within 0.1 mm' }],
   loads: [{ name: 'tip', kind: 'traction', on: 'beam.xmax', summary: 'total [0, 0, -1] kN' }],
   steps: [
     { name: 'uls', procedure: 'static', constraints: ['root'], loads: ['tip'], solved: true },
@@ -46,15 +47,15 @@ const state = (model: ModelSummary | null): UiState => ({ ...initialState, model
 const group = (s: UiState, label: string) => treeGroups(s).find((g) => g.label === label)!;
 
 describe('treeGroups', () => {
-  it('lists the design\'s eight groups in workflow order, even with no Model at all', () => {
-    expect(treeGroups(state(null)).map((g) => g.label)).toEqual(['Geometry', 'Materials', 'Mesh', 'Constraints', 'Loads', 'Steps', 'Results', 'Plugins']);
+  it('lists the design\'s nine groups in workflow order, even with no Model at all', () => {
+    expect(treeGroups(state(null)).map((g) => g.label)).toEqual(['Geometry', 'Materials', 'Mesh', 'Constraints', 'Connections', 'Loads', 'Steps', 'Results', 'Plugins']);
     for (const g of treeGroups(state(null))) {
       expect(g.items).toEqual([]);
       expect(g.badge).toBe('—');
       expect(g.note.length).toBeGreaterThan(20);
     }
     // Every group a person can add to offers the Command that adds to it.
-    expect(treeGroups(state(null)).filter((g) => g.add).map((g) => g.add!.cmd)).toEqual(['geometry.addBox', 'material.add', 'mesh.set', 'constraint.fix', 'load.pressure', 'step.add']);
+    expect(treeGroups(state(null)).filter((g) => g.add).map((g) => g.add!.cmd)).toEqual(['geometry.addBox', 'material.add', 'mesh.set', 'constraint.fix', 'contact.add', 'load.pressure', 'step.add']);
   });
 
   it('puts bodies and named faces in Geometry, with their glyphs and summaries', () => {
@@ -81,6 +82,14 @@ describe('treeGroups', () => {
     expect(group(s, 'Materials').items[0]!.summary).toBe('E 210000 MPa · ν 0.3 · ρ 7850 kg/m^3 · on beam');
     expect(group(s, 'Materials').items[0]!.args).toEqual({ kind: 'material', name: 'steel' });
     expect(group(s, 'Constraints').items[0]!.summary).toBe('fix ux, uy, uz on beam.xmin');
+    // A tie is its own group, edited through the Constraint it is, and highlights both faces.
+    expect(group(s, 'Connections').items[0]).toMatchObject({
+      cmd: 'form.edit',
+      args: { kind: 'constraint', name: 'weld' },
+      summary: 'bonded, pairing within 0.1 mm · beam.xmax to plate.xmin',
+      select: { sets: ['beam.xmax', 'plate.xmin'] },
+      remove: 'constraint.remove',
+    });
     expect(group(s, 'Loads').items[0]).toMatchObject({ cmd: 'form.edit', summary: 'total [0, 0, -1] kN on beam.xmax' });
     expect(group(s, 'Mesh').items[0]!.summary).toBe('lattice · order 1 · incompatible-modes');
     expect(group(s, 'Steps').items[0]!.summary).toBe('static · 1 constraints · 1 loads · solved');
