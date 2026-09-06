@@ -60,6 +60,8 @@ export class ResultsView {
   private loadedFor = '';
   private conversions = new Map<string, { scale: number; offset: number }>();
   private selectedStep: string | undefined;
+  /** Only the latest concurrent `view.animate` request may commit playback state. */
+  private animationRequest = 0;
   /** What was *asked* for, not what it resolved to: an `"auto"` that could not be computed while
    *  the Viewer or the displacement was missing is recomputed on the next `load`, and a person
    *  who typed ×200 keeps ×200 across a field switch and a re-solve. */
@@ -229,7 +231,9 @@ export class ResultsView {
 
   /** Select the requested solved Step/mode before applying playback speed or phase. */
   async animate(a: { step: string; mode?: number; playing: boolean; speed?: number; frame?: number }): Promise<void> {
+    const request = ++this.animationRequest;
     const result = await this.transport.query({ query: 'query.result', step: a.step }) as ResultSummary;
+    if (request !== this.animationRequest) return;
     if (a.mode !== undefined && a.mode > (result.frequencies?.length ?? 0))
       throw new FemError('not-found', `Step '${a.step}' has no mode ${a.mode}`, 'view.animate.mode', 'query.result for the available modes');
     if (a.mode === undefined && !result.extremes.some((e) => e.field === 'displacement') && !result.frequencies?.length)
@@ -240,6 +244,7 @@ export class ResultsView {
     this.store.set({ result, fieldKey, viewMode: 'results' });
     this.viewer.current?.setMode('results');
     if (needsLoad) await this.load(result);
+    if (request !== this.animationRequest) return;
     const phase = a.frame === undefined ? undefined : a.frame / 100;
     const speed = a.speed ?? this.store.state.animationSpeed;
     this.viewer.current?.animate(a.playing, speed, phase);

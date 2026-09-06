@@ -280,6 +280,27 @@ describe('ResultsView', () => {
     expect(store.state.fieldKey).toBe('mode:2');
   });
 
+  it('keeps a newer pause when an older play finishes loading afterward', async () => {
+    const modal = { ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] };
+    const { store, viewer, results, transport } = harness(modal);
+    let finishLoad!: () => void;
+    const loadPending = new Promise<void>((resolve) => { finishLoad = resolve; });
+    transport.field.mockImplementationOnce(async () => {
+      await loadPending;
+      return { values: Float32Array.from([0, 0, 0, 0, 0, -0.0001919]), min: 0, max: 1, unit: '' };
+    });
+
+    const play = results.animate({ step: 'modes', mode: 1, playing: true });
+    await vi.waitFor(() => expect(transport.field).toHaveBeenCalledWith('modes', 'mode:1', undefined));
+    await results.animate({ step: 'modes', mode: 1, playing: false });
+    finishLoad();
+    await play;
+
+    expect(viewer.current.animate).toHaveBeenCalledTimes(1);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, undefined);
+    expect(store.state.playing).toBe(false);
+  });
+
   it('reports missing displacement without pretending a thermal field can be animated', async () => {
     const { results, viewer } = harness({ ...RESULT, extremes: [] });
     await expect(results.animate({ step: 'heat', playing: true })).rejects.toThrow('has no displacement');
