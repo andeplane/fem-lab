@@ -491,7 +491,7 @@ impl Engine {
             }
             Command::GeometryNameFace { name, of, where_ } => {
                 check_name(name)?;
-                self.check_selector_body(of).map_err(|e| e.at("of"))?;
+                self.check_body(of).map_err(|e| e.at("of"))?;
                 let pred = where_.to_si()?;
                 let set = NamedSet { name: name.clone(), source: SetSource::Face { of: of.clone(), where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
@@ -500,7 +500,7 @@ impl Engine {
                 check_name(name)?;
                 let pred = where_.to_si()?;
                 if let femlab_geometry::RegionPredicate::Body { name: b } = &pred {
-                    self.check_selector_body(b).map_err(|e| e.at("where.name"))?;
+                    self.check_body(b).map_err(|e| e.at("where.name"))?;
                 }
                 let set = NamedSet { name: name.clone(), source: SetSource::Region { where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
@@ -831,7 +831,7 @@ impl Engine {
                 // A Step's fields are point data on the same Mesh; without a Step the file is
                 // the Mesh alone, which is what a user exports before solving.
                 let point: Vec<(&str, usize, Vec<f64>)> = match step {
-                    Some(s) => crate::solve_run::export_fields(self.stored(Some(s))?.2),
+                    Some(s) => crate::solve_run::export_fields(self.current_result(Some(s))?),
                     None => Vec::new(),
                 };
                 let built = self.mesh()?;
@@ -983,9 +983,9 @@ impl Engine {
             .suggest("use an auto face like 'beam.xmin' (see query.model) or geometry.nameFace"))
     }
 
-    /// Selectors may refer to explicit geometry or the Body defined by a mapped/swept mesher.
-    /// This validates identity only; the geometric predicate resolves against the actual Mesh.
-    fn check_selector_body(&self, body: &str) -> Result<(), Error> {
+    /// A Body reference may name explicit geometry or the Body defined by a mapped/swept mesher.
+    /// This validates identity only; selectors and loads resolve against the actual Mesh.
+    fn check_body(&self, body: &str) -> Result<(), Error> {
         let mut known = self.model.names(ObjectKind::Body);
         known.extend(self.model.implicit_body());
         if known.contains(&body) {
@@ -1000,8 +1000,8 @@ impl Engine {
 
     /// Every named Body exists, or `not-found` listing the ones that do.
     fn check_bodies(&self, bodies: &[String]) -> Result<(), Error> {
-        for b in bodies {
-            self.model.body(b).ok_or_else(|| Error::not_found("body", b, &self.model.names(ObjectKind::Body)))?;
+        for (i, body) in bodies.iter().enumerate() {
+            self.check_body(body).map_err(|error| error.at(format!("bodies[{i}]")))?;
         }
         Ok(())
     }
