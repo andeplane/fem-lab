@@ -37,6 +37,7 @@ export const SelectionInput = z.object({
   sets: z.array(z.string()).optional(),
   mode: z.enum(['replace', 'add', 'remove']).optional(),
 });
+export const HighlightInput = SelectionInput.omit({ mode: true });
 export const PickTarget = z.enum(['face', 'body', 'off']);
 export const ScreenshotOptions = z.object({ width: int.optional(), height: int.optional(), legend: z.boolean().optional(), title: z.string().optional() });
 export const CopyWhat = z.union([
@@ -88,6 +89,7 @@ export interface HostContext {
     setClip(p: z.output<typeof ClipPlane> | null): void;
     toggle(layer: z.output<typeof Layer>, on?: boolean): void;
     setVisible(bodies: string[], on: boolean): void;
+    highlight(s: z.output<typeof HighlightInput>): void;
     setTheme(t: z.output<typeof Theme>): void;
     animate(a: z.output<typeof Animation>): void;
     camera(): z.output<typeof CameraState>;
@@ -278,6 +280,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.setClip', 'Cut the view with a section plane `{ normal, offset }` in metres to look inside a body, or `{ plane: null }` to remove the cut. Contours are drawn on the cut surface too.', z.object({ plane: ClipPlane.nullable() }), ({ plane }, ctx) => ctx.view.setClip(plane)),
   def('view.toggle', 'Show or hide an overlay layer: mesh, edges, loads, constraints, sets, legend, axes or grid. Omit `on` to flip the current state.', z.object({ layer: Layer, on: z.boolean().optional() }), ({ layer, on }, ctx) => ctx.view.toggle(layer, on)),
   def('view.setVisible', 'Show or hide the named bodies in the viewer (the tree\'s eye icon). Hidden bodies stay in the Model and in every solve; only the display changes.', z.object({ bodies: z.array(z.string()), on: z.boolean() }), ({ bodies, on }, ctx) => ctx.view.setVisible(bodies, on)),
+  def('view.highlight', 'Temporarily highlight named bodies, faces or Sets in the viewer. Pass an empty object to clear the highlight. This is transient hover state: it never changes the selection, Model or Journal.', HighlightInput, (s, ctx) => ctx.view.highlight(s)),
   def('view.setTheme', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
   def('view.animate', 'Play, pause or scrub an animation of a Step: a mode shape (`mode`) or a transient history, with `speed` and an explicit `frame`. Available once dynamics land; the row exists so the control has a Command.', Animation, (a, ctx) => ctx.view.animate(a)),
   def('selection.set', 'Select bodies, faces (named face Sets) and Sets by name, never by id. `mode` is replace (default), add or remove, like shift-click; the selection drives `view.fit` and `@selection` in the chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),

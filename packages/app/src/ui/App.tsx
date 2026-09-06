@@ -368,6 +368,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         return;
       }
       viewer.current = v;
+      v.setSelection(store.state.selection);
       viewer.onReady?.();
       v.onPick((p) => {
         setProbe(probeLine(p));
@@ -388,7 +389,9 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       viewer.current = null;
       v.dispose();
     };
-  }, [viewer, dispatch]);
+  }, [viewer, dispatch, store]);
+
+  useEffect(() => viewer.current?.setSelection(s.selection), [viewer, s.selection]);
 
   const ref = s.selection.refs[0];
   const stale = s.result?.stale === true;

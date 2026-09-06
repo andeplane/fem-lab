@@ -64,6 +64,7 @@ export function fakeHost(transport = fakeTransport(), projectOpen = false): Host
       setClip: vi.fn(),
       toggle: vi.fn(),
       setVisible: vi.fn(),
+      highlight: vi.fn(),
       setTheme: vi.fn(),
       animate: vi.fn(),
       camera: vi.fn(() => ({ position: [1, 2, 3] as [number, number, number], target: [0, 0, 0] as [number, number, number] })),

@@ -26,10 +26,12 @@ export interface CmdProps {
   selected?: boolean;
   /** Runs instead of `dispatch` when the click needs a fallback (the `@` button's copy). */
   onRun?: () => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
   children: ComponentChildren;
 }
 
-export function Cmd({ dispatch, cmd, args, children, onRun, ...rest }: CmdProps) {
+export function Cmd({ dispatch, cmd, args, children, onRun, onFocus, onBlur, ...rest }: CmdProps) {
   return (
     <button
       type="button"
@@ -40,6 +42,8 @@ export function Cmd({ dispatch, cmd, args, children, onRun, ...rest }: CmdProps)
       {...(rest.role === undefined ? {} : { role: rest.role })}
       {...(rest.selected === undefined ? {} : { 'aria-selected': rest.selected })}
       {...(rest.pressed === undefined ? {} : { 'aria-pressed': rest.pressed })}
+      onFocus={onFocus}
+      onBlur={onBlur}
       onClick={(e) => {
         e.stopPropagation();
         if (onRun) return onRun();

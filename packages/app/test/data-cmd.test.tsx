@@ -9,6 +9,8 @@ import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import { Store } from '../src/store';
 import { App } from '../src/ui/App';
+import { journalTarget } from '../src/ui/Bottom';
+import type { Dispatch } from '../src/ui/cmd';
 import type { WorkerTransport } from '../src/worker-transport';
 
 // `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40
@@ -68,7 +70,7 @@ const staleSeqs = (root: HTMLElement): string[] => [...root.querySelectorAll('.j
  * each bottom tab and the ⌘K palette. If any of them names a Command the registry does not
  * have, the first test below fails.
  */
-function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLElement; registry: Registry; store: Store } {
+function mount(patch: Partial<Parameters<Store['set']>[0]> = {}, dispatch: Dispatch = async () => undefined): { root: HTMLElement; registry: Registry; store: Store } {
   const store = new Store();
   const viewer = { current: null };
   const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
@@ -81,7 +83,7 @@ function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLEl
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
-  render(<App store={store} dispatch={async () => undefined} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root);
+  render(<App store={store} dispatch={dispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root);
   return { root, registry, store };
 }
 
@@ -235,6 +237,48 @@ describe('the shell', () => {
     // A restoring study never produces a cached Result, even if inconsistent host data points
     // at that exact Journal line.
     expect(boundarySeq(mount({ journal: restoring, result: result('static', false, 1) }).root)).toBeUndefined();
+  });
+
+  it('resolves only explicit, live Journal targets to drawable Model names', () => {
+    const current = model();
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'beam' }, current)).toEqual({ ref: 'body:beam', view: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'material.add', name: 'steel' }, current)).toEqual({ ref: 'material:steel', view: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'constraint.fix', name: 'fix', on: 'old.face' }, current)).toEqual({ ref: 'constraint:fix', view: { faces: ['beam.xmin'] } });
+    expect(journalTarget({ cmd: 'load.pressure', name: 'p', on: 'old.face' }, current)).toEqual({ ref: 'load:p', view: { faces: ['beam.top'] } });
+    expect(journalTarget({ cmd: 'model.rename', kind: 'body', name: 'old', to: 'beam' }, current)).toEqual({ ref: 'body:beam', view: { bodies: ['beam'] } });
+
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'deleted' }, current)).toBeNull();
+    expect(journalTarget({ cmd: 'geometry.remove', name: 'beam' }, current)).toBeNull();
+    expect(journalTarget({ cmd: 'step.add', name: 'static' }, current)).toBeNull();
+    expect(journalTarget({ cmd: 'solve.run', step: 'static' }, current)).toBeNull();
+  });
+
+  it('selects and highlights a Journal target while keeping copy separate', () => {
+    const dispatch = vi.fn<Dispatch>(async () => undefined);
+    const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m', '1 m'] }, { cmd: 'geometry.addBox', name: 'deleted', size: ['1 m', '1 m', '1 m'] });
+    const { root, store } = mount({ tab: 'journal', journal: entries }, dispatch);
+    const row = root.querySelector<HTMLElement>('[data-target-ref="body:beam"]')!;
+    const select = row.querySelector<HTMLButtonElement>('.jrow-main')!;
+
+    row.dispatchEvent(new MouseEvent('mouseenter'));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight', bodies: ['beam'] });
+    row.dispatchEvent(new MouseEvent('mouseleave'));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+    select.focus();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight', bodies: ['beam'] });
+    select.blur();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+
+    select.click();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'selection.set', bodies: ['beam'] });
+    row.querySelector<HTMLButtonElement>('.jcopy')!.click();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
+    expect(store.state.journal).toBe(entries);
+
+    const unavailable = [...root.querySelectorAll<HTMLElement>('.jrow')].find((item) => item.textContent?.includes('deleted'))!;
+    expect(unavailable.dataset['targetRef']).toBeUndefined();
+    expect(unavailable.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+    expect(root.querySelector<HTMLElement>('.jrow')!.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
   });
 
   it('renders the start screen with its four paths before a Model exists', () => {

@@ -116,6 +116,10 @@ export class Viewer {
   /** Design state 6: a stale Result keeps its contours, at 42 % so nobody trusts them. */
   private dim = false;
   private hoverFace: string | null = null;
+  private selectedBodies = new Set<string>();
+  private selectedFaces = new Set<string>();
+  private highlightedBodies = new Set<string>();
+  private highlightedFaces = new Set<string>();
   private readonly hidden = new Set<string>();
   private box = new Box3(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
   private pickCb: ((p: Pick | null) => void) | null = null;
@@ -156,6 +160,21 @@ export class Viewer {
 
   onPick(cb: (p: Pick | null) => void): void {
     this.pickCb = cb;
+  }
+
+  /** Persistent selection and transient Journal hover share the same drawable name boundary. */
+  setSelection(s: { bodies: string[]; faces: string[]; sets: string[] }): void {
+    this.selectedBodies = new Set(s.bodies);
+    this.selectedFaces = new Set([...s.faces, ...s.sets]);
+    this.paint();
+    this.render();
+  }
+
+  setHighlight(s: { bodies?: string[]; faces?: string[]; sets?: string[] }): void {
+    this.highlightedBodies = new Set(s.bodies ?? []);
+    this.highlightedFaces = new Set([...(s.faces ?? []), ...(s.sets ?? [])]);
+    this.paint();
+    this.render();
   }
 
   resize(): void {
@@ -241,7 +260,11 @@ export class Viewer {
     for (let i = 0; i < this.tri.length; i++) {
       const t = this.tri[i]!;
       const faceName = s.faceNames[s.triFace[t]!] ?? null;
-      const hot = faceName !== null && faceName === this.hoverFace;
+      const bodyName = s.bodyNames[s.triBody[t]!] ?? null;
+      const selected = (bodyName !== null && this.selectedBodies.has(bodyName)) || (faceName !== null && this.selectedFaces.has(faceName));
+      const hot =
+        (faceName !== null && (faceName === this.hoverFace || this.highlightedFaces.has(faceName))) ||
+        (bodyName !== null && this.highlightedBodies.has(bodyName));
       for (let k = 0; k < 3; k++) {
         const vertex = i * 3 + k;
         if (this.mode === 'results' && this.field) {
@@ -252,6 +275,7 @@ export class Viewer {
         } else {
           c.setScalar(grey).lerp(bodyTint(s.triBody[t]!), 0.14);
         }
+        if (selected) c.lerp(HIGHLIGHT, 0.28);
         if (hot) c.lerp(HIGHLIGHT, 0.45);
         if (this.dim) c.multiplyScalar(0.42);
         colour.setXYZ(vertex, c.r, c.g, c.b);

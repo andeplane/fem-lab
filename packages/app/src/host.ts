@@ -104,6 +104,7 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       },
       toggle: (layer, on) => v().setLayer(layer, on ?? true),
       setVisible: (bodies, on) => v().setVisible(bodies, on),
+      highlight: (s) => viewer.current?.setHighlight(s),
       setTheme: (t) => {
         store.set({ theme: t });
         document.documentElement.dataset['theme'] = t;
