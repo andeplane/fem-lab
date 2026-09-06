@@ -44,7 +44,10 @@ describe('benchmark comparison registry', () => {
       .sort();
     expect(Object.keys(BENCHMARK_COMPARISONS).sort()).toEqual(names);
     expect(Object.values(BENCHMARK_COMPARISONS).filter(Boolean).length).toBeGreaterThanOrEqual(11);
-    expect(BENCHMARK_COMPARISONS['nafems-le10-plate']).toBeNull();
+    expect(BENCHMARK_COMPARISONS['nafems-le10-plate']).toMatchObject({
+      locator: { kind: 'probe', field: 'stress', component: 1, at: ['2 m', '0 m', '0.6 m'] },
+      reference: { values: [-5.25], unit: 'MPa' },
+    });
     expect(BENCHMARK_COMPARISONS['heated-fin']).toMatchObject({ reference: { values: [0.1656], unit: 'mm' } });
     const unmapped = Object.entries(BENCHMARK_COMPARISONS).filter(([, comparison]) => comparison === null).map(([name]) => name).sort();
     expect(Object.keys(BENCHMARK_UNMAPPED_REASONS).sort()).toEqual(unmapped);
@@ -122,6 +125,15 @@ describe('benchmark comparison registry', () => {
     const reading = await readBenchmark(comparison, result(), query);
     expect(query).toHaveBeenLastCalledWith({ query: 'query.convert', quantity: { value: 92_160_590, unit: 'Pa' }, to: 'MPa' });
     expect(reading.actual).toEqual([92.16059]);
+    expect(reading.pass).toBe(true);
+  });
+
+  it('checks the corrected LE10 full-face variant at upper-surface point D', async () => {
+    const comparison = BENCHMARK_COMPARISONS['nafems-le10-plate']!;
+    const query = vi.fn(async () => ({ value: { value: -5.234137, unit: 'MPa' }, element: 0, interpolated: true }));
+    const reading = await readBenchmark(comparison, result(), query);
+    expect(query).toHaveBeenCalledWith({ query: 'query.probe', field: 'stress', component: 1, at: ['2 m', '0 m', '0.6 m'] });
+    expect(reading.percent).toBeCloseTo(0.30215, 4);
     expect(reading.pass).toBe(true);
   });
 
@@ -231,12 +243,12 @@ describe('Theory panel', () => {
     expect(root.querySelector('.surface.pass')).toBeNull();
   });
 
-  it('explains why LE10 makes no live verification claim', () => {
+  it('shows the corrected ESRD LE10 live reference', async () => {
     const root = document.createElement('div');
-    render(<Theory benchmark={attachComparison(example('nafems-le10-plate'), provenance())} result={result()} current={provenance()} query={async () => undefined} />, root);
-    expect(root.textContent).toContain('published LE10 line support');
-    expect(root.textContent).toContain('Issue #183');
-    expect(root.querySelector('.theory-values')).toBeNull();
+    render(<Theory benchmark={attachComparison(example('nafems-le10-plate'), provenance())} result={result()} current={provenance()} query={async () => ({ value: { value: -5.234137, unit: 'MPa' } })} />, root);
+    await waitFor(() => root.querySelector('.theory-values'), 'LE10 comparison');
+    expect(root.textContent).toContain('σᵧᵧ at upper-surface point D');
+    expect(root.querySelector('.surface.pass')).not.toBeNull();
   });
 
   it('hides an old reading while a different Result at the same revision is being queried', async () => {

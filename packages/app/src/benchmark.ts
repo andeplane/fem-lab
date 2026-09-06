@@ -126,7 +126,12 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
     tolerance: { kind: 'percent', value: 2 },
     source: 'NAFEMS “The Standard NAFEMS Benchmarks” P18 (1990), LE1 · catalogue C5',
   },
-  'nafems-le10-plate': null,
+  'nafems-le10-plate': {
+    locator: { kind: 'probe', field: 'stress', component: 1, at: ['2 m', '0 m', '0.6 m'] },
+    reference: { values: [-5.25], unit: 'MPa', label: 'σᵧᵧ at upper-surface point D' },
+    tolerance: { kind: 'percent', value: 2 },
+    source: 'ESRD StressCheck Benchmarks Guide, pp. 29–31, full outer-face support variant',
+  },
   'plate-with-hole-2d': null,
   'simply-supported-beam': null,
   'slab-strip': null,
@@ -148,7 +153,6 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
 export const BENCHMARK_UNMAPPED_REASONS: Record<string, string> = {
   'bolt-flange': 'No live comparison: the quoted peak is a stair-stepped bolt-hole stress with only two or three elements across the hole. The metadata explicitly treats it as a load-path picture, not a converged stress oracle.',
   'bracket-L': 'No live comparison: the Result peak lies at the sharp re-entrant corner, where linear-elastic stress is singular and rises with refinement. There is no finite corner-stress reference to pass.',
-  'nafems-le10-plate': 'Live comparison withheld: this model clamps the full outer face, unlike the published LE10 line support. Issue #183 tracks the matching variant.',
   'plate-with-hole-2d': 'No live comparison: 3σ is the local hoop stress of an infinite plate, while this finite-width full model reports global Cartesian and von Mises extrema. Those are different stress quantities and locations.',
   'simply-supported-beam': 'No live comparison: the textbook formulas assume ideal line supports at the neutral axis, but this solid model restrains translation over both complete end faces. Its bundled expected value is the resulting global von Mises peak at a support, not the mid-span beam quantity.',
   'slab-strip': 'No live comparison: 6M/bh² is longitudinal stress at the mid-span extreme fibre for ideal line supports, but this solid model restrains both complete end faces. Its bundled expected value is the resulting global von Mises peak near a support.',
