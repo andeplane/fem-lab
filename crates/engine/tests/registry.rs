@@ -1165,6 +1165,7 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     ok(&mut e, r#"{"cmd":"load.pressure","name":"pfa","on":"fa","value":"1 MPa"}"#);
     ok(&mut e, r#"{"cmd":"load.convection","name":"cfa","on":"fa","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
     ok(&mut e, r#"{"cmd":"load.heatFlux","name":"hfa","on":"fa","q":"1 kW/m^2"}"#);
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"rfa","on":"fa","emissivity":0.9,"tInf":"20 degC"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"ta","bodies":["a"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"tb","bodies":["b"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
@@ -1196,6 +1197,7 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     assert_eq!(e.model().load("pfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("cfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("hfa").unwrap().kind.set(), Some("faa"));
+    assert_eq!(e.model().load("rfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("tra").unwrap().kind.set(), Some("aa.zmax"));
     let QueryResult::Objects(o) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Set]) }).unwrap() else {
         panic!()
@@ -2049,6 +2051,26 @@ fn the_free_mesher_validates_its_body_its_size_and_its_boxes() {
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
     assert!(er.cause.contains("a full circle"), "{}", er.cause);
     assert!(er.suggestion.unwrap().contains("split the full-circle arc into two arcs"));
+    // Wrapping the same malformed sketch must retain its located diagnostic.
+    let mut wrapped = serde_json::to_value(&e.journal().entries[e.journal().entries.len() - 2].cmd).unwrap();
+    wrapped["shape"] = serde_json::json!({
+        "kind":"transform","at":{"translate":["1 m","0 m","0 m"]},"shape":wrapped["shape"].clone()
+    });
+    ok(&mut e, &wrapped.to_string());
+    let before = e.model_hash();
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(error.suggestion.unwrap().contains("split the full-circle arc into two arcs"));
+    assert_eq!(e.model_hash(), before);
+    // Native Model files retain named geometry wrappers even though geometry.add's boundary
+    // schema supplies the Body name separately. Their sketch diagnostics must be identical.
+    let mut file = e.export_file();
+    let plate = file.model.bodies.iter_mut().find(|body| body.name == "plate").unwrap();
+    plate.shape = femlab_geometry::Shape::Named { name: "outline".into(), shape: Box::new(plate.shape.clone()) };
+    e.import_file(file).unwrap();
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(error.cause.contains("a full circle"));
 }
 
 #[test]
@@ -4416,7 +4438,7 @@ const TIP_UZ: &str = r#"{"kind":"probe","field":"displacement","component":2,"at
 /// The rate is about 1, not the 2 plan A hoped for: a fully clamped three-dimensional root is a
 /// re-entrant corner, and a point quantity measured over a singular corner converges at first
 /// order however good the element is. (The same study over 100, 50 and 25 mm is not even in the
-/// asymptotic range yet — its differences grow, so `richardson` reports a negative rate.) What
+/// asymptotic range yet — its differences grow, so the convergent estimate is unavailable.) What
 /// the extrapolation does reach is the beam formula, inside 1 %.
 #[test]
 fn a_convergence_study_reports_a_rate_and_restores_the_mesh() {
@@ -5378,6 +5400,80 @@ fn journal_guard_uses_full_history_even_for_filtered_queries() {
     let guarded = serde_json::json!({"cmd":"journal.undo","expectedJournal":tail.hash}).to_string();
     ok(&mut e, &guarded);
     assert_eq!(e.revision(), 1);
+}
+
+#[test]
+fn the_free_mesher_accepts_a_transformed_sheet_and_preserves_named_holes() {
+    let mut e = engine();
+    let commands: Vec<Command> = serde_json::from_str(include_str!("fixtures/transformed-sheet.json")).unwrap();
+    for cmd in commands {
+        pollster::block_on(e.dispatch(cmd, &mut |_: Progress| true)).unwrap();
+    }
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"domain","where":{"kind":"body","name":"plate"}}"#);
+    for size in ["1 m", "0.5 m", "0.25 m"] {
+        for order in [1, 2] {
+            ok(
+                &mut e,
+                &format!(
+                    r#"{{"cmd":"mesh.set","mesher":{{"kind":"free","of":"plate","size":"{size}"}},"order":{order}}}"#
+                ),
+            );
+            let summary = mesh_summary(&mut e);
+            assert_eq!(summary.element_kind, if order == 1 { "tri3" } else { "tri6" });
+            assert!((set_info(&mut e, "domain").measure.value - 18.0).abs() < 1e-9);
+            for (tag, length) in [
+                ("plate.left", 6.0),
+                ("plate.bottom", 4.0),
+                ("plate.right", 6.0),
+                ("plate.top", 4.0),
+                ("plate.hole", 10.0),
+            ] {
+                let set = set_info(&mut e, tag);
+                assert!((set.measure.value - length).abs() < 1e-10, "{tag}: {set:?}");
+                assert!(set.count > 0);
+            }
+            let mesh = &e.mesh().unwrap().mesh;
+            for element in 0..mesh.n_elems() as u32 {
+                let nodes = mesh.elem_nodes(element);
+                let (a, b, c) = (mesh.node(nodes[0]), mesh.node(nodes[1]), mesh.node(nodes[2]));
+                let det = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+                assert!(det > 0.0, "positive physical Jacobian");
+            }
+        }
+    }
+}
+
+#[test]
+fn unsupported_sheet_transforms_return_structured_errors_without_mutating_the_model() {
+    let mut e = engine();
+    let commands: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/transformed-sheet.json")).unwrap();
+    for cmd in &commands[..2] {
+        ok(&mut e, &cmd.to_string());
+    }
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    for at in [
+        serde_json::json!({"scale":[1e308,1.0,1.0]}),
+        serde_json::json!({"scale":[4e307,1.0,1.0],"translate":["1.7e308 m","0 m","0 m"]}),
+    ] {
+        let mut cmd = commands[2].clone();
+        cmd["shape"]["at"] = at;
+        let error = err(&mut e, &cmd.to_string());
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert!(error.cause.contains("non-finite coordinates"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+    for (field, value) in
+        [("rotate", serde_json::json!([15.0, 0.0, 0.0])), ("translate", serde_json::json!(["5 m", "7 m", "1 m"]))]
+    {
+        let mut cmd = commands[2].clone();
+        cmd["shape"]["at"][field] = value;
+        let error = err(&mut e, &cmd.to_string());
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert!(error.cause.contains("xy plane"));
+        assert!(error.where_.is_some());
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
 }
 
 fn selector_mesh(e: &mut Engine, n: u32, order: u32, swept: bool) {
@@ -6532,4 +6628,127 @@ fn body_rename_and_duplicate_reject_cut_names_without_mutation() {
     let mut replayed = engine();
     pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
     assert_eq!(serde_json::to_value(replayed.export_file()).unwrap(), after);
+}
+
+/// `load.radiation` validates its Set, its emissivity and its absolute surrounding temperature
+/// at dispatch, so a Journal never records a Load that cannot be integrated. Zero kelvin is a
+/// legitimate surrounding (a deep-space sink); below it is not.
+#[test]
+fn load_radiation_validates_its_emissivity_and_its_absolute_temperature() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    let cases: [(&str, ErrorCode, &str); 7] = [
+        (
+            r#"{"cmd":"load.radiation","name":"","on":"bar.xmax","emissivity":0.9,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "name",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"nowhere","emissivity":0.9,"tInf":"20 degC"}"#,
+            ErrorCode::NotFound,
+            "set 'nowhere'",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":0,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "emissivity",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":1.5,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "emissivity",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":-0.2,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "emissivity",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":0.9,"tInf":"5 m"}"#,
+            ErrorCode::UnitDimension,
+            "tInf",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":0.9,"tInf":"-5 K"}"#,
+            ErrorCode::ModelIllPosed,
+            "tInf",
+        ),
+    ];
+    for (json, code, field) in cases {
+        let got = err(&mut e, json);
+        assert_eq!((got.code, got.where_.as_deref()), (code, Some(field)), "{json}: {got:?}");
+    }
+    // The two validations this Command owns say what to do about it.
+    let bad_eps = err(&mut e, r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":2,"tInf":"0 K"}"#);
+    assert!(bad_eps.suggestion.expect("a range").contains("black body"));
+    let bad_t = err(&mut e, r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":1,"tInf":"-1 K"}"#);
+    assert!(bad_t.suggestion.expect("a floor").contains("0 K"));
+    // A black body and a 0 K sink are both inside the range.
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"space","on":"bar.xmax","emissivity":1,"tInf":"0 K"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    let row = m.loads.iter().find(|l| l.name == "space").expect("the Load is listed");
+    assert_eq!(row.kind, "radiation");
+    assert!(row.summary.contains("emissivity = 1"), "{}", row.summary);
+    assert!(row.summary.contains("tInf"), "{}", row.summary);
+    // Renaming the Body the Set belongs to follows the Load, as it does for a convection face.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"bar","to":"rod"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    assert_eq!(m.loads.iter().find(|l| l.name == "space").expect("still there").on.as_deref(), Some("rod.xmax"));
+}
+
+/// The two convergence fields are validated at dispatch and reach the procedure: a budget of one
+/// pass cannot converge a fourth-power film, and the Step says so with `solve.diverged` instead
+/// of reporting an unconverged temperature.
+#[test]
+fn a_radiating_step_iterates_under_the_control_step_add_carries() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmin","value":"1000 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"cool","on":"bar.xmax","emissivity":0.98,"tInf":"300 K"}"#);
+    for (json, field) in [
+        (
+            r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":[],"loads":[],
+                "nonlinearTolerance":0}"#,
+            "nonlinearTolerance",
+        ),
+        (
+            r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":[],"loads":[],
+                "nonlinearTolerance":-1}"#,
+            "nonlinearTolerance",
+        ),
+        (
+            r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":[],"loads":[],
+                "nonlinearMaxIterations":0}"#,
+            "nonlinearMaxIterations",
+        ),
+    ] {
+        let got = err(&mut e, json);
+        assert_eq!((got.code, got.where_.as_deref()), (ErrorCode::Schema, Some(field)), "{json}: {got:?}");
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"radiate","procedure":"heat-steady","constraints":["hot"],"loads":["cool"],
+            "output":["temperature"],"nonlinearMaxIterations":1}"#,
+    );
+    let stingy = err(&mut e, r#"{"cmd":"solve.run","step":"radiate"}"#);
+    assert_eq!(stingy.code, ErrorCode::SolveDiverged, "{stingy:?}");
+    assert!(stingy.suggestion.expect("a way out").contains("nonlinearMaxIterations"));
+
+    // With a real budget it converges, and the Result reports the passes it took.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"radiate","procedure":"heat-steady","constraints":["hot"],"loads":["cool"],
+            "output":["temperature"],"nonlinearTolerance":1e-10}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"radiate"}"#);
+    let summary = result_of(&mut e, Some("radiate"));
+    assert!(summary.iterations > 1 && summary.iterations < 50, "{} passes", summary.iterations);
+    assert!(!summary.stale);
+
+    // The whole Journal replays into the same Model, so the new Command and the two new Step
+    // fields survive a round trip through the Journal.
+    let before = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&before.journal.entries, true, true)).expect("the journal replays");
+    assert_eq!(replayed.export_file(), before);
 }
