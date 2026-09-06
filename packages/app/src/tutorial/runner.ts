@@ -70,11 +70,41 @@ export class TutorialRunner {
     this.stepIndex = Math.min(Math.max(startAt, 0), tutorial.steps.length);
   }
 
-  /** Resume from the URL hash first, then localStorage, else start at step 0. */
-  static resume(tutorial: Tutorial, deps: RunnerDeps, hash = typeof location === 'undefined' ? '' : location.hash): TutorialRunner {
+  /**
+   * Resume from the URL hash first, then localStorage, else start at step 0 — but only as far as
+   * the Journal actually got. A saved position is a claim about the Model; the Journal is the
+   * proof. Every earlier step that expects a Command must have it, in order, or the tutorial
+   * starts over (issue #47: a stale `#tutorial=cantilever/3` over an empty Model put "Define
+   * the material" on screen with no beam to assign it to). The watermark lands on the last
+   * matched entry, so those entries cannot satisfy a later step either.
+   */
+  static resume(
+    tutorial: Tutorial,
+    deps: RunnerDeps,
+    entries: JournalEntry[],
+    hash = typeof location === 'undefined' ? '' : location.hash,
+  ): TutorialRunner {
     const fromHash = parseTutorialHash(hash);
-    const start = fromHash && fromHash.id === tutorial.id ? fromHash.step : (savedStep(tutorial.id) ?? 0);
-    return new TutorialRunner(tutorial, deps, start);
+    const wanted = fromHash && fromHash.id === tutorial.id ? fromHash.step : (savedStep(tutorial.id) ?? 0);
+    const { step, watermark } = TutorialRunner.provenStep(tutorial, entries, wanted);
+    const runner = new TutorialRunner(tutorial, deps, step);
+    runner.watermark = watermark;
+    if (step !== wanted) save(tutorial.id, step);
+    return runner;
+  }
+
+  /** The furthest step ≤ `wanted` whose predecessors all have their Command in the Journal. */
+  static provenStep(tutorial: Tutorial, entries: JournalEntry[], wanted: number): { step: number; watermark: number } {
+    let watermark = -1;
+    const limit = Math.min(Math.max(wanted, 0), tutorial.steps.length);
+    for (let i = 0; i < limit; i++) {
+      const expect = tutorial.steps[i]?.expect;
+      if (!expect) continue;
+      const hit = entries.find((e) => e.seq > watermark && matches(e.cmd as { cmd: string } & Record<string, unknown>, expect));
+      if (!hit) return { step: i, watermark };
+      watermark = hit.seq;
+    }
+    return { step: limit, watermark };
   }
 
   get step(): number {
@@ -135,6 +165,18 @@ export class TutorialRunner {
     this.stepIndex = 0;
     this.watermark = -1;
     this.notify();
+  }
+
+  /** Forget the saved position and take the tutorial out of the URL: on close, or once it is done. */
+  static forget(id: string): void {
+    try {
+      localStorage.removeItem(storageKey(id));
+    } catch {
+      // storage refused: nothing to forget
+    }
+    if (typeof location !== 'undefined' && parseTutorialHash(location.hash)?.id === id) {
+      history.replaceState(null, '', location.pathname + location.search);
+    }
   }
 
   /** Dispatch the current step's Command. Does not itself advance: the Journal it produces is

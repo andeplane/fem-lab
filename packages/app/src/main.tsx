@@ -113,6 +113,7 @@ async function boot(): Promise<void> {
   // The Assistant's tool calls and the tutorial's "do it for me" go through the same wrapper
   // as a click, so the Journal, the tree and the viewer surface all catch up either way.
   const panelRegistry = new Proxy(registry, { get: (t, k) => (k === 'dispatch' ? dispatch : Reflect.get(t, k, t)) });
+  store.dispatch = dispatch;
   render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} registry={panelRegistry} />, root);
 
   // Lazy, but not late: three.js is the chunk the very next click needs, so it is fetched now,

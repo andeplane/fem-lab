@@ -126,11 +126,32 @@ describe('persistence', () => {
     expect(parseTutorialHash('')).toBeNull();
   });
 
+  it('resumes no further than the Journal proves, and sets the watermark past the proven entries', () => {
+    localStorage.setItem('femlab.tutorial.demo', '2');
+    // nothing in the Journal: a saved step 2 means nothing, start over
+    const empty = TutorialRunner.resume(tutorial, { dispatch: vi.fn() }, [], '');
+    expect(empty.step).toBe(0);
+    expect(localStorage.getItem('femlab.tutorial.demo')).toBe('0');
+    // the first step's Command is there: resume at 1, and that entry cannot satisfy step 1
+    const one = TutorialRunner.resume(tutorial, { dispatch: vi.fn() }, [entry(0, tutorial.steps[0]!.expect!.cmd)], '#tutorial=demo/2');
+    expect(one.step).toBe(1);
+    expect(one.advanceIfMatched([entry(0, tutorial.steps[0]!.expect!.cmd)])).toBe(false);
+  });
+
+  it('forget drops the saved step and the hash', () => {
+    localStorage.setItem('femlab.tutorial.demo', '3');
+    location.hash = tutorialHash('demo', 3);
+    TutorialRunner.forget('demo');
+    expect(localStorage.getItem('femlab.tutorial.demo')).toBeNull();
+    expect(location.hash).toBe('');
+  });
+
   it('resume prefers the URL hash over localStorage, and falls back to localStorage', () => {
     localStorage.setItem('femlab.tutorial.demo', '1');
-    const fromStorage = TutorialRunner.resume(tutorial, { dispatch: vi.fn() }, '');
+    const proven = [entry(0, 'model.new'), entry(1, 'material.add', { name: 'steel' })];
+    const fromStorage = TutorialRunner.resume(tutorial, { dispatch: vi.fn() }, proven, '');
     expect(fromStorage.step).toBe(1);
-    const fromHash = TutorialRunner.resume(tutorial, { dispatch: vi.fn() }, `#${tutorialHash('demo', 2)}`);
+    const fromHash = TutorialRunner.resume(tutorial, { dispatch: vi.fn() }, proven, `#${tutorialHash('demo', 2)}`);
     expect(fromHash.step).toBe(2);
   });
 
