@@ -6,12 +6,12 @@ import type { HostCaps } from './capabilities';
 import type { ActiveBenchmark } from './benchmark';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
+import { TABS, type Tab } from './tabs';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
-export type Tab = 'journal' | 'script' | 'results' | 'checks' | 'console';
-export const TABS: Tab[] = ['journal', 'script', 'results', 'checks', 'console'];
+export { TABS, type Tab } from './tabs';
 
 /** The Properties panel: which Command is being filled in, and the arguments so far. */
 export interface FormState {
