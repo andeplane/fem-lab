@@ -63,4 +63,10 @@ test('@cpu composer suggestions and skills prepare editable drafts by keyboard',
   await expect(input).toHaveValue(/Help me build a cantilever/);
   await expect(input).toBeFocused();
   await expect(drawer.locator('.messages')).toBeEmpty();
+  await drawer.getByTitle('Close the assistant').click();
+  await expect(drawer).toBeHidden();
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'chat.setDraft', text: 'Reopened draft' }));
+  await expect(drawer).toBeVisible();
+  await expect(input).toHaveValue('Reopened draft');
+  await expect(input).toBeFocused();
 });

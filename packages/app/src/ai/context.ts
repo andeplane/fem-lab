@@ -223,7 +223,7 @@ export interface BuiltTurn {
   unresolved: { ref: string; cause: string }[];
 }
 
-const SLASH = /^\/([a-z0-9-]+)[ \t]*(.*)$/i;
+const SLASH = /^\/([a-z0-9-]+)(?=\s|$)/i;
 
 /**
  * `parseMentions` gives the chips; each is resolved through `query.*` and the summaries ride along

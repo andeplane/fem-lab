@@ -4,7 +4,7 @@
 // holds this panel against `registry.list()` the same way it holds the shell.
 import { FemError, parseMentions, toToolDefinitions, type JournalEntry, type Registry } from '@femlab/registry';
 import type { ComponentChildren } from 'preact';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Store, UiState } from '../store';
 import { runTurn, undoTurn, type ToolCall, type TurnResult } from './agent';
 import { anthropicProvider } from './anthropic';
@@ -135,6 +135,13 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const [turn, setTurn] = useState<TurnResult | null>(null);
   const messages = useRef<Message[]>([]);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const focusDraft = useRef(false);
+  useLayoutEffect(() => {
+    if (focusDraft.current && !hidden) {
+      composer.current?.focus();
+      focusDraft.current = false;
+    }
+  });
 
   const key = resolveKey(provider);
   const openPanel = (name: string, fallback = false) => ui.panels[`assistant.${name}`] ?? fallback;
@@ -252,7 +259,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
       store.togglePanel('assistant', true);
       setDraft(text);
       store.togglePanel('assistant.skills', false);
-      composer.current?.focus();
+      focusDraft.current = true;
     };
     if (chatBridge.pendingDraft !== null) {
       chatBridge.setDraft(chatBridge.pendingDraft);
@@ -280,7 +287,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const slash = /^\/(\S*)$/.exec(draft);
   const skillMenu = openPanel('skills') ? enabled : slash ? enabled.filter((s) => s.name.startsWith(slash[1]!)) : [];
 
-  const compose = () => [...tokens.map((t) => `@${t}`), draft].join(' ').trim();
+  const compose = () => [draft, ...tokens.map((t) => `@${t}`)].join(' ').trim();
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
 
   return (

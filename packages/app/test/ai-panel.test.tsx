@@ -265,6 +265,37 @@ describe('the assistant drawer', () => {
     expect(dispatch).toHaveBeenCalledWith({ cmd: 'chat.setDraft', text: '/beam-theory-check Check my beam' });
   });
 
+  it('loads a selected skill on Send while retaining existing reference chips', async () => {
+    localStorage.setItem('femlab.ai.key', 'test-key');
+    let received = '';
+    const provider = vi.spyOn(anthropic, 'anthropicProvider').mockReturnValue({
+      id: 'anthropic', models: ['test'],
+      async *chat(request) {
+        received = JSON.stringify(request.messages);
+        yield { type: 'text_delta', text: 'Checked' };
+        yield { type: 'done', stopReason: 'end_turn' };
+      },
+    });
+    try {
+      const { root, registry } = await mount();
+      chatBridge.insertMention('body:beam');
+      await type(root, 'Check my beam\nExplain assumptions');
+      root.querySelector<HTMLButtonElement>('[title="Choose a skill for this draft"]')!.click();
+      await tick();
+      [...root.querySelectorAll<HTMLButtonElement>('.popover button')].find((b) => b.textContent?.includes('beam-theory-check'))!.click();
+      await tick();
+      expect(root.querySelector('.token')!.textContent).toContain('@body:beam');
+      const dispatch = vi.spyOn(registry, 'dispatch');
+      root.querySelector<HTMLButtonElement>('button.send')!.click();
+      await tick();
+      await tick();
+      expect(dispatch).toHaveBeenCalledWith({ cmd: 'skill.invoke', name: 'beam-theory-check', args: 'Check my beam\nExplain assumptions @body:beam' });
+      expect(received).toContain('Skill beam-theory-check');
+      expect(received).toContain('# Steps');
+      expect(received).toContain('@body:beam');
+    } finally { provider.mockRestore(); }
+  });
+
   it('shows the skill menu when the line starts with a slash', async () => {
     const { root } = await mount();
     await type(root, '/beam');
