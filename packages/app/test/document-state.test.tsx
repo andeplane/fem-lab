@@ -36,6 +36,8 @@ it('commits the name exactly once on Enter or blur, cancels Escape, and rejects 
   document.body.append(root);
   render(<ModelName name="beam" dirty dispatch={dispatch} />, root);
   const input = root.querySelector('input')!;
+  expect(input.title).toBe('beam');
+  expect(input.getAttribute('aria-description')).toContain('Escape to cancel');
   const edit = async (value: string, key?: string) => {
     input.focus();
     input.value = value;

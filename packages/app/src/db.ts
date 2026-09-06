@@ -1,13 +1,14 @@
 // The one module that opens IndexedDB. Everything the app keeps in this browser lives in the
-// `femlab` database at version 2, and nothing else may call `indexedDB.open`.
+// `femlab` database at version 3, and nothing else may call `indexedDB.open`.
 //
 // That rule is the fix for a real bug: `share.ts` used to open `femlab` at version 1 and create
 // an `autosave` store, and `ai/project.ts` opened the same name at the same version and created a
 // `handles` store. Whichever ran first defined the store set; the other's `onupgradeneeded` never
-// fired and its transaction raised `NotFoundError`. One module, one version, three stores.
+// fired and its transaction raised `NotFoundError`. One module owns all four stores.
 //
 //   projects   keyPath 'id'   the Recent list's metadata: a few kB, read on every start screen
 //   journals   keyPath 'id'   the Commands, read only when a project is opened
+//   revisions  out-of-line    bounded Journal history, independent of the current project
 //   handles    out-of-line    the project *folder* handle (`FileSystemDirectoryHandle`)
 //
 // Two stores for a project, not one, so listing Recent never reads a Command.
@@ -15,10 +16,11 @@ import { FemError } from '@femlab/registry';
 import type { ShareCommand } from './share';
 
 export const DB_NAME = 'femlab';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const PROJECTS = 'projects';
 export const JOURNALS = 'journals';
 export const HANDLES = 'handles';
+export const REVISIONS = 'revisions';
 
 /** What the Recent list and the top bar read; the Commands live in `journals` under the same id. */
 export interface ProjectMeta {
@@ -81,7 +83,7 @@ const blocked = (): FemError =>
   new FemError('unsupported', 'another FEM Lab tab is holding an older version of this browser’s storage', 'IndexedDB femlab', 'close the other tab and reload this one');
 
 /**
- * Open `femlab` at version 2, creating the three stores and migrating a version-1 autosave into a
+ * Open `femlab` at version 3, creating the four stores and migrating a version-1 autosave into a
  * project on the way. The migrated records are written here, in an ordinary transaction, rather
  * than inside `onupgradeneeded`: the upgrade only creates and destroys stores.
  */
@@ -94,6 +96,7 @@ export async function openDb(factory: IDBFactory = indexedDB): Promise<IDBDataba
       if (!upgraded.objectStoreNames.contains(PROJECTS)) upgraded.createObjectStore(PROJECTS, { keyPath: 'id' });
       if (!upgraded.objectStoreNames.contains(JOURNALS)) upgraded.createObjectStore(JOURNALS, { keyPath: 'id' });
       if (!upgraded.objectStoreNames.contains(HANDLES)) upgraded.createObjectStore(HANDLES);
+      if (!upgraded.objectStoreNames.contains(REVISIONS)) upgraded.createObjectStore(REVISIONS);
       if (upgraded.objectStoreNames.contains(LEGACY)) upgraded.deleteObjectStore(LEGACY);
     };
     req.onsuccess = () => resolve(req.result);

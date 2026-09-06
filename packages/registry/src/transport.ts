@@ -14,6 +14,10 @@ export interface Surface {
   indices: Uint32Array;
   triBody: Uint32Array;
   triFace: Uint32Array;
+  /** Optional tagged Sheet boundary edges. Mesh edges index original nodes in `positions`. */
+  edges?: Uint32Array;
+  edgeFace?: Uint32Array;
+  edgeBody?: Uint32Array;
   faceNames: string[];
   bodyNames: string[];
 }

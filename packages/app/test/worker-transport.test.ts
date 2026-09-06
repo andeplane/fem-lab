@@ -73,15 +73,21 @@ describe('WorkerTransport', () => {
             { name: 'indices', dtype: 'u32', length: 3 },
             { name: 'triFace', dtype: 'u32', length: 1 },
             { name: 'triBody', dtype: 'u32', length: 1 },
+            { name: 'edges', dtype: 'u32', length: 2 },
+            { name: 'edgeFace', dtype: 'u32', length: 1 },
+            { name: 'edgeBody', dtype: 'u32', length: 1 },
           ],
         },
-        [positions.buffer as ArrayBuffer, indices.buffer as ArrayBuffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer],
+        [positions.buffer as ArrayBuffer, indices.buffer as ArrayBuffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer, new Uint32Array([0, 1]).buffer, new Uint32Array([0]).buffer, new Uint32Array([0]).buffer],
       ),
     );
     const s = await transport.surface();
     expect(Array.from(s.positions)).toEqual([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     expect(s.faceNames[s.triFace[0]!]).toBe('b.top');
     expect(s.source).toBe('geometry');
+    expect(s.edges).toEqual(new Uint32Array([0, 1]));
+    expect(s.faceNames[s.edgeFace![0]!]).toBe('b.top');
+    expect(s.bodyNames[s.edgeBody![0]!]).toBe('b');
   });
 
   it('rejects with the engine\'s structured error, not a string', async () => {
@@ -208,6 +214,8 @@ describe('toStructured', () => {
   it('passes an engine error through and fills the optional fields', () => {
     expect(toStructured({ code: 'set.empty', cause: 'nothing matched' })).toEqual({ code: 'set.empty', cause: 'nothing matched', where: null, suggestion: null });
     expect(toStructured({ code: 'result.stale', cause: 'the predecessor belongs to an older Model', where: 'after', suggestion: 'solve.run the predecessor' })).toEqual({ code: 'result.stale', cause: 'the predecessor belongs to an older Model', where: 'after', suggestion: 'solve.run the predecessor' });
+    expect(toStructured({ code: 'solve.too-large', cause: 'retained history exceeds the budget', where: 'outputEvery', suggestion: 'increase outputEvery' }))
+      .toEqual({ code: 'solve.too-large', cause: 'retained history exceeds the budget', where: 'outputEvery', suggestion: 'increase outputEvery' });
   });
 
   it('wraps anything else as internal', () => {
