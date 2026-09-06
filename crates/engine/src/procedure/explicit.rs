@@ -3,6 +3,7 @@
 //! `M` is the HRZ-lumped diagonal, so every step is a divide rather than a solve. The step size
 //! is Irons' bound `Δt = dt_factor · 2/ω_max` with `ω_max = max_e ω_max(e)`, which is an upper
 //! bound on the global maximum frequency and therefore a safe estimate of the stability limit.
+//! A uniform increment no larger than that bound is chosen to reach `t_end` exactly.
 //!
 //! Stability is watched, not assumed. For a linear undamped system the energy in the model can
 //! never exceed the work the loads have done (plus whatever it started with), so the monitor is
@@ -15,15 +16,17 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::{assemble_stiffness, pattern, resolve};
 use crate::fem::checks;
 use crate::fem::element::element_for;
-use crate::fem::loads::assemble_loads;
+use crate::fem::loads::assemble_lumped_loads;
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, Per};
-use crate::procedure::{blank, report, vector_field, History, StepResult};
+use crate::procedure::{blank, report, retained_frame_count, time_grid, vector_field, History, StepResult};
 use crate::solve::SolveInfo;
 
 /// Energy above this multiple of what the loads can account for is a diverging integration.
 const BLOWUP: f64 = 1e3;
+
+type LumpedMass = (Vec<f64>, f64, Option<(u32, usize)>);
 
 /// Integrate one explicit dynamics Step.
 pub fn run(
@@ -49,39 +52,47 @@ pub fn run(
     report(&mut progress, "assemble", 0.1, "building the stiffness and the lumped mass")?;
     let dpn = p.dofs_per_node();
     let pat = pattern(p.mesh, dpn);
-    // One `?`: the mass, the stiffness and the loads fail on exactly the same materials and the
-    // same Sets, so only the first of them is an arm a test can take.
-    let (a, mass, omega_max, f) = pool.install(|| {
-        lumped_mass_and_omega(p).and_then(|(mass, omega_max)| {
-            assemble_stiffness(p, &pat).and_then(|a| {
-                let mut f = a.f_thermal.clone();
-                assemble_loads(p, &mut f).map(|_| (a, mass, omega_max, f))
-            })
-        })
-    })?;
-    if !omega_max.is_finite() || omega_max <= 0.0 {
-        return Err(Error::new(
-            ErrorCode::ModelIllPosed,
-            "the model has no mass: no Material in this Step has a density",
-        )
-        .at("materials")
-        .suggest("material.add with rho, e.g. \"7850 kg/m^3\""));
-    }
-    let dt_crit = 2.0 / omega_max;
-    let dt = dt_factor * dt_crit;
-    let n_steps = (t_end / dt).round().max(1.0) as usize;
-    let every = output_every.max(1);
-
     // Constrained DOFs are held at their prescribed value with zero velocity and acceleration.
     let rc = resolve(p).expect("the checks resolved the constraints");
-    let mut held = vec![false; a.k.n];
-    let mut u = vec![0.0; a.k.n];
+    let mut held = vec![false; p.n_dofs()];
+    let mut u = vec![0.0; p.n_dofs()];
     for &(dof, value) in &rc.fixed {
         held[dof as usize] = true;
         u[dof as usize] = value;
     }
-    // Every lumped mass is positive: HRZ scales a positive diagonal by a positive total.
-    let minv: Vec<f64> = mass.iter().map(|&m| 1.0 / m).collect();
+    // One `?`: the mass, the stiffness and the loads fail on exactly the same materials and the
+    // same Sets, so only the first of them is an arm a test can take.
+    let (a, mass, omega_max, massless_free, f) = pool.install(|| {
+        lumped_mass_and_omega(p, &held, true).and_then(|(mass, omega_max, massless_free)| {
+            assemble_stiffness(p, &pat).and_then(|a| {
+                let mut f = a.f_thermal.clone();
+                assemble_lumped_loads(p, &mut f, &mass).map(|_| (a, mass, omega_max, massless_free, f))
+            })
+        })
+    })?;
+    for (dof, &m) in mass.iter().enumerate() {
+        if !held[dof] && (!m.is_finite() || m <= 0.0) {
+            let node = dof / dpn;
+            let component = ["ux", "uy", "uz"][dof % dpn];
+            return Err(Error::new(
+                ErrorCode::ModelIllPosed,
+                format!(
+                    "node {node} has {m} lumped mass on free DOF {component}; explicit dynamics requires positive mass at every free DOF"
+                ),
+            )
+            .at(format!("node {node}.{component}"))
+            .suggest("material.add with rho, then material.assign to every dynamic Body"));
+        }
+    }
+    validate_frequency_bound(omega_max, massless_free, dpn)?;
+    let (dt_crit, max_dt) = step_bounds(omega_max, dt_factor);
+    let (n_steps, dt) = time_grid(max_dt, t_end)?;
+    let every = output_every.max(1);
+    let frames = retained_frame_count(n_steps, every).expect("time_grid bounds the retained-frame count");
+
+    // The free lumped masses were checked above; held DOFs are never multiplied by their
+    // inverse, so a constrained node may legitimately belong only to a massless element.
+    let minv: Vec<f64> = mass.iter().enumerate().map(|(i, &m)| if held[i] { 0.0 } else { 1.0 / m }).collect();
     let mut v = initial_velocity.map_or_else(|| vec![0.0; a.k.n], <[f64]>::to_vec);
     for (i, vi) in v.iter_mut().enumerate() {
         if held[i] {
@@ -98,11 +109,12 @@ pub fn run(
     for (vi, ai) in v.iter_mut().zip(&a0) {
         *vi += 0.5 * dt * ai;
     }
+    drop(a0);
     let e0 = energy(&a.k, &mass, &u, &v, &mut ku);
     let p0 = momentum(&mass, &v, dpn);
     let mut work = 0.0;
     let mut e_max: f64 = e0;
-    let mut history = History { field: Field::Displacement, times: vec![0.0], values: vec![u.clone()] };
+    let mut history = History::with_initial(Field::Displacement, u.clone(), frames);
     for step in 1..=n_steps {
         for i in 0..u.len() {
             if !held[i] {
@@ -130,7 +142,7 @@ pub fn run(
             .suggest(format!("step.add with dtFactor below {dt_factor}, e.g. 0.9")));
         }
         if step % every == 0 || step == n_steps {
-            history.times.push(step as f64 * dt);
+            history.times.push(if step == n_steps { t_end } else { step as f64 * dt });
             history.values.push(u.clone());
         }
         report(&mut progress, "solve", 0.1 + 0.8 * step as f64 / n_steps as f64, "stepping in time")?;
@@ -167,11 +179,13 @@ pub fn run(
     Ok(res)
 }
 
-/// The lumped mass per DOF and the largest element frequency bound.
-fn lumped_mass_and_omega(p: &Problem<'_>) -> Result<(Vec<f64>, f64), Error> {
+/// The lumped mass per DOF, the largest element frequency bound, and the first massless element
+/// that contributes stiffness to a free DOF.
+fn lumped_mass_and_omega(p: &Problem<'_>, held: &[bool], retain_mass: bool) -> Result<LumpedMass, Error> {
     let dpn = p.dofs_per_node();
-    let mut mass = vec![0.0; p.mesh.n_nodes() * dpn];
+    let mut mass = if retain_mass { vec![0.0; p.mesh.n_nodes() * dpn] } else { Vec::new() };
     let mut omega: f64 = 0.0;
+    let mut massless_free = None;
     let mut coords = Vec::new();
     let mut me = Vec::new();
     let t = [0.0; 0];
@@ -184,21 +198,75 @@ fn lumped_mass_and_omega(p: &Problem<'_>) -> Result<(Vec<f64>, f64), Error> {
             p.mesh.elem_coords(elem, &mut coords);
             me.clear();
             me.resize(nd * nd, 0.0);
-            // One `?`: the context, the mass and the frequency bound fail on the same
-            // material and the same element, and the first failure is the one to report.
-            omega = omega.max(
-                p.ctx(elem, &coords, &t)
-                    .and_then(|c| element.mass(&c, &mut me, true).and_then(|()| element.omega_max(&c)))
-                    .map_err(|e| e.at(format!("element {elem}")))?,
-            );
-            for (a, &node) in p.mesh.elem_nodes(elem).iter().enumerate() {
-                for k in 0..dpn {
-                    mass[node as usize * dpn + k] += me[(a * dpn + k) * nd + a * dpn + k];
+            // A bad density keeps the mass kernel's useful `material.rho` location. The run's
+            // checks normally resolve this first; `query.cost` also calls this path directly.
+            let c = p.ctx(elem, &coords, &t)?;
+            element.mass(&c, &mut me, true)?;
+            // A zero-density element contributes stiffness without a finite local frequency
+            // bound. It is supported only when every one of its DOFs is held.
+            if c.material.rho > 0.0 {
+                omega = omega.max(element.omega_max(&c).map_err(|e| e.at(format!("element {elem}")))?);
+            } else {
+                let unsupported = p.mesh.elem_nodes(elem).iter().find_map(|&node| {
+                    (0..dpn).map(|k| node as usize * dpn + k).find(|&dof| !held[dof]).map(|dof| (elem, dof))
+                });
+                massless_free = massless_free.or(unsupported);
+            }
+            if retain_mass {
+                for (a, &node) in p.mesh.elem_nodes(elem).iter().enumerate() {
+                    for k in 0..dpn {
+                        mass[node as usize * dpn + k] += me[(a * dpn + k) * nd + a * dpn + k];
+                    }
                 }
             }
         }
     }
-    Ok((mass, omega))
+    Ok((mass, omega, massless_free))
+}
+
+fn validate_frequency_bound(omega_max: f64, massless_free: Option<(u32, usize)>, dpn: usize) -> Result<(), Error> {
+    if let Some((elem, dof)) = massless_free {
+        let node = dof / dpn;
+        let component = ["ux", "uy", "uz"][dof % dpn];
+        return Err(Error::new(
+            ErrorCode::ModelIllPosed,
+            format!(
+                "element {elem} has zero density but contributes stiffness to free DOF node {node}.{component}; its finite explicit frequency bound is undefined"
+            ),
+        )
+        .at(format!("element {elem}"))
+        .suggest("material.add with rho, or constraint.fix every DOF of the massless Body"));
+    }
+    if !omega_max.is_finite() || omega_max <= 0.0 {
+        return Err(Error::new(
+            ErrorCode::ModelIllPosed,
+            "the model has no mass: no Material in this Step has a density",
+        )
+        .at("materials")
+        .suggest("material.add with rho, e.g. \"7850 kg/m^3\""));
+    }
+    Ok(())
+}
+
+/// The exact explicit integration grid without allocating a global mass vector or matrix.
+/// `query.cost` resolves the same held DOFs, element frequency bound and endpoint rule as `run`.
+pub(crate) fn retention_grid(p: &Problem<'_>, t_end: f64, dt_factor: f64) -> Result<(usize, f64), Error> {
+    let rc = resolve(p)?;
+    let mut held = vec![false; p.n_dofs()];
+    for &(dof, _) in &rc.fixed {
+        held[dof as usize] = true;
+    }
+    let (_, omega_max, massless_free) = lumped_mass_and_omega(p, &held, false)?;
+    validate_frequency_bound(omega_max, massless_free, p.dofs_per_node())?;
+    let (_, max_dt) = step_bounds(omega_max, dt_factor);
+    time_grid(max_dt, t_end)
+}
+
+/// Keep the operation order shared by integration and planning: regrouping the multiplication
+/// and division can move a time-step bound by one ULP and change an endpoint `ceil`.
+fn step_bounds(omega_max: f64, dt_factor: f64) -> (f64, f64) {
+    let dt_crit = 2.0 / omega_max;
+    (dt_crit, dt_factor * dt_crit)
 }
 
 /// `½ vᵀ M v + ½ uᵀ K u`: the monitor. Positive for a stable run, unbounded for an unstable one.
@@ -216,4 +284,21 @@ fn momentum(mass: &[f64], v: &[f64], dpn: usize) -> [f64; 3] {
         p[i % dpn] += m * vi;
     }
     p
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    #[test]
+    fn planning_keeps_the_integrators_rounding_order_at_an_endpoint() {
+        let dt_factor = f64::from_bits(0x3f4d_4f28_2e92_e24a);
+        let omega_max = f64::from_bits(0x40fc_90b1_53bc_de6b);
+        let t_end = f64::from_bits(0x3e50_6aae_e82d_3e9c);
+        let (_, shared) = step_bounds(omega_max, dt_factor);
+        let regrouped = (dt_factor * 2.0) / omega_max;
+        assert_ne!(shared, regrouped, "this is the one-ULP boundary witness");
+        assert_eq!(time_grid(shared, t_end).unwrap().0, 2);
+        assert_eq!(time_grid(regrouped, t_end).unwrap().0, 1);
+    }
 }

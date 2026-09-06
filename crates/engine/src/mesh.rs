@@ -6,8 +6,8 @@
 use std::collections::BTreeMap;
 
 use femlab_geometry::{
-    extrude, face_centroid_normal, free, lattice, mapped, nearest_boundary_face, resolve_face_set, resolve_region,
-    revolve, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox, Shape, Solid,
+    extrude, face_centroid_normal, free_sheet, lattice, mapped, nearest_boundary_face, resolve_face_set,
+    resolve_region, revolve, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox, Shape, Solid,
 };
 
 use crate::command::ObjectKind;
@@ -122,6 +122,18 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
         if resolved.is_empty() {
             return Err(set_empty(model, &mesh, &named.name, probe));
         }
+        // Keep the format-specific Mesh maps in step with the richer resolved Set. Face Sets
+        // carry their nodes; element regions carry both their elements and their nodes; a
+        // region that catches no element is a node-only Set.
+        if !resolved.faces.is_empty() {
+            mesh.face_sets.insert(named.name.clone(), resolved.faces.clone());
+        }
+        if !resolved.nodes.is_empty() {
+            mesh.node_sets.insert(named.name.clone(), resolved.nodes.clone());
+        }
+        if !resolved.elems.is_empty() {
+            mesh.elem_sets.insert(named.name.clone(), resolved.elems.clone());
+        }
         sets.insert(named.name.clone(), resolved);
     }
     Ok(BuiltMesh { mesh, body_of_block, sets })
@@ -153,21 +165,33 @@ fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result
             Ok((body.clone(), part, "mapped"))
         }
         MesherSettings::Free { of, size, refine } => {
-            let sketch = match model.body(of).map(|b| &b.shape) {
-                Some(Shape::Sheet { sketch }) => sketch,
-                Some(_) => {
+            let shape = model
+                .body(of)
+                .map(|body| &body.shape)
+                .ok_or_else(|| Error::not_found("body", of, &model.names(ObjectKind::Body)).at("mesher.of"))?;
+            // Unwrap the Sheet before checking its sketch so transformed geometry retains
+            // located diagnostics, while non-Sheet Bodies keep the existing structured error.
+            let mut leaf = shape;
+            while let Shape::Named { shape, .. } | Shape::Transform { shape, .. } = leaf {
+                leaf = shape;
+            }
+            let sketch = match leaf {
+                Shape::Sheet { sketch } => sketch,
+                _ => {
                     return Err(Error::new(
                         ErrorCode::ModelIllPosed,
                         format!("body '{of}' is not a sheet, and the free mesher meshes a 2D sketch"),
                     )
                     .at("mesher.of")
-                    .suggest("geometry.add with a sheet shape, or mesh.set with the lattice mesher"))
-                }
-                None => {
-                    return Err(Error::not_found("body", of, &model.names(ObjectKind::Body)).at("mesher.of"));
+                    .suggest("geometry.add with a sheet shape, or mesh.set with the lattice mesher"));
                 }
             };
-            let part = free(sketch, *size, quadratic, refine).map_err(|e| {
+            sketch.check().map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.cause)
+                    .at(format!("shape.sketch.{}", e.where_))
+                    .suggest(e.suggestion)
+            })?;
+            let part = free_sheet(shape, *size, quadratic, refine).map_err(|e| {
                 Error::new(ErrorCode::MeshFailed, e.0)
                     .at("mesher.size")
                     .suggest("mesh.set with a different element size, or a sketch whose holes lie inside it")

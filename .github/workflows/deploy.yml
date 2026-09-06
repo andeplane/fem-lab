@@ -39,8 +39,24 @@ jobs:
       # without it the published module is a third larger.
       - run: npm ci
       - run: node tools/build-wasm.mjs
-      # `prebuild` copies the Journal fixtures into public/examples; `postbuild` refuses to
-      # publish a bundle with an API key in it.
+      # Build once for Chromium to replay every real example through the viewer, then package
+      # those fixed 320×180 canvases in the final deploy artifact.
+      - run: npm run build -w packages/app
+      - name: playwright version for thumbnails
+        id: thumbnail-pw
+        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.thumbnail-pw.outputs.v }}
+      - run: npx playwright install --with-deps chromium
+        working-directory: packages/app
+      # Never let a picture stop the site from shipping. `copy-examples.mjs` already writes
+      # `thumbnail: null` for anything missing and the gallery renders a "preview pending" card,
+      # so a failed or slow software-rendered pass costs a thumbnail, not a deployment.
+      - run: npm run thumbnails -w packages/app
+        continue-on-error: true
+      # `prebuild` now sees the generated PNGs; `postbuild` still refuses to publish a key.
       - run: npm run build -w packages/app
       # Jekyll would drop the underscore-prefixed files GitHub Pages otherwise serves fine.
       - run: touch packages/app/dist/.nojekyll

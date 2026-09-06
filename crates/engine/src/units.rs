@@ -4,6 +4,8 @@
 //! `{ "value": 2, "unit": "MPa" }`. [`Q<D>`] is a Quantity whose dimension is fixed by the
 //! schema; [`Q::si`] parses, checks the dimension and converts to SI. Nothing past this module
 //! ever sees a unit string.
+//! Numeric inputs and converted outputs must be finite; unit factors must also be nonzero.
+//! Dimension operations are checked against their i8 range and reject overflow before use.
 
 use std::marker::PhantomData;
 
@@ -28,8 +30,8 @@ impl Quantity {
     }
     /// The number and the unit text of a Quantity (no dimension check).
     pub fn split(&self) -> Result<(f64, &str), Error> {
-        match self {
-            Quantity::Parts { value, unit } => Ok((*value, unit.as_str())),
+        let (value, unit) = match self {
+            Quantity::Parts { value, unit } => (*value, unit.as_str()),
             Quantity::Text(t) => {
                 let t = t.trim();
                 let end = t
@@ -42,9 +44,10 @@ impl Quantity {
                 let value: f64 = num.parse().map_err(|_| {
                     Error::new(ErrorCode::Schema, format!("'{t}' does not start with a number")).at("value")
                 })?;
-                Ok((value, rest.trim()))
+                (value, rest.trim())
             }
-        }
+        };
+        Ok((finite_value(value)?, unit))
     }
 }
 
@@ -62,14 +65,19 @@ pub struct Dimension(pub [i8; 4]);
 
 impl Dimension {
     pub const NONE: Dimension = Dimension([0, 0, 0, 0]);
-    fn mul(self, o: Dimension) -> Dimension {
-        Dimension([self.0[0] + o.0[0], self.0[1] + o.0[1], self.0[2] + o.0[2], self.0[3] + o.0[3]])
+    fn combine(self, o: Dimension, sign: i8) -> Option<Dimension> {
+        let mut exponents = [0; 4];
+        for (i, exponent) in exponents.iter_mut().enumerate() {
+            *exponent = if sign > 0 { self.0[i].checked_add(o.0[i]) } else { self.0[i].checked_sub(o.0[i]) }?;
+        }
+        Some(Dimension(exponents))
     }
-    fn pow(self, n: i8) -> Dimension {
-        Dimension([self.0[0] * n, self.0[1] * n, self.0[2] * n, self.0[3] * n])
-    }
-    fn inv(self) -> Dimension {
-        self.pow(-1)
+    fn pow(self, n: i8) -> Option<Dimension> {
+        let mut exponents = [0; 4];
+        for (i, exponent) in exponents.iter_mut().enumerate() {
+            *exponent = self.0[i].checked_mul(n)?;
+        }
+        Some(Dimension(exponents))
     }
     /// Human name of a dimension, for error messages.
     pub fn name(self) -> String {
@@ -134,6 +142,7 @@ dims! {
     Time, "time", "0.5 s", [0,0,1,0];
     Temperature, "temperature", "20 degC", [0,0,0,1];
     Force, "force", "10 kN", [1,1,-2,0];
+    Power, "power", "1 kW", [2,1,-3,0];
     Stress, "stress", "210 GPa", [-1,1,-2,0];
     Density, "density", "7850 kg/m^3", [-3,1,0,0];
     Acceleration, "acceleration", "9.81 m/s^2", [1,0,-2,0];
@@ -167,7 +176,7 @@ impl<D: Dim> Q<D> {
     pub fn quantity(&self) -> &Quantity {
         &self.q
     }
-    /// Parse, check the dimension and convert to SI.
+    /// Parse, check the dimension and convert to finite SI, rejecting numeric overflow.
     pub fn si(&self) -> Result<f64, Error> {
         to_si(&self.q, D::DIM).map_err(|e| e.suggest(format!("e.g. \"{}\"", D::EXAMPLE)))
     }
@@ -442,12 +451,12 @@ fn parse_expr(toks: &[Tok], pos: &mut usize, whole: &str) -> Result<Parsed, Erro
             Tok::Mul => {
                 *pos += 1;
                 let f = parse_factor(toks, pos, whole)?;
-                acc = combine(acc, f, 1);
+                acc = combine(acc, f, 1, whole)?;
             }
             Tok::Div => {
                 *pos += 1;
                 let f = parse_factor(toks, pos, whole)?;
-                acc = combine(acc, f, -1);
+                acc = combine(acc, f, -1, whole)?;
             }
             Tok::Close => break,
             _ => {
@@ -458,10 +467,24 @@ fn parse_expr(toks: &[Tok], pos: &mut usize, whole: &str) -> Result<Parsed, Erro
     Ok(acc)
 }
 
-fn combine(a: Parsed, b: Parsed, sign: i8) -> Parsed {
-    let dim = if sign > 0 { a.dim.mul(b.dim) } else { a.dim.mul(b.dim.inv()) };
+fn unit_range(whole: &str) -> Error {
+    Error::new(ErrorCode::UnitUnknown, format!("unit expression \"{whole}\" exceeds the supported numeric range"))
+        .at("unit")
+        .suggest("use units with representable dimension exponents and a finite, nonzero SI factor")
+}
+
+fn checked_factor(factor: f64, whole: &str) -> Result<f64, Error> {
+    if factor.is_finite() && factor > 0.0 {
+        Ok(factor)
+    } else {
+        Err(unit_range(whole))
+    }
+}
+
+fn combine(a: Parsed, b: Parsed, sign: i8, whole: &str) -> Result<Parsed, Error> {
+    let dim = a.dim.combine(b.dim, sign).ok_or_else(|| unit_range(whole))?;
     let factor = if sign > 0 { a.factor * b.factor } else { a.factor / b.factor };
-    Parsed { factor, dim, offset: 0.0 }
+    Ok(Parsed { factor: checked_factor(factor, whole)?, dim, offset: 0.0 })
 }
 
 fn parse_factor(toks: &[Tok], pos: &mut usize, whole: &str) -> Result<Parsed, Error> {
@@ -480,8 +503,8 @@ fn parse_factor(toks: &[Tok], pos: &mut usize, whole: &str) -> Result<Parsed, Er
             let (factor, dim, offset) = lookup(s).ok_or_else(|| unknown(s, whole))?;
             let single = toks.len() == 1;
             Ok(Parsed {
-                factor: powi(factor, *exp),
-                dim: dim.pow(*exp),
+                factor: checked_factor(powi(factor, *exp), whole)?,
+                dim: dim.pow(*exp).ok_or_else(|| unit_range(whole))?,
                 offset: if single && *exp == 1 { offset } else { 0.0 },
             })
         }
@@ -490,14 +513,23 @@ fn parse_factor(toks: &[Tok], pos: &mut usize, whole: &str) -> Result<Parsed, Er
 }
 
 fn powi(f: f64, e: i8) -> f64 {
+    // Invert first so a representable subnormal (e.g. Gm^-35) is not lost when f^35
+    // overflows before taking its reciprocal.
+    let f = if e < 0 { 1.0 / f } else { f };
     let mut r = 1.0;
     for _ in 0..e.unsigned_abs() {
         r *= f;
     }
-    if e < 0 {
-        1.0 / r
+    r
+}
+
+fn finite_value(value: f64) -> Result<f64, Error> {
+    if value.is_finite() {
+        Ok(value)
     } else {
-        r
+        Err(Error::new(ErrorCode::Schema, "quantity must be finite before and after unit conversion")
+            .at("value")
+            .suggest("use a finite quantity whose converted value fits in the numeric range"))
     }
 }
 
@@ -519,11 +551,12 @@ pub fn to_si(q: &Quantity, expect: Dimension) -> Result<f64, Error> {
         )
         .at("value"));
     }
-    Ok(value * p.factor + p.offset)
+    finite_value(value * p.factor + p.offset)
 }
 
 /// Convert an SI value to `to`, checking the dimension when `expect` is given.
 pub fn convert(value_si: f64, to: &str, expect: Option<Dimension>) -> Result<f64, Error> {
+    let value_si = finite_value(value_si)?;
     let p = parse_unit(to)?;
     if let Some(d) = expect {
         if p.dim != d {
@@ -534,7 +567,7 @@ pub fn convert(value_si: f64, to: &str, expect: Option<Dimension>) -> Result<f64
             .at("unit"));
         }
     }
-    Ok((value_si - p.offset) / p.factor)
+    finite_value((value_si - p.offset) / p.factor)
 }
 
 /// Format an SI value in `unit` with `sig` significant digits: `"2.5 MPa"`.
@@ -570,6 +603,14 @@ pub fn fmt_sig(v: f64, sig: usize) -> String {
     }
 }
 
+/// The physical quantity carried by a Result's reactions and applied totals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ReactionQuantity {
+    Force,
+    Power,
+}
+
 /// Display units, all optional; SI defaults.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -578,6 +619,9 @@ pub struct UnitSet {
     pub length: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub force: Option<String>,
+    /// Thermal reaction and applied power display unit; defaults to W, independently of force.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stress: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -597,6 +641,7 @@ pub struct UnitSet {
 pub struct ResolvedUnits {
     pub length: String,
     pub force: String,
+    pub power: String,
     pub stress: String,
     pub mass: String,
     pub density: String,
@@ -606,12 +651,13 @@ pub struct ResolvedUnits {
 }
 
 impl UnitSet {
-    /// Fill defaults: m, N, Pa, kg, kg/m^3, s, K, m/s^2.
+    /// Fill defaults: m, N, W, Pa, kg, kg/m^3, s, K, m/s^2.
     pub fn resolve(&self) -> ResolvedUnits {
         let d = |o: &Option<String>, def: &str| o.clone().unwrap_or_else(|| def.to_string());
         ResolvedUnits {
             length: d(&self.length, "m"),
             force: d(&self.force, "N"),
+            power: d(&self.power, "W"),
             stress: d(&self.stress, "Pa"),
             mass: d(&self.mass, "kg"),
             density: d(&self.density, "kg/m^3"),
@@ -622,9 +668,10 @@ impl UnitSet {
     }
     /// Every given unit must parse and have the right dimension.
     pub fn validate(&self) -> Result<(), Error> {
-        let checks: [(&Option<String>, Dimension, &str); 8] = [
+        let checks: [(&Option<String>, Dimension, &str); 9] = [
             (&self.length, Length::DIM, "length"),
             (&self.force, Force::DIM, "force"),
+            (&self.power, Power::DIM, "power"),
             (&self.stress, Stress::DIM, "stress"),
             (&self.mass, Mass::DIM, "mass"),
             (&self.density, Density::DIM, "density"),
@@ -654,6 +701,7 @@ impl ResolvedUnits {
         let unit = match dim {
             d if d == Length::DIM => self.length.as_str(),
             d if d == Force::DIM => self.force.as_str(),
+            d if d == Power::DIM => self.power.as_str(),
             d if d == Stress::DIM => self.stress.as_str(),
             d if d == Mass::DIM => self.mass.as_str(),
             d if d == Density::DIM => self.density.as_str(),
@@ -723,6 +771,60 @@ mod tests {
         assert_eq!(si("1 um", Length::DIM), 1e-6);
         assert_eq!(si("1 ksi", Stress::DIM), 6_894_757.293_168);
         assert_eq!(to_si(&Quantity::Parts { value: 3.0, unit: "GPa".into() }, Stress::DIM).unwrap(), 3e9);
+    }
+
+    #[test]
+    fn nonfinite_inputs_and_conversion_results_are_structured_errors() {
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let q = Quantity::Parts { value, unit: "N".into() };
+            assert_eq!(q.split().unwrap_err().code, ErrorCode::Schema);
+            assert_eq!(to_si(&q, Force::DIM).unwrap_err().where_.as_deref(), Some("value"));
+            assert_eq!(convert(value, "N", None).unwrap_err().code, ErrorCode::Schema);
+        }
+        for text in ["1e999 N", "-1e999 N", "1e999", "1e308 kN"] {
+            let e = to_si(&Quantity::text(text), Force::DIM).unwrap_err();
+            assert_eq!(e.code, ErrorCode::Schema);
+            assert!(e.cause.contains("finite"));
+            assert!(e.suggestion.is_some());
+        }
+        assert_eq!(Q::<Force>::new(f64::MAX, "kN").si().unwrap_err().code, ErrorCode::Schema);
+        assert_eq!(Q::<Dimensionless>::new(f64::INFINITY, "").si().unwrap_err().code, ErrorCode::Schema);
+        assert_eq!(convert(f64::MAX, "mN", Some(Force::DIM)).unwrap_err().code, ErrorCode::Schema);
+        assert_eq!(to_si(&Quantity::Parts { value: f64::MAX, unit: "N".into() }, Force::DIM).unwrap(), f64::MAX);
+    }
+
+    #[test]
+    fn dimension_and_factor_overflow_never_wrap_or_panic() {
+        for unit in [
+            "Pa^127",
+            "Pa^-128",
+            "m^127*m",
+            "m^-128/m",
+            "1/m^-128",
+            "Gm^35",
+            "nm^-35",
+            "Gm^20*Gm^20",
+            "nm^20*nm^20",
+            "Gm^20/nm^20",
+        ] {
+            let e = parse_unit(unit).unwrap_err();
+            assert_eq!(e.code, ErrorCode::UnitUnknown, "{unit}");
+            assert_eq!(e.where_.as_deref(), Some("unit"));
+            assert!(e.cause.contains("numeric range"));
+            assert!(e.suggestion.is_some());
+        }
+        // Boundary exponents are valid when the result remains representable, including
+        // division of two -128 exponents; forming an intermediate inverse would overflow.
+        assert_eq!(parse_unit("m^-128").unwrap().dim, Dimension([-128, 0, 0, 0]));
+        assert_eq!(parse_unit("m^127").unwrap().dim, Dimension([127, 0, 0, 0]));
+        assert_eq!(parse_unit("m^-128/m^-128").unwrap().dim, Dimension::NONE);
+        assert_eq!(parse_unit("Pa^63").unwrap().dim, Dimension([-63, 63, -126, 0]));
+        let small = parse_unit("Gm^-35").unwrap().factor;
+        // 1/(10^9)^35 = 10^-315: independent decimal-power reference, below MIN_POSITIVE.
+        assert!((small / 1e-315 - 1.0).abs() < 1e-8);
+        assert!(small > 0.0 && small < f64::MIN_POSITIVE);
+        let repeated = vec!["m"; 129].join("*");
+        assert_eq!(parse_unit(&repeated).unwrap_err().code, ErrorCode::UnitUnknown);
     }
 
     #[test]
@@ -826,6 +928,12 @@ mod tests {
         assert_eq!(r.fmt(0.001, Length::DIM), (1.0, "mm".to_string()));
         assert_eq!(r.fmt(1e6, Stress::DIM), (1.0, "MPa".to_string()));
         assert_eq!(r.fmt(1.0, Force::DIM), (1.0, "N".to_string()));
+        assert_eq!(r.fmt(1.0, Power::DIM), (1.0, "W".to_string()));
+        let power = UnitSet { power: Some("kW".into()), force: Some("kN".into()), ..Default::default() };
+        power.validate().unwrap();
+        assert_eq!(power.resolve().fmt(1000.0, Power::DIM), (1.0, "kW".to_string()));
+        let bad_power = UnitSet { power: Some("kN".into()), ..Default::default() };
+        assert_eq!(bad_power.validate().unwrap_err().code, ErrorCode::UnitDimension);
         assert_eq!(r.fmt(1.0, Mass::DIM).1, "kg");
         assert_eq!(r.fmt(1.0, Density::DIM).1, "kg/m^3");
         assert_eq!(r.fmt(1.0, Time::DIM).1, "s");

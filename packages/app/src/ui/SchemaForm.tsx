@@ -6,7 +6,8 @@ import type { JsonSchema } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
 import type { LastError, Store, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
-import { applyLabel, commandLine, defaultTaggedUnions, type Defs, type Field, fieldsOf, getAt, parseQuantity, setAt, siUnit, step } from './schema';
+import { SketchEditor } from './SketchEditor';
+import { applyLabel, commandLine, defaultFormValues, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
 
 export type Query = (q: { query: string } & Record<string, unknown>) => Promise<unknown>;
 
@@ -23,7 +24,7 @@ type FieldProps = FormProps & { field: Field; values: Record<string, unknown>; f
 
 /** Every control writes the whole argument object back through `form.open`; that is its Command. */
 const editor = (s: UiState, dispatch: Dispatch, values: Record<string, unknown>, fields: Field[]) => (path: string[], value: unknown) =>
-  void dispatch({ cmd: 'form.open', command: s.form?.cmd ?? '', args: defaultTaggedUnions(setAt(values, path, value), fields), keepInitial: true }).catch(() => undefined);
+  void dispatch({ cmd: 'form.open', command: s.form?.cmd ?? '', args: defaultFormValues(setAt(values, path, value), fields), keepInitial: true }).catch(() => undefined);
 
 /**
  * A multi-valued field's current value as a list. The form's values come from anywhere a
@@ -35,6 +36,10 @@ export function asList(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
   return value === undefined || value === null || typeof value === 'object' ? [] : [String(value)];
 }
+
+/** What a running tutorial step expects in this input, shown as its `placeholder` (issue #46).
+ * `undefined` — no tutorial, or nothing to say about this field — leaves the input bare. */
+const hintFor = (s: UiState, path: string[]): string | undefined => s.formHints?.[path.join('.')];
 
 /** The engine's `where` ("body 'beam'", "size.0") pointed at one field of this form. */
 export function errorFor(err: LastError | null, path: string[]): string | null {
@@ -66,9 +71,10 @@ function Row({ field, children, error }: { field: Field; children: preact.Compon
 }
 
 /** The design's quantity field: value with unit, − / + steppers, and the SI echo underneath. */
-function Quantity({ value, dimension, onChange, query, keyField }: { value: unknown; dimension: string; onChange(v: unknown): void; query: Query; keyField: boolean }) {
+function Quantity({ value, dimension, onChange, query, keyField, placeholder, hint }: { value: unknown; dimension: string; onChange(v: unknown): void; query: Query; keyField: boolean; placeholder?: string; hint?: string }) {
   const [echo, setEcho] = useState<{ text: string; bad: boolean }>({ text: '', bad: false });
-  const text = typeof value === 'string' || value === undefined || value === null ? String(value ?? '') : JSON.stringify(value);
+  const parsed = parseQuantity(value);
+  const text = typeof value === 'string' || value === undefined || value === null ? String(value ?? '') : parsed ? `${parsed.value} ${parsed.unit}` : JSON.stringify(value);
   useEffect(() => {
     let live = true;
     if (parseQuantity(text) === null) {
@@ -85,7 +91,7 @@ function Quantity({ value, dimension, onChange, query, keyField }: { value: unkn
   return (
     <>
       <div class={keyField ? 'qty key' : 'qty'}>
-        <input class="mono" value={text} data-cmd="form.open" onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
+        <input class="mono" value={text} data-cmd="form.open" data-hint={hint} placeholder={hint ?? placeholder} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
         <button type="button" data-cmd="form.open" title="−10 %" onClick={() => onChange(step(text, -1))}>
           −
         </button>
@@ -99,7 +105,7 @@ function Quantity({ value, dimension, onChange, query, keyField }: { value: unkn
 }
 
 /** Chips for the Sets, Bodies or Steps a Command points at, with the design's "pick in viewer". */
-function Picker({ field, value, candidates, onChange, store, dispatch, armed }: { field: Field & { kind: 'ref' }; value: unknown; candidates: { name: string; summary: string }[]; onChange(v: unknown): void; store: Store; dispatch: Dispatch; armed: boolean }) {
+function Picker({ field, value, candidates, onChange, command, dispatch, armed }: { field: Field & { kind: 'ref' }; value: unknown; candidates: { name: string; summary: string }[]; onChange(v: unknown): void; command: string; dispatch: Dispatch; armed: boolean }) {
   const chosen = field.multi ? asList(value) : asList(value).slice(0, 1);
   const add = (name: string) => onChange(field.multi ? [...new Set([...chosen, name])] : name);
   const drop = (name: string) => onChange(field.multi ? chosen.filter((c) => c !== name) : undefined);
@@ -117,14 +123,10 @@ function Picker({ field, value, candidates, onChange, store, dispatch, armed }: 
         {field.refKind === 'set' ? (
           <Cmd
             dispatch={dispatch}
-            cmd="selection.setPickTarget"
+            cmd="form.pick"
             class={armed ? 'chip-pick armed' : 'chip-pick'}
-            args={{ target: 'face' }}
+            args={{ command, field: field.path }}
             title="pick in viewer"
-            onRun={() => {
-              store.set({ pickInto: field.path });
-              void dispatch({ cmd: 'selection.setPickTarget', target: 'face' }).catch(() => undefined);
-            }}
           >
             {armed ? 'click a face…' : 'pick in viewer'}
           </Cmd>
@@ -160,7 +162,7 @@ function Segmented({ options, active, onPick }: { options: string[]; active: (o:
 }
 
 function FieldView(props: FieldProps) {
-  const { field, fields, values, s, store, dispatch, query, defs, variants } = props;
+  const { field, fields, values, s, dispatch, query, defs, variants } = props;
   const set = editor(s, dispatch, values, fields);
   const value = getAt(values, field.path);
   const error = errorFor(s.formError, field.path);
@@ -169,10 +171,13 @@ function FieldView(props: FieldProps) {
   if (field.kind === 'quantity') {
     const parts = field.parts;
     const list = Array.isArray(value) ? (value as unknown[]) : [];
+    // The issue's "the placeholder should show the units": the Model's own length unit, or the
+    // dimension's SI one, so an empty box says what a number in it has to carry.
+    const placeholder = `0 ${field.dimension === 'length' ? (s.model?.units.length ?? 'm') : siUnit(field.dimension)}`.trim();
     return (
       <Row field={field} error={error}>
         {parts === 1 ? (
-          <Quantity value={value} dimension={field.dimension} onChange={onChange} query={query} keyField={field.required} />
+          <Quantity value={value} dimension={field.dimension} onChange={onChange} query={query} keyField={field.required} placeholder={placeholder} hint={hintFor(s, field.path)} />
         ) : (
           Array.from({ length: parts }, (_, i) => (
             <Quantity
@@ -181,10 +186,19 @@ function FieldView(props: FieldProps) {
               dimension={field.dimension}
               query={query}
               keyField={field.required}
+              placeholder={placeholder}
+              hint={hintFor(s, [...field.path, String(i)])}
               onChange={(v) => onChange(Array.from({ length: parts }, (_, j) => (j === i ? v : (list[j] ?? ''))))}
             />
           ))
         )}
+      </Row>
+    );
+  }
+  if (field.kind === 'sketch') {
+    return (
+      <Row field={field} error={error}>
+        <SketchEditor value={value} unit={s.model?.units.length ?? 'm'} onChange={onChange} dispatch={dispatch} />
       </Row>
     );
   }
@@ -220,7 +234,7 @@ function FieldView(props: FieldProps) {
     };
     return (
       <Row field={field} error={error}>
-        <Picker field={field} value={value} candidates={byKind[field.refKind] ?? []} onChange={onChange} store={store} dispatch={dispatch} armed={s.pickInto?.join('.') === field.path.join('.')} />
+        <Picker field={field} value={value} candidates={byKind[field.refKind] ?? []} onChange={onChange} command={s.form!.cmd} dispatch={dispatch} armed={s.pickInto?.join('.') === field.path.join('.')} />
       </Row>
     );
   }
@@ -250,9 +264,30 @@ function FieldView(props: FieldProps) {
     );
   }
   if (field.kind === 'number') {
+    const mesher = getAt(values, ['mesher', 'kind']);
+    // Only describe elements that this engine can actually produce. Order defaults to one.
+    const linear = value === undefined || value === null || value === 1;
+    const bendingWarning = s.form?.cmd === 'mesh.set' && field.path.join('.') === 'order' && linear
+      ? mesher === 'free'
+        ? 'Linear triangles have constant strain and can be too stiff in bending. Use quadratic elements and check mesh convergence.'
+        : ['lattice', 'mapped', 'sweep'].includes(String(mesher)) && values['formulation'] === 'full'
+          ? 'Fully integrated linear quadrilaterals and hexahedra can lock in bending. Use quadratic elements and check mesh convergence.'
+          : null
+      : null;
     return (
       <Row field={field} error={error}>
-        <input class="mono input" type="number" data-cmd="form.open" value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value === '' ? undefined : Number((e.target as HTMLInputElement).value))} />
+        <input class="mono input" type="number" data-cmd="form.open" data-hint={hintFor(s, field.path)} placeholder={hintFor(s, field.path)} value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value === '' ? undefined : Number((e.target as HTMLInputElement).value))} />
+        {bendingWarning ? (
+          <div class="surface warn" role="status">
+            <span aria-hidden="true">△</span>
+            <span>
+              {bendingWarning}{' '}
+              <Cmd dispatch={dispatch} cmd="form.open" class="link" args={{ command: 'mesh.set', args: { ...values, order: 2 }, keepInitial: true }}>
+                Switch to quadratic
+              </Cmd>
+            </span>
+          </div>
+        ) : null}
       </Row>
     );
   }
@@ -279,7 +314,7 @@ function FieldView(props: FieldProps) {
   void variants;
   return (
     <Row field={field} error={error}>
-      <input class="mono input" data-cmd="form.open" value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
+      <input class="mono input" data-cmd="form.open" data-hint={hintFor(s, field.path)} placeholder={hintFor(s, field.path)} value={value === undefined ? '' : String(value)} onInput={(e) => onChange((e.target as HTMLInputElement).value)} />
     </Row>
   );
 }
@@ -300,11 +335,15 @@ export function SchemaForm(props: FormProps) {
     );
   }
   const fields = fieldsOf(variant, defs);
-  const values = defaultTaggedUnions(form.values, fields);
+  const values = defaultFormValues(form.values, fields);
   const cmd = { cmd: form.cmd, ...values };
   const name = String(values['name'] ?? '—');
   const label = applyLabel(form.cmd);
+  const missing = missingRequired(fields, values);
   const apply = (): void => {
+    // The panel is a real `<form>`, so ↵ in any field lands here whatever the button says: the
+    // rule lives in `apply`, and `disabled` below is only its visible half (issue #43).
+    if (missing.length > 0) return store.set({ formError: { code: 'incomplete', cause: `fill in ${missing.join(', ')}`, where: null, suggestion: null } });
     store.set({ formError: null });
     void dispatch(cmd as { cmd: string }).catch(() => store.set({ formError: store.state.lastError }));
   };
@@ -344,7 +383,8 @@ export function SchemaForm(props: FormProps) {
               cmd={form.cmd}
               class="apply"
               args={values}
-              title={form.cmd}
+              disabled={missing.length > 0}
+              title={missing.length > 0 ? `fill in ${missing.join(', ')}` : form.cmd}
               onRun={apply}
             >
               {label}

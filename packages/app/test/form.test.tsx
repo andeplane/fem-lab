@@ -1,8 +1,11 @@
 // The Properties form against the real schema and a fake registry: what a field edit dispatches,
 // what the SI echo says, where a structured error lands, and that "will be recorded as" is
 // literally the Command Apply sends — the design's promise that you see it before it happens.
-import type { EngineSchema, JsonSchema, ModelSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type EngineSchema, type JsonSchema, type ModelSummary } from '@femlab/registry';
+import { fakeHost, fakeTransport } from '../../registry/test/fakes';
+import { appHostCommands } from '../src/host';
 import { render } from 'preact';
+import { z } from 'zod';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from './wait-for';
 import schema from '../../registry/src/generated/engine.schema.json';
@@ -36,11 +39,12 @@ function mount(cmd: string, values: Record<string, unknown> = {}) {
   const store = new Store();
   store.set({ model: model(), ready: true });
   store.openForm(cmd, values);
+  const transport = fakeTransport();
+  const registry = new Registry({ schema: doc, host: fakeHost(transport), hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, { current: null }, async () => undefined)] });
   const sent: { cmd: string }[] = [];
   const dispatch = vi.fn(async (c: { cmd: string } & Record<string, unknown>) => {
     sent.push(c);
-    if (c.cmd === 'form.open') store.openForm(c['command'] as string, (c['args'] as Record<string, unknown>) ?? {}, c['keepInitial'] === true);
-    return undefined;
+    return registry.dispatch(c);
   });
   const query = vi.fn(async (q: { query: string } & Record<string, unknown>) => {
     expect(q.query).toBe('query.convert');
@@ -63,6 +67,34 @@ const type = (input: HTMLInputElement, value: string) => {
 const echoOf = (root: HTMLElement, path: string, cls = '.echo') => waitFor(() => field(root, path).querySelector(cls)?.textContent || null, `the ${path} echo`);
 
 describe('SchemaForm', () => {
+  it('teaches linear mesh accuracy and previews a quadratic fix as one Command', () => {
+    const values = { mesher: { kind: 'free', of: 'plate', size: '10 mm' } };
+    const { root, sent, store } = mount('mesh.set', values);
+    expect(field(root, 'order').querySelector('[role="status"]')!.textContent).toContain('Linear triangles');
+    root.querySelector<HTMLButtonElement>('[role="status"] button')!.click();
+    expect(sent).toEqual([{ cmd: 'form.open', command: 'mesh.set', args: { ...values, order: 2 }, keepInitial: true }]);
+    expect(store.state.form!.initial).toEqual(values);
+    expect(root.querySelector('[role="status"]')).toBeNull();
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('order: 2');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'mesh.set', ...values, order: 2 });
+  });
+
+  it('warns for full linear quad/hex formulations, not quadratic or incompatible modes', () => {
+    for (const kind of ['lattice', 'mapped', 'sweep']) {
+      const { root } = mount('mesh.set', { mesher: { kind }, order: 1, formulation: 'full' });
+      expect(root.querySelector('[role="status"]')!.textContent).toContain('can lock in bending');
+    }
+    for (const values of [
+      { mesher: { kind: 'lattice' } },
+      { mesher: { kind: 'mapped' }, order: 1, formulation: 'incompatible-modes' },
+      { mesher: { kind: 'free' }, order: 2 },
+      { mesher: { kind: 'lattice' }, order: 2, formulation: 'full' },
+    ]) {
+      expect(mount('mesh.set', values).root.querySelector('[role="status"]')).toBeNull();
+    }
+  });
+
   beforeEach(() => {
     document.body.innerHTML = '';
   });
@@ -165,7 +197,41 @@ describe('SchemaForm', () => {
     field(root, 'bodies').querySelector<HTMLButtonElement>('.chip-cand')!.click();
     expect(store.state.form!.values['bodies']).toEqual(['beam']);
     field(root, 'bodies').querySelector<HTMLButtonElement>('.chip-set button')!.click();
-    expect(store.state.form!.values['bodies']).toBeUndefined();
+    expect(store.state.form!.values['bodies']).toEqual([]);
+  });
+
+  it.each(['modal', 'static'])('submits an untouched empty required picker for a %s Step', (procedure) => {
+    const { root, sent } = mount('step.add');
+    type(field(root, 'name').querySelector('input')!, 'free');
+    [...field(root, 'procedure').querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === procedure)!.click();
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    const applied = sent.at(-1)!;
+    expect(applied).toEqual({ cmd: 'step.add', name: 'free', procedure, constraints: [], loads: [] });
+    expect(z.fromJSONSchema(schema.commands as never).safeParse(applied).success).toBe(true);
+    // Optional output remains absent, so the engine can apply its documented defaults.
+    expect(applied).not.toHaveProperty('output');
+  });
+
+  it('preserves required empty arrays after removing the final constraint/load chip', () => {
+    const { root, sent, store } = mount('step.add', { name: 'free', procedure: 'modal', constraints: ['root'], loads: ['tip'] });
+    field(root, 'constraints').querySelector<HTMLButtonElement>('.chip-set button')!.click();
+    field(root, 'loads').querySelector<HTMLButtonElement>('.chip-set button')!.click();
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(store.state.form!.values).toMatchObject({ constraints: [], loads: [] });
+    expect(z.fromJSONSchema(schema.commands as never).safeParse(sent.at(-1)).success).toBe(true);
+  });
+
+  it.each([['model.rename', 'to'], ['model.duplicate', 'as']])('fills the required ObjectKind in %s from empty arguments', (command, target) => {
+    const { root, sent } = mount(command!);
+    const kind = field(root, 'kind');
+    expect(kind.textContent).not.toContain('(optional)');
+    [...kind.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'body')!.click();
+    type(field(root, 'name').querySelector('input')!, 'beam');
+    type(field(root, target!).querySelector('input')!, 'beam-copy');
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    const applied = sent.at(-1)!;
+    expect(applied).toEqual({ cmd: command, kind: 'body', name: 'beam', [target!]: 'beam-copy' });
+    expect(z.fromJSONSchema(schema.commands as never).safeParse(applied).success).toBe(true);
   });
 
   it('dispatches the visually selected default kind when its tagged-union sub-form is edited', () => {
@@ -183,6 +249,56 @@ describe('SchemaForm', () => {
     expect(store.state.form!.values['restore']).toBe(true);
     field(root, 'quantity').querySelector<HTMLButtonElement>('button')!.click();
     expect(store.state.form!.values['quantity']).toEqual({ kind: 'max' });
+  });
+
+  // Issue #43: every primitive in the form, the sketch as an editor, and no Apply until it can work.
+  it('draws the fields of whichever shape kind is picked', () => {
+    const { root, store } = mount('geometry.add', { name: 'pin' });
+    const kinds = [...field(root, 'shape').querySelectorAll<HTMLButtonElement>('.segmented button')].map((b) => b.textContent);
+    expect(kinds).toEqual(['box', 'cylinder', 'sphere', 'sheet', 'extrude', 'revolve', 'union', 'subtract', 'intersect', 'transform']);
+    kinds.forEach((k, i) => k === 'cylinder' && field(root, 'shape').querySelectorAll<HTMLButtonElement>('.segmented button')[i]!.click());
+    expect(store.state.form!.values['shape']).toEqual({ kind: 'cylinder' });
+    expect(field(root, 'shape.radius')).not.toBeNull();
+    expect(field(root, 'shape.height')).not.toBeNull();
+  });
+
+  it('offers a sketch editor rather than a JSON textarea, and emits a valid SketchSpec', () => {
+    const { root, store } = mount('geometry.add', { name: 'plate', shape: { kind: 'sheet' } });
+    const sketch = field(root, 'shape.sketch');
+    expect(sketch.querySelector('textarea')).toBeNull();
+    expect(sketch.querySelector('.sketch-view')).not.toBeNull();
+    sketch.querySelector<HTMLButtonElement>('[title^="a 1 × 1"]')!.click();
+    const value = (store.state.form!.values['shape'] as { sketch: { outer: { kind: string; to: string[] }[] } }).sketch;
+    expect(value.outer).toHaveLength(4);
+    expect(value.outer[0]).toEqual({ kind: 'line', to: ['1 mm', '0 mm'] });
+    // The preview closes the loop by wrapping, so four segments draw four sides.
+    expect(root.querySelector('.sketch-view path')!.getAttribute('d')).toBe('M 0 0 L 1 0 L 1 1 L 0 1 L 0 0 Z');
+    [...root.querySelectorAll<HTMLButtonElement>('.sketch-add button')].find((b) => b.textContent === '+ arc')!.click();
+    const grown = (store.state.form!.values['shape'] as { sketch: { outer: { kind: string }[] } }).sketch.outer;
+    expect(grown).toHaveLength(5);
+    expect(grown[4]).toMatchObject({ kind: 'arc', ccw: true });
+  });
+
+  it('will not Add body — by button or by ↵ — until the required fields are filled', () => {
+    const { root, store, sent } = mount('geometry.add');
+    const apply = root.querySelector<HTMLButtonElement>('.apply')!;
+    expect(apply.disabled).toBe(true);
+    expect(apply.title).toBe('fill in Name, Size');
+    // A real <form>, so ↵ submits whatever the button says: the rule has to be in `apply` too.
+    root.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(sent.filter((c) => c.cmd === 'geometry.add')).toEqual([]);
+    expect(store.state.formError).toMatchObject({ code: 'incomplete', cause: 'fill in Name, Size' });
+    type(field(root, 'name').querySelector('input')!, 'beam');
+    for (const [i, input] of [...field(root, 'shape.size').querySelectorAll('input')].entries()) type(input as HTMLInputElement, `${i + 1} mm`);
+    expect(root.querySelector<HTMLButtonElement>('.apply')!.disabled).toBe(false);
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toMatchObject({ cmd: 'geometry.add', name: 'beam' });
+  });
+
+  it('puts the Model\'s own length unit in an empty quantity box', () => {
+    const { root } = mount('geometry.addBox');
+    expect(field(root, 'size').querySelector('input')!.placeholder).toBe('0 mm');
+    expect(field(root, 'at').querySelector('input')!.placeholder).toBe('0 mm');
   });
 
   it('takes a number as a number and a free-form object as JSON', () => {

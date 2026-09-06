@@ -1,7 +1,7 @@
 //! VTU (VTK XML UnstructuredGrid) writer: the format anyone checks our fields with in ParaView.
 //!
 //! `format="binary"` with `header_type="UInt64"`, which in VTK's XML means each DataArray's text
-//! is base64 of the byte count followed — as a separately encoded block — by base64 of the data.
+//! is base64 of one block containing the byte count followed by the data.
 //! That keeps the file text, so it travels as a `String` through every host.
 //!
 //! No node permutation: VTK's quadratic hexahedron and tetrahedron orderings are Abaqus's, which
@@ -58,12 +58,14 @@ pub fn write_vtu(mesh: &Mesh, point_fields: &[(&str, usize, &[f64])], cell_field
     s
 }
 
-/// One DataArray: the base64 of the payload length, then the base64 of the payload.
+/// One DataArray: encode the UInt64 length and payload together, with padding only at the end.
 fn array(name: &str, ty: &str, comps: usize, payload: &[u8]) -> String {
+    let mut block = Vec::with_capacity(8 + payload.len());
+    block.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    block.extend_from_slice(payload);
     format!(
-        "<DataArray type=\"{ty}\" Name=\"{name}\" NumberOfComponents=\"{comps}\" format=\"binary\">{}{}</DataArray>\n",
-        base64(&(payload.len() as u64).to_le_bytes()),
-        base64(payload)
+        "<DataArray type=\"{ty}\" Name=\"{name}\" NumberOfComponents=\"{comps}\" format=\"binary\">{}</DataArray>\n",
+        base64(&block)
     )
 }
 

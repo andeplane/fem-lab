@@ -4,7 +4,7 @@
 // content agent's; they are dispatched Command by Command exactly as `file.openExample` does.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 const FIXTURES = path.join(import.meta.dirname, 'fixtures');
 const journal = (name: string): Record<string, unknown>[] => JSON.parse(readFileSync(path.join(FIXTURES, `${name}.json`), 'utf8')) as Record<string, unknown>[];
@@ -30,8 +30,6 @@ test.describe('@cpu the Results tab after a modal Step', () => {
   test.setTimeout(240_000);
 
   test('frequencies, the mode picker, and the sweep on the deformation bar', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1440, height: 900 });
     await ready(page);
     await open(page, 'cantilever-modal', 'modes');
@@ -78,7 +76,53 @@ test.describe('@cpu the Results tab after a modal Step', () => {
     await phase.dispatchEvent('input');
     await expect(play).toHaveText('▶');
 
-    expect(errors).toEqual([]);
+    // WebM capture uses the same phase sweep at a commanded pixel size. Decode the browser's
+    // own file independently: the EBML signature and video metadata prove this is a playable
+    // 320 × 240 recording, not renamed PNG bytes or the live canvas size.
+    await play.click();
+    const download = page.waitForEvent('download');
+    const exported = page.evaluate(() => window.fem.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 320, height: 240, fps: 15, duration: 0.5 } }));
+    const file = await download;
+    await exported;
+    expect(file.suggestedFilename()).toBe('cantilever-modal.webm');
+    const saved = await file.path();
+    expect(saved).not.toBeNull();
+    const webm = readFileSync(saved!);
+    expect([...webm.subarray(0, 4)]).toEqual([0x1a, 0x45, 0xdf, 0xa3]);
+    expect(webm.length).toBeGreaterThan(1000);
+    // Decode away from the app page: its CSP deliberately refuses blob: media, while the
+    // downloaded file must remain independently playable in Chromium.
+    const decoder = await page.context().newPage();
+    let dimensions: number[];
+    try {
+      dimensions = await decoder.evaluate(async (base64) => {
+        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+        const video = document.createElement('video');
+        video.src = URL.createObjectURL(new Blob([bytes], { type: 'video/webm' }));
+        await new Promise<void>((resolve, reject) => {
+          video.onloadedmetadata = () => resolve();
+          video.onerror = () => reject(new Error('Chromium could not decode its WebM recording'));
+        });
+        const size = [video.videoWidth, video.videoHeight];
+        URL.revokeObjectURL(video.src);
+        return size;
+      }, webm.toString('base64'));
+    } finally {
+      await decoder.close();
+    }
+    expect(dimensions).toEqual([320, 240]);
+    await expect(play).toHaveText('❚❚');
+
+    // Cancellation resolves without a partial download and restores the running animation.
+    const cancelled = await page.evaluate(async () => {
+      const recording = window.fem.dispatch({ cmd: 'file.export', spec: { format: 'webm', width: 320, height: 240, fps: 15, duration: 2 } });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const cancel = await window.fem.dispatch({ cmd: 'file.cancelAnimationCapture' });
+      return { cancel, recording: await recording };
+    });
+    expect(cancelled).toEqual({ cancel: { cancelled: true }, recording: { cancelled: true } });
+    await expect(play).toHaveText('❚❚');
+
   });
 });
 
@@ -86,8 +130,6 @@ test.describe('@cpu the Results tab after a transient Step', () => {
   test.setTimeout(240_000);
 
   test('the history plot, its axes in the Step\'s units, and its hover readout', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1440, height: 900 });
     await ready(page);
     await open(page, 'bar-heat-transient', 'warmup');
@@ -115,7 +157,6 @@ test.describe('@cpu the Results tab after a transient Step', () => {
     await expect(chart.locator('.chart-readout')).not.toContainText('hover to read');
     await expect(chart.locator('.chart-readout')).toContainText(' s · max ');
 
-    expect(errors).toEqual([]);
   });
 });
 
@@ -123,8 +164,6 @@ test.describe('@cpu the derived checks and the image resolution', () => {
   test.setTimeout(240_000);
 
   test('safety and utilisation from the Material\'s yield, and 1x / 2x on the PNG row', async ({ page }) => {
-    const errors: string[] = [];
-    page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1440, height: 900 });
     await ready(page);
     // The modal fixture's Model, solved as a static Step instead: it has the yield.
@@ -166,6 +205,5 @@ test.describe('@cpu the derived checks and the image resolution', () => {
     const shot = await page.evaluate(async () => ((await window.fem.registry.query({ query: 'query.screenshot', width: 800, height: 600 })) as { png: string }).png.slice(0, 22));
     expect(shot).toBe('data:image/png;base64,');
 
-    expect(errors).toEqual([]);
   });
 });

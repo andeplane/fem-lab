@@ -3,9 +3,10 @@
 // convergence bars; Checks is what the Model is about to hand the solver, live and before any
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
-import { useEffect, useState } from 'preact/hooks';
-import { FIELD_CHOICES, dimensionOf, formatNumber } from '../fields';
-import type { UiState } from '../store';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber } from '../fields';
+import { verificationState, type UiState } from '../store';
+
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
 import { blockers } from './schema';
@@ -14,7 +15,7 @@ const num = (v: Valued | undefined): string => (v ? formatNumber(v.value) : '—
 const at = (p: [Valued, Valued, Valued]): string => p.map((v) => formatNumber(v.value)).join(' ');
 const fieldUnit = (field: string, v: Valued): string => (dimensionOf(field) === 'dimensionless' && v.unit === 'SI' ? '(1)' : v.unit);
 
-/** `balance` is a ratio of forces; the design writes it as a percentage with four decimals. */
+/** `balance` is a dimensionless ratio; the design writes it as a percentage with four decimals. */
 export function balanceLine(r: ResultSummary): { pass: boolean; text: string } {
   const percent = r.balance * 100;
   return { pass: Math.abs(r.balance) < 1e-6, text: `Σ reactions = −Σ loads · ${percent.toFixed(4)} %` };
@@ -97,6 +98,8 @@ export function extremeLabel(e: { field: string; component: number }): string {
 function Reactions({ s }: { s: UiState }) {
   const r = s.result!;
   const sum = [0, 1, 2].map((c) => r.reactions.reduce((a, x) => a + x.total[c]!.value, 0));
+  const power = r.reactionQuantity === 'power';
+  const components = power ? 1 : 3;
   const unit = r.appliedTotal[0]!.unit;
   const balance = balanceLine(r);
   return (
@@ -105,16 +108,14 @@ function Reactions({ s }: { s: UiState }) {
         <thead>
           <tr>
             <th>constraint</th>
-            <th>Fx</th>
-            <th>Fy</th>
-            <th>Fz {unit}</th>
+            {power ? <th>Power {unit}</th> : <><th>Fx</th><th>Fy</th><th>Fz {unit}</th></>}
           </tr>
         </thead>
         <tbody>
           {r.reactions.map((x) => (
             <tr key={x.constraint}>
               <td class="mono">{x.constraint}</td>
-              {x.total.map((v, i) => (
+              {x.total.slice(0, components).map((v, i) => (
                 <td key={i} class="mono n">
                   {num(v)}
                 </td>
@@ -123,7 +124,7 @@ function Reactions({ s }: { s: UiState }) {
           ))}
           <tr class="total">
             <td>Σ reactions</td>
-            {sum.map((v, i) => (
+            {sum.slice(0, components).map((v, i) => (
               <td key={i} class="mono n">
                 {formatNumber(v)}
               </td>
@@ -131,7 +132,7 @@ function Reactions({ s }: { s: UiState }) {
           </tr>
           <tr class="total">
             <td>Σ applied</td>
-            {r.appliedTotal.map((v, i) => (
+            {r.appliedTotal.slice(0, components).map((v, i) => (
               <td key={i} class="mono n">
                 {num(v)}
               </td>
@@ -193,14 +194,34 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [path, setPath] = useState<PathResult | null>(null);
   const [error, setError] = useState('');
-  const field = s.result?.extremes[0]?.field ?? 'vonMises';
+  const field = s.transient?.catalogue.field ?? s.result?.extremes[0]?.field ?? 'vonMises';
+  const choice = choiceOf(s.fieldKey);
+  const requested = useRef<{ probe: string[] | null; path: { from: string[]; to: string[] } | null }>({ probe: null, path: null });
+  const generation = useRef(0);
+  const sampledIdentity = useRef({ probe: '', path: '' });
+  const identity = `${s.result?.step}:${s.transient?.generation}:${s.transient?.frame.index}:${s.fieldKey}`;
+  const currentIdentity = useRef(identity);
+  if (currentIdentity.current !== identity) { currentIdentity.current = identity; generation.current++; }
+  const context = {
+    step: s.result?.step, field,
+    ...(s.transient ? { sample: { kind: 'frame', index: s.transient.frame.index }, ...(choice.component === null ? {} : { component: choice.component }) } : {}),
+  };
   const parse = (text: string): string[] => text.split(',').map((p) => p.trim());
   const run = (q: Record<string, unknown>, keep: (v: unknown) => void): void => {
+    const ticket = generation.current;
     setError('');
     query({ query: q['query'] as string, ...q })
-      .then(keep)
-      .catch((e: { cause?: string }) => setError(e.cause ?? 'the sample failed'));
+      .then((value) => { if (ticket === generation.current) keep(value); })
+      .catch((e: { cause?: string }) => { if (ticket === generation.current) setError(e.cause ?? 'the sample failed'); });
   };
+  const keepProbe = (value: unknown): void => { sampledIdentity.current.probe = identity; setProbe(value as ProbeResult); };
+  const keepPath = (value: unknown): void => { sampledIdentity.current.path = identity; setPath(value as PathResult); };
+  useEffect(() => {
+    setProbe(null); setPath(null);
+    if (requested.current.probe) run({ query: 'query.probe', ...context, at: requested.current.probe }, keepProbe);
+    if (requested.current.path) run({ query: 'query.path', ...context, ...requested.current.path, n: 24 }, keepPath);
+    return () => { generation.current++; };
+  }, [identity]);
   return (
     <div class="sample">
       <div class="section-label">Probe · path</div>
@@ -213,19 +234,26 @@ function Sample({ s, query }: { s: UiState; query: Query }) {
         <input class="mono" data-field="path.to" value={to} onInput={(e) => setTo((e.target as HTMLInputElement).value)} />
       </label>
       <div class="row">
-        <Cmd dispatch={async () => undefined} cmd="query.probe" class="chip-add" onRun={() => run({ query: 'query.probe', field, at: parse(at) }, (v) => setProbe(v as ProbeResult))}>
+        <Cmd dispatch={async () => undefined} cmd="query.probe" class="chip-add" onRun={() => {
+          requested.current.probe = parse(at);
+          run({ query: 'query.probe', ...context, at: requested.current.probe }, keepProbe);
+        }}>
           probe
         </Cmd>
-        <Cmd dispatch={async () => undefined} cmd="query.path" class="chip-add" onRun={() => run({ query: 'query.path', field, from: parse(at), to: parse(to), n: 24 }, (v) => setPath(v as PathResult))}>
+        <Cmd dispatch={async () => undefined} cmd="query.path" class="chip-add" onRun={() => {
+          requested.current.path = { from: parse(at), to: parse(to) };
+          run({ query: 'query.path', ...context, ...requested.current.path, n: 24 }, keepPath);
+        }}>
           path
         </Cmd>
       </div>
-      {probe ? (
+      {probe && sampledIdentity.current.probe === identity ? (
         <div class="mono probe-out">
           {field} {formatNumber(probe.value.value)} {probe.value.unit} · element {probe.element}
+          {probe.sample ? ` · ${formatNumber(probe.sample.frame.time.value)} ${probe.sample.frame.time.unit}` : ''}
         </div>
       ) : null}
-      {path ? <PathPlot path={path} /> : null}
+      {path && sampledIdentity.current.path === identity ? <PathPlot path={path} /> : null}
       {error ? <div class="surface error mono">{error}</div> : null}
     </div>
   );
@@ -374,6 +402,29 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
   );
 }
 
+/**
+ * What was solved, above the two columns (#42): a Result *exists*, this is the Step and the
+ * procedure it came from, and the shape in the viewer is drawn exaggerated — said here too, so
+ * a person reading the numbers is not left to infer it from the legend. Everything on it is
+ * already in the store: a header is no place to start a Query, and the Checks tab is where the
+ * DOF count lives.
+ */
+function ResultHeader({ s }: { s: UiState }) {
+  const r = s.result!;
+  const procedure = s.model?.steps.find((st) => st.name === r.step)?.procedure;
+  return (
+    <div class={r.stale ? 'result-header stale' : 'result-header'}>
+      <span class="mono">Result · step {r.step}</span>
+      {procedure ? <span class="faint">{procedure}</span> : null}
+      <span class="faint">
+        {r.solver} · {Math.round(r.timeMs)} ms
+      </span>
+      <span class="faint">{r.stale ? `solved at rev ${r.revision}, before the edits since` : `solved at rev ${r.revision}`}</span>
+      <span class="faint">{s.deformScale === 1 ? 'drawn at true scale' : `drawn exaggerated ×${formatNumber(s.deformScale)}`}</span>
+    </div>
+  );
+}
+
 export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch; query: Query }) {
   const next = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0)[0];
   if (!s.result) {
@@ -394,10 +445,9 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
   }
   return (
     <div class="results">
+      <ResultHeader s={s} />
       <div class="rcol">
-        <div class="section-label">
-          Extremes · {s.result.step} · {s.result.solver} · {Math.round(s.result.timeMs)} ms
-        </div>
+        <div class="section-label">Extremes</div>
         <Extremes s={s} dispatch={dispatch} />
         <Frequencies s={s} dispatch={dispatch} />
         <Sample s={s} query={query} />
@@ -488,18 +538,45 @@ export function Checks({ s, dispatch, query }: { s: UiState; dispatch: Dispatch;
         <div class="kv mono">
           <span>degrees of freedom</span>
           <span class="n">{cost.dofs}</span>
-          <span>matrix non-zeros</span>
+          <span>matrix non-zeros (upper bound)</span>
           <span class="n">{cost.nnz}</span>
-          <span>memory</span>
+          <span>counted peak memory estimate</span>
           <span class="n">{bytes(cost.bytes)}</span>
-          <span>feasible here</span>
-          <span class={cost.feasible ? 'n' : 'bad'}>{cost.feasible ? 'yes' : 'no'}</span>
+          {cost.retainedFrames > 0 ? (
+            <>
+              <span>retained frames</span>
+              <span class="n">{cost.retainedFrames}</span>
+              <span>retained primary fields</span>
+              <span class="n">{bytes(cost.retainedBytes)}</span>
+              <span>native frame staging</span>
+              <span class="n">{bytes(cost.transportStagingBytes)}</span>
+              <span>browser frame staging</span>
+              <span class="n">
+                {cost.wasmTransportStagingComplete ? bytes(cost.wasmTransportStagingBytes) : `≥ ${bytes(cost.wasmTransportStagingBytes)} + JSON/JS overhead`}
+              </span>
+            </>
+          ) : null}
+          <span>planning budget</span>
+          <span class="n">{bytes(cost.budgetBytes)}</span>
+          <span>feasibility</span>
+          <span class={cost.feasible === false ? 'bad' : 'n'}>{cost.feasible === false ? 'over budget' : 'not established'}</span>
           <span>note</span>
           <span>{cost.note}</span>
         </div>
       ) : (
         <div class="empty-note">The DOF and memory estimate appears once a Mesh and a Step exist.</div>
       )}
+
+      {s.assistantVerifications.length > 0 ? <>
+        <div class="section-label">Assistant-reported checks</div>
+        <div class="empty-note">Assistant observations, not independently verified engine measurements.</div>
+        {s.assistantVerifications.map((record, i) => <div class="assistant-check" key={i}>
+          <div class="empty-note">{record.model ?? 'No Model'} · {verificationState(record, s)}</div>
+          {record.rows.map((row, j) => <div class="check-row" key={j}>
+            <span class="mono code">{row.status}</span><span class="check-text">{row.what}</span><span class="mono">{row.value}</span>
+          </div>)}
+        </div>)}
+      </> : null}
 
       <div class="section-label">Assumption log</div>
       {s.assumptions.length === 0 ? (

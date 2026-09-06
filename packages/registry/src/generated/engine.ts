@@ -482,6 +482,21 @@ export type Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -507,6 +522,10 @@ export type Command =
       after?: string | null;
       nModes?: number | null;
       shift?: number | null;
+      /**
+       * Maximum heat-transient time increment. A uniform increment no larger than dt is
+       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       */
       dt?:
         | (
             | string
@@ -527,6 +546,10 @@ export type Command =
         | null;
       theta?: number | null;
       outputEvery?: number | null;
+      /**
+       * Maximum fraction of the explicit critical time step (usually 0.9). The increment
+       * may be reduced uniformly to finish exactly at tEnd.
+       */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
       initial?:
@@ -538,6 +561,16 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -573,6 +606,7 @@ export type Command =
     }
   | {
       steps?: number | null;
+      expectedJournal?: string | null;
       cmd: "journal.undo";
     }
   | {
@@ -1294,7 +1328,9 @@ export type Axis = "x" | "y" | "z";
  */
 export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
 /**
- * Result fields.
+ * Result fields. Reaction is support force in N for structural Results and removed heat
+ * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
+ * display units.
  */
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
@@ -1415,6 +1451,11 @@ export type Query =
       query: "query.model";
     }
   | {
+      kind: ObjectKind;
+      name: string;
+      query: "query.definition";
+    }
+  | {
       query: "query.mesh";
     }
   | {
@@ -1427,8 +1468,20 @@ export type Query =
     }
   | {
       step?: string | null;
+      query: "query.frames";
+    }
+  | {
+      step?: string | null;
+      index?: number | null;
+      sample?: FrameSample | null;
+      field?: Field | null;
+      query: "query.frame";
+    }
+  | {
+      step?: string | null;
       field: Field;
       component?: number | null;
+      sample?: FrameSample | null;
       /**
        * @minItems 3
        * @maxItems 3
@@ -1464,6 +1517,7 @@ export type Query =
       step?: string | null;
       field: Field;
       component?: number | null;
+      sample?: FrameSample | null;
       /**
        * @minItems 3
        * @maxItems 3
@@ -1542,6 +1596,10 @@ export type Query =
       query: "query.convert";
     }
   | {
+      name?: string | null;
+      query: "query.materialLibrary";
+    }
+  | {
       kinds?: ObjectKind[] | null;
       query: "query.objects";
     }
@@ -1553,6 +1611,34 @@ export type Query =
   | {
       query: "query.capabilities";
     };
+/**
+ * How to select retained output; there is no temporal interpolation or extrapolation.
+ */
+export type FrameSample =
+  | {
+      index: number;
+      kind: "frame";
+    }
+  | {
+      /**
+       * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
+       */
+      time:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      sampling: TimeSampling;
+      kind: "time";
+    };
+/**
+ * Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.
+ * Nearest explicitly selects a retained time; equal-distance ties (within the same relative
+ * roundoff bound on the distances) choose the earlier frame.
+ * Both reject times outside the retained interval (except endpoint conversion roundoff).
+ */
+export type TimeSampling = "exact" | "nearest";
 /**
  * A number with a unit, as text or as parts.
  */
@@ -1572,15 +1658,19 @@ export type ReportSection =
  */
 export type QueryResult =
   | ModelSummary
+  | ObjectDefinition
   | MeshSummary
   | SetInfo
   | ResultSummary
+  | FramesResult
+  | FrameResult
   | ProbeResult
   | PathResult
   | CostEstimate
   | JournalDump
   | ScriptText
   | Converted
+  | MaterialLibrary
   | ObjectList
   | Capabilities
   | ReportText;
@@ -2138,6 +2228,21 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -2163,6 +2268,10 @@ export type ModelFile_Command =
       after?: string | null;
       nModes?: number | null;
       shift?: number | null;
+      /**
+       * Maximum heat-transient time increment. A uniform increment no larger than dt is
+       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       */
       dt?:
         | (
             | string
@@ -2183,6 +2292,10 @@ export type ModelFile_Command =
         | null;
       theta?: number | null;
       outputEvery?: number | null;
+      /**
+       * Maximum fraction of the explicit critical time step (usually 0.9). The increment
+       * may be reduced uniformly to finish exactly at tEnd.
+       */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
       initial?:
@@ -2194,6 +2307,16 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -2229,6 +2352,7 @@ export type ModelFile_Command =
     }
   | {
       steps?: number | null;
+      expectedJournal?: string | null;
       cmd: "journal.undo";
     }
   | {
@@ -2780,6 +2904,12 @@ export type Load1 =
     }
   | {
       on: string;
+      emissivity: number;
+      t_inf: number;
+      kind: "radiation";
+    }
+  | {
+      on: string;
       q: number;
       kind: "heatFlux";
     }
@@ -2820,6 +2950,10 @@ export interface Engine {
 export interface UnitSet {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;
@@ -3093,6 +3227,10 @@ export interface MaterialRow {
   E: Valued;
   nu: number;
   rho?: Valued | null;
+  /**
+   * Current yield strength in the Model's display stress unit, when specified.
+   */
+  yield?: Valued | null;
   assignedTo: string[];
 }
 export interface SetRow {
@@ -3187,6 +3325,12 @@ export interface Warning {
   where?: string | null;
 }
 /**
+ * Lossless input for editing one Model object through the same Command used to create it.
+ */
+export interface ObjectDefinition {
+  command: Command;
+}
+/**
  * `query.mesh` response.
  */
 export interface MeshSummary {
@@ -3250,6 +3394,10 @@ export interface SetInfo {
  */
 export interface ResultSummary {
   step: string;
+  /**
+   * The Journal revision after the Command that produced this Result. It stays fixed while
+   * later edits make the Result stale and when undo removes that producing Command.
+   */
   revision: number;
   stale: boolean;
   solver: string;
@@ -3257,8 +3405,14 @@ export interface ResultSummary {
   residual: number;
   timeMs: number;
   extremes: Extreme[];
+  /**
+   * Force for structural Results; power for thermal Results, retained with the solved state.
+   */
+  reactionQuantity: "force" | "power";
   reactions: ReactionRow[];
   /**
+   * Applied force vector or thermal power in component 0 (remaining components zero).
+   *
    * @minItems 3
    * @maxItems 3
    */
@@ -3273,7 +3427,7 @@ export interface ResultSummary {
    */
   history?: HistoryRow[];
   /**
-   * |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+   * |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
    * by a prescribed displacement — where both totals are zero — still reports a meaningful
    * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
    */
@@ -3315,9 +3469,62 @@ export interface HistoryRow {
   max: Valued;
 }
 /**
+ * `query.frames` response; stored components describe the unpadded History storage.
+ */
+export interface FramesResult {
+  step: string;
+  modelHash: string;
+  stale: boolean;
+  nodeCount: number;
+  field: Field;
+  /**
+   * Public field layout, matching final FieldData (three components, zero-padded).
+   */
+  components: number;
+  storedComponents: number;
+  /**
+   * Logical bytes of retained f64 times and unpadded primary values; excludes allocator
+   * overhead, spare capacity, final derived fields and temporary Query response copies.
+   */
+  retainedBytes: number;
+  frames: FrameStamp[];
+}
+/**
+ * One retained frame's zero-based index and time in seconds and Model display units.
+ */
+export interface FrameStamp {
+  index: number;
+  timeSi: number;
+  time: Valued;
+}
+/**
+ * `query.frame` response: SI values in the existing component-fastest FieldData layout.
+ */
+export interface FrameResult {
+  sample: ResolvedFrame;
+  field: Field;
+  components: number;
+  nodeCount: number;
+  /**
+   * SI unit for values: K for temperature, m for displacement, never a display unit.
+   */
+  unit: string;
+  values: number[];
+}
+/**
+ * Result identity and the actual resolved sample. The solved Model hash is not a solve-instance
+ * counter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.
+ */
+export interface ResolvedFrame {
+  step: string;
+  modelHash: string;
+  frame: FrameStamp;
+}
+/**
  * `query.probe` response.
  */
 export interface ProbeResult {
+  sample?: ResolvedFrame | null;
   value: Valued;
   element: number;
   interpolated: boolean;
@@ -3326,6 +3533,7 @@ export interface ProbeResult {
  * `query.path` response.
  */
 export interface PathResult {
+  sample?: ResolvedFrame | null;
   s: number[];
   values: (number | null)[];
   unit: string;
@@ -3335,15 +3543,70 @@ export interface PathResult {
  */
 export interface CostEstimate {
   dofs: number;
+  /**
+   * Upper bound on matrix non-zeros; exact when equal to nnzLower.
+   */
   nnz: number;
+  /**
+   * Lower bound on matrix non-zeros.
+   */
+  nnzLower: number;
+  /**
+   * Estimated peak of the counted solve and frame-read phases. It includes mandatory
+   * assembly storage, retained primary values, a conservative transient f64 working-vector
+   * allowance and known native/browser frame-response storage. It is incomplete because
+   * solver fill, JSON and allocator overhead are not known before solving.
+   */
   bytes: number;
-  feasible: boolean;
+  /**
+   * Mandatory assembly storage before transient-specific values are added.
+   */
+  assemblyBytes: number;
+  /**
+   * Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
+   */
+  retainedFrames: number;
+  /**
+   * Logical f64 bytes for retained times and unpadded primary values.
+   */
+  retainedBytes: number;
+  /**
+   * Conservative full-field allowance for procedure working f64 vectors live with History.
+   * Free-DOF vectors are charged at the full nodal length.
+   */
+  transientWorkBytes: number;
+  /**
+   * One normalized three-component f64 frame owned by a native Query result.
+   */
+  transportStagingBytes: number;
+  /**
+   * Known lower bound for the WASM/Worker frame route while two normalized three-component
+   * numeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.
+   */
+  wasmTransportStagingBytes: number;
+  /**
+   * False while the generic JSON route has value- and runtime-dependent allocation overhead.
+   */
+  wasmTransportStagingComplete: boolean;
+  /**
+   * Fixed 1.5 GiB planning budget; not measured free memory on the current host.
+   */
+  budgetBytes: number;
+  /**
+   * False if the counted conservative estimate exceeds the planning budget; null means
+   * feasibility is unknown. Fitting it does not establish that assembly or factorisation fits.
+   */
+  feasible?: boolean | null;
   note: string;
 }
 /**
  * `query.journal` response.
  */
 export interface JournalDump {
+  /**
+   * Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
+   */
+  hash: string;
   entries: JournalEntry[];
   revision: number;
   canUndo: boolean;
@@ -3369,6 +3632,174 @@ export interface ScriptText {
 export interface Converted {
   value: number;
   unit: string;
+}
+/**
+ * `query.materialLibrary` response.
+ */
+export interface MaterialLibrary {
+  entries: MaterialLibraryEntry[];
+  sources: MaterialCitation[];
+}
+/**
+ * A documented catalogue entry. Every optional property serializes as a value or `null`.
+ */
+export interface MaterialLibraryEntry {
+  id: string;
+  name: string;
+  aliases: string[];
+  specification: string;
+  productForm: string;
+  condition: string;
+  temperature?:
+    | (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    | null;
+  temperatureBasis: string;
+  E?: SourcedStress | null;
+  nu?: SourcedRatio | null;
+  rho?: SourcedDensity | null;
+  alpha?: SourcedThermalExpansion | null;
+  k?: SourcedConductivity | null;
+  cp?: SourcedSpecificHeat | null;
+  yield?: SourcedStress | null;
+  /**
+   * Limitations that prevent a reported value from being treated as a generic default.
+   */
+  limitations: string[];
+  /**
+   * Ready to copy into `material.add.source` with the applicable reported values.
+   */
+  materialAddSource: string;
+}
+export interface SourcedStress {
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedRatio {
+  /**
+   * A dimensionless with unit, e.g. "0.3". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedDensity {
+  /**
+   * A density with unit, e.g. "7850 kg/m^3". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedThermalExpansion {
+  /**
+   * A thermal expansion with unit, e.g. "1.2e-5 1/K". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedConductivity {
+  /**
+   * A conductivity with unit, e.g. "50 W/(m K)". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedSpecificHeat {
+  /**
+   * A specific heat with unit, e.g. "460 J/(kg K)". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+/**
+ * One primary source used by [`MaterialLibrary`]. Property `source` fields name its `id`.
+ */
+export interface MaterialCitation {
+  id: string;
+  organization: string;
+  title: string;
+  url: string;
+  locator: string;
+  retrievedOn: string;
 }
 /**
  * `query.objects` response.
@@ -3465,10 +3896,13 @@ export interface EngineError {
     | "mesh.failed"
     | "model.no-material"
     | "model.ill-posed"
+    | "result.stale"
     | "constraint.conflict"
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
     | "solve.stalled"
+    | "solve.diverged"
+    | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
     | "explicit.unstable";
@@ -3527,6 +3961,10 @@ export interface Model {
 export interface UnitSet1 {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;
@@ -3620,6 +4058,8 @@ export interface Step {
   dtFactor?: number | null;
   amplitude?: Amplitude | null;
   initial?: number | null;
+  nonlinearTolerance?: number | null;
+  nonlinearMaxIterations?: number | null;
 }
 /**
  * A Plugin used by the Model (phase P).
