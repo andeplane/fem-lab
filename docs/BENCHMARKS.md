@@ -93,7 +93,9 @@ cases. NaN, infinite, nonpositive and allowance-overflowing tolerances are rejec
 changing the solution vector. Direct solves reject a nonfinite residual or one above the existing
 refinement floor of `100*tolerance` (default 1e-8); this is an acceptance guard, not a replacement for D1's
 published stress and force-balance oracles. Command regressions keep Model/Journal/previous
-Result intact on rejection and ensure transient heat propagates the error without a panic.
+Result intact on rejection and ensure transient heat and modal analysis propagate the error
+without a panic. The modal case uses the first Bathe inverse iterate, whose coefficients
+scale as `rho²/E`: finite `rho=1e100 kg/m³` and `E=1e-200 Pa` exceed the f64 range.
 
 ## B. Beams and locking (phase 1–2)
 

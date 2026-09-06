@@ -2,6 +2,8 @@ name: Direct solver diagnosis (#266)
 on:
   push:
     branches: [codex/266-windows-direct-solve]
+    # Preserve the queued baseline; ordinary guard commits do not enqueue duplicate matrices.
+    paths: [tools/diagnose-direct-solve.py]
 permissions:
   contents: read
 jobs:

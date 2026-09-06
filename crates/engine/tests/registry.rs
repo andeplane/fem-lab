@@ -3735,3 +3735,20 @@ fn transient_heat_propagates_a_rejected_direct_solve_without_panicking() {
     ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
     assert!(e.field(Some("heat"), Field::Temperature).unwrap().data.iter().all(|&t| t == 0.0));
 }
+
+#[test]
+fn modal_analysis_propagates_a_rejected_direct_solve_without_panicking() {
+    let mut e = engine();
+    cantilever(&mut e);
+    // Bathe's first inverse iteration has right-hand side M*diag(M), proportional
+    // to rho^2. With finite rho=1e100 and E=1e-200, A^-1 M*diag(M) exceeds f64.
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"1e-200 Pa","nu":0.3,"rho":"1e100 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root"],"loads":[],"nModes":2}"#);
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let error = err(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(error.code, ErrorCode::SolveStalled);
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert!(e.field(Some("modes"), Field::Displacement).unwrap().data.iter().all(|value| value.is_finite()));
+}
