@@ -214,16 +214,20 @@ Rule: one Apply = one Command batch; sliders emit on release.
 - Under it: **selection chip** (max-width 100%−20 px, truncating): `@reentrant_corner` mono cyan ·
   meta faint · `⌘C` key chip (turns green "copied") · "name by rule" link.
 - Right: **legend** 168 px (top 56, bottom 58, scrolls if short): field name + unit, "ULS 6.10b ·
-  deformed ×120", 16×132 px gradient bar, six mono ticks (top tick orange), divider, peak vs
+  exaggerated ×120" (or "true scale" at ×1), 16×132 px gradient bar, six mono ticks (top tick orange), divider, peak vs
   `f_cd C30/37 17.0`, three colour-map swatches (12 px, active outlined high).
-- Bottom-right: **deformation bar**: ▶/❚❚ (mode/transient animation), "deformation", range
-  0–400 step 10 (accent orange), mono `×120`, "true scale", "screenshot".
+- Bottom-right: **deformation bar**: ▶/❚❚ (mode/transient animation), "exaggeration", range
+  0–max(400, the drawn scale) in a hundred steps (accent orange), mono `×120`, "true scale"
+  (pressed at ×1), "screenshot".
 - Bottom-left: probe readout (mono 11 low) — `σ_vM 12.40 MPa · node 1342 · x 0 y 412 z 1388 mm`
   in Results; face name + coordinates otherwise.
 - Overlays: solving card, stale banner, error card, "No geometry yet" hint (all above).
 Viewer canvas: z-up, ground grid `GridHelper(4000, 40, #232730, #171a20)` at z = −2, hemisphere +
 two directional lights, geometry flat grey (0.58) with quad edges `#272b33`; mesh mode grey 0.46
-with edges `#5b6472`; results vertex-coloured, edges hidden. Glyphs: constraint pins = 4-sided
+with edges `#5b6472`; results vertex-coloured, edges hidden — except while the shape is drawn
+exaggerated, where the edges (built from the undeformed positions and never moved) are kept as a
+ghost outline `#4a5260` so the departure from the real body is visible; `view.toggle
+{ layer: 'edges' }` still turns them off. Glyphs: constraint pins = 4-sided
 cones cyan under base; loads = orange cylinder+cone arrows on bearing_top; gravity single arrow.
 Clip plane along y at 520 mm. Must hold 60 fps while solving (engine in a Worker).
 
@@ -237,7 +241,9 @@ download .ts.
 - **Script**: line numbers + TypeScript (mono 11.5, lh 1.75), imports/blank faint, checks green,
   export cyan, the edited line orange. Right rail 214 px: **▶ Run script**, console output
   green, note "The Journal, typed. Edit a line and rerun and the Model replays from there."
-- **Results**: two columns. Left: Extremes table (field · min · max · location; peak orange),
+- **Results**: a header across both columns saying a Result exists and what made it — "Result ·
+  step static · linear-static · cpu-direct · 12 ms · solved at rev 10 · drawn exaggerated ×1000",
+  in warn tones when it is stale — then two columns. Left: Extremes table (field · min · max · location; peak orange),
   "CODE CHECK · NS-EN 1992-1-1, NA NORWAY" rows (✓/!/✕ · name · utilisation · clause). Right:
   Reactions table (kN, Fx Fy Fz per constraint, Σ, Σ applied) + pass surface
   "✓ Σ reactions = −Σ loads · 0.0000 %"; "MESH CONVERGENCE · u_z" mini bars (100/50/25 mm, last

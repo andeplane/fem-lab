@@ -122,9 +122,10 @@ test.describe('@cpu the guided tutorial', () => {
 
       const inForm = await target.evaluate((el) => Boolean(el.closest('.props')));
       if (inForm) {
-        // Every text and quantity input carries the value it wants as its own placeholder; a
-        // reference field is chips, so its value is picked from the candidates on offer.
-        const inputs = page.locator('.props .field input[placeholder]:not([placeholder=""])');
+        // Every text and quantity input the tutorial has an answer for carries it as its own
+        // placeholder, marked `data-hint` so the generic unit placeholder (#43) is not mistaken
+        // for one; a reference field is chips, so its value is picked from the candidates on offer.
+        const inputs = page.locator('.props .field input[data-hint]:not([data-hint=""])');
         for (let i = 0; i < (await inputs.count()); i++) {
           const want = await inputs.nth(i).getAttribute('placeholder');
           if (want) await inputs.nth(i).fill(want);
