@@ -104,7 +104,7 @@ function Quantity({ value, dimension, onChange, query, keyField, placeholder, hi
 }
 
 /** Chips for the Sets, Bodies or Steps a Command points at, with the design's "pick in viewer". */
-function Picker({ field, value, candidates, onChange, store, dispatch, armed }: { field: Field & { kind: 'ref' }; value: unknown; candidates: { name: string; summary: string }[]; onChange(v: unknown): void; store: Store; dispatch: Dispatch; armed: boolean }) {
+function Picker({ field, value, candidates, onChange, command, dispatch, armed }: { field: Field & { kind: 'ref' }; value: unknown; candidates: { name: string; summary: string }[]; onChange(v: unknown): void; command: string; dispatch: Dispatch; armed: boolean }) {
   const chosen = field.multi ? asList(value) : asList(value).slice(0, 1);
   const add = (name: string) => onChange(field.multi ? [...new Set([...chosen, name])] : name);
   const drop = (name: string) => onChange(field.multi ? chosen.filter((c) => c !== name) : undefined);
@@ -122,14 +122,10 @@ function Picker({ field, value, candidates, onChange, store, dispatch, armed }: 
         {field.refKind === 'set' ? (
           <Cmd
             dispatch={dispatch}
-            cmd="selection.setPickTarget"
+            cmd="form.pick"
             class={armed ? 'chip-pick armed' : 'chip-pick'}
-            args={{ target: 'face' }}
+            args={{ command, field: field.path }}
             title="pick in viewer"
-            onRun={() => {
-              store.set({ pickInto: field.path });
-              void dispatch({ cmd: 'selection.setPickTarget', target: 'face' }).catch(() => undefined);
-            }}
           >
             {armed ? 'click a face…' : 'pick in viewer'}
           </Cmd>
@@ -165,7 +161,7 @@ function Segmented({ options, active, onPick }: { options: string[]; active: (o:
 }
 
 function FieldView(props: FieldProps) {
-  const { field, fields, values, s, store, dispatch, query, defs, variants } = props;
+  const { field, fields, values, s, dispatch, query, defs, variants } = props;
   const set = editor(s, dispatch, values, fields);
   const value = getAt(values, field.path);
   const error = errorFor(s.formError, field.path);
@@ -237,7 +233,7 @@ function FieldView(props: FieldProps) {
     };
     return (
       <Row field={field} error={error}>
-        <Picker field={field} value={value} candidates={byKind[field.refKind] ?? []} onChange={onChange} store={store} dispatch={dispatch} armed={s.pickInto?.join('.') === field.path.join('.')} />
+        <Picker field={field} value={value} candidates={byKind[field.refKind] ?? []} onChange={onChange} command={s.form!.cmd} dispatch={dispatch} armed={s.pickInto?.join('.') === field.path.join('.')} />
       </Row>
     );
   }
