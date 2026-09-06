@@ -2145,8 +2145,90 @@ fn probing_and_walking_a_solved_field() {
         at: [Q::text("1 m"), Q::text("50 mm"), Q::text("50 mm")],
     };
     let e2 = e.query(q).expect_err("the mesh moved");
-    assert_eq!(e2.code, ErrorCode::NotFound);
-    assert!(e2.cause.contains("nodes"), "{}", e2.cause);
+    assert_eq!(e2.code, ErrorCode::ResultStale);
+    assert!(e2.cause.contains("current Model"), "{}", e2.cause);
+}
+
+fn assert_stale_mesh_consumers(e: &mut Engine) {
+    let revision = e.revision();
+    let export = err(e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#);
+    let probe = e
+        .query(
+            serde_json::from_str(
+                r#"{
+        "query":"query.probe","field":"displacement","component":2,
+        "at":["500 mm","50 mm","50 mm"]
+    }"#,
+            )
+            .unwrap(),
+        )
+        .expect_err("a stale field cannot be sampled on the current Mesh");
+    let path = e
+        .query(
+            serde_json::from_str(
+                r#"{
+        "query":"query.path","step":"static","field":"displacement","component":2,
+        "from":["0 m","50 mm","50 mm"],"to":["1 m","50 mm","50 mm"],"n":5
+    }"#,
+            )
+            .unwrap(),
+        )
+        .expect_err("a stale field cannot be sampled along the current Mesh");
+    for error in [export, probe, path] {
+        assert_eq!(error.code, ErrorCode::ResultStale);
+        assert_eq!(error.where_.as_deref(), Some("step 'static'"));
+        assert_eq!(error.suggestion.as_deref(), Some("solve.run on step 'static' again"));
+    }
+    assert_eq!(e.revision(), revision, "failed export and Queries cannot append Commands");
+    assert!(result(e).stale, "the stored summary remains available and explicitly stale");
+}
+
+#[test]
+fn result_mesh_consumers_reject_changed_counts_and_same_count_geometry() {
+    let changes = [
+        (r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"25 mm"},"order":1}"#, false),
+        (
+            r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"],"at":["0 m","10 mm","0 m"]}"#,
+            true,
+        ),
+    ];
+    for (change, same_count) in changes {
+        let mut e = engine();
+        solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+        let before = e.mesh().unwrap().mesh.clone();
+        ok(&mut e, change);
+        let after = &e.mesh().unwrap().mesh;
+        assert_eq!(before.n_nodes() == after.n_nodes(), same_count);
+        assert_ne!(before.coords, after.coords, "the current Mesh really changed");
+        assert_stale_mesh_consumers(&mut e);
+        // Restoring the exact solved Model makes the stored field safe again, even though
+        // the Journal revision moved. Re-solving is not required just to undo the edit.
+        ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+        assert!(!result(&mut e).stale);
+        assert!(tip_uz(&mut e) < 0.0);
+        let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#).output;
+        let Output::Export { text, .. } = output else { panic!("a VTU export") };
+        let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("independent VTK reader accepts the restored Result");
+        let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+        assert_eq!(piece.num_points(), before.n_nodes());
+        // The suggested Command repairs the edited Model for all three consumers as well.
+        ok(&mut e, change);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+        assert!(tip_uz(&mut e) < 0.0);
+        let path = serde_json::from_str(
+            r#"{"query":"query.path","field":"displacement","component":2,
+                "from":["0 m","50 mm","50 mm"],"to":["1 m","50 mm","50 mm"],"n":5}"#,
+        )
+        .unwrap();
+        let QueryResult::Path(path) = e.query(path).unwrap() else { panic!("a path") };
+        assert_eq!(path.values.len(), 5);
+        assert!(path.values.iter().all(Option::is_some));
+        let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#).output;
+        let Output::Export { text, .. } = output else { panic!("a VTU export") };
+        let vtk = vtkio::Vtk::parse_xml(text.as_bytes()).expect("independent VTK reader accepts the re-solved Result");
+        let piece = vtkio::model::UnstructuredGridPiece::try_from(vtk.data).unwrap();
+        assert_eq!(piece.num_points(), e.mesh().unwrap().mesh.n_nodes());
+    }
 }
 
 #[test]
@@ -2285,6 +2367,23 @@ fn a_host_reads_a_field_straight_off_the_result() {
     assert_eq!(e.field(None, Field::Displacement).expect("the last solved step").comps, 3);
     // temperature was never computed in a static Step
     assert_eq!(e.field(None, Field::Temperature).expect_err("no such field").code, ErrorCode::NotFound);
+    let before = e.revision();
+    let unavailable = e
+        .query(Query::Probe {
+            step: None,
+            field: Field::Temperature,
+            component: None,
+            at: [Q::text("500 mm"), Q::text("50 mm"), Q::text("50 mm")],
+        })
+        .expect_err("a current structural Result still has no temperature field");
+    assert_eq!(unavailable.code, ErrorCode::NotFound);
+    assert!(unavailable.cause.contains("no temperature field"));
+    assert!(unavailable.suggestion.unwrap().contains("query.result"));
+    assert_eq!(e.revision(), before);
+    let unsolved = engine();
+    let missing = unsolved.field(None, Field::Displacement).expect_err("a raw field needs a solved Step");
+    assert_eq!(missing.code, ErrorCode::NotFound);
+    assert_eq!(missing.suggestion.as_deref(), Some("solve.run"));
 }
 
 #[test]
@@ -2568,6 +2667,8 @@ fn result_queries_refuse_what_they_cannot_answer() {
     assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"t"}"#), ErrorCode::SetEmpty);
     ok(&mut e, r#"{"cmd":"step.add","name":"u","procedure":"static","constraints":["root"],"loads":["tug"]}"#);
     assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"u"}"#), ErrorCode::SetEmpty);
+    // The added Steps changed the Model; refresh the valid Result before testing bad units.
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
     // a point in the wrong dimension, on the probe and on both ends of a path
     let mut bad = |q: Query| e.query(q).expect_err("a mass is not a length").code;
     assert_eq!(
@@ -2599,7 +2700,7 @@ fn result_queries_refuse_what_they_cannot_answer() {
         component: Some(2),
         at: [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")],
     };
-    assert_eq!(e.query(q).expect_err("a 3D body in a 2D idealisation").code, ErrorCode::ModelIllPosed);
+    assert_eq!(e.query(q).expect_err("the Result predates the invalid idealisation").code, ErrorCode::ResultStale);
 }
 
 // ---------------------------------------------------- heat, modal, transient and explicit Steps

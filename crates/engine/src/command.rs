@@ -820,6 +820,8 @@ pub enum Command {
     /// stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
     /// id and the Body index as cell data. Name a `step` to add that Step's result fields as
     /// point data — displacement, reaction, stress and von Mises — so ParaView colours by them.
+    /// Result fields require the Model state they were solved on; `result.stale` means run
+    /// `solve.run` on that Step again before exporting it with the current Mesh.
     /// `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
     #[serde(rename = "mesh.export", rename_all = "camelCase")]
     MeshExport {

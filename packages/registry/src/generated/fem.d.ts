@@ -114,6 +114,8 @@ export interface Fem {
      * stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
      * id and the Body index as cell data. Name a `step` to add that Step's result fields as
      * point data — displacement, reaction, stress and von Mises — so ParaView colours by them.
+     * Result fields require the Model state they were solved on; `result.stale` means run
+     * `solve.run` on that Step again before exporting it with the current Mesh.
      * `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
      */
     export(args: Omit<Extract<Command, { cmd: 'mesh.export' }>, 'cmd'>): Promise<Ack>;
@@ -293,10 +295,12 @@ export interface Fem {
     /**
      * A field value interpolated at a point (default: the last solved Step). Component
      * indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+     * Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
      */
     probe(args: Omit<Extract<Query, { query: 'query.probe' }>, 'query'>): Promise<ProbeResult>;
     /**
      * A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+     * Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
      */
     path(args: Omit<Extract<Query, { query: 'query.path' }>, 'query'>): Promise<PathResult>;
     /**

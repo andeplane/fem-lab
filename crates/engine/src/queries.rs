@@ -375,21 +375,14 @@ impl Engine {
     /// The nodal field a probe or a path samples, plus its display unit, refusing a Result
     /// whose Mesh is no longer the one it was solved on.
     fn sampled(&mut self, step: Option<&str>, field: Field) -> Result<(FieldData, String), Error> {
+        self.current_result(step)?;
         let f = self.field(step, field)?.clone();
         if f.per != crate::post::Per::Node {
             return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal field"))
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
         let unit = display(&self.model, 0.0, crate::solve_run::field_dimension(field)).unit;
-        self.mesh()?;
-        let nodes = self.mesh.as_ref().expect("built above").mesh.n_nodes();
-        if f.len() != nodes {
-            return Err(Error::new(
-                ErrorCode::NotFound,
-                format!("the Result has {} nodes but the Mesh now has {nodes}", f.len()),
-            )
-            .suggest("solve.run again: the Mesh changed under the Result"));
-        }
+        self.mesh().expect("a Result with the current Model hash was solved on this Mesh");
         Ok((f, unit))
     }
 
