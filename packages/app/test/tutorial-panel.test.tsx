@@ -18,7 +18,7 @@ const click = async (el: Element | null): Promise<void> => {
 const progress = () => root.querySelector('.tutorial-progress');
 
 function fakeRegistry(): Registry & { dispatch: ReturnType<typeof vi.fn>; query: ReturnType<typeof vi.fn> } {
-  const journal: JournalDump = { entries: [], revision: 0, canUndo: false, canRedo: false };
+  const journal: JournalDump = { hash: 'empty', entries: [], revision: 0, canUndo: false, canRedo: false };
   const model: ModelSummary = { name: 'm', revision: 0 } as unknown as ModelSummary;
   const dispatch = vi.fn(async (cmd: { cmd: string } & Record<string, unknown>) => {
     journal.entries = [...journal.entries, { seq: journal.entries.length, cmd, hashAfter: `h${journal.entries.length}` } as never];
