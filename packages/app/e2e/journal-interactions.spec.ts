@@ -1,6 +1,6 @@
 // Design brief §5.5: a Journal row selects its still-live object, keyboard focus and hover
 // highlight it, and these host-only interactions leave the Journal byte-for-byte unchanged.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
