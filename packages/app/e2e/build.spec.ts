@@ -188,7 +188,7 @@ test.describe('@cpu the gallery, the palette and the Script tab', () => {
     await ready(page);
     await page.evaluate(() => window.fem.model.new({ name: 'scripted' }));
     await page.locator('.tab', { hasText: 'script' }).click();
-    await page.locator('button[data-cmd="script.setSource"]').click();
+    await page.getByRole('button', { name: 'edit this script' }).click();
     await page.locator('.script-edit').fill('await fem.geometry.addBox({ name: "fromScript", size: ["2 m", "1 m", "1 m"] });\nconsole.log("added");\nreturn (await fem.query.model()).bodies.length;');
     await page.locator('button[data-cmd="script.run"]').click();
     await expect(page.locator('.script-out')).toContainText('added', { timeout: 30_000 });

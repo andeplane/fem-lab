@@ -58,8 +58,10 @@ export interface UiState {
   journalWho: Record<number, { who: 'you' | 'ai'; at: number }>;
   /** What the caller of `dispatch` currently counts as; the script host flips it to `ai`. */
   source: 'you' | 'ai';
-  /** `null` while the Script tab shows the Journal; a string once it is being edited. */
+  /** An intentional draft survives switching back to the live Journal script. */
   scriptDraft: string | null;
+  /** Whether the Script tab is showing the draft editor or the live Journal script. */
+  scriptEditing: boolean;
   scriptOut: string[];
   scriptRunning: boolean;
   hostCaps: HostCaps | null;
@@ -143,6 +145,7 @@ export const initialState: UiState = {
   journalWho: {},
   source: 'you',
   scriptDraft: null,
+  scriptEditing: false,
   scriptOut: [],
   scriptRunning: false,
   hostCaps: null,

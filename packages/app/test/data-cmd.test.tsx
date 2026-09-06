@@ -8,7 +8,7 @@ import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import { Store } from '../src/store';
-import { App } from '../src/ui/App';
+import { App, ownsEditingShortcuts } from '../src/ui/App';
 import type { WorkerTransport } from '../src/worker-transport';
 
 // `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40
@@ -125,6 +125,34 @@ describe('the shell', () => {
   it('starts on the Journal tab and shows the Command lines', () => {
     const { root } = mount();
     expect(root.querySelector('.bottom-body')!.textContent).toContain('model.new');
+  });
+
+  it('keeps an intentional Script draft while showing the live Journal script', async () => {
+    const { registry, store } = mount({ tab: 'script' });
+    await registry.dispatch({ cmd: 'script.setSource', code: '// draft' });
+    expect(store.state).toMatchObject({ tab: 'script', scriptDraft: '// draft', scriptEditing: true });
+    await registry.dispatch({ cmd: 'script.setSource', code: '\n// inserted Journal', append: true });
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+
+    store.set({ script: '// live Journal' });
+    await registry.dispatch({ cmd: 'script.setEditing', editing: false });
+    expect(store.state.scriptEditing).toBe(false);
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+    expect(store.state.script).toBe('// live Journal');
+    await registry.dispatch({ cmd: 'script.setEditing', editing: true });
+    expect(store.state).toMatchObject({ tab: 'script', scriptEditing: true, scriptDraft: '// draft\n// inserted Journal' });
+  });
+
+  it('recognises the fields that own editing shortcuts', () => {
+    const { root } = mount();
+    const input = root.querySelector<HTMLInputElement>('input')!;
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+    const token = document.createElement('span');
+    editor.append(token);
+    expect(ownsEditingShortcuts(input)).toBe(true);
+    expect(ownsEditingShortcuts(token)).toBe(true);
+    expect(ownsEditingShortcuts(root)).toBe(false);
   });
 
   // Issue #40: the drawer used to be a column of `.workspace`, which only exists once a Model

@@ -36,6 +36,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
   'script.setSource': { code: 'fem.model.new({ name: "a" })', append: true },
+  'script.setEditing': { editing: false },
   'chat.send': { text: 'hello @body:beam' },
   'chat.insertMention': { ref: 'body:beam' },
   'chat.clear': {},
@@ -174,6 +175,8 @@ describe('Registry', () => {
     expect(host.selection.set).toHaveBeenCalledWith({ faces: ['beam.top'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
     expect(host.script.setSource).toHaveBeenCalledWith('x', undefined);
+    await registry.dispatch({ cmd: 'script.setEditing', editing: true });
+    expect(host.script.setEditing).toHaveBeenCalledWith(true);
   });
 
   it('skill.invoke returns the body or a not-found error listing the skills', async () => {

@@ -22,6 +22,10 @@ import { blockers, type Defs } from './schema';
 
 export type { Dispatch } from './cmd';
 
+/** Form fields and CodeMirror keep native editing shortcuts instead of mutating the Journal. */
+export const ownsEditingShortcuts = (target: EventTarget | null): boolean =>
+  target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, [contenteditable="true"]') !== null);
+
 // Three chunks that must not be on the boot path: the two AI SDKs, the tutorial runner and (in
 // `ViewerPane` below) three.js. Same import sites as before, one `import()` later.
 const AssistantPanel = lazy(() => import('../ai').then((m) => m.AssistantPanel));
@@ -491,6 +495,9 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const meta = e.metaKey || e.ctrlKey;
+      // Native form fields and CodeMirror own modified editing shortcuts such as undo and copy.
+      // Escape remains a shell shortcut so it can close an overlay whose input has focus.
+      if (meta && ownsEditingShortcuts(e.target)) return;
       if (meta && e.key.toLowerCase() === 'k') (e.preventDefault(), void dispatch({ cmd: 'panel.toggle', panel: 'palette' }).catch(() => undefined));
       else if (meta && e.key.toLowerCase() === 'z') (e.preventDefault(), void dispatch({ cmd: e.shiftKey ? 'journal.redo' : 'journal.undo', steps: 1 }).catch(() => undefined));
       else if (meta && e.key.toLowerCase() === 'c' && s.selection.refs.length > 0) void dispatch({ cmd: 'clipboard.copy', what: { kind: 'selection' } }).catch(() => undefined);
