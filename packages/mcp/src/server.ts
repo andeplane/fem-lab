@@ -25,7 +25,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import engineSchema from '../../registry/src/generated/engine.schema.json' with { type: 'json' };
 import type { EngineHandle } from './engine';
-import { runScript } from './script';
+import { runScript, type ScriptDeps } from './script';
 
 export const SCHEMA = engineSchema as unknown as EngineSchema;
 export const SERVER_NAME = 'femlab';
@@ -37,6 +37,7 @@ export type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 export interface ServerDeps {
   engine: EngineHandle;
+  script?: ScriptDeps;
   /** Absolute path of the folder `export.file` may write into; without one it refuses. */
   project?: string | undefined;
 }
@@ -116,10 +117,14 @@ export function createRegistry(deps: ServerDeps): Registry {
           (cmd) => registry.dispatch(cmd),
           (q) => registry.query(q),
           timeoutMs,
+          deps.script,
         ),
     },
   } as unknown as HostContext;
-  const script = HOST_COMMANDS.filter((d) => d.name === 'script.run');
+  const script = HOST_COMMANDS.filter((d) => d.name === 'script.run').map((d) => ({
+    ...d,
+    description: 'Run TypeScript against the asynchronous fem API in an isolated QuickJS runtime. Only registry Commands/Queries, console and setTimeout/clearTimeout are available; no Node globals, imports, filesystem or network APIs. File exports use export.file and its host project policy. timeoutMs is greater than 0 and at most 30000 (default 30000), including startup. Timeout terminates the script and refuses further Commands; already admitted Commands may finish and are not rolled back. Nested script.run is refused. Returns { result, console, error? }; Commands enter the Journal like any other.',
+  }));
   registry = new Registry({ schema: SCHEMA, host, hostCommands: [...script, exportFileCommand(deps)], hostQueries: [] });
   return registry;
 }

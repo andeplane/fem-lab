@@ -165,7 +165,8 @@ export interface Fem {
     force(args: Omit<Extract<Command, { cmd: 'load.force' }>, 'cmd'>): Promise<Ack>;
     /**
      * Gravity (or any uniform acceleration) as a body force on every Body whose Material has
-     * a density; Bodies without one are skipped and listed in the warnings.
+     * a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
+     * apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
      */
     gravity(args: Omit<Extract<Command, { cmd: 'load.gravity' }>, 'cmd'>): Promise<Ack>;
     /**

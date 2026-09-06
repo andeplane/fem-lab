@@ -4268,3 +4268,98 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
         }
     }
 }
+
+/// Every structural family must share one acceleration under uniform gravity, even where
+/// consistent higher-order nodal gravity has negative/zero entries while HRZ masses are positive.
+/// Pappus gives the axisymmetric annulus mass; its axial translation is also a rigid mode.
+#[test]
+fn explicit_gravity_uses_its_lumped_inertia_for_all_kinds_and_idealisations() {
+    let velocity = [0.0, 0.2, 0.0];
+    let gravity = [0.0, -9.81, 0.0];
+    for kind in ALL_KINDS {
+        for id in idealisations(kind) {
+            for nx in [1, 2, 4] {
+                let mut mesh = Structured { kind, n: [nx, 1, 1] }.box_([1.0, 0.1, 0.1]);
+                // r spans [1,2], away from the axis, with centroid radius 1.5.
+                for x in mesh.coords.iter_mut().step_by(3) {
+                    *x += 1.0;
+                }
+                let sets = sets_of(&mesh);
+                let bodies = one_body();
+                let mut p = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, Vec::new());
+                p.loads = vec![Load::Gravity { g: [0.0, -4.0, 0.0] }, Load::Gravity { g: [0.0, -5.81, 0.0] }];
+                let dpn = p.dofs_per_node();
+                let base = if kind.dim() == 3 { 0.01 } else { 0.1 };
+                let total_mass = DENSITY * weighted(&id, base, 1.5);
+                // The unchanged consistent path still conserves total gravity. Quadratic
+                // nodal distribution must remain consistent for static/modal calculations.
+                let mut consistent = vec![0.0; mesh.n_nodes() * dpn];
+                let totals = assemble_loads(&p, &mut consistent).unwrap();
+                assert!((totals.force[1] - total_mass * gravity[1]).abs() < 1e-11 * total_mass);
+                for factor in [0.5, 0.9] {
+                    for ratio in [0.25, 6.25] {
+                        let end = ratio * factor * critical_step(&p);
+                        let step = Step::Explicit {
+                            t_end: end,
+                            dt_factor: factor,
+                            initial_velocity: Some(velocity[..dpn].repeat(mesh.n_nodes())),
+                            output_every: 2,
+                        };
+                        let mut previous = None;
+                        for threads in [1, 4] {
+                            let mut progress = |_: Progress| true;
+                            let pool = Pool::new(threads);
+                            let res = pollster::block_on(procedure::run(&p, &step, &pool, None, None, &mut progress))
+                                .unwrap();
+                            let history = res.history.unwrap();
+                            assert_eq!(*history.times.last().unwrap(), end);
+                            for (&time, field) in history.times.iter().zip(&history.values) {
+                                for (i, value) in field.iter().enumerate() {
+                                    let c = i % dpn;
+                                    let expected = velocity[c] * time + 0.5 * gravity[c] * time * time;
+                                    assert!(
+                                        (value - expected).abs() < 1e-10 * end,
+                                        "{kind:?} {id:?} nx{nx} factor{factor} t{time}: {value} vs {expected}"
+                                    );
+                                }
+                            }
+                            // The integrator reports half-step velocity at t+dt/2. Its total
+                            // momentum increment is the impulse of the independently known weight.
+                            let expected_momentum =
+                                total_mass * (velocity[1] + gravity[1] * (end + 0.5 * res.scalars["dt"]));
+                            assert!((res.scalars["momentum_y"] - expected_momentum).abs() < 1e-10 * total_mass);
+                            if let Some(previous) = previous {
+                                assert_eq!(history, previous);
+                            }
+                            previous = Some(history);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A single affine quad8's consistent gravity has negative corner loads (-rho*A*g/12)
+/// and positive midside loads (rho*A*g/3). Explicit uses HRZ, but the general static/modal
+/// load assembler must keep these exact shape-function integrals.
+#[test]
+fn consistent_quadratic_gravity_distribution_remains_unchanged() {
+    let mesh = Structured { kind: ElementKind::Quad8, n: [1, 1, 1] }.box_([1.0, 1.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p =
+        problem(&mesh, &sets, &bodies, Idealisation::PlaneStress { thickness: 0.5 }, Formulation::Full, Vec::new());
+    p.loads = vec![Load::Gravity { g: [0.0, -12.0, 0.0] }];
+    let mut f = vec![0.0; 2 * mesh.n_nodes()];
+    let totals = assemble_loads(&p, &mut f).unwrap();
+    let weight = -12.0 * DENSITY * 0.5;
+    assert!((totals.force[1] - weight).abs() < 1e-10);
+    for i in 0..mesh.n_nodes() {
+        let [x, y, _] = mesh.node(i as u32);
+        let corner = (x == 0.0 || x == 1.0) && (y == 0.0 || y == 1.0);
+        let expected = if corner { -weight / 12.0 } else { weight / 3.0 };
+        assert!((f[2 * i + 1] - expected).abs() < 1e-10);
+        assert_eq!(f[2 * i], 0.0);
+    }
+}

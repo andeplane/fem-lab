@@ -16,7 +16,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::{assemble_stiffness, pattern, resolve};
 use crate::fem::checks;
 use crate::fem::element::element_for;
-use crate::fem::loads::assemble_loads;
+use crate::fem::loads::assemble_lumped_loads;
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, Per};
@@ -56,7 +56,7 @@ pub fn run(
         lumped_mass_and_omega(p).and_then(|(mass, omega_max)| {
             assemble_stiffness(p, &pat).and_then(|a| {
                 let mut f = a.f_thermal.clone();
-                assemble_loads(p, &mut f).map(|_| (a, mass, omega_max, f))
+                assemble_lumped_loads(p, &mut f, &mass).map(|_| (a, mass, omega_max, f))
             })
         })
     })?;
