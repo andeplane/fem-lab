@@ -1,3 +1,5 @@
+import { migratePersistentKeys } from './ai/key-storage';
+import { browserScriptValidator } from './script-validation-host';
 // Boot (plan B §7.4): capabilities → engine Worker → Registry → `window.fem` → `<App/>`.
 // The shell renders first and the engine arrives into it, so the start screen is on screen
 // before the 3.2 MB wasm module has finished downloading.
@@ -12,7 +14,7 @@ import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { devApiKeys } from './dev-keys';
-import { appHostCommands, makeHostContext, noteAutosave, primeAutosave, type ViewerRef } from './host';
+import { appHostCommands, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
 import { ResultsView } from './results';
 import { ScriptHost } from './script-host';
 import { openShared } from './share';
@@ -32,6 +34,7 @@ const viewer: ViewerRef = { current: null };
 const root = document.getElementById('app')!;
 
 async function boot(): Promise<void> {
+  migratePersistentKeys();
   const host = readHostCaps();
   store.set({ hostCaps: host, notes: capabilityNotes(host, null) });
 
@@ -52,6 +55,7 @@ async function boot(): Promise<void> {
     () => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }),
     (p) => late.dispatch(p as { cmd: string }),
     (p) => late.query(p as { query: string }),
+    browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })),
   );
 
   const results = new ResultsView(store, transport, viewer);
@@ -63,6 +67,8 @@ async function boot(): Promise<void> {
   // a lazy chunk) asks for everything again, so an example that opened solved is drawn solved.
   viewer.onReady = () => {
     viewer.current?.setMode(store.state.viewMode);
+    for (const [layer, visible] of Object.entries(store.state.layerVisibility)) viewer.current?.setLayer(layer, visible);
+    viewer.current?.setVisible(store.state.hiddenBodies, false);
     void refresh().catch(() => undefined);
   };
   const refresh = async (): Promise<void> => {
@@ -73,7 +79,11 @@ async function boot(): Promise<void> {
     store.set({ model, journal, script, objects, revision: (model as { revision: number }).revision });
     viewer.current?.setSurface(await transport.surface());
     await results.refresh();
+    // Where a project comes from: with none open and a non-empty Journal this creates one named
+    // after the Model, and otherwise it debounces a write into the one that is open (issue #41).
     noteAutosave(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? []);
+    store.set({ autosaves: autosaveHistory() });
+    noteProject(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? [], (model as { hash: string | null }).hash);
   };
   const registry = new Registry({
     schema: schema as unknown as EngineSchema,
@@ -81,18 +91,38 @@ async function boot(): Promise<void> {
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results)],
   });
 
+  /**
+   * The Commands that replace the whole Model, and so start a project rather than overwrite the
+   * one that is open. `example.open` is the registry's own and easy to miss; a share link's
+   * replay is covered because its first Command is `model.new`. `project.new` and `project.open`
+   * do their own bookkeeping and go through the transport, so they are deliberately absent.
+   */
+  const REPLACES_MODEL = new Set(['model.new', 'file.open', 'file.openExample', 'example.open']);
+  /**
+   * Host Commands after which the Model, the Journal or the project has changed and the shell
+   * has to catch up. `file.open` and `example.open` replace the whole Model through the
+   * transport, so without this the tree, the Journal and the new project all lag a Command
+   * behind; `file.openExample` refreshes on its own way out and needs no row here.
+   */
+  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'example.open', 'project.new', 'project.open']);
+
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
   const dispatch: Registry['dispatch'] = async (cmd) => {
     store.set({ lastError: null });
+    // Before, not after: `file.openExample` refreshes on its own way out, and by then the fork
+    // has to have happened or the example is written over the project it replaced.
+    if (cmd.cmd === 'file.openExample') forkProject();
     // A long Command owns the Solve button and the solving card until it settles either way.
     const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
       const ack = await registry.dispatch(cmd);
+      if (REPLACES_MODEL.has(cmd.cmd) && cmd.cmd !== 'file.openExample') forkProject();
       store.log('command', cmd.cmd);
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
-      // journals like any other, so the Journal has to be re-read after it too.
-      if (registry.describe(cmd.cmd).provider === 'engine' || cmd.cmd === 'file.export' || cmd.cmd === 'file.restore') {
+      // journals like any other, and `file.open` / `example.open` replace the engine Model and
+      // Journal outright, so the store, viewer and Results have to catch up after those too.
+      if (registry.describe(cmd.cmd).provider === 'engine' || REFRESHES.has(cmd.cmd)) {
         const { seq } = ack as { seq?: number };
         if (typeof seq === 'number' && seq >= 0) store.set({ journalWho: { ...store.state.journalWho, [seq]: { who: store.state.source, at: Date.now() } } });
         await refresh();
@@ -122,6 +152,11 @@ async function boot(): Promise<void> {
   store.dispatch = dispatch;
   render(<App store={store} dispatch={dispatch} viewer={viewer} query={query} commands={registry.list().commands} registry={panelRegistry} />, root);
 
+  // The Recent projects list is what the start screen leads with, so it is read before the
+  // 3.2 MB wasm module rather than after it.
+  void primeAutosave().then(() => store.set({ autosaves: autosaveHistory() })).catch((e: unknown) => store.fail(e));
+  void primeProjects().catch((e: unknown) => store.fail(e));
+
   // Lazy, but not late: three.js is the chunk the very next click needs, so it is fetched now,
   // in parallel with the wasm, rather than when the first Body appears. `<link rel=modulepreload>`
   // in the built `index.html` (vite.config.ts) has already started this fetch by here.
@@ -134,7 +169,6 @@ async function boot(): Promise<void> {
   if (devApiKeys()?.anthropic) store.log('engine', 'an ANTHROPIC_API_KEY from the dev shell is available to the assistant');
   await refresh();
 
-  store.set({ autosave: await primeAutosave() });
   const example = new URLSearchParams(location.search).get('example');
   if (example) await dispatch({ cmd: 'file.openExample', name: example });
   await openShared({ dispatch }, location.hash);

@@ -69,6 +69,10 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
 - **Property tests** (fast-check / proptest) for invariants: replay determinism, undo
   inverses, symmetric PSD stiffness for any admissible element, `parse∘format` identity for
   units.
+- **Geometry input validation is tested with a never-panics proptest**: random sketches go
+  through `Sketch::check` and the free mesher, and any `Err` is a pass while a panic is a
+  failure. The triangulator panics on degenerate and crossing input, so nothing reaches it
+  unchecked.
 - **Software adapters are for correctness, never for timing.**
 - **Coverage mechanics that bite.** `cargo llvm-cov` does not merge generic or async
   instantiations across test binaries, so a crate's integration tests live in ONE
@@ -90,6 +94,11 @@ here at once, and the issue tracker is the only shared view of who is doing what
   not start on an issue that already carries the label; message its owner instead.
 - **Branch and PR carry the number**: `fix/36-lazy-initialiser`, PR body ends with
   `Closes #36`. One issue per PR unless the issues are inseparable; say so in the body.
+- **Never check out a branch in the main checkout.** `~/projects/personal/fem-lab` (or wherever the
+  repo was cloned) stays on `main`: it is the entry point people run the dev server from. Do your
+  work in a worktree (`git worktree add ../fem-lab-<issue> -b <branch> origin/main`) and remove it
+  when the PR merges. Use a port of your own for any server you start (`PW_PORT=<n> npm run e2e …`
+  gives Playwright its own preview ports), and never kill a process you did not start.
 - **Finish by closing.** The PR merge closes the issue and drops the label; if the work stops,
   remove the label and comment why. Never leave an `in progress` issue silent for a day.
 - **Labels mean something**: `bug`, `enhancement`; areas `engine`, `geometry`, `numerics`,

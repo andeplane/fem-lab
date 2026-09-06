@@ -13,8 +13,8 @@ use femlab_geometry::Mesh;
 
 use crate::command::Solver;
 use crate::engine::{OnProgress, Progress};
-use crate::error::Error;
-use crate::fem::assembly::{pattern, Csr};
+use crate::error::{Error, ErrorCode};
+use crate::fem::assembly::Csr;
 use crate::par::Pool;
 use crate::query::CostEstimate;
 
@@ -133,38 +133,265 @@ pub async fn solve(
     }
 }
 
-/// Bytes per stored non-zero: an `f64` value and a `u32` column index.
-const BYTES_PER_NNZ: u64 = 12;
-/// Solution, right-hand side, residual and one scratch vector.
-const VECTORS: u64 = 4;
-/// The wasm heap a browser tab can be relied on for (plan A §5, Q2).
-#[cfg(target_arch = "wasm32")]
-const WASM_BUDGET: u64 = 1_610_612_736;
+/// Counting scratch is bounded independently of the requested matrix size. The adjacency
+/// builder temporarily holds two offsets arrays; afterwards a node marker replaces one.
+const COST_SCRATCH_BYTES: u64 = 16 << 20;
+/// A planning budget, not a measurement of free host memory (also applies on native hosts).
+const PLANNING_BUDGET: u64 = 1_610_612_736;
 
-#[cfg(target_arch = "wasm32")]
-fn feasible(bytes: u64) -> bool {
-    bytes < WASM_BUDGET
+/// Count node couplings with adjacency and one reusable marker array, never matrix entries
+/// or element slots. If the adjacency would exceed the scratch budget, bound the graph by
+/// its largest observed element clique and the sum of element cliques (capped by dense).
+/// Work is linear in connectivity times the bounded element node count, not node-count².
+fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
+    let nodes = mesh.n_nodes() as u64;
+    let incidences: u64 = mesh.blocks.iter().map(|b| b.conn.len() as u64).sum();
+    let scratch = incidences.saturating_mul(4).saturating_add((nodes + 1).saturating_mul(8));
+    if scratch <= COST_SCRATCH_BYTES {
+        let adj = mesh.node_to_elems();
+        let mut marked = vec![0; mesh.n_nodes()];
+        let mut count = 0;
+        for node in 0..mesh.n_nodes() {
+            let tag = node as u32 + 1;
+            for &elem in adj.of(node) {
+                for &other in mesh.elem_nodes(elem) {
+                    if marked[other as usize] != tag {
+                        marked[other as usize] = tag;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        (count, count)
+    } else {
+        let mut lower = 0;
+        let mut upper: u64 = 0;
+        for block in &mesh.blocks {
+            let nn = block.kind.n_nodes() as u64;
+            upper = upper.saturating_add((block.n_elems() as u64).saturating_mul(nn * nn));
+            // One clique per block suffices for a lower bound. Repeated node IDs are legal
+            // topology here, so count distinct nodes without allocating a scratch set.
+            let first = &block.conn[..block.conn.len().min(nn as usize)];
+            let unique = first.iter().enumerate().filter(|(i, n)| !first[..*i].contains(n)).count() as u64;
+            lower = lower.max(unique * unique);
+        }
+        (lower, upper.min(nodes.saturating_mul(nodes)))
+    }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn feasible(_bytes: u64) -> bool {
-    true
-}
-
-/// What solving this Mesh would cost, from the sparsity alone and before any assembly: this is
-/// `query.cost`, so it must be cheap and must never allocate the matrix values.
+/// Estimate before assembly with at most 16 MiB of counting scratch, plus the returned note.
+/// `nnz` is an upper bound, exact when equal to `nnz_lower`. `bytes` is a lower bound on
+/// simultaneously live assembly storage: the pattern CSR, element slots and their offsets,
+/// an assembled CSR and one RHS. It excludes the resident mesh/model, local element buffers,
+/// reduction, solver vectors, direct-factor fill/workspace and procedure-specific history.
+/// Therefore fitting this lower bound never establishes feasibility, on any host.
 pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostEstimate {
-    let pat = pattern(mesh, dofs_per_node);
-    let (dofs, nnz) = (pat.csr.n as u64, pat.csr.nnz() as u64);
-    let bytes = nnz * BYTES_PER_NNZ + dofs * 8 * VECTORS;
-    // `query.cost` knows the pattern, not the device, so it reports what `Auto` would pick
-    // without one; a host with a GPU sees `gpu-pcg` in the Result the solve itself returns.
-    let chosen = solver_name(resolve_solver(solver, pat.csr.n, false));
+    let dofs = (mesh.n_nodes() as u64).saturating_mul(dofs_per_node as u64);
+    let block_size = (dofs_per_node as u64).saturating_mul(dofs_per_node as u64);
+    let (lower, upper) = coupling_bounds(mesh);
+    let nnz_lower = lower.saturating_mul(block_size);
+    let nnz = upper.saturating_mul(block_size);
+    let mut slots: u64 = 0;
+    for block in &mesh.blocks {
+        let nd = (block.kind.n_nodes() as u64).saturating_mul(dofs_per_node as u64);
+        slots = slots.saturating_add((block.n_elems() as u64).saturating_mul(nd.saturating_mul(nd)));
+    }
+    let assembly_bytes = nnz_lower
+        .saturating_mul(24)
+        .saturating_add(dofs.saturating_add(1).saturating_mul(8))
+        .saturating_add(slots.saturating_mul(4))
+        .saturating_add((mesh.n_elems() as u64).saturating_add(1).saturating_mul(4))
+        .saturating_add(dofs.saturating_mul(8));
+    let bytes = assembly_bytes;
+    let feasible = if bytes > PLANNING_BUDGET { Some(false) } else { None };
+    let status =
+        if feasible.is_some() { "mandatory storage exceeds planning budget" } else { "feasibility not established" };
+    // Device availability and constraints are not known here; Auto reports its CPU choice.
+    let chosen = solver_name(resolve_solver(solver, usize::try_from(dofs).unwrap_or(usize::MAX), false));
     CostEstimate {
-        dofs,
-        nnz,
-        bytes,
-        feasible: feasible(bytes),
-        note: format!("{chosen} on {dofs} equations with {nnz} matrix non-zeros"),
+        dofs, nnz, nnz_lower, bytes, assembly_bytes, retained_frames: 0,
+        retained_bytes: 0, transient_work_bytes: 0, transport_staging_bytes: 0,
+        wasm_transport_staging_bytes: 0, wasm_transport_staging_complete: true,
+        budget_bytes: PLANNING_BUDGET, feasible,
+        note: format!("{chosen} on {dofs} equations; matrix non-zeros {nnz_lower}..{nnz}; {status}. Memory is an assembly lower bound; excludes mesh/model, element buffers, reduction, solver vectors, direct-factor fill/workspace and time history."),
+    }
+}
+
+fn memory_overflow(where_: &str, suggestion: &str) -> Error {
+    Error::new(ErrorCode::SolveTooLarge, "the transient memory estimate overflows byte accounting")
+        .at(where_)
+        .suggest(suggestion)
+}
+
+fn mesh_memory_overflow() -> Error {
+    memory_overflow("mesh", "mesh.generate with a coarser size")
+}
+
+fn history_memory_overflow() -> Error {
+    memory_overflow("outputEvery", "step.add with a larger outputEvery")
+}
+
+/// Add the two phases unique to retained transient output. During integration the assembly,
+/// working vectors and growing History coexist. During a frame read the History and one
+/// normalized three-component f64 response coexist. These are separate phases, so the budgeted
+/// peak is their maximum rather than their sum.
+pub(crate) fn add_transient_cost(
+    mut cost: CostEstimate,
+    nodes: usize,
+    stored_components: usize,
+    steps: usize,
+    output_every: usize,
+    work_vectors: u64,
+) -> Result<CostEstimate, Error> {
+    let frames = crate::procedure::retained_frame_count(steps, output_every)?;
+    let values = nodes.checked_mul(stored_components).ok_or_else(mesh_memory_overflow)?;
+    let retained = crate::procedure::retained_payload_bytes(frames, values)?;
+    let values = values as u64;
+    let nodes = nodes as u64;
+    let work = values
+        .checked_mul(work_vectors)
+        .and_then(|n| n.checked_mul(std::mem::size_of::<f64>() as u64))
+        .ok_or_else(mesh_memory_overflow)?;
+    let staging = nodes
+        .checked_mul(3)
+        .and_then(|n| n.checked_mul(std::mem::size_of::<f64>() as u64))
+        .ok_or_else(mesh_memory_overflow)?;
+    // The generic JSON route currently has a parsed source and its structured clone alive at
+    // once. The planned typed-bulk route has its transferred Float64Array and final number[]
+    // alive at once. Either route therefore has at least two three-component f64-equivalent
+    // numeric payloads; JSON strings and engine-dependent array/object storage are not portable.
+    let wasm_staging = staging.checked_mul(2).ok_or_else(mesh_memory_overflow)?;
+    let solve_peak = cost
+        .assembly_bytes
+        .checked_add(work)
+        .and_then(|n| n.checked_add(retained))
+        .ok_or_else(history_memory_overflow)?;
+    let transport_peak = retained.checked_add(wasm_staging).ok_or_else(history_memory_overflow)?;
+    cost.retained_frames = frames as u64;
+    cost.retained_bytes = retained;
+    cost.transient_work_bytes = work;
+    cost.transport_staging_bytes = staging;
+    cost.wasm_transport_staging_bytes = wasm_staging;
+    cost.wasm_transport_staging_complete = false;
+    cost.bytes = solve_peak.max(transport_peak);
+    cost.feasible = if cost.bytes > cost.budget_bytes { Some(false) } else { None };
+    let status =
+        if cost.feasible.is_some() { "counted peak exceeds planning budget" } else { "feasibility not established" };
+    cost.note = format!(
+        "{} Retains {frames} frames ({retained} bytes); conservative full-field transient f64 working allowance {work} bytes; native frame staging {staging} bytes; known WASM/Worker numeric staging {wasm_staging} bytes with JSON/JavaScript heap overhead unknown; counted peak estimate {} bytes; {status}.",
+        cost.note, cost.bytes
+    );
+    Ok(cost)
+}
+
+/// Refuse the Command before History preallocation. The suggested stride is the smallest one
+/// whose retained payload fits both counted phases when increasing outputEvery can help.
+pub(crate) fn enforce_transient_budget(
+    cost: &CostEstimate,
+    step: &str,
+    procedure: &str,
+    steps: usize,
+    output_every: usize,
+) -> Result<(), Error> {
+    if cost.feasible != Some(false) {
+        return Ok(());
+    }
+    let frame_bytes = cost.retained_bytes / cost.retained_frames;
+    let solve_fixed = cost.assembly_bytes.saturating_add(cost.transient_work_bytes);
+    let max_solve = cost.budget_bytes.saturating_sub(solve_fixed) / frame_bytes;
+    let max_transport = cost.budget_bytes.saturating_sub(cost.wasm_transport_staging_bytes) / frame_bytes;
+    let max_frames = max_solve.min(max_transport);
+    let suggestion = if max_frames >= 2 {
+        let intervals = (max_frames - 1) as usize;
+        let stride = steps.div_ceil(intervals).max(output_every.max(1).saturating_add(1));
+        if u32::try_from(stride).is_ok() {
+            format!("step.add for '{step}' with procedure '{procedure}' and outputEvery at least {stride}")
+        } else {
+            format!(
+                "step.add for '{step}' with procedure '{procedure}' and a shorter tEnd or larger dt; the required outputEvery exceeds {}",
+                u32::MAX
+            )
+        }
+    } else {
+        "mesh.generate with a coarser size, then query.cost before solve.run".into()
+    };
+    Err(Error::new(
+        ErrorCode::SolveTooLarge,
+        format!(
+            "step '{step}' would retain {} frames ({} bytes) and reach a counted peak estimate of {} bytes, above the {} byte planning budget",
+            cost.retained_frames, cost.retained_bytes, cost.bytes, cost.budget_bytes
+        ),
+    )
+    .at(format!("step '{step}'.outputEvery"))
+    .suggest(suggestion))
+}
+
+#[cfg(test)]
+mod transient_cost_tests {
+    use super::*;
+
+    fn base(assembly_bytes: u64, budget_bytes: u64) -> CostEstimate {
+        CostEstimate {
+            dofs: 0,
+            nnz: 0,
+            nnz_lower: 0,
+            bytes: assembly_bytes,
+            assembly_bytes,
+            retained_frames: 0,
+            retained_bytes: 0,
+            transient_work_bytes: 0,
+            transport_staging_bytes: 0,
+            wasm_transport_staging_bytes: 0,
+            wasm_transport_staging_complete: true,
+            budget_bytes,
+            feasible: None,
+            note: "assembly".into(),
+        }
+    }
+
+    #[test]
+    fn transient_peak_uses_separate_solve_and_transport_phases() {
+        let cost = add_transient_cost(base(10, 1000), 2, 3, 5, 2, 6).unwrap();
+        assert_eq!((cost.retained_frames, cost.retained_bytes), (4, 224));
+        assert_eq!((cost.transient_work_bytes, cost.transport_staging_bytes), (288, 48));
+        assert_eq!(cost.wasm_transport_staging_bytes, 96);
+        assert!(!cost.wasm_transport_staging_complete);
+        assert_eq!(cost.bytes, 522, "solve phase is larger than retained + browser staging");
+        assert_eq!(cost.feasible, None);
+        enforce_transient_budget(&cost, "warm", "heat-transient", 5, 2).unwrap();
+
+        let fixed = add_transient_cost(base(0, 1), 2, 3, 5, 2, 6).unwrap();
+        assert_eq!(fixed.feasible, Some(false));
+        let error = enforce_transient_budget(&fixed, "warm", "heat-transient", 5, 2).unwrap_err();
+        assert!(error.suggestion.as_deref().unwrap().starts_with("mesh.generate"));
+
+        let mut limited = base(0, 2);
+        limited.feasible = Some(false);
+        limited.retained_frames = 3;
+        limited.retained_bytes = 3;
+        let error = enforce_transient_budget(&limited, "warm", "heat-transient", 5, 1).unwrap_err();
+        assert!(error.suggestion.as_deref().unwrap().contains("outputEvery at least 5"));
+        let error = enforce_transient_budget(&limited, "warm", "heat-transient", usize::MAX, 1).unwrap_err();
+        assert!(error.suggestion.as_deref().unwrap().contains("shorter tEnd or larger dt"));
+    }
+
+    #[test]
+    fn every_transient_byte_calculation_is_checked() {
+        let cases = [
+            (1, 1, usize::MAX, 1, 0, 0),
+            (usize::MAX, 2, 1, 1, 0, 0),
+            (usize::MAX, 1, 1, 1, 0, 0),
+            (usize::MAX / 32, 1, 1, 1, 64, 0),
+            (usize::MAX / 20, 1, 1, 1, 0, 0),
+            (usize::MAX / 40, 1, 1, 1, 0, 0),
+            (usize::MAX / 56, 1, 1, 1, 0, 0),
+            (1, 1, 1, 1, 0, u64::MAX),
+        ];
+        for (nodes, components, steps, every, work, assembly) in cases {
+            let error = add_transient_cost(base(assembly, u64::MAX), nodes, components, steps, every, work)
+                .expect_err("overflow must be a structured error");
+            assert_eq!(error.code, ErrorCode::SolveTooLarge);
+            assert!(error.suggestion.is_some());
+        }
     }
 }

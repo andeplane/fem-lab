@@ -25,22 +25,22 @@ export function projectError(error: unknown, where: string): FemError {
   if (error instanceof FemError) return error;
   const name = error instanceof Error ? error.name : 'Error';
   const cause = error instanceof Error ? error.message : String(error);
-  if (name === 'AbortError') return new FemError('cancelled', cause, where, 'retry project.open when ready');
-  if (name === 'NotFoundError') return new FemError('file.not-found', cause, where, 'use query.project to list files or project.open to choose a folder');
-  if (name === 'NotAllowedError' || name === 'SecurityError') return new FemError('file.scope', `${name}: ${cause}`, where, 'use project.open from a click and grant read/write access');
-  return new FemError('internal', `${name}: ${cause}`, where, 'check folder access, then retry project.refresh');
+  if (name === 'AbortError') return new FemError('cancelled', cause, where, 'retry folder.open when ready');
+  if (name === 'NotFoundError') return new FemError('file.not-found', cause, where, 'use query.folder to list files or folder.open to choose a folder');
+  if (name === 'NotAllowedError' || name === 'SecurityError') return new FemError('file.scope', `${name}: ${cause}`, where, 'use folder.open from a click and grant read/write access');
+  return new FemError('internal', `${name}: ${cause}`, where, 'check folder access, then retry folder.refresh');
 }
 
 function directoryHandle(value: unknown): DirHandle {
   const handle = value as Partial<DirHandle> | null;
   if (!handle || handle.kind !== 'directory' || typeof handle.name !== 'string' ||
     typeof handle.entries !== 'function' || typeof handle.getDirectoryHandle !== 'function' || typeof handle.getFileHandle !== 'function') {
-    throw new FemError('schema', 'project.open needs a directory handle from the browser', 'handle', 'use project.open with picker: true');
+    throw new FemError('schema', 'folder.open needs a directory handle from the browser', 'handle', 'use folder.open with picker: true');
   }
   return handle as DirHandle;
 }
 
-export function makeProjectHost(store: Store, access: ProjectAccess = browserProjectAccess): HostContext['project'] {
+export function makeProjectHost(store: Store, access: ProjectAccess = browserProjectAccess): HostContext['folder'] {
   let generation = 0;
   // Store writes follow open/close order even if an earlier IndexedDB transaction is slow.
   let persistence: Promise<void> = Promise.resolve();
@@ -50,15 +50,15 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
     return next;
   };
   const current = () => {
-    const folder = store.state.project;
-    if (!folder) throw new FemError('file.not-found', 'no project folder is open', 'project', 'use project.open from a click');
+    const folder = store.state.folder;
+    if (!folder) throw new FemError('file.not-found', 'no project folder is open', 'folder', 'use folder.open from a click');
     return folder;
   };
   const publish = (folder: ProjectFolder) => {
-    if (store.state.project === folder) store.setProject(folder);
+    if (store.state.folder === folder) store.setFolder(folder);
   };
   const check = (started: number) => {
-    if (generation !== started) throw new FemError('cancelled', 'a newer project open or close superseded this request', 'project.open', 'use query.project to see the active folder');
+    if (generation !== started) throw new FemError('cancelled', 'a newer project open or close superseded this request', 'folder.open', 'use query.folder to see the active folder');
   };
   return {
     open: async (how) => {
@@ -66,11 +66,11 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
       try {
         // Call the picker immediately, while the initiating click still has user activation.
         const value = await ('picker' in how ? access.pick() : 'reopen' in how ? access.recall() : how.handle);
-        if (value === null) throw new FemError('file.not-found', 'no project folder was remembered', 'project.open', 'use project.open with picker: true');
+        if (value === null) throw new FemError('file.not-found', 'no project folder was remembered', 'folder.open', 'use folder.open with picker: true');
         const handle = directoryHandle(value);
         check(started);
         if (handle.requestPermission && await handle.requestPermission({ mode: 'readwrite' }) !== 'granted') {
-          throw new FemError('file.scope', 'read/write permission for the project folder was denied', 'project.open', 'use project.open from a click and allow access');
+          throw new FemError('file.scope', 'read/write permission for the project folder was denied', 'folder.open', 'use folder.open from a click and allow access');
         }
         check(started);
         const folder = await ProjectFolder.fromHandle(handle);
@@ -80,32 +80,32 @@ export function makeProjectHost(store: Store, access: ProjectAccess = browserPro
           store.log('warn', `project folder is open for this session; could not remember it: ${String(error)}`);
         });
         check(started);
-        store.setProject(folder);
+        store.setFolder(folder);
       } catch (error) {
-        throw projectError(error, 'project.open');
+        throw projectError(error, 'folder.open');
       }
     },
     close: async () => {
       generation++;
-      store.setProject(null);
+      store.setFolder(null);
       try { await persist(() => access.forget()); }
-      catch (error) { throw projectError(error, 'project.close'); }
+      catch (error) { throw projectError(error, 'folder.close'); }
     },
     refresh: async () => {
       const folder = current();
       try { await folder.refresh(); publish(folder); }
-      catch (error) { throw projectError(error, 'project.refresh'); }
+      catch (error) { throw projectError(error, 'folder.refresh'); }
     },
-    info: () => store.state.project?.info() ?? null,
+    info: () => store.state.folder?.info() ?? null,
     recent: async () => {
       try {
         await persistence;
         return await access.recent();
-      } catch (error) { throw projectError(error, 'query.projectRecent'); }
+      } catch (error) { throw projectError(error, 'query.folderRecent'); }
     },
-    readText: async (path) => {
+    readText: async (path, maxBytes) => {
       const folder = current();
-      try { return await folder.readText(path); }
+      try { return await folder.readText(path, maxBytes); }
       catch (error) { throw projectError(error, path); }
     },
     writeText: async (path, text) => {

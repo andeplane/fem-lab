@@ -507,6 +507,10 @@ export type Command =
       after?: string | null;
       nModes?: number | null;
       shift?: number | null;
+      /**
+       * Maximum heat-transient time increment. A uniform increment no larger than dt is
+       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       */
       dt?:
         | (
             | string
@@ -527,6 +531,10 @@ export type Command =
         | null;
       theta?: number | null;
       outputEvery?: number | null;
+      /**
+       * Maximum fraction of the explicit critical time step (usually 0.9). The increment
+       * may be reduced uniformly to finish exactly at tEnd.
+       */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
       initial?:
@@ -573,6 +581,7 @@ export type Command =
     }
   | {
       steps?: number | null;
+      expectedJournal?: string | null;
       cmd: "journal.undo";
     }
   | {
@@ -1294,7 +1303,9 @@ export type Axis = "x" | "y" | "z";
  */
 export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
 /**
- * Result fields.
+ * Result fields. Reaction is support force in N for structural Results and removed heat
+ * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
+ * display units.
  */
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
@@ -1413,6 +1424,11 @@ export type PluginSource =
 export type Query =
   | {
       query: "query.model";
+    }
+  | {
+      kind: ObjectKind;
+      name: string;
+      query: "query.definition";
     }
   | {
       query: "query.mesh";
@@ -1542,6 +1558,10 @@ export type Query =
       query: "query.convert";
     }
   | {
+      name?: string | null;
+      query: "query.materialLibrary";
+    }
+  | {
       kinds?: ObjectKind[] | null;
       query: "query.objects";
     }
@@ -1572,6 +1592,7 @@ export type ReportSection =
  */
 export type QueryResult =
   | ModelSummary
+  | ObjectDefinition
   | MeshSummary
   | SetInfo
   | ResultSummary
@@ -1581,6 +1602,7 @@ export type QueryResult =
   | JournalDump
   | ScriptText
   | Converted
+  | MaterialLibrary
   | ObjectList
   | Capabilities
   | ReportText;
@@ -2163,6 +2185,10 @@ export type ModelFile_Command =
       after?: string | null;
       nModes?: number | null;
       shift?: number | null;
+      /**
+       * Maximum heat-transient time increment. A uniform increment no larger than dt is
+       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       */
       dt?:
         | (
             | string
@@ -2183,6 +2209,10 @@ export type ModelFile_Command =
         | null;
       theta?: number | null;
       outputEvery?: number | null;
+      /**
+       * Maximum fraction of the explicit critical time step (usually 0.9). The increment
+       * may be reduced uniformly to finish exactly at tEnd.
+       */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
       initial?:
@@ -2229,6 +2259,7 @@ export type ModelFile_Command =
     }
   | {
       steps?: number | null;
+      expectedJournal?: string | null;
       cmd: "journal.undo";
     }
   | {
@@ -2820,6 +2851,10 @@ export interface Engine {
 export interface UnitSet {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;
@@ -3093,6 +3128,10 @@ export interface MaterialRow {
   E: Valued;
   nu: number;
   rho?: Valued | null;
+  /**
+   * Current yield strength in the Model's display stress unit, when specified.
+   */
+  yield?: Valued | null;
   assignedTo: string[];
 }
 export interface SetRow {
@@ -3187,6 +3226,12 @@ export interface Warning {
   where?: string | null;
 }
 /**
+ * Lossless input for editing one Model object through the same Command used to create it.
+ */
+export interface ObjectDefinition {
+  command: Command;
+}
+/**
  * `query.mesh` response.
  */
 export interface MeshSummary {
@@ -3257,8 +3302,14 @@ export interface ResultSummary {
   residual: number;
   timeMs: number;
   extremes: Extreme[];
+  /**
+   * Force for structural Results; power for thermal Results, retained with the solved state.
+   */
+  reactionQuantity: "force" | "power";
   reactions: ReactionRow[];
   /**
+   * Applied force vector or thermal power in component 0 (remaining components zero).
+   *
    * @minItems 3
    * @maxItems 3
    */
@@ -3273,7 +3324,7 @@ export interface ResultSummary {
    */
   history?: HistoryRow[];
   /**
-   * |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+   * |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
    * by a prescribed displacement — where both totals are zero — still reports a meaningful
    * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
    */
@@ -3335,15 +3386,70 @@ export interface PathResult {
  */
 export interface CostEstimate {
   dofs: number;
+  /**
+   * Upper bound on matrix non-zeros; exact when equal to nnzLower.
+   */
   nnz: number;
+  /**
+   * Lower bound on matrix non-zeros.
+   */
+  nnzLower: number;
+  /**
+   * Estimated peak of the counted solve and frame-read phases. It includes mandatory
+   * assembly storage, retained primary values, a conservative transient f64 working-vector
+   * allowance and known native/browser frame-response storage. It is incomplete because
+   * solver fill, JSON and allocator overhead are not known before solving.
+   */
   bytes: number;
-  feasible: boolean;
+  /**
+   * Mandatory assembly storage before transient-specific values are added.
+   */
+  assemblyBytes: number;
+  /**
+   * Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
+   */
+  retainedFrames: number;
+  /**
+   * Logical f64 bytes for retained times and unpadded primary values.
+   */
+  retainedBytes: number;
+  /**
+   * Conservative full-field allowance for procedure working f64 vectors live with History.
+   * Free-DOF vectors are charged at the full nodal length.
+   */
+  transientWorkBytes: number;
+  /**
+   * One normalized three-component f64 frame owned by a native Query result.
+   */
+  transportStagingBytes: number;
+  /**
+   * Known lower bound for the WASM/Worker frame route while two normalized three-component
+   * numeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.
+   */
+  wasmTransportStagingBytes: number;
+  /**
+   * False while the generic JSON route has value- and runtime-dependent allocation overhead.
+   */
+  wasmTransportStagingComplete: boolean;
+  /**
+   * Fixed 1.5 GiB planning budget; not measured free memory on the current host.
+   */
+  budgetBytes: number;
+  /**
+   * False if the counted conservative estimate exceeds the planning budget; null means
+   * feasibility is unknown. Fitting it does not establish that assembly or factorisation fits.
+   */
+  feasible?: boolean | null;
   note: string;
 }
 /**
  * `query.journal` response.
  */
 export interface JournalDump {
+  /**
+   * Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
+   */
+  hash: string;
   entries: JournalEntry[];
   revision: number;
   canUndo: boolean;
@@ -3369,6 +3475,174 @@ export interface ScriptText {
 export interface Converted {
   value: number;
   unit: string;
+}
+/**
+ * `query.materialLibrary` response.
+ */
+export interface MaterialLibrary {
+  entries: MaterialLibraryEntry[];
+  sources: MaterialCitation[];
+}
+/**
+ * A documented catalogue entry. Every optional property serializes as a value or `null`.
+ */
+export interface MaterialLibraryEntry {
+  id: string;
+  name: string;
+  aliases: string[];
+  specification: string;
+  productForm: string;
+  condition: string;
+  temperature?:
+    | (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    | null;
+  temperatureBasis: string;
+  E?: SourcedStress | null;
+  nu?: SourcedRatio | null;
+  rho?: SourcedDensity | null;
+  alpha?: SourcedThermalExpansion | null;
+  k?: SourcedConductivity | null;
+  cp?: SourcedSpecificHeat | null;
+  yield?: SourcedStress | null;
+  /**
+   * Limitations that prevent a reported value from being treated as a generic default.
+   */
+  limitations: string[];
+  /**
+   * Ready to copy into `material.add.source` with the applicable reported values.
+   */
+  materialAddSource: string;
+}
+export interface SourcedStress {
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedRatio {
+  /**
+   * A dimensionless with unit, e.g. "0.3". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedDensity {
+  /**
+   * A density with unit, e.g. "7850 kg/m^3". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedThermalExpansion {
+  /**
+   * A thermal expansion with unit, e.g. "1.2e-5 1/K". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedConductivity {
+  /**
+   * A conductivity with unit, e.g. "50 W/(m K)". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+export interface SourcedSpecificHeat {
+  /**
+   * A specific heat with unit, e.g. "460 J/(kg K)". Any unit of the right dimension is accepted.
+   */
+  value:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * The exact grade, direction, statistic or test condition to which the value applies.
+   */
+  basis: string;
+  /**
+   * A [`MaterialCitation::id`].
+   */
+  source: string;
+}
+/**
+ * One primary source used by [`MaterialLibrary`]. Property `source` fields name its `id`.
+ */
+export interface MaterialCitation {
+  id: string;
+  organization: string;
+  title: string;
+  url: string;
+  locator: string;
+  retrievedOn: string;
 }
 /**
  * `query.objects` response.
@@ -3465,10 +3739,12 @@ export interface EngineError {
     | "mesh.failed"
     | "model.no-material"
     | "model.ill-posed"
+    | "result.stale"
     | "constraint.conflict"
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
     | "solve.stalled"
+    | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
     | "explicit.unstable";
@@ -3527,6 +3803,10 @@ export interface Model {
 export interface UnitSet1 {
   length?: string | null;
   force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
   stress?: string | null;
   mass?: string | null;
   density?: string | null;

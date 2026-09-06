@@ -126,7 +126,9 @@ pub enum Solver {
     GpuPcg,
 }
 
-/// Result fields.
+/// Result fields. Reaction is support force in N for structural Results and removed heat
+/// power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
+/// display units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
@@ -681,7 +683,7 @@ pub enum Command {
         description: Option<String>,
     },
 
-    /// Choose the display units used by Queries and the UI (for example mm, kN, MPa). Storage
+    /// Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage
     /// stays SI and every input may still use any unit of the right dimension; this only
     /// changes how values are reported back.
     #[serde(rename = "model.setUnits", rename_all = "camelCase")]
@@ -695,13 +697,16 @@ pub enum Command {
 
     /// Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
     /// rename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`
-    /// already exists in that kind.
+    /// already exists in that kind. Mapped and swept mapped Bodies also rename their mesher
+    /// geometry, named Face/Body-region selectors and material association.
     #[serde(rename = "model.rename", rename_all = "camelCase")]
     ModelRename { kind: ObjectKind, name: String, to: String },
 
     /// Copy an object under a new name. A Body copy shares nothing with the original; a Step
     /// copy references the same Constraints and Loads. Useful for "the same load case but
     /// twice the pressure": duplicate, then re-issue the create Command with the new value.
+    /// A mapped or swept mapped Body cannot be copied: the Model has one mesher geometry
+    /// slot. Returns unsupported without changing the Model; use model.rename or mesh.set.
     #[serde(rename = "model.duplicate", rename_all = "camelCase")]
     ModelDuplicate {
         kind: ObjectKind,
@@ -724,6 +729,7 @@ pub enum Command {
     /// Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's
     /// walls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure
     /// on `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.
+    /// Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
     #[serde(rename = "geometry.subtractBox", rename_all = "camelCase")]
     GeometrySubtractBox { name: String, from: String, size: [Q<Length>; 3], at: [Q<Length>; 3] },
 
@@ -736,12 +742,15 @@ pub enum Command {
     /// Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a
     /// cylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape
     /// is positioned in world coordinates, so use its `at` or a transform to place it.
+    /// Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
     #[serde(rename = "geometry.subtract", rename_all = "camelCase")]
     GeometrySubtract { name: String, from: String, shape: ShapeSpec },
 
     /// Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any
     /// of those) so constraints and loads can target it. Rules are re-evaluated after every
-    /// remesh, so the Set survives refinement. Prefer the auto face names when one fits.
+    /// remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
+    /// implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
+    /// Body's actual mesh boundary. Prefer the auto face names when one fits.
     #[serde(rename = "geometry.nameFace", rename_all = "camelCase")]
     GeometryNameFace {
         name: String,
@@ -752,7 +761,8 @@ pub enum Command {
 
     /// Name a node/element Set by a region rule (a box or a whole Body), for point-like
     /// constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
-    /// use a box slightly larger than the points you mean.
+    /// use a box slightly larger than the points you mean. A whole-Body rule also accepts
+    /// the implicit Body defined by a mapped or swept mapped mesher.
     #[serde(rename = "geometry.nameRegion", rename_all = "camelCase")]
     GeometryNameRegion {
         name: String,
@@ -761,7 +771,10 @@ pub enum Command {
     },
 
     /// Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-    /// and material assignments that still reference it; remove or retarget those first.
+    /// (including temperature and volumetric heat sources), named selectors or free-mesher
+    /// geometry references that still use a Body; remove or retarget those first. Removing
+    /// a mapped or swept mapped Body clears its mesher and material association, preserving
+    /// unrelated explicit geometry and Materials.
     #[serde(rename = "geometry.remove", rename_all = "camelCase")]
     GeometryRemove { name: String },
 
@@ -802,7 +815,10 @@ pub enum Command {
     /// Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
     /// 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
     /// `formulation: full` is the textbook linear element that locks in bending: keep the
-    /// default incompatible modes or use order 2 when bending matters.
+    /// default incompatible modes or use order 2 when bending matters. Mapped geometry owns
+    /// a Body name distinct from explicit geometry. Keeping that name preserves its material;
+    /// changing/removing it requires no remaining Body references and clears its material.
+    /// Use model.rename to change an implicit Body name while preserving its references.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     MeshSet {
         mesher: MesherSpec,
@@ -816,6 +832,8 @@ pub enum Command {
     /// stale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element
     /// id and the Body index as cell data. Name a `step` to add that Step's result fields as
     /// point data — displacement, reaction, stress and von Mises — so ParaView colours by them.
+    /// Result fields require the Model state they were solved on; `result.stale` means run
+    /// `solve.run` on that Step again before exporting it with the current Mesh.
     /// `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
     #[serde(rename = "mesh.export", rename_all = "camelCase")]
     MeshExport {
@@ -874,12 +892,19 @@ pub enum Command {
     LoadForce { name: String, on: SetRef, total: [Q<Force>; 3] },
 
     /// Gravity (or any uniform acceleration) as a body force on every Body whose Material has
-    /// a density; Bodies without one are skipped and listed in the warnings.
+    /// a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
+    /// apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
     #[serde(rename = "load.gravity", rename_all = "camelCase")]
     LoadGravity { name: String, g: [Q<Acceleration>; 3] },
 
     /// A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
     /// producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
+    /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.
+    /// Disjoint Bodies compose independently, each using its own reference. Overlapping
+    /// assignments must produce exactly the same increment; otherwise `solve.run` returns
+    /// `model.ill-posed` naming both Loads and the Body. Equal increments are not added.
+    /// When continuing a heat Step, its nodal temperatures replace `value`; these per-Body
+    /// references still apply, with 293.15 K on Bodies without a temperature Load.
     #[serde(rename = "load.temperature", rename_all = "camelCase")]
     LoadTemperature {
         name: String,
@@ -902,6 +927,8 @@ pub enum Command {
 
     /// A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
     /// It is a density, not a total: the heat delivered is `q` times each Body's volume.
+    /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
+    /// for a plane-stress Sheet, the volume includes its specified thickness.
     #[serde(rename = "load.heatSource", rename_all = "camelCase")]
     LoadHeatSource { name: String, bodies: Vec<String>, q: Q<HeatSource> },
 
@@ -917,7 +944,9 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit.
+    /// `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
+    /// conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
+    /// `theta` must lie in [0, 1].
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -932,6 +961,8 @@ pub enum Command {
         n_modes: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shift: Option<f64>,
+        /// Maximum heat-transient time increment. A uniform increment no larger than dt is
+        /// chosen to finish exactly at tEnd; the Result reports the increment actually used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt: Option<Q<Time>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -940,6 +971,8 @@ pub enum Command {
         theta: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_every: Option<u32>,
+        /// Maximum fraction of the explicit critical time step (usually 0.9). The increment
+        /// may be reduced uniformly to finish exactly at tEnd.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt_factor: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -949,7 +982,8 @@ pub enum Command {
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
-    /// stay in the Model and can be reused by other Steps.
+    /// stay in the Model and can be reused by other Steps. Fails with `in-use` while another
+    /// Step names it in `after`; re-issue that dependent Step without the reference first.
     #[serde(rename = "step.remove", rename_all = "camelCase")]
     StepRemove { name: String },
 
@@ -960,7 +994,9 @@ pub enum Command {
 
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
     /// element quality) and refuses with a suggested fix. Returns extremes and reactions;
-    /// always check that reactions balance the applied loads before trusting a stress.
+    /// always check that reactions balance the applied loads before trusting a stress. A Step
+    /// with `after` requires its predecessor's Result to match the current Model state;
+    /// after an edit, solve the predecessor again before continuing the chain.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,
@@ -975,7 +1011,12 @@ pub enum Command {
     /// Re-mesh at each size, re-solve the Step and report the quantity of interest per size,
     /// the observed convergence rate and a Richardson estimate of the converged value. Sizes
     /// should halve each time (three or more). Restores the previous mesh settings afterwards
-    /// unless `restore` is false.
+    /// unless `restore` is false. Uses the Step's actual procedure: static and steady heat
+    /// measure equilibrium fields; transient heat and explicit dynamics measure the final
+    /// field at the configured tEnd with the Step's time settings unchanged. Modal Steps are
+    /// unsupported because a mode amplitude is not a mesh-independent quantity; compare
+    /// frequencies with solve.run/query.result instead. Steps with after are unsupported:
+    /// solve their dependencies and target at each mesh explicitly.
     #[serde(rename = "study.converge", rename_all = "camelCase")]
     StudyConverge {
         step: String,
@@ -986,11 +1027,15 @@ pub enum Command {
     },
 
     /// Undo the last `steps` Commands (default 1), restoring the Model and orphaning any
-    /// Result produced after that point. Not recorded in the Journal.
+    /// Result produced after that point. Not recorded in the Journal. If `expectedJournal` is
+    /// supplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise
+    /// nothing is undone. Use this guard for a saved turn boundary while other callers can edit.
     #[serde(rename = "journal.undo", rename_all = "camelCase")]
     JournalUndo {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_journal: Option<String>,
     },
 
     /// Redo the last `steps` undone Commands (default 1) by re-applying them; a redone solve
@@ -1041,7 +1086,7 @@ mod tests {
         };
         assert_eq!(c.name(), "geometry.addBox");
         assert!(c.is_journaled());
-        assert!(!Command::JournalUndo { steps: None }.is_journaled());
+        assert!(!Command::JournalUndo { steps: None, expected_journal: None }.is_journaled());
         assert!(!Command::JournalRedo { steps: Some(2) }.is_journaled());
         let j = serde_json::to_string(&c).unwrap();
         assert_eq!(j, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"]}"#);

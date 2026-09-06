@@ -38,9 +38,12 @@ impl Engine {
     pub fn query(&mut self, q: Query) -> Result<QueryResult, Error> {
         match q {
             Query::Model {} => self.query_model().map(QueryResult::Model),
+            Query::Definition { kind, name } => crate::definition::command(&self.model, kind, &name)
+                .map(|command| QueryResult::Definition(ObjectDefinition { command })),
             Query::Journal { from_seq } => {
                 let from = from_seq.unwrap_or(0);
                 Ok(QueryResult::Journal(JournalDump {
+                    hash: self.journal.hash(),
                     entries: self.journal.entries.iter().filter(|e| e.seq >= from).cloned().collect(),
                     revision: self.revision(),
                     can_undo: self.can_undo(),
@@ -54,6 +57,9 @@ impl Engine {
                 let si = value * from.factor + from.offset;
                 let converted = units::convert(si, &to, Some(from.dim))?;
                 Ok(QueryResult::Converted(Converted { value: converted, unit: to }))
+            }
+            Query::MaterialLibrary { name } => {
+                crate::material_library::query(name.as_deref()).map(QueryResult::MaterialLibrary)
             }
             Query::Objects { kinds } => Ok(QueryResult::Objects(self.query_objects(kinds.as_deref()))),
             Query::Capabilities {} => Ok(QueryResult::Capabilities(Capabilities {
@@ -146,6 +152,7 @@ impl Engine {
                 e: display(m, mat.e, Stress::DIM),
                 nu: mat.nu,
                 rho: mat.rho.map(|r| display(m, r, Density::DIM)),
+                yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)),
                 assigned_to: m
                     .bodies
                     .iter()
@@ -370,25 +377,20 @@ impl Engine {
         })
     }
 
-    /// The nodal field a probe or a path samples, plus its display unit, refusing a Result
+    /// The nodal field a probe or a path samples, plus its physical dimension, refusing a Result
     /// whose Mesh is no longer the one it was solved on.
-    fn sampled(&mut self, step: Option<&str>, field: Field) -> Result<(FieldData, String), Error> {
+    fn sampled(&mut self, step: Option<&str>, field: Field) -> Result<(FieldData, Dimension), Error> {
+        // Every sampled query must reject a Result from an older Model revision. Keep the
+        // Result's reaction quantity so thermal reaction fields retain their power dimension.
+        let reaction_quantity = self.current_result(step)?.reaction_quantity;
         let f = self.field(step, field)?.clone();
         if f.per != crate::post::Per::Node {
             return Err(Error::new(ErrorCode::Unsupported, format!("{field:?} is not a nodal field"))
                 .suggest("query.probe of displacement, stress, vonMises, principal, strain or reaction"));
         }
-        let unit = display(&self.model, 0.0, crate::solve_run::field_dimension(field)).unit;
-        self.mesh()?;
-        let nodes = self.mesh.as_ref().expect("built above").mesh.n_nodes();
-        if f.len() != nodes {
-            return Err(Error::new(
-                ErrorCode::NotFound,
-                format!("the Result has {} nodes but the Mesh now has {nodes}", f.len()),
-            )
-            .suggest("solve.run again: the Mesh changed under the Result"));
-        }
-        Ok((f, unit))
+        let dim = crate::solve_run::field_dimension(field, reaction_quantity);
+        self.mesh().expect("a Result with the current Model hash was solved on this Mesh");
+        Ok((f, dim))
     }
 
     /// One component of a sampled value: the named one, or the magnitude of a vector.
@@ -407,14 +409,14 @@ impl Engine {
         component: Option<u8>,
         at: [Q<Length>; 3],
     ) -> Result<ProbeResult, Error> {
-        let (f, unit) = self.sampled(step, field)?;
+        let (f, dim) = self.sampled(step, field)?;
         let x = si3(&at)?;
         let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
         let (elem, v) = crate::post::probe::probe(mesh, &f, x).ok_or_else(|| {
             Error::new(ErrorCode::NotFound, "the point is outside the mesh").at("at").suggest("query.mesh reports bbox")
         })?;
-        let value = display(&self.model, Engine::pick(&v, component), crate::solve_run::field_dimension(field));
-        Ok(ProbeResult { value: Valued { value: value.value, unit }, element: elem, interpolated: true })
+        let value = display(&self.model, Engine::pick(&v, component), dim);
+        Ok(ProbeResult { value, element: elem, interpolated: true })
     }
 
     /// `query.path`: a field sampled along a line.
@@ -427,9 +429,9 @@ impl Engine {
         to: [Q<Length>; 3],
         n: u32,
     ) -> Result<PathResult, Error> {
-        let (f, unit) = self.sampled(step, field)?;
+        let (f, dim) = self.sampled(step, field)?;
         let (a, b) = (si3(&from)?, si3(&to)?);
-        let dim = crate::solve_run::field_dimension(field);
+        let unit = display(&self.model, 0.0, dim).unit;
         let mesh = &self.mesh.as_ref().expect("built in sampled").mesh;
         let samples = crate::post::probe::path(mesh, &f, a, b, n as usize);
         Ok(PathResult {
@@ -442,12 +444,22 @@ impl Engine {
         })
     }
 
-    /// `query.cost`: what solving this Step would take, from the sparsity alone.
+    /// `query.cost`: bounded assembly counting plus the Step's actual retained-output schedule.
     pub(crate) fn query_cost(&mut self, step: &str) -> Result<CostEstimate, Error> {
-        self.model.step(step).ok_or_else(|| Error::not_found("step", step, &self.model.names(ObjectKind::Step)))?;
+        let step = self
+            .model
+            .step(step)
+            .ok_or_else(|| Error::not_found("step", step, &self.model.names(ObjectKind::Step)))?
+            .clone();
+        let procedure = crate::solve_run::procedure_step(&step, crate::solve::SolveOptions::default())?;
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
-        Ok(crate::solve::cost_estimate(&built.mesh, built.mesh.dim, crate::command::Solver::Auto))
+        if matches!(procedure, crate::procedure::Step::Explicit { .. }) {
+            let problem = crate::solve_run::build_problem(&self.model, built, &step)?;
+            Ok(crate::solve_run::planned_cost(&built.mesh, Some(&problem), &procedure)?.estimate)
+        } else {
+            Ok(crate::solve_run::planned_cost(&built.mesh, None, &procedure)?.estimate)
+        }
     }
 
     fn query_objects(&self, kinds: Option<&[ObjectKind]>) -> ObjectList {

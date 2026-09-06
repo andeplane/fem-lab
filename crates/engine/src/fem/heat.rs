@@ -1,7 +1,7 @@
 //! The heat kernels: conduction, capacity, a volumetric source, and the two face integrals a
 //! convection or flux boundary needs (plan A §3.3, §3.4).
 //!
-//! One unknown per node, the same reference elements and the same quadrature as the
+//! One unknown per node, the same reference elements and integral-specific quadrature as the
 //! isoparametric solid, and the same Jacobian routine — [`jac_inv`] and [`scale_at`] are
 //! shared with [`element`](crate::fem::element), so an axisymmetric heat problem picks up its
 //! `2π r` weight from the one place that knows about it and a folded element is the same
@@ -15,7 +15,8 @@ use femlab_geometry::mesh::ElementKind;
 
 use crate::error::Error;
 use crate::fem::element::{grad_of, inverted, jac_inv, scale_at, ElementCtx};
-use crate::fem::shape::{dshape_of, face_dshape_of, face_rule_of, face_shape_of, rule_of, shape_of};
+use crate::fem::quadrature::Rule;
+use crate::fem::shape::{dshape_of, face_dshape_of, face_rule_of, face_shape_of, product_rule_of, rule_of, shape_of};
 
 /// One resolved heat load. Unlike the structural [`Load`](crate::fem::loads::Load)s these are
 /// intensive already — a film coefficient, a flux per unit area, a source per unit volume — so
@@ -55,10 +56,8 @@ struct Kin {
 }
 
 /// The Jacobian, the gradients and the weights of one element, or the folded-element error.
-fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
+fn kinematics(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Result<Kin, Error> {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
-    let rule = rule_of(kind);
-    let v_ref: f64 = rule.weights.iter().sum();
     let n_gp = rule.points.len();
     let mut kin = Kin {
         n_gp,
@@ -74,7 +73,7 @@ fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
         let xi = rule.points[gp];
         shape_of(kind, xi, &mut sh);
         dshape_of(kind, xi, &mut dn);
-        let (inv, det) = jac_inv(dim, c.coords, &dn, v_ref).ok_or_else(inverted)?;
+        let (inv, det) = jac_inv(dim, c.coords, &dn).ok_or_else(inverted)?;
         kin.min_det = kin.min_det.min(det);
         let mut x = [0.0; 3];
         for (a, &n) in sh.iter().enumerate() {
@@ -94,7 +93,7 @@ fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
 /// `∫ k ∇Nᵀ ∇N dV` into `out` (`n_nodes × n_nodes`, row-major); returns the smallest
 /// Gauss-point `det J`, which the well-posedness report carries just as the stiffness does.
 pub fn conductivity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<f64, Error> {
-    let kin = kinematics(kind, c)?;
+    let kin = kinematics(kind, c, rule_of(kind))?;
     let nn = kin.n_nodes;
     let dim = kind.dim();
     out.fill(0.0);
@@ -113,7 +112,7 @@ pub fn conductivity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> R
 
 /// `∫ ρ c_p Nᵀ N dV` into `out`: the consistent capacity the θ-method integrates with.
 pub fn capacity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<(), Error> {
-    let kin = kinematics(kind, c)?;
+    let kin = kinematics(kind, c, product_rule_of(kind))?;
     let nn = kin.n_nodes;
     out.fill(0.0);
     for gp in 0..kin.n_gp {
@@ -130,7 +129,7 @@ pub fn capacity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> Resul
 
 /// `∫ q N dV` into `out`: the nodal heat a volumetric source delivers.
 pub fn source(kind: ElementKind, c: &ElementCtx<'_>, q: f64, out: &mut [f64]) -> Result<(), Error> {
-    let kin = kinematics(kind, c)?;
+    let kin = kinematics(kind, c, rule_of(kind))?;
     let nn = kin.n_nodes;
     out.fill(0.0);
     for gp in 0..kin.n_gp {

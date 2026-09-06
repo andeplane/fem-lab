@@ -26,14 +26,14 @@ test.describe('@cpu project file host', () => {
       const skill = await skills.getDirectoryHandle('project-check', { create: true });
       await put(skill, 'SKILL.md', '---\nname: project-check\ndescription: Check this project.\n---\n\nOriginal project instructions.');
       // Native prototype methods and handle identity must survive schema parsing.
-      await window.fem.dispatch({ cmd: 'project.open', handle: folder });
+      await window.fem.dispatch({ cmd: 'folder.open', handle: folder });
       await window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true });
     });
     const drawer = page.locator('aside.assistant');
     await expect(drawer).toContainText('project-13');
     await expect(drawer.locator('.chips')).toContainText('project-check');
     await expect(drawer).toContainText('AGENTS.md');
-    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.project' }))).toMatchObject({ name: 'project-13', agentsMd: 'AGENTS.md', skills: ['project-check'] });
+    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folder' }))).toMatchObject({ name: 'project-13', agentsMd: 'AGENTS.md', skills: ['project-check'] });
     expect(await page.evaluate(() => window.fem.dispatch({ cmd: 'skill.invoke', name: 'project-check' }))).toMatchObject({ body: 'Original project instructions.', source: 'project' });
     await page.evaluate(async () => {
       await window.fem.dispatch({ cmd: 'file.write', path: 'skills/project-check/SKILL.md', text: '---\nname: project-check\ndescription: Revised check.\n---\n\nRevised project instructions.' });
@@ -52,7 +52,7 @@ test.describe('@cpu project file host', () => {
       const stream = await (await folder.getFileHandle('AGENTS.md')).createWritable();
       await stream.write('Externally revised rules.'); await stream.close();
     });
-    await drawer.locator('[data-cmd="project.refresh"]').click();
+    await drawer.locator('[data-cmd="folder.refresh"]').click();
     await expect(drawer.locator('.chips')).not.toContainText('project-check');
     expect(await page.evaluate(() => window.fem.dispatch({ cmd: 'file.read', path: 'AGENTS.md' }))).toEqual({ text: 'Externally revised rules.' });
     const errors = await page.evaluate(async () => {
@@ -100,17 +100,17 @@ test.describe('@cpu project file host', () => {
       } finally { db.close(); }
     })).toBe('saved-project');
     await page.reload(); await ready(page);
-    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.project' }))).toBeNull();
-    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.projectRecent' }))).toEqual({ name: 'project-13' });
+    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folder' }))).toBeNull();
+    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folderRecent' }))).toEqual({ name: 'project-13' });
     // Autosave and handle persistence each opened their database before this reload.
     expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.autosave' }))).toMatchObject({ enabled: true, saved: { name: 'saved-project', commands: 3 } });
     await page.evaluate(() => window.fem.dispatch({ cmd: 'panel.toggle', panel: 'assistant', open: true }));
     await drawer.getByRole('button', { name: 'reopen project-13', exact: true }).click();
     await expect(drawer).toContainText('AGENTS.md');
     expect(await page.evaluate(() => window.fem.dispatch({ cmd: 'file.read', path: 'AGENTS.md' }))).toEqual({ text: 'Externally revised rules.' });
-    await drawer.locator('[data-cmd="project.close"]').click();
+    await drawer.locator('[data-cmd="folder.close"]').click();
     await expect(drawer).toContainText('open a project folder');
-    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.projectRecent' }))).toBeNull();
+    expect(await page.evaluate(() => window.fem.registry.query({ query: 'query.folderRecent' }))).toBeNull();
     const download = page.waitForEvent('download');
     await page.evaluate(() => window.fem.dispatch({ cmd: 'file.save', name: 'closed.femlab.json' }));
     expect((await download).suggestedFilename()).toBe('closed.femlab.json');

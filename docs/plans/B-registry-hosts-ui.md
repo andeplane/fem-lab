@@ -110,8 +110,8 @@ pub struct StepResult { pub fields: BTreeMap<String, post::Field>, pub scalars: 
                         pub modes: Option<Modes>, pub history: Option<History>, pub info: SolveInfo, pub checks: Vec<Warning> }
 // crates/engine/src/fem/checks.rs (plan A §7): each returns Err(Error) with code/cause/where/suggestion
 pub fn checks::run(p: &Problem<'_>) -> Result<(), Error>;                                   // J6.11; B maps Err → Warning for query.model
-// crates/engine/src/fem/assembly.rs (plan A §4): nnz for query.cost
-pub fn assembly::pattern(mesh: &Mesh, dofs_per_node: usize) -> Pattern;                   // Pattern.csr.nnz()
+// crates/engine/src/solve/mod.rs (plan A §5, amended by #122): bounded cost counting
+pub fn solve::cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostEstimate;
 // crates/engine/src/post (plan A §8)
 pub fn post::extremes(f: &Field, mesh: &Mesh) -> Vec<Extreme>;
 pub fn post::reactions_per_constraint(p: &Problem, r: &[f64]) -> Vec<(String, [f64; 3])>;
@@ -121,9 +121,10 @@ pub fn mesh::face_set_area(mesh: &Mesh, faces: &[Face]) -> f64;     // load.trac
 pub struct SolveOptions { .., pub on_progress: Option<&mut dyn FnMut(Progress) -> bool> }  // iteration progress + cooperative cancel
 ```
 
-`query.cost` is computed in B from `pattern(..).csr.nnz()` (bytes = nnz × 12 for CSR f64+u32,
-plus vectors) with `estimatedMs: None` until PLAN 2.9's calibration exists; there is no
-`cost_estimate` in plan A.
+`query.cost` calls the bounded estimator in A (#122): exact non-zero counts within a 16 MiB
+scratch cap, conservative bounds above it, and mandatory assembly storage including element
+slots. Feasibility is false above a fixed 1.5 GiB planning budget and unknown otherwise, since
+solver fill/workspace are excluded. See plan A §5 for the storage accounting.
 
 Until plan A lands there is no stub mesher or fake solver (that would be scaffolding for its own
 sake). Plan B lands with `mesh.set`, `solve.run`, `study.converge`, `query.mesh`, `query.result`,
@@ -377,7 +378,7 @@ never converts (ADR 0008 literally: units at the boundary).
 | `query.result` | `step?` (default last solved) | `ResultSummary { step, revision, stale, solver: {name, iterations?, residual?, timeMs}, fields, extremes: {field: {min: {value, at, node}, max}}, reactions: [{constraint, total: [F;3]}], appliedTotal: [F;3], balance: f64 }` | observe without pixels (ADR 0006); reaction balance is the first thing to check |
 | `query.probe` | `step?`, `field: Field`, `component?: u8`, `at: [Q<Length>;3]` | `ProbeResult { value, unit, element, nearestNode, interpolated: bool }` | value at a point |
 | `query.path` | `step?`, `field`, `component?`, `from: [Q;3]`, `to: [Q;3]`, `n: u32` | `PathResult { s: [..], values: [..], unit }` | line plots |
-| `query.cost` | `step` | `CostEstimate { dofs, nnz?, bytes, estimatedMs?, feasible, note }` | J4.7; computed here from A's `assembly::pattern(..).csr.nnz()`; `estimatedMs` is `None` until PLAN 2.9 calibration; `feasible` compares `bytes` with the wasm heap / `Gpu::limits()` |
+| `query.cost` | `step` | `CostEstimate { dofs, nnzLower, nnz, bytes, budgetBytes, feasible, note }` | J4.7; bounded counting (#122), `bytes` is an assembly lower bound; `feasible` is false above the planning budget, otherwise null; no host-memory guarantee |
 | `query.exportFormats` | – | `[ExportFormat { format, extension, mime, description, needs: ["mesh"\|"result"\|"geometry"\|"view"], available: bool, reason?: String }]` | the Export menu enumerates this (§7.10); `available` says whether the current Model can produce it (no mesh → no VTU) |
 | `query.export` | `spec: ExportSpec` (§7.10) | `ExportInfo { filename, mime, bytes: u64 }` (metadata only; the bytes cross as a typed array via the transport's `export` op) | "each export names the format, what it contains and its size before writing" (DESIGN-BRIEF §4.12) |
 | `query.objects` | `kinds?: Vec<ObjectKind>` | `[ObjectRef { ref: "body:beam", kind, name, summary: String }]` | the `@`-mention picker's index (§7.7); one call, every nameable thing in the Model plus Journal entries (`journal:12`) and Results (`result:static`) |
@@ -555,7 +556,9 @@ pub struct ModelFile { pub format: String /* "femlab/1" */, pub engine_version: 
   `dispatch` each entry in order (which also rebuilds the undo stack); per-entry `hash_after` is
   recomputed and compared, and the first mismatch is reported with its `seq` (this is how the
   native-vs-wasm CI job localises a divergence). With `skip_solves`, `solve.run`/`study.converge`
-  entries are appended to the Journal unchanged (so `hash_after` still lines up) without running.
+  calculations are omitted while every entry retains its undo snapshot and recomputed hash.
+  A `study.converge` with `restore: false` still applies its final mesh settings, so skipping
+  numerical work preserves the same Model and Journal as normal replay (#145).
 - **Script export** (`Journal::as_script`, exposed as `query.script`): one line per entry,
   `await fem.geometry.addBox({ name: "beam", size: ["1 m", "100 mm", "100 mm"] });` with the `cmd`
   key removed. The formatter walks the `serde_json::Value` (never a regex over text, which a string
@@ -753,7 +756,7 @@ code (same rule as engine Commands). `n` = number, `PanelId` = the `id` column o
 | `project.refresh` | `{}` | re-list files, re-read `AGENTS.md`/`CLAUDE.md` and `skills/*/SKILL.md` | yes |
 | `example.open` | `{ name: string }` | fetch `examples/<name>.json` → `importFile` | yes |
 | `solve.cancel` | `{}` | `transport.cancel()` | yes |
-| `ai.setKey` | `{ key: string \| null }` | localStorage; never journaled, never a tool, never in exports | no |
+| `ai.setKey` | `{ key: string \| null }` | sessionStorage (ADR 0016); never journaled, never a tool, never in exports | no |
 | `ai.setModel` | `{ model: string }` | model id for the agent (default `claude-opus-5`) | no |
 
 Host Queries (same file, same zod treatment, all `tool: true` unless noted): `query.screenshot
@@ -860,11 +863,14 @@ Decisions:
 - **Async and `&mut self`.** Verified to compile; the worker keeps a promise chain so at most one
   `dispatch`/`query` is in flight (a concurrent call would panic inside wasm-bindgen's borrow check).
 - **Cancel.** For CPU solves the wasm thread is busy and cannot observe a flag; `worker.terminate()`,
-  recreate the worker, then `replay_hashes(journal, skip_solves = true)` from the Journal the
-  transport fetched (`query.journal`) before the `solve.run`. Replaying rebuilds the Model *and* the
-  undo stack (a plain `import_file` would clear undo). What a cancel costs, stated in the UI note:
-  the redo stack and every earlier step's Result (Results are not in the ModelFile; they show as
-  "not solved"). For GPU solves the progress callback's `false` return is honoured at the next
+  recreate the worker, then `replay_hashes(journal, skip_solves = true)` from the transport's
+  acknowledged Journal shadow, including any redo tail. Undo back to the acknowledged active
+  revision after replay, preserving both undo and redo history. Undo/redo acknowledgements move
+  the active revision without becoming Journal entries; exports use the same acknowledged
+  dispatch path. Queued calls from the cancelled worker are rejected, and new calls wait for
+  recovery ([#110](https://github.com/andeplane/fem-lab/issues/110), building on #145).
+  Cancellation still discards every earlier step's Result (Results are not in the ModelFile;
+  they show as "not solved"). For GPU solves the progress callback's `false` return is honoured at the next
   await. Both paths are one `transport.cancel()`. With plan A's `on_progress` in `SolveOptions`
   (Reconciled table) the CPU path also becomes cooperative at 25-iteration granularity and the
   terminate path stays as the fallback for a hung solve.
@@ -912,7 +918,7 @@ femlab run <file.json> [--hashes] [--skip-solves] [--verify] [--as-script] [--js
     hash list (--hashes), or the Journal as a TypeScript script (--as-script). --verify replays and compares
     hash_after per entry; exit 3 on the first mismatch with its seq.
 femlab bench [--filter <substr>] [--json] [--markdown] [--cpu] [--threads N]
-    Runs every case in crates/engine/benches/cases/*.json: { name, journal: [...], checks: [{ query, path, expect, tol, rel }] }.
+    Runs every case in crates/femlab/benches/cases/*.json: { name, journal: [...], checks: [{ query, path, expect, tol, rel }] }.
     Exit 1 if any check fails. --markdown prints the status table BENCHMARKS.md links to.
 femlab export <file.json> --format vtu|msh|inp|stl|csv|script|journal|report [--step S] [--table T] --out <path>
     Replays (skip-solves unless --solve) and writes Engine::export(spec) to --out. The same exporters the app uses (§7.10);
@@ -999,6 +1005,13 @@ HTML element with a CSS gradient and min/max in display units from `query.result
 
 ### 7.3 Panels and controls as data
 
+> **Superseded in part by plan D** (`docs/plans/D-projects-and-start.md`, issues #40 and #41).
+> The top bar's "model name + unsaved flag" is now the **project** name with a saved chip, and it
+> gains **Projects** (`panel.toggle { panel: 'projects' }`), **Save** (`project.save`) and
+> **Save as file** (`file.save`). The Assistant drawer is mounted outside `.workspace`, so it
+> exists on the start screen. `file.restore` and `query.autosave` are deleted; Recent projects
+> replaces them.
+
 `src/panels.ts` declares `PANELS: { id, title, side, defaultOpen }[]` and
 `CONTROLS: { id, label, cmd: string, args?: unknown, panel: PanelId, kind: 'button'|'toggle'|'form' }[]`.
 Components render from these tables; every rendered control carries `data-cmd`. The vitest
@@ -1027,6 +1040,13 @@ Playwright's smoke checks the DOM agrees (`[data-cmd]` set ⊆ registry).
 | AI chat (7; flag `?ai=1` until phase 4 eval passes) | key entry with the plain notice (ADR 0006), model id, chat with `@` picker and `/` menu, streamed tool-call cards (each also a Journal entry), "show me what you did" = `query.journal` diff since the turn's first seq with "undo this turn" = `journal.undo { steps }`, verification card, cost per turn from `usage`, AGENTS.md badge | everything, via `registry.dispatch`; `chat.*`, `skill.invoke`, `ai.setKey`, `ai.setModel`; reads `query.objects`, `query.selection`, `query.skills`, `query.project` |
 | Start / empty state (5.9) | three paths and a capability line | `chat.send`, `panel.toggle { examples }`, the geometry "Add…" form; reads `query.capabilities` |
 | Status bar (8) | progress from `dispatch` progress events, capability notes (no WebGPU → CPU; not isolated → single thread; not Chromium → best effort), engine local/remote, engine version | reads `query.capabilities` |
+
+Editing existing objects (#141) uses `form.edit { kind, name }` and the engine's
+`query.definition` to read an exact upsert Command from the current Model. Rounded
+`query.model` summaries only label rows; they never supply editable values. Definitions
+retain all shape, material, constraint, load and Step parameters after rename or duplicate.
+Structured SI quantities display as round-trippable unit text; a delayed edit response
+cannot replace a newer form. Imported internal-only shapes are refused explicitly.
 
 Hover highlighting (tree ↔ viewer) is transient view state with no control and no Command; the
 brief's "hover is view state" sentence covers it. Everything a click does is a row above.
@@ -1091,7 +1111,7 @@ as one `<context>` JSON block after the text. A leading `/name` (§7.8) is repla
 body as a preceding block. Nothing about the message layout is visual; the designer decides how
 chips look.
 
-Key in `localStorage['femlab.anthropicKey']`, never in the store snapshot, Journal, export or
+Keys in `sessionStorage['femlab.ai.key']` and `sessionStorage['femlab.ai.key.openai']` (ADR 0016), never in the store snapshot, Journal, export or
 screenshot. Phase 4's eval suite decides when the `?ai=1` flag is removed.
 
 Tests (vitest, no network): the loop against a fake `Anthropic` client that replays a scripted
@@ -1163,12 +1183,19 @@ the menu shows the built-in.
 
 ### 7.9 Project folder (`src/project-host.ts`, `src/ai/project.ts`, `packages/registry/src/project-paths.ts`)
 
+> **Renamed by plan D.** A *project* is now one saved Model in this browser (issue #41), so the
+> disk-side Commands here are `folder.open | folder.close | folder.refresh` and the Query is
+> `query.folder`; `HostContext.project` is `HostContext.folder` and `ProjectInfo` is `FolderInfo`.
+> The handle store is `src/db.ts`'s `handles` object store — one module owns the `femlab`
+> database, which is what fixes the two-modules-at-version-1 collision described there. Read the
+> Commands below as `folder.*`.
+
 Chromium's File System Access API (ADR 0014; `showDirectoryPicker` needs a user gesture and is
-Window-only, so `project.open { picker: true }` runs on the main thread from a click). The handle
+Window-only, so `folder.open { picker: true }` runs on the main thread from a click). The handle
 is stored in IndexedDB (`FileSystemDirectoryHandle` is structured-cloneable) under one key so a
-reload can offer "reopen <name>". `query.projectRecent` reads a separate name record without
+reload can offer "reopen <name>". `query.folderRecent` reads a separate name record without
 deserializing the stored handle or asking for permission; clicking reopen calls
-`project.open { reopen: true }`, which requests read/write
+`folder.open { reopen: true }`, which requests read/write
 permission before publishing the folder. The registry preserves native handle identity, and the
 typed `ProjectAccess` boundary supplies the picker and handle persistence to the production host.
 
@@ -1177,8 +1204,7 @@ The Assistant uses the same Commands, including refresh and close. Cancellation 
 folder without opening a second picker; denied access remains a structured error. A failed refresh
 keeps the last successful files/rules/skills catalog. Closing drops the active capability and
 forgets the remembered handle, without deleting disk files; a slow earlier open cannot restore it.
-Handle writes commit in invocation order in `femlab-project`/`handles`, separate from the existing
-`femlab`/`autosave` database, so the two version-one store initializers cannot race. If storage is
+Handle writes follow invocation order in the shared `femlab`/`handles` store owned by `src/db.ts`. If storage is
 unavailable, granted file access remains usable for the session and the host reports the failure.
 
 ```ts
@@ -1201,7 +1227,7 @@ symlinks; a real-browser test guards this requirement. `resolve()` is not used a
 check because it reports handle-relative paths. Invalid paths get `file.scope` before accessing
 any handle. Failed writes abort the writable stream while preserving the original error.
 `file.read`/`file.write`/
-`file.open { path }`/`file.save { to: 'project' }`/`file.export { to: 'project' }` all go through
+`file.open { path }`/`file.save { to: 'folder' }`/`file.export { to: 'folder' }` all go through
 `ProjectFolder`. `AGENTS.md` text feeds `buildSystem` (§7.6) and the badge; the AI gets the same
 `file.read` the person has (PLAN 4.13 "scoped").
 
@@ -1210,8 +1236,8 @@ FileScope, `C:\\x` → FileScope); `ProjectFolder` against a 40-line fake `FileS
 (in-memory map) for list/read/write/AGENTS.md/skills; `buildSystem` includes the AGENTS.md text
 exactly once. Playwright cannot drive `showDirectoryPicker`, so the e2e test uses
 `navigator.storage.getDirectory()` (OPFS returns a real `FileSystemDirectoryHandle`), writes
-`AGENTS.md` and `skills/x/SKILL.md` into it, dispatches `project.open { handle }` via `window.fem`,
-and asserts `query.project`, `query.skills` and the badge state. The Node/MCP host implements the
+`AGENTS.md` and `skills/x/SKILL.md` into it, dispatches `folder.open { handle }` via `window.fem`,
+and asserts `query.folder`, `query.skills` and the badge state. The Node/MCP host implements the
 same class over `node:fs` under `--project` with the same `normalisePath`.
 
 ### 7.10 Export (`crates/engine/src/export.rs`, `report.rs`; `src/export/image.ts`)
@@ -1419,7 +1445,7 @@ their Commands, stores and tests immediately and their components when the desig
 | R9 | **Anthropic tool constraints**: names cannot contain `.` (`^[a-zA-Z0-9_-]{1,64}$`). | `toolNameFor` mapping with reverse lookup, asserted by the tool-list test; `run_script` + generated API reference as the primary mode (Anthropic/Cloudflare findings, note 05). Token cost is R20. |
 | R10 | **Schema drift** between Rust, JSON, TS, forms and tools. | Rust snapshot test + `codegen --check` + tool-list invariant test; three independent gates on one artefact. |
 | R11 | **Concurrent calls into the wasm `Engine`** panic ("recursive use of an object"). | The worker's promise queue; the transport never issues two calls at once; a test with a fake worker asserts ordering. |
-| R12 | **Cancelling a CPU solve** cannot interrupt wasm. | `terminate` + recreate + `replay(journal, skip_solves)`; the transport fetches the Journal before every `solve.run`; cancelled solve leaves the Journal as before the solve (the `solve.run` entry is appended only on `Ok`); earlier Results and the redo stack are lost and the UI says so. Plan A's `on_progress` in `SolveOptions` makes it cooperative later. |
+| R12 | **Cancelling a CPU solve** cannot interrupt wasm. | `terminate` + recreate + `replay(journal, skip_solves)` from the acknowledged shadow, then undo the redo tail back to the active revision. Cancelled and queued unacknowledged Commands stay outside the Journal; earlier Results are lost, while undo/redo history is preserved (#110). Plan A's `on_progress` in `SolveOptions` makes it cooperative later. |
 | R18 | **`showDirectoryPicker` cannot be automated** and needs a user gesture; handles need re-permission after reload. | `project.open { handle }` is the internal form; e2e uses an OPFS directory handle (same interface); reopen goes through a click that calls `requestPermission` first. |
 | R19 | **Clipboard writes need a user gesture** and `navigator.clipboard` is main-thread only. | `clipboard.copy` runs synchronously inside the ⌘C key handler; from a script/AI it returns `Unsupported` with the text in the error so the caller still gets it. |
 | R20 | **Tool count** is now ~70 (engine + host) ≈ 25–30 k tokens of definitions per turn. | Prompt caching on the tool prefix (tools render first and are stable); `run_script` first in the system rules; if evals show selection trouble, consolidate `view.*` into one `view` tool with an `action` field — a change in `toToolDefinitions`, not in the registry. |

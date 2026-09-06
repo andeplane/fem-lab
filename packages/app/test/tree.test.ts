@@ -4,7 +4,7 @@
 import type { ModelSummary } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import { Store, initialState, type UiState } from '../src/store';
-import { treeGroups } from '../src/ui/Tree';
+import { shapeMenu, treeGroups } from '../src/ui/Tree';
 
 const v = (value: number, unit: string) => ({ value, unit });
 
@@ -68,24 +68,20 @@ describe('treeGroups', () => {
     expect(g.items[0]!.remove).toBe('geometry.remove');
   });
 
-  it('reads a Body\'s size and position back out of its bounding box, so a click can edit it', () => {
+  it('requests a lossless definition by explicit object identity rather than bbox values', () => {
     expect(group(state(MODEL), 'Geometry').items[0]).toMatchObject({
-      cmd: 'geometry.addBox',
-      args: { name: 'beam', size: ['1000 mm', '100 mm', '100 mm'], at: ['0 mm', '0 mm', '0 mm'] },
+      cmd: 'form.edit', args: { kind: 'body', name: 'beam' }, run: true,
     });
-  });
-
-  it('survives a Model whose bounding box is not there yet', () => {
     const g = group(state({ ...MODEL, bodies: [{ ...MODEL.bodies[0]!, bbox: [] as never }] }), 'Geometry');
-    expect((g.items[0]!.args as { size: string[] }).size).toEqual(['', '', '']);
+    expect(g.items[0]!.args).toEqual({ kind: 'body', name: 'beam' });
   });
 
   it('summarises materials, constraints, loads, the mesh and the steps in display units', () => {
     const s = state(MODEL);
     expect(group(s, 'Materials').items[0]!.summary).toBe('E 210000 MPa · ν 0.3 · ρ 7850 kg/m^3 · on beam');
-    expect(group(s, 'Materials').items[0]!.args).toEqual({ name: 'steel', E: '210000 MPa', nu: 0.3, rho: '7850 kg/m^3' });
+    expect(group(s, 'Materials').items[0]!.args).toEqual({ kind: 'material', name: 'steel' });
     expect(group(s, 'Constraints').items[0]!.summary).toBe('fix ux, uy, uz on beam.xmin');
-    expect(group(s, 'Loads').items[0]).toMatchObject({ cmd: 'load.traction', summary: 'total [0, 0, -1] kN on beam.xmax' });
+    expect(group(s, 'Loads').items[0]).toMatchObject({ cmd: 'form.edit', summary: 'total [0, 0, -1] kN on beam.xmax' });
     expect(group(s, 'Mesh').items[0]!.summary).toBe('lattice · order 1 · incompatible-modes');
     expect(group(s, 'Steps').items[0]!.summary).toBe('static · 1 constraints · 1 loads · solved');
   });
@@ -107,6 +103,29 @@ describe('treeGroups', () => {
     const s = state({ ...MODEL, meshSettings: null } as ModelSummary);
     expect(group(s, 'Mesh').badge).toBe('1 warning');
     expect(group(state({ ...MODEL, bodies: [], meshSettings: null } as unknown as ModelSummary), 'Mesh').badge).toBe('—');
+  });
+
+  // Issue #43: the tree offered `geometry.addBox` and nothing else.
+  it('offers every shape ShapeSpec declares plus the cut, with box keeping its own Command', () => {
+    const menu = shapeMenu([
+      { kind: 'box', hint: 'a box' },
+      { kind: 'cylinder', hint: 'a cylinder' },
+      { kind: 'wormhole', hint: 'an engine kind this file has never heard of' },
+    ]);
+    expect(menu.map((m) => m.label)).toEqual(['box', 'cylinder', 'wormhole', 'cut']);
+    expect(menu[0]).toMatchObject({ cmd: 'geometry.addBox', args: {} });
+    expect(menu[1]).toMatchObject({ cmd: 'geometry.add', args: { shape: { kind: 'cylinder' } } });
+    expect(menu[2]!.glyph).toBe('◇');
+    expect(menu[3]).toMatchObject({ cmd: 'geometry.subtract' });
+  });
+
+  it('hangs that menu off the Geometry chip, and nowhere else', () => {
+    const s = state(MODEL);
+    const shapes = [{ kind: 'box', hint: 'a box' }];
+    expect(treeGroups(s, shapes).find((g) => g.label === 'Geometry')!.add!.menu!.map((m) => m.label)).toEqual(['box', 'cut']);
+    expect(treeGroups(s, shapes).find((g) => g.label === 'Materials')!.add!.menu).toBeUndefined();
+    // No shapes handed in (a test that does not care) and the chip is the plain one it was.
+    expect(treeGroups(s).find((g) => g.label === 'Geometry')!.add).toEqual({ what: 'body', cmd: 'geometry.addBox' });
   });
 
   it('marks the row whose Command the Properties panel is showing', () => {

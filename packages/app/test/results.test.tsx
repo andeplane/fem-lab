@@ -1,21 +1,46 @@
 // The results state machine and everything it computes on the way to the screen: the design's
 // states 4–7 as one word, the Solve button's label, the legend's ticks, the balance line, and
 // the field→unit table both the Worker and the viewer read.
-import type { PathResult, ResultSummary, Valued } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type CostEstimate, type EngineSchema, type ModelSummary, type PathResult, type ResultSummary, type Valued } from '@femlab/registry';
 import { render } from 'preact';
+import { createRequire } from 'node:module';
 import { describe, expect, it, vi } from 'vitest';
+import schema from '../../registry/src/generated/engine.schema.json';
+import { readHostCaps } from '../src/capabilities';
 import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, legendTicks, siUnitOf } from '../src/fields';
+import { makeHostContext } from '../src/host';
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
+import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
 import { Store, initialState, solveLabel, stageOf } from '../src/store';
-import { probeLine } from '../src/ui/App';
-import { PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
+import { exaggerationHelp, probeLine } from '../src/ui/App';
+import { Checks, PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
 import { specOf, unavailable } from '../src/ui/Export';
 import type { WorkerTransport } from '../src/worker-transport';
 
 const mm = (value: number): Valued => ({ value, unit: 'mm' });
 const kN = (value: number): Valued => ({ value, unit: 'kN' });
 
+const MODEL: ModelSummary = {
+  name: 'results-test',
+  revision: 0,
+  hash: 'results-test',
+  units: { length: 'mm' },
+  idealisation: 'solid',
+  bodies: [{ name: 'body', bbox: [
+    { value: 0, unit: 'm' }, { value: 0, unit: 'm' }, { value: 0, unit: 'm' },
+    { value: 1, unit: 'm' }, { value: 1, unit: 'm' }, { value: 1, unit: 'm' },
+  ], measure: { value: 1, unit: 'm^3' }, faces: [] }],
+  materials: [],
+  sets: [],
+  constraints: [],
+  loads: [],
+  steps: [],
+  meshSettings: null,
+  warnings: [],
+};
+
 const RESULT: ResultSummary = {
+  reactionQuantity: 'force',
   step: 'static',
   revision: 10,
   stale: false,
@@ -87,11 +112,13 @@ describe('fields and the legend', () => {
     expect(FIELD_CHOICES.find((c) => c.key === 'temperature')?.field).toBe('temperature');
   });
 
-  it('maps a `view.showField` back to the picker key it names, falling back to the field', () => {
+  it('maps supported `view.showField` fields and rejects unsupported requests', () => {
     expect(fieldKeyOf('displacement', 2)).toBe('uz');
     expect(fieldKeyOf('displacement', null)).toBe('umag');
-    expect(fieldKeyOf('stress', 99)).toBe('sxx');
-    expect(fieldKeyOf('nonsense', 0)).toBe('vonMises');
+    expect(fieldKeyOf('stress', 0)).toBe('sxx');
+    expect(() => fieldKeyOf('stress', 99)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField', suggestion: expect.stringContaining('query.result') }));
+    expect(() => fieldKeyOf('reaction', 0)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField' }));
+    expect(() => fieldKeyOf('nonsense', 0)).toThrowError(expect.objectContaining({ code: 'unsupported', where: 'view.showField' }));
     expect(choiceOf('nope').key).toBe('vonMises');
   });
 
@@ -106,6 +133,24 @@ describe('the Results tab', () => {
   it('writes the balance as a percentage and passes at zero', () => {
     expect(balanceLine(RESULT)).toEqual({ pass: true, text: 'Σ reactions = −Σ loads · 0.0000 %' });
     expect(balanceLine({ ...RESULT, balance: 0.0123 })).toEqual({ pass: false, text: 'Σ reactions = −Σ loads · 1.2300 %' });
+  });
+
+  it('keeps thermal reactions as power through the legend and reaction table', () => {
+    expect(siUnitOf('reaction', 'power')).toBe('W');
+    expect(displayUnitOf('reaction', { force: 'kN' }, 'power')).toBe('W');
+    expect(displayUnitOf('reaction', { force: 'N', power: 'kW' }, 'power')).toBe('kW');
+    expect(displayUnitOf('reaction', { force: 'kN', power: 'W' }, 'force')).toBe('kN');
+    const kw = (value: number): Valued => ({ value, unit: 'kW' });
+    const result: ResultSummary = { ...RESULT, reactionQuantity: 'power',
+      reactions: [{ constraint: 'cold', total: [kw(0.01), kw(0), kw(0)] }],
+      appliedTotal: [kw(0.01), kw(0), kw(0)], extremes: [] };
+    const root = document.createElement('div');
+    render(<Results s={{ ...initialState, result }} dispatch={vi.fn()} query={vi.fn()} />, root);
+    expect(root.textContent).toContain('Power kW');
+    expect(root.textContent).not.toContain('Fx');
+    const table = [...root.querySelectorAll('table')].find((t) => t.textContent?.includes('Power kW'))!;
+    expect([...table.querySelectorAll('tbody tr')].map((r) => r.children.length)).toEqual([2, 2, 2]);
+    expect(table.textContent).toContain('cold0.01');
   });
 
   it('leads with the extreme of the largest magnitude', () => {
@@ -183,20 +228,21 @@ describe('the Export dialog', () => {
     expect(specOf({ format: 'vtu' } as never, 'static')).toEqual({ format: 'vtu', step: 'static' });
     expect(specOf({ format: 'vtu' } as never, undefined)).toEqual({ format: 'vtu' });
     expect(specOf({ format: 'stl' } as never, 'static')).toEqual({ format: 'stl' });
+    expect(specOf({ format: 'png' } as never, 'static', { width: 1280, height: 720 })).toEqual({ format: 'png', width: 1280, height: 720 });
   });
 });
 
 /** A viewer stub: the four calls `ResultsView` makes, recorded. */
 function fakeViewer() {
-  return { setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), autoScale: vi.fn(() => 120) };
+  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), autoScale: vi.fn(() => 120), animate: vi.fn() };
 }
 
 function harness(result: ResultSummary | null = RESULT) {
-  const store = new Store({ ...initialState, model: { units: { length: 'mm' } } as never });
+  const store = new Store({ ...initialState, model: MODEL });
   const viewer = { current: fakeViewer() };
   const transport = {
-    query: vi.fn(async (q: { query: string }) => {
-      if (q.query === 'query.convert') return { value: 1000, unit: 'mm' };
+    query: vi.fn(async (q: { query: string; quantity?: { value: number } }) => {
+      if (q.query === 'query.convert') return { value: q.quantity!.value * 1000, unit: 'mm' };
       if (result) return result;
       throw { code: 'not-found', cause: 'no Step has been solved yet' };
     }),
@@ -205,7 +251,87 @@ function harness(result: ResultSummary | null = RESULT) {
   return { store, viewer, results: new ResultsView(store, transport as unknown as WorkerTransport, viewer as never), transport };
 }
 
+function registryHarness(result: ResultSummary) {
+  const { store, viewer, results, transport } = harness(result);
+  store.set({ result });
+  const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
+  const registry = new Registry({
+    schema: schema as unknown as EngineSchema,
+    host: makeHostContext(store, transport as unknown as WorkerTransport, viewer as never, host, undefined, results),
+    hostCommands: HOST_COMMANDS,
+  });
+  return { registry, store, transport };
+}
+
 describe('ResultsView', () => {
+  it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
+    const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
+    await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
+    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
+    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 0.5, 0.75);
+    expect(store.state).toMatchObject({ playing: false, phase: 0.75, animationSpeed: 0.5, fieldKey: 'mode:2', viewMode: 'results' });
+    await results.animate({ step: 'modes', mode: 2, playing: true, speed: 2 });
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(true, 2, undefined);
+    expect(store.state.playing).toBe(true);
+    await results.refresh();
+    expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
+    await expect(results.animate({ step: 'modes', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
+    expect(store.state.fieldKey).toBe('mode:2');
+  });
+
+  it('keeps a newer pause when an older play finishes loading afterward', async () => {
+    const modal = { ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }] };
+    const { store, viewer, results, transport } = harness(modal);
+    let finishLoad!: () => void;
+    const loadPending = new Promise<void>((resolve) => { finishLoad = resolve; });
+    transport.field.mockImplementationOnce(async () => {
+      await loadPending;
+      return { values: Float32Array.from([0, 0, 0, 0, 0, -0.0001919]), min: 0, max: 1, unit: '' };
+    });
+
+    const play = results.animate({ step: 'modes', mode: 1, playing: true });
+    await vi.waitFor(() => expect(transport.field).toHaveBeenCalledWith('modes', 'mode:1', undefined));
+    await results.animate({ step: 'modes', mode: 1, playing: false });
+    finishLoad();
+    await play;
+
+    expect(viewer.current.animate).toHaveBeenCalledTimes(1);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, undefined);
+    expect(store.state.playing).toBe(false);
+  });
+
+  it('reports missing displacement without pretending a thermal field can be animated', async () => {
+    const { results, viewer } = harness({ ...RESULT, extremes: [] });
+    await expect(results.animate({ step: 'heat', playing: true })).rejects.toThrow('has no displacement');
+    expect(viewer.current.animate).not.toHaveBeenCalled();
+  });
+  it('uses current material yields in display units, independent of historical Journal entries', async () => {
+    const { store, results, transport } = harness();
+    transport.query.mockImplementation(async (q) => {
+      if (q.query !== 'query.convert') return RESULT;
+      const { quantity, to } = q as unknown as { quantity: { value: number; unit: string }; to: string };
+      return { value: to === 'Pa' ? quantity.value * (quantity.unit === 'MPa' ? 1e6 : 1) : 1000, unit: to } as never;
+    });
+    store.set({
+      journal: { revision: 2, entries: [{ cmd: { cmd: 'material.add', yield: '1 Pa' } }] } as never,
+      model: { units: { length: 'mm' }, materials: [
+        { name: 'renamed-steel', yield: { value: 355, unit: 'MPa' } },
+        { name: 'other', yield: { value: 400e6, unit: 'Pa' } },
+        { name: 'no-yield' },
+      ] } as never,
+    });
+    await results.refresh(true);
+    expect(store.state.yieldStress).toBe(355e6);
+    // Editing/removing material state takes effect even while old commands remain in history.
+    store.set({ model: { ...store.state.model, materials: [{ name: 'other', yield: { value: 400e6, unit: 'Pa' } }] } as never });
+    await results.refresh(true);
+    expect(store.state.yieldStress).toBe(400e6);
+    store.set({ model: { ...store.state.model, materials: [{ name: 'no-yield' }] } as never });
+    await results.refresh(true);
+    expect(store.state.yieldStress).toBeNull();
+  });
+
   it('loads the contoured scalar in display units and the displacement in SI', async () => {
     const { store, viewer, results } = harness();
     await results.refresh();
@@ -216,6 +342,54 @@ describe('ResultsView', () => {
     expect(viewer.current.setDim).toHaveBeenCalledWith(false);
     // The displacement reaches the viewer untouched: the mesh it deforms is in metres.
     expect(viewer.current.setDeformed.mock.calls.at(-1)![0]).toEqual(Float32Array.from([0, 0, 0, 0, 0, -0.0001919]));
+  });
+
+  it('converts Kelvin contours and legends using scale plus offset, cached by unit pair', async () => {
+    const heat = { ...RESULT, extremes: [{ ...RESULT.extremes[0]!, field: 'temperature' }] };
+    const { store, viewer, results, transport } = harness(heat);
+    store.set({ model: { ...MODEL, units: { temperature: 'degC', length: 'm' } } });
+    const { Engine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as { Engine: new (threads: number) => { query(json: string): string } };
+    const engine = new Engine(1);
+    const conversions = vi.fn(async (q: { query: string; quantity?: { value: number }; to?: string }) => {
+      if (q.query !== 'query.convert') return heat;
+      expect(q.to).toBe('degC');
+      return JSON.parse(engine.query(JSON.stringify(q))) as { value: number; unit: string };
+    });
+    transport.query.mockImplementation(conversions);
+    transport.field.mockImplementation(async () => ({ values: Float32Array.from([273.15, 293.15, 373.15]), min: 273.15, max: 373.15, unit: 'K' }));
+    await results.refresh();
+    const [values, range] = viewer.current.setField.mock.calls.at(-1)! as [Float32Array, [number, number]];
+    for (const [index, expected] of [0, 20, 100].entries()) expect(values[index]).toBeCloseTo(expected, 4);
+    expect(range[0]).toBeCloseTo(0, 4);
+    expect(range[1]).toBeCloseTo(100, 4);
+    expect(store.state.legend?.unit).toBe('degC');
+    expect(conversions.mock.calls.filter(([q]) => q.query === 'query.convert')).toHaveLength(2);
+    await results.refresh(true);
+    expect(conversions.mock.calls.filter(([q]) => q.query === 'query.convert')).toHaveLength(2);
+    store.set({ model: { ...MODEL, units: { temperature: 'K', length: 'm' } } });
+    await results.refresh(true);
+    expect(viewer.current.setField.mock.calls.at(-1)![0]).toEqual(Float32Array.from([273.15, 293.15, 373.15]));
+    expect(store.state.legend?.unit).toBe('K');
+  });
+
+  it('uses the thermal result quantity when converting a reaction contour', async () => {
+    const thermal = { ...RESULT, reactionQuantity: 'power' as const };
+    const { store, results, transport } = harness(thermal);
+    store.set({ result: thermal, model: { ...MODEL, units: { power: 'kW', length: 'm' } } });
+    transport.query.mockImplementation(async (q: { query: string; quantity?: { value: number; unit?: string }; to?: string }) => {
+      if (q.query !== 'query.convert') return thermal;
+      expect(q.quantity?.unit).toBe('W');
+      expect(q.to).toBe('kW');
+      return { value: q.quantity!.value / 1000, unit: 'kW' };
+    });
+    type Contour = { values: Float32Array; range: [number, number]; unit: string };
+    const contour = (results as unknown as {
+      contour: (choice: { field: string; component: number | null }, raw: Float32Array) => Promise<Contour>;
+    }).contour;
+    const output = await contour.call(results, { field: 'reaction', component: 0 }, Float32Array.from([1000, 2000]));
+    expect(output.values).toEqual(Float32Array.from([1, 2]));
+    expect(output.range).toEqual([1, 2]);
+    expect(output.unit).toBe('kW');
   });
 
   it('does the second refresh without refetching, and a forced one with', async () => {
@@ -244,12 +418,42 @@ describe('ResultsView', () => {
 
   it('showField picks a scalar, and `{ field: null }` turns contours off', async () => {
     const { store, viewer, results } = harness();
+    store.set({ result: RESULT });
     await results.showField({ field: 'displacement', component: 2 });
     expect(store.state.fieldKey).toBe('uz');
+    expect((viewer.current.setField.mock.calls.at(-1)![0] as Float32Array)[5]).toBeCloseTo(-0.1919, 5);
     expect(store.state.viewMode).toBe('results');
     await results.showField({ field: null });
     expect(store.state.viewMode).toBe('geometry');
     expect(viewer.current.setField).toHaveBeenLastCalledWith(null, [0, 1]);
+  });
+
+  it('routes structural and thermal field requests through the registry without fallback', async () => {
+    const structural = registryHarness(RESULT);
+    await structural.registry.dispatch({ cmd: 'view.showField', field: 'displacement', component: 2 });
+    expect(structural.store.state.fieldKey).toBe('uz');
+    const structuralQueries = structural.transport.query.mock.calls.length;
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'reaction', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'stress', component: 99 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: 'mode:999' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(structural.registry.dispatch({ cmd: 'view.showField', field: '' })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    expect(structural.store.state.fieldKey).toBe('uz');
+    expect(structural.transport.query.mock.calls.length).toBe(structuralQueries);
+
+    const thermal: ResultSummary = {
+      ...RESULT,
+      extremes: [{
+        field: 'temperature', component: 0, min: { value: 0, unit: 'K' },
+        minAt: [mm(0), mm(0), mm(0)], max: { value: 100, unit: 'K' }, maxAt: [mm(0), mm(0), mm(0)],
+      }],
+    };
+    const thermalRegistry = registryHarness(thermal);
+    await thermalRegistry.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 0 });
+    expect(thermalRegistry.store.state.fieldKey).toBe('temperature');
+    await expect(thermalRegistry.registry.dispatch({ cmd: 'view.showField', field: 'reaction', component: 0 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    await expect(thermalRegistry.registry.dispatch({ cmd: 'view.showField', field: 'temperature', component: 1 })).rejects.toMatchObject({ code: 'unsupported', where: 'view.showField' });
+    expect(thermalRegistry.store.state.fieldKey).toBe('temperature');
   });
 
   it('setLegend takes the colour map and the clamp', async () => {
@@ -300,4 +504,115 @@ describe('ResultsView', () => {
     await results.onAck(undefined);
     expect(store.state.study).toEqual({ rows: [], unit: 'mm' });
   });
+
+  // Issue #42: the shape a person sees must not depend on which chain got there first.
+  it('pushes the same exaggeration for every field, memoised path and forced path alike', async () => {
+    const { viewer, results } = harness();
+    await results.refresh(); // Hydrate the current Result before requesting one of its fields.
+    await results.showField({ field: 'vonMises' });
+    const first = viewer.current.setDeformed.mock.calls.at(-1)![1];
+    await results.showField({ field: 'displacement', component: null });
+    expect(viewer.current.setDeformed.mock.calls.at(-1)![1]).toBe(first);
+    await results.showField({ field: 'vonMises' });
+    expect(viewer.current.setDeformed.mock.calls.at(-1)![1]).toBe(first);
+    expect(first).not.toBe(1);
+  });
+
+  it('recomputes an `auto` that had no Viewer to compute it with when one arrives', async () => {
+    const { store, viewer, results } = harness();
+    const arriving = viewer.current;
+    // The three.js chunk has not landed: `load` cannot read a scale off a Viewer that is not there.
+    viewer.current = null as never;
+    await results.onAck({ output: { type: 'solve' } });
+    expect(store.state.deformScale).toBe(1);
+    // It lands, and the host's un-forced refresh is all that follows.
+    viewer.current = arriving;
+    await results.refresh();
+    expect(store.state.deformScale).toBe(120);
+    expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(expect.any(Float32Array), 120);
+  });
+
+  it('waits for the surface before scaling: a placeholder bounding box would exaggerate wildly', async () => {
+    const { store, viewer, results } = harness();
+    // The Viewer is mounted but the host has not pushed a surface yet, so its box is the
+    // constructor's unit cube and `autoScale` would measure the model against that.
+    (viewer.current as { hasSurface: boolean }).hasSurface = false;
+    await results.onAck({ output: { type: 'solve' } });
+    expect(store.state.deformScale).toBe(1);
+    expect(viewer.current.setDeformed).not.toHaveBeenCalled();
+    (viewer.current as { hasSurface: boolean }).hasSurface = true;
+    await results.refresh();
+    expect(store.state.deformScale).toBe(120);
+  });
+
+  it('keeps a typed exaggeration across a field switch and a re-solve', async () => {
+    const { store, viewer, results } = harness();
+    await results.refresh();
+    results.setDeformScale(200);
+    await results.showField({ field: 'displacement', component: 2 });
+    expect(store.state.deformScale).toBe(200);
+    await results.onAck({ output: { type: 'solve' } });
+    expect(store.state.deformScale).toBe(200);
+    expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(expect.any(Float32Array), 200);
+  });
+});
+
+describe('the exaggeration, said in words', () => {
+  it('explains the number wherever it appears, and says what ×1 means', () => {
+    const help = exaggerationHelp(1000);
+    expect(help).toContain('1000× larger');
+    expect(help).toContain('The Result itself is unchanged');
+    expect(help).toContain('the faint outline is the undeformed body');
+    expect(exaggerationHelp(1)).toContain('true scale');
+  });
+});
+
+describe("the viewer's rounding and its stale-displacement guard", () => {
+  it('rounds down to a round 1/2/5·10^k, and gives up on nothing', () => {
+    expect([1311, 999, 640, 21, 7, 1, 0.037].map(nice)).toEqual([1000, 500, 500, 20, 5, 1, 0.02]);
+    expect(nice(0)).toBe(1);
+    expect(nice(-3)).toBe(1);
+    expect(niceTick(200)).toBe(10);
+    expect(niceTick(0)).toBe(1);
+  });
+
+  it('keeps a displacement that still spans the surface and drops one that no longer does', () => {
+    const positions = new Float32Array(9);
+    expect(fitsSurface(new Float32Array(9), positions)).toBe(true);
+    expect(fitsSurface(new Float32Array(12), positions)).toBe(true);
+    // A re-mesh or a new body: re-applying this would index past the end and write NaN.
+    expect(fitsSurface(new Float32Array(6), positions)).toBe(false);
+    expect(fitsSurface(null, positions)).toBe(false);
+  });
+});
+
+
+it.each([null, false] as const)('shows honest cost bounds and %s feasibility in Checks', async (feasible) => {
+  const { waitForText } = await import('./wait-for');
+  const root = document.createElement('div');
+  const cost: CostEstimate = {
+    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000,
+    retainedFrames: 3, retainedBytes: 900_000, transientWorkBytes: 50_000, transportStagingBytes: 864,
+    wasmTransportStagingBytes: 1728, wasmTransportStagingComplete: false,
+    budgetBytes: 1_610_612_736,
+    feasible, note: 'Excludes direct-factor fill/workspace.',
+  };
+  const model = { bodies: [], warnings: [], meshSettings: {}, steps: [{ name: 'static' }] } as unknown as ModelSummary;
+  const query = vi.fn(async (q: { query: string }) => q.query === 'query.cost' ? cost : null);
+  render(<Checks s={{ ...initialState, model }} dispatch={async () => undefined} query={query} />, root);
+  try {
+    const text = await waitForText(() => root, feasible === false ? 'over budget' : 'not established');
+    expect(query).toHaveBeenCalledWith({ query: 'query.cost', step: 'static' });
+    expect(text).toContain('matrix non-zeros (upper bound)1296');
+    expect(text).toContain('counted peak memory estimate1.7 GB');
+    expect(text).toContain('retained frames3');
+    expect(text).toContain('retained primary fields900 kB');
+    expect(text).toContain('native frame staging1 kB');
+    expect(text).toContain('browser frame staging≥ 2 kB + JSON/JS overhead');
+    expect(text).toContain('planning budget1.6 GB');
+    expect(text).toContain('Excludes direct-factor fill/workspace.');
+    expect(text).not.toContain('feasible here');
+  } finally {
+    render(null, root);
+  }
 });

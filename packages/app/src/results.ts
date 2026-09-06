@@ -3,9 +3,9 @@
 // here is still one Command — this is only where the Command lands.
 //
 // Values arrive from the engine in SI and are shown in the Model's own units, so the array the
-// viewer colours by is scaled once, here, with the factor `query.convert` gives; the deformed
+// viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
-import type { JournalDump, ResultSummary, StudyReport, Warning } from '@femlab/registry';
+import { FemError, type ResultSummary, type StudyReport, type Warning } from '@femlab/registry';
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store } from './store';
@@ -13,20 +13,6 @@ import type { WorkerTransport } from './worker-transport';
 
 /** `view.setDeformScale`'s argument. */
 export type DeformScale = number | 'auto' | 'true';
-
-/**
- * Every `yield` a `material.add` line in the Journal names, as the quantity strings they were
- * written with. `query.model`'s MaterialRow carries E, nu and rho only, and re-reading the
- * Journal is free: it is already in the store after every Command.
- */
-export function yieldQuantities(journal: JournalDump | null): unknown[] {
-  const out: unknown[] = [];
-  for (const e of journal?.entries ?? []) {
-    const cmd = e.cmd as unknown as Record<string, unknown>;
-    if (cmd['cmd'] === 'material.add' && cmd['yield'] !== undefined && cmd['yield'] !== null) out.push(cmd['yield']);
-  }
-  return out;
-}
 
 /**
  * The contoured array for a derived choice. `safety` is `f_y / σ_vM` — unbounded where the
@@ -72,7 +58,14 @@ export class ResultsView {
   /** Nodal displacement in SI for the shown Step, and what it was loaded for. */
   private displacement: Float32Array | null = null;
   private loadedFor = '';
-  private factors = new Map<string, number>();
+  private conversions = new Map<string, { scale: number; offset: number }>();
+  private selectedStep: string | undefined;
+  /** Only the latest concurrent `view.animate` request may commit playback state. */
+  private animationRequest = 0;
+  /** What was *asked* for, not what it resolved to: an `"auto"` that could not be computed while
+   *  the Viewer or the displacement was missing is recomputed on the next `load`, and a person
+   *  who typed ×200 keeps ×200 across a field switch and a re-solve. */
+  private requested: DeformScale = 'auto';
 
   constructor(
     private readonly store: Store,
@@ -80,22 +73,26 @@ export class ResultsView {
     private readonly viewer: ViewerRef,
   ) {}
 
-  /** display = SI × factor, asked of the engine once per unit pair rather than tabulated here. */
-  private async factor(field: string): Promise<number> {
-    const si = siUnitOf(field);
-    const to = displayUnitOf(field, this.store.state.model?.units);
-    if (si === to) return 1;
+  /** display = SI × scale + offset, derived from the engine once per unit pair. */
+  private async conversion(field: string): Promise<{ scale: number; offset: number }> {
+    const reactionQuantity = this.store.state.result?.reactionQuantity;
+    const si = siUnitOf(field, reactionQuantity);
+    const to = displayUnitOf(field, this.store.state.model?.units, reactionQuantity);
+    if (si === to) return { scale: 1, offset: 0 };
     const key = `${si}→${to}`;
-    const hit = this.factors.get(key);
+    const hit = this.conversions.get(key);
     if (hit !== undefined) return hit;
-    const { value } = (await this.transport.query({ query: 'query.convert', quantity: { value: 1, unit: si }, to } as never)) as { value: number };
-    this.factors.set(key, value);
-    return value;
+    const [zero, one] = await Promise.all([0, 1].map(async (value) =>
+      (await this.transport.query({ query: 'query.convert', quantity: { value, unit: si }, to } as never)) as { value: number },
+    ));
+    const conversion = { scale: one!.value - zero!.value, offset: zero!.value };
+    this.conversions.set(key, conversion);
+    return conversion;
   }
 
-  /** The Journal's smallest `yield` in pascals — the conservative one — or `null`. */
+  /** The current materials' smallest yield in pascals — the conservative one — or `null`. */
   private async readYield(): Promise<number | null> {
-    const quantities = yieldQuantities(this.store.state.journal);
+    const quantities = (this.store.state.model?.materials ?? []).flatMap((material) => material.yield ? [material.yield] : []);
     if (quantities.length === 0) return null;
     const values = await Promise.all(
       quantities.map((quantity) =>
@@ -141,8 +138,9 @@ export class ResultsView {
     // No Step has been solved is a normal state, not a failure: `query.result` says so with
     // `not-found`, which is the one error this call swallows.
     try {
-      return (await this.transport.query({ query: 'query.result' })) as ResultSummary;
+      return (await this.transport.query({ query: 'query.result', ...(this.selectedStep === undefined ? {} : { step: this.selectedStep }) })) as ResultSummary;
     } catch {
+      this.selectedStep = undefined;
       return null;
     }
   }
@@ -150,9 +148,11 @@ export class ResultsView {
   /** Fetch the contoured scalar and the displacement, and hand both to the viewer. */
   private async load(result: ResultSummary): Promise<void> {
     const v = this.viewer.current;
-    // No Viewer yet (its chunk is still arriving): forget the key, so the refresh the Viewer
-    // asks for on arrival loads the arrays instead of finding them "already loaded".
-    if (!v) {
+    // No Viewer yet (its chunk is still arriving), or one that has not been handed a surface:
+    // its bounding box is still the placeholder, so an `"auto"` computed here would exaggerate
+    // against the wrong model size — the ×1311 of the report. Forget the key either way, so the
+    // refresh that follows the surface push loads the arrays instead of finding them "loaded".
+    if (!v?.hasSurface) {
       this.loadedFor = '';
       return;
     }
@@ -166,10 +166,12 @@ export class ResultsView {
     // which a heat Step does not have — there the mesh simply stays where it is.
     const moves = choice.mode !== undefined || result.extremes.some((e) => e.field === 'displacement');
     this.displacement = !moves ? null : choice.mode === undefined ? (await this.transport.field(result.step, 'displacement')).values : scalar.values;
-    this.store.set({ lengthFactor: await this.factor('displacement') });
-    v.setDeformed(this.displacement, this.store.state.deformScale);
+    this.store.set({ lengthFactor: (await this.conversion('displacement')).scale });
     // A mode's amplitude is arbitrary, so it opens at a visible one rather than at ×1.
-    if (choice.mode !== undefined) this.setDeformScale('auto');
+    if (choice.mode !== undefined) this.requested = 'auto';
+    // The one code path: the field and the deformation are pushed by the same function, in the
+    // same order, every time — so every field shows the same shape at the same scale (#42).
+    this.setDeformScale(this.requested);
   }
 
   /** The array the viewer colours by, in display units, and the range and unit for the legend. */
@@ -180,22 +182,27 @@ export class ResultsView {
       const [, max] = extent(values);
       return { values, range: this.store.state.clamp ?? derivedRange(choice.derived, max), unit: '' };
     }
-    const factor = await this.factor(choice.field);
+    const { scale, offset } = await this.conversion(choice.field);
     const values = magnitude(raw, choice.magnitude === true);
-    for (let i = 0; i < values.length; i++) values[i] = values[i]! * factor;
+    for (let i = 0; i < values.length; i++) values[i] = values[i]! * scale + offset;
     const [min, max] = extent(values);
-    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units) };
+    return { values, range: this.store.state.clamp ?? [min, max], unit: displayUnitOf(choice.field, this.store.state.model?.units, this.store.state.result?.reactionQuantity) };
   }
 
   /** `view.showField`: `{ field: null }` turns contours off, anything else picks a scalar. */
   async showField(f: { field: string | null; component?: number | null }): Promise<void> {
-    if (!f.field) {
+    if (f.field === null) {
       this.store.set({ viewMode: 'geometry' });
       this.viewer.current?.setMode('geometry');
       this.viewer.current?.setField(null, [0, 1]);
       return;
     }
     const key = fieldKeyOf(f.field, f.component ?? null);
+    const result = this.store.state.result;
+    const choices = result
+      ? fieldChoices(result.extremes.map((e) => e.field), result.frequencies?.length ?? 0, this.store.state.yieldStress !== null)
+      : [];
+    if (!result || !choices.some((c) => c.key === key)) throw unavailableField(f.field, f.component ?? null);
     this.store.set({ fieldKey: key, viewMode: 'results' });
     this.viewer.current?.setMode('results');
     await this.refresh(true);
@@ -216,16 +223,39 @@ export class ResultsView {
   /** `view.setDeformScale`: `"true"` is ×1, `"auto"` makes the largest displacement visible. */
   setDeformScale(s: DeformScale): void {
     const v = this.viewer.current;
+    this.requested = s;
     const scale = typeof s === 'number' ? s : s === 'true' ? 1 : this.displacement && v ? v.autoScale(this.displacement) : 1;
     this.store.set({ deformScale: scale });
     v?.setDeformed(this.displacement, scale);
   }
 
+  /** Select the requested solved Step/mode before applying playback speed or phase. */
+  async animate(a: { step: string; mode?: number; playing: boolean; speed?: number; frame?: number }): Promise<void> {
+    const request = ++this.animationRequest;
+    const result = await this.transport.query({ query: 'query.result', step: a.step }) as ResultSummary;
+    if (request !== this.animationRequest) return;
+    if (a.mode !== undefined && a.mode > (result.frequencies?.length ?? 0))
+      throw new FemError('not-found', `Step '${a.step}' has no mode ${a.mode}`, 'view.animate.mode', 'query.result for the available modes');
+    if (a.mode === undefined && !result.extremes.some((e) => e.field === 'displacement') && !result.frequencies?.length)
+      throw new FemError('unsupported', `Step '${a.step}' has no displacement to animate`, 'view.animate', 'view.showField to inspect its static field');
+    const fieldKey = a.mode === undefined ? available(this.store.state.fieldKey, result, this.store.state.yieldStress !== null) : `mode:${a.mode}`;
+    const needsLoad = this.selectedStep !== a.step || this.store.state.result?.step !== a.step || this.store.state.fieldKey !== fieldKey;
+    this.selectedStep = a.step;
+    this.store.set({ result, fieldKey, viewMode: 'results' });
+    this.viewer.current?.setMode('results');
+    if (needsLoad) await this.load(result);
+    if (request !== this.animationRequest) return;
+    const phase = a.frame === undefined ? undefined : a.frame / 100;
+    const speed = a.speed ?? this.store.state.animationSpeed;
+    this.viewer.current?.animate(a.playing, speed, phase);
+    this.store.set({ playing: a.playing, animationSpeed: speed, phase: phase ?? (a.playing ? 0 : 0.25) });
+  }
+
   /** What the legend burns into a screenshot; `null` outside Results mode. */
-  legendBurn(): { title: string; unit: string; min: number; max: number; colormap: string; scale: number } | null {
-    const { legend, fieldKey, colormap, viewMode, screenshotScale } = this.store.state;
+  legendBurn(): { title: string; unit: string; min: number; max: number; colormap: string } | null {
+    const { legend, fieldKey, colormap, viewMode } = this.store.state;
     if (!legend || viewMode !== 'results') return null;
-    return { title: choiceOf(fieldKey).label, unit: legend.unit, min: legend.min, max: legend.max, colormap, scale: screenshotScale };
+    return { title: choiceOf(fieldKey).label, unit: legend.unit, min: legend.min, max: legend.max, colormap };
   }
 
   /**
@@ -236,12 +266,13 @@ export class ResultsView {
     const out = (ack as { output?: { type?: string; report?: StudyReport } } | undefined)?.output;
     if (out?.type === 'study' && out.report) this.store.set({ study: out.report });
     if (out?.type !== 'solve') return;
+    this.selectedStep = undefined;
     const warnings = (ack as { warnings?: Warning[] }).warnings ?? [];
     this.store.set({ tab: 'results', viewMode: 'results', assumptions: warnings });
     this.viewer.current?.setMode('results');
+    // A real displacement is invisible at ×1, so a fresh Result opens exaggerated (design §5) —
+    // which `load` does through `requested`, defaulting to `"auto"`.
     await this.refresh(true);
-    // A real displacement is invisible at ×1, so a fresh Result opens exaggerated (design §5).
-    this.setDeformScale('auto');
   }
 }
 
@@ -266,7 +297,38 @@ export function magnitude(values: Float32Array, on: boolean): Float32Array {
 
 /** `view.showField { field, component }` → the picker key that names the same scalar. */
 export function fieldKeyOf(field: string, component: number | null): string {
-  if (field.startsWith('mode:') || field === 'safety' || field === 'utilisation') return field;
-  const exact = FIELD_CHOICES.find((c) => c.field === field && c.component === component);
-  return (exact ?? FIELD_CHOICES.find((c) => c.field === field))?.key ?? 'vonMises';
+  if (field === 'safety' || field === 'utilisation') {
+    if (component !== null) throw unsupportedField(field, component);
+    return field;
+  }
+  if (field.startsWith('mode:')) {
+    if (!/^mode:[1-9]\d*$/.test(field) || component !== null) throw unsupportedField(field, component);
+    return field;
+  }
+  const choices = FIELD_CHOICES.filter((c) => c.field === field);
+  if (choices.length === 0) throw unsupportedField(field, component);
+  if (component === null) return choices.find((c) => c.component === null)?.key ?? choices[0]!.key;
+  const exact = choices.find((c) => c.component === component);
+  if (!exact) throw unsupportedField(field, component);
+  return exact.key;
+}
+
+function unsupportedField(field: string, component: number | null): FemError {
+  const suffix = component === null ? '' : ` component ${component}`;
+  return new FemError(
+    'unsupported',
+    `the browser cannot contour result field '${field}'${suffix}`,
+    'view.showField',
+    'run query.result, then call view.showField with a supported field and component from that Result',
+  );
+}
+
+function unavailableField(field: string, component: number | null): FemError {
+  const suffix = component === null ? '' : ` component ${component}`;
+  return new FemError(
+    'unsupported',
+    `the current Result does not contain browser-contourable field '${field}'${suffix}`,
+    'view.showField',
+    'run query.result, then call view.showField with one of that Result\'s available fields and components',
+  );
 }

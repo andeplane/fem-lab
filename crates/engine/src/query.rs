@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::command::{Command, Field, ObjectKind};
 use crate::error::Warning;
-use crate::units::{Length, Quantity, Q};
+use crate::units::{
+    Conductivity, Density, Dimensionless, Length, Quantity, SpecificHeat, Stress, Temperature, ThermalExpansion, Q,
+};
 
 /// A value with its display unit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -25,6 +27,14 @@ pub enum Query {
     #[serde(rename = "query.model")]
     #[schemars(extend("x-returns" = "ModelSummary"))]
     Model {},
+
+    /// The complete upsert Command for an existing object's current definition, with exact
+    /// SI quantities. Use it to populate an edit form; change its arguments and dispatch it
+    /// to apply. Display summaries are rounded and must never be used to reconstruct edits.
+    /// Auto-generated Sets and mesher-owned Bodies have no editable object definition.
+    #[serde(rename = "query.definition", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "ObjectDefinition"))]
+    Definition { kind: ObjectKind, name: String },
 
     /// Counts and sanity of the current Mesh (nodes, elements, element kind, DOF, bounding box,
     /// edge lengths, Sets with their resolved sizes, quality). Builds the Mesh if needed.
@@ -50,6 +60,7 @@ pub enum Query {
 
     /// A field value interpolated at a point (default: the last solved Step). Component
     /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
     #[serde(rename = "query.probe", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ProbeResult"))]
     Probe {
@@ -62,6 +73,7 @@ pub enum Query {
     },
 
     /// A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
     #[serde(rename = "query.path", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "PathResult"))]
     Path {
@@ -75,8 +87,11 @@ pub enum Query {
         n: u32,
     },
 
-    /// Cost of solving a Step before running it: DOF, matrix non-zeros, memory, and whether
-    /// it fits the current host. Use it before solving large models.
+    /// Cost before solving: DOF, matrix non-zero bounds, exact retained-frame schedule and
+    /// counted peak memory. Counting uses at most 16 MiB scratch after meshing. Feasibility is
+    /// false above a fixed 1.5 GiB planning budget, otherwise unknown because solver fill,
+    /// allocator overhead and host serialization are excluded.
+    /// Use before large solves; this query does not promise that a solve fits the current host.
     #[serde(rename = "query.cost", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "CostEstimate"))]
     Cost { step: String },
@@ -102,6 +117,18 @@ pub enum Query {
     #[schemars(extend("x-returns" = "Converted"))]
     Convert { quantity: Quantity, to: String },
 
+    /// Primary-source material data with dimensions, grade, condition, temperature and a source
+    /// for every reported property. With no `name`, lists the stable catalogue. With a canonical
+    /// id, name or unambiguous alias, returns that entry. Missing properties are explicit nulls:
+    /// never infer them before material.add. Copy the entry's `materialAddSource` into that
+    /// Command's `source` so the Journal preserves provenance.
+    #[serde(rename = "query.materialLibrary", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "MaterialLibrary"))]
+    MaterialLibrary {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+
     /// Every nameable thing in the Model as `@`-mention references (`body:beam`, `set:beam.top`,
     /// `material:steel`, `journal:12`), with a one-line summary each; the mention picker's index.
     #[serde(rename = "query.objects", rename_all = "camelCase")]
@@ -116,7 +143,9 @@ pub enum Query {
     /// checks with a hand calculation where one applies, and the Journal as an appendix. Nothing
     /// in it depends on the clock or the machine, so two runs of the same Journal produce
     /// byte-identical text. `step` reports one Step instead of every solved one; `include` picks
-    /// sections. Formulas are `$$…$$` for KaTeX.
+    /// sections. Automatic hand references require a current static Step on an uncut 3D lattice
+    /// box with one fully clamped end and one single-component force on the opposite end;
+    /// other cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.
     #[serde(rename = "query.report", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ReportText"))]
     Report {
@@ -164,7 +193,78 @@ pub struct MaterialRow {
     pub nu: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rho: Option<Valued>,
+    /// Current yield strength in the Model's display stress unit, when specified.
+    #[serde(rename = "yield", default, skip_serializing_if = "Option::is_none")]
+    pub yield_: Option<Valued>,
     pub assigned_to: Vec<String>,
+}
+
+/// One primary source used by [`MaterialLibrary`]. Property `source` fields name its `id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialCitation {
+    pub id: String,
+    pub organization: String,
+    pub title: String,
+    pub url: String,
+    pub locator: String,
+    pub retrieved_on: String,
+}
+
+macro_rules! sourced_quantity {
+    ($name:ident, $dim:ty) => {
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+        #[serde(rename_all = "camelCase")]
+        pub struct $name {
+            pub value: Q<$dim>,
+            /// The exact grade, direction, statistic or test condition to which the value applies.
+            pub basis: String,
+            /// A [`MaterialCitation::id`].
+            pub source: String,
+        }
+    };
+}
+
+sourced_quantity!(SourcedStress, Stress);
+sourced_quantity!(SourcedDensity, Density);
+sourced_quantity!(SourcedRatio, Dimensionless);
+sourced_quantity!(SourcedThermalExpansion, ThermalExpansion);
+sourced_quantity!(SourcedConductivity, Conductivity);
+sourced_quantity!(SourcedSpecificHeat, SpecificHeat);
+
+/// A documented catalogue entry. Every optional property serializes as a value or `null`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialLibraryEntry {
+    pub id: String,
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub specification: String,
+    pub product_form: String,
+    pub condition: String,
+    pub temperature: Option<Q<Temperature>>,
+    pub temperature_basis: String,
+    #[serde(rename = "E")]
+    pub e: Option<SourcedStress>,
+    pub nu: Option<SourcedRatio>,
+    pub rho: Option<SourcedDensity>,
+    pub alpha: Option<SourcedThermalExpansion>,
+    pub k: Option<SourcedConductivity>,
+    pub cp: Option<SourcedSpecificHeat>,
+    #[serde(rename = "yield")]
+    pub yield_: Option<SourcedStress>,
+    /// Limitations that prevent a reported value from being treated as a generic default.
+    pub limitations: Vec<String>,
+    /// Ready to copy into `material.add.source` with the applicable reported values.
+    pub material_add_source: String,
+}
+
+/// `query.materialLibrary` response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialLibrary {
+    pub entries: Vec<MaterialLibraryEntry>,
+    pub sources: Vec<MaterialCitation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -295,7 +395,10 @@ pub struct ResultSummary {
     pub residual: f64,
     pub time_ms: f64,
     pub extremes: Vec<Extreme>,
+    /// Force for structural Results; power for thermal Results, retained with the solved state.
+    pub reaction_quantity: crate::units::ReactionQuantity,
     pub reactions: Vec<ReactionRow>,
+    /// Applied force vector or thermal power in component 0 (remaining components zero).
     pub applied_total: [Valued; 3],
     /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
     /// shape is the Result field named `mode:k`.
@@ -304,7 +407,7 @@ pub struct ResultSummary {
     /// One row per output time of a transient Step: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
-    /// |Σ reactions + Σ applied| over the largest single force in either, so a Step driven
+    /// |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
     /// by a prescribed displacement — where both totals are zero — still reports a meaningful
     /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
     pub balance: f64,
@@ -349,9 +452,36 @@ pub struct PathResult {
 #[serde(rename_all = "camelCase")]
 pub struct CostEstimate {
     pub dofs: u64,
+    /// Upper bound on matrix non-zeros; exact when equal to nnzLower.
     pub nnz: u64,
+    /// Lower bound on matrix non-zeros.
+    pub nnz_lower: u64,
+    /// Estimated peak of the counted solve and frame-read phases. It includes mandatory
+    /// assembly storage, retained primary values, a conservative transient f64 working-vector
+    /// allowance and known native/browser frame-response storage. It is incomplete because
+    /// solver fill, JSON and allocator overhead are not known before solving.
     pub bytes: u64,
-    pub feasible: bool,
+    /// Mandatory assembly storage before transient-specific values are added.
+    pub assembly_bytes: u64,
+    /// Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
+    pub retained_frames: u64,
+    /// Logical f64 bytes for retained times and unpadded primary values.
+    pub retained_bytes: u64,
+    /// Conservative full-field allowance for procedure working f64 vectors live with History.
+    /// Free-DOF vectors are charged at the full nodal length.
+    pub transient_work_bytes: u64,
+    /// One normalized three-component f64 frame owned by a native Query result.
+    pub transport_staging_bytes: u64,
+    /// Known lower bound for the WASM/Worker frame route while two normalized three-component
+    /// numeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.
+    pub wasm_transport_staging_bytes: u64,
+    /// False while the generic JSON route has value- and runtime-dependent allocation overhead.
+    pub wasm_transport_staging_complete: bool,
+    /// Fixed 1.5 GiB planning budget; not measured free memory on the current host.
+    pub budget_bytes: u64,
+    /// False if the counted conservative estimate exceeds the planning budget; null means
+    /// feasibility is unknown. Fitting it does not establish that assembly or factorisation fits.
+    pub feasible: Option<bool>,
     pub note: String,
 }
 
@@ -359,6 +489,8 @@ pub struct CostEstimate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JournalDump {
+    /// Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
+    pub hash: String,
     pub entries: Vec<crate::journal::JournalEntry>,
     pub revision: u32,
     pub can_undo: bool,
@@ -421,6 +553,7 @@ pub struct Capabilities {
 #[serde(untagged)]
 pub enum QueryResult {
     Model(ModelSummary),
+    Definition(ObjectDefinition),
     Mesh(MeshSummary),
     Set(SetInfo),
     Result(ResultSummary),
@@ -430,9 +563,16 @@ pub enum QueryResult {
     Journal(JournalDump),
     Script(ScriptText),
     Converted(Converted),
+    MaterialLibrary(MaterialLibrary),
     Objects(ObjectList),
     Capabilities(Capabilities),
     Report(ReportText),
+}
+
+/// Lossless input for editing one Model object through the same Command used to create it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ObjectDefinition {
+    pub command: Command,
 }
 
 /// Acknowledgement of a dispatched Command.
@@ -522,6 +662,7 @@ mod tests {
     fn names_and_schema_document() {
         assert_eq!(Query::Model {}.name(), "query.model");
         assert_eq!(Query::Convert { quantity: Quantity::text("1 m"), to: "mm".into() }.name(), "query.convert");
+        assert_eq!(Query::MaterialLibrary { name: None }.name(), "query.materialLibrary");
         let doc = schema_document();
         assert_eq!(doc["schemaVersion"], crate::SCHEMA_VERSION);
         let variants = doc["commands"]["oneOf"].as_array().unwrap();

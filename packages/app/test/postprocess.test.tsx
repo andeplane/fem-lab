@@ -3,10 +3,10 @@
 // a pure function or a component over one `query.result` fixture, so none of this needs wasm.
 import type { ResultSummary, StudyReport } from '@femlab/registry';
 import { render } from 'preact';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, modeChoice, showFieldArgs, siUnitOf } from '../src/fields';
-import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnitude, yieldQuantities } from '../src/results';
+import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnitude } from '../src/results';
 import { Store, initialState, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
 import { Frequencies, History, LineChart, axisTicks, extremeLabel } from '../src/ui/Results';
@@ -120,22 +120,6 @@ describe('the derived fields', () => {
     expect(derivedRange('utilisation', 2.4)).toEqual([0, 2.4]);
     expect(derivedRange('safety', 40)).toEqual([0, SAFETY_CAP]);
     expect(derivedRange('safety', 0.2)).toEqual([0, 1]);
-  });
-
-  it('reads the yields off the Journal, which is where material.add put them', () => {
-    const journal = {
-      revision: 4,
-      canUndo: true,
-      canRedo: false,
-      entries: [
-        { seq: 0, cmd: { cmd: 'model.new', name: 'm' }, hashAfter: 'a' },
-        { seq: 1, cmd: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3, yield: '355 MPa' }, hashAfter: 'b' },
-        { seq: 2, cmd: { cmd: 'material.add', name: 'alu', E: '70 GPa', nu: 0.33 }, hashAfter: 'c' },
-        { seq: 3, cmd: { cmd: 'material.add', name: 'weak', E: '70 GPa', nu: 0.33, yield: null }, hashAfter: 'd' },
-      ],
-    } as never;
-    expect(yieldQuantities(journal)).toEqual(['355 MPa']);
-    expect(yieldQuantities(null)).toEqual([]);
   });
 
   it('finds the extent of an array, and says 0..1 for an empty one', () => {
@@ -272,12 +256,16 @@ describe('the deformation bar', () => {
     expect(mount({ result: transient }).root.querySelector('.deform-bar input.phase')).not.toBeNull();
   });
 
-  it('flips to pause, and says which shape it sweeps', () => {
+  it('requests playback through the registry and reflects the acknowledged host state', () => {
     const { root, store } = mount({ result: modal, fieldKey: 'mode:2' });
+    const dispatch = vi.fn(async () => undefined);
+    render(<App store={store} dispatch={dispatch} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
     const play = root.querySelector<HTMLButtonElement>('.deform-bar [data-cmd="view.animate"]')!;
     expect(play.title).toBe('sweep mode 2');
     play.click();
-    expect(store.state.playing).toBe(true);
+    expect(dispatch).toHaveBeenCalledWith({ cmd: 'view.animate', step: modal.step, mode: 2, playing: true });
+    expect(store.state.playing).toBe(false);
+    store.set({ playing: true }); // ResultsView owns this acknowledgement, tested through its host path.
     render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
     expect(root.querySelector('.deform-bar [data-cmd="view.animate"]')!.textContent).toBe('❚❚');
   });
@@ -285,6 +273,42 @@ describe('the deformation bar', () => {
   it('tells the truth about a transient sweep: the Result keeps one field', () => {
     const { root } = mount({ result: transient });
     expect(root.querySelector<HTMLButtonElement>('.deform-bar [data-cmd="view.animate"]')!.title).toContain('the sweep is the amplitude');
+  });
+
+  it('previews phase movement and records only a completed gesture, not cancellation', () => {
+    const { root, store } = mount({ result: modal, fieldKey: 'mode:2', phase: 0.25 });
+    const dispatch = vi.fn(async () => undefined);
+    render(<App store={store} dispatch={dispatch} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    const phase = root.querySelector<HTMLInputElement>('input.phase')!;
+    for (const value of ['40', '75']) {
+      phase.value = value;
+      phase.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    expect(store.state.phase).toBe(0.75);
+    expect(dispatch).not.toHaveBeenCalled();
+    phase.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ cmd: 'view.animate', step: modal.step, mode: 2, playing: false, frame: 75 });
+    dispatch.mockClear();
+    phase.value = '30';
+    phase.dispatchEvent(new Event('input', { bubbles: true }));
+    phase.dispatchEvent(new Event('pointercancel', { bubbles: true }));
+    phase.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(store.state.phase).toBe(0.75);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('rolls a rejected phase preview back to the acknowledged state', async () => {
+    const { root, store } = mount({ result: modal, fieldKey: 'mode:2', phase: 0.25 });
+    const viewer = { current: { animate: vi.fn(), setPhase: vi.fn() } };
+    const dispatch = vi.fn(async () => { throw new Error('rejected'); });
+    render(<App store={store} dispatch={dispatch} viewer={viewer as never} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    const phase = root.querySelector<HTMLInputElement>('input.phase')!;
+    phase.value = '80';
+    phase.dispatchEvent(new Event('input', { bubbles: true }));
+    phase.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(store.state.phase).toBe(0.25));
+    expect(store.state.playing).toBe(false);
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, 0.25);
   });
 });
 
@@ -300,5 +324,15 @@ describe('the convergence study, through the same chart', () => {
     expect(bottom.textContent).toContain('Mesh convergence');
     expect(bottom.querySelector('.chart line[stroke-dasharray]')).not.toBeNull();
     expect(bottom.textContent).toContain('rate 2.01');
+    expect(root.querySelector('.stale-banner')).toBeNull();
+    store.set({ result: { ...RESULT, stale: true } });
+    render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    expect(root.querySelector('.stale-banner')?.textContent).toContain('convergence table reports separate study solves');
+    expect(root.querySelector('.stale-banner')?.textContent).toContain('does not refresh these stale contours');
+    expect(root.querySelector('.stale-banner button')?.getAttribute('data-cmd')).toBe('solve.run');
+    store.set({ study: null });
+    render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    expect(root.querySelector('.stale-banner')?.textContent).toContain('Model changed');
+    expect(root.querySelector('.stale-banner')?.textContent).not.toContain('convergence table');
   });
 });

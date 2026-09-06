@@ -76,8 +76,8 @@ under `e2e/fixtures/` found four more.
   `Engine::field_named` exposes `mode:k` but no per-frame transient arrays, so for a transient
   Step the sweep is the amplitude of the final field, and the control says so.
 - **Derived fields** — `n_y = f_y / σ_vM` and `σ/f_y`, computed in the app from von Mises and
-  the smallest `yield` any `material.add` line in the Journal names (`query.model`'s
-  `MaterialRow` carries E, ν and ρ only). The legend opens clamped at 1 for a utilisation and
+  the smallest positive `yield` in `query.model`'s current material rows, converted to SI
+  from their display stress units. The legend opens clamped at 1 for a utilisation and
   at the safety cap for a factor.
 - **`query.screenshot` at 1× / 2×** on the export dialog's PNG row.
 
@@ -89,4 +89,3 @@ under `e2e/fixtures/` found four more.
   and `height`. Until they forward them, the chosen scale rides on `ResultsView.legendBurn()`.
 - `view.animate`'s `mode`, `speed` and `frame` are dropped by `host.ts` (`v().animate(a.playing)`);
   the scrub therefore also calls `Viewer.setPhase` directly.
-- `query.model` could carry `yield` on `MaterialRow`, which would remove the Journal scan.
