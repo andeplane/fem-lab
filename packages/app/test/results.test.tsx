@@ -8,7 +8,7 @@ import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, leg
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
 import { Store, initialState, solveLabel, stageOf } from '../src/store';
 import { probeLine } from '../src/ui/App';
-import { PathPlot, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
+import { PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
 import { specOf, unavailable } from '../src/ui/Export';
 import type { WorkerTransport } from '../src/worker-transport';
 
@@ -121,6 +121,29 @@ describe('the Results tab', () => {
     const bbox = [mm(0), mm(0), mm(0), mm(300), mm(400), mm(0)] as never;
     expect(modelSpan({ ...initialState, model: { bodies: [{ bbox }] } } as never)).toBe(500);
     expect(modelSpan(initialState)).toBe(1);
+  });
+
+  it('puts field units on values and length units on extreme locations', () => {
+    const m = (value: number): Valued => ({ value, unit: 'm' });
+    const result = {
+      ...RESULT,
+      extremes: [
+        { field: 'stress', component: 0, min: { value: 0, unit: 'Pa' }, minAt: [m(0), m(0), m(0)], max: { value: 1e6, unit: 'Pa' }, maxAt: [m(1), m(0.05), m(0.05)] },
+        { field: 'reaction', component: 0, min: { value: 0, unit: 'N' }, minAt: [m(0), m(0), m(0)], max: { value: 1e4, unit: 'N' }, maxAt: [m(0), m(0.05), m(0.05)] },
+        { field: 'strain', component: 0, min: { value: 0, unit: 'SI' }, minAt: [m(0), m(0), m(0)], max: { value: 5e-6, unit: 'SI' }, maxAt: [m(0.5), m(0.05), m(0.05)] },
+        { field: 'displacement', component: 2, min: mm(-0.2), minAt: [mm(1000), mm(50), mm(50)], max: mm(0), maxAt: [mm(0), mm(50), mm(50)] },
+      ],
+    } as ResultSummary;
+    const root = document.createElement('div');
+    render(<Results s={{ ...initialState, result }} dispatch={async () => undefined} query={async () => undefined} />, root);
+    const rows = [...root.querySelectorAll('.rtable tbody tr')].slice(0, 4);
+
+    expect(rows.map((row) => [...row.querySelectorAll('td')].map((cell) => cell.textContent.trim()))).toEqual([
+      ['σxxstress', '0 Pa', '1.000e+6 Pa', '1 0.05 0.05 m', 'go to'],
+      ['reaction 0reaction', '0 N', '10000 N', '0 0.05 0.05 m', 'go to'],
+      ['strain 0strain', '0 (1)', '5.000e-6 (1)', '0.5 0.05 0.05 m', 'go to'],
+      ['uzdisplacement', '-0.2 mm', '0 mm', '0 50 50 mm', 'go to'],
+    ]);
   });
 
   it('plots a path, and says so when every sample missed the mesh', () => {
