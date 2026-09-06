@@ -1667,6 +1667,43 @@ fn the_free_mesher_validates_its_body_its_size_and_its_boxes() {
     let er = e.query(Query::Mesh {}).unwrap_err();
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("mesher.size")));
     assert!(er.cause.contains("produced no triangle"), "{}", er.cause);
+    // the plate-with-hole sketch that panicked weka: the hole's fourth arc ends where its first
+    // one does, so the loop closes with a full circle. It fails at the segment, not at the size.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+          {"kind":"line","to":["100 mm","0 mm"],"tag":"xmax0"},{"kind":"line","to":["100 mm","80 mm"],"tag":"ymax"},
+          {"kind":"line","to":["0 mm","80 mm"],"tag":"xmin0"},{"kind":"line","to":["0 mm","0 mm"],"tag":"ymin"}],
+          "holes":[[{"kind":"arc","center":["50 mm","40 mm"],"to":["35 mm","40 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["50 mm","25 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["65 mm","40 mm"],"ccw":true,"tag":"hole"},
+          {"kind":"arc","center":["50 mm","40 mm"],"to":["35 mm","40 mm"],"ccw":true,"tag":"hole"}]]}}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"free","of":"plate","size":"5 mm"}}"#);
+    let er = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(er.cause.contains("a full circle"), "{}", er.cause);
+    assert!(er.suggestion.unwrap().contains("split the full-circle arc into two arcs"));
+    // Wrapping the same malformed sketch must retain its located diagnostic.
+    let mut wrapped = serde_json::to_value(&e.journal().entries[e.journal().entries.len() - 2].cmd).unwrap();
+    wrapped["shape"] = serde_json::json!({
+        "kind":"transform","at":{"translate":["1 m","0 m","0 m"]},"shape":wrapped["shape"].clone()
+    });
+    ok(&mut e, &wrapped.to_string());
+    let before = e.model_hash();
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(error.suggestion.unwrap().contains("split the full-circle arc into two arcs"));
+    assert_eq!(e.model_hash(), before);
+    // Native Model files retain named geometry wrappers even though geometry.add's boundary
+    // schema supplies the Body name separately. Their sketch diagnostics must be identical.
+    let mut file = e.export_file();
+    let plate = file.model.bodies.iter_mut().find(|body| body.name == "plate").unwrap();
+    plate.shape = femlab_geometry::Shape::Named { name: "outline".into(), shape: Box::new(plate.shape.clone()) };
+    e.import_file(file).unwrap();
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(error.cause.contains("a full circle"));
 }
 
 #[test]
@@ -2378,6 +2415,52 @@ fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
     assert_eq!(missing.code, ErrorCode::NotFound);
     let bad = e.field_named(Some("modes"), "wobble").expect_err("not a field");
     assert_eq!(bad.code, ErrorCode::Schema);
+}
+
+/// A modal model with every displacement DOF constrained has no reduced system to solve. The
+/// failed solve must be a structured model error, and the Engine must remain usable afterwards.
+#[test]
+fn a_modal_solve_with_no_free_dofs_returns_an_error_and_recovers() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"fully-fixed-modal"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    for (name, face) in [
+        ("xmin", "block.xmin"),
+        ("xmax", "block.xmax"),
+        ("ymin", "block.ymin"),
+        ("ymax", "block.ymax"),
+        ("zmin", "block.zmin"),
+        ("zmax", "block.zmax"),
+    ] {
+        ok(&mut e, &format!(r#"{{"cmd":"constraint.fix","name":"{name}","on":"{face}"}}"#));
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmin","xmax","ymin","ymax","zmin","zmax"],"loads":[],"nModes":2}"#,
+    );
+
+    let failure = err(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(failure.code, ErrorCode::ModelIllPosed);
+    assert_eq!(failure.where_.as_deref(), Some("constraints"));
+    assert!(failure.cause.contains("no free displacement DOF"), "{}", failure.cause);
+    assert_eq!(
+        failure.suggestion.as_deref(),
+        Some("constraint.remove on an over-constraining displacement constraint")
+    );
+
+    // The failed solve is transactional: reissuing the Step with five faces released and solving
+    // again works on the same Engine, so the worker did not abort or retain broken state.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal",
+            "constraints":["xmax"],"loads":[],"nModes":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(result_of(&mut e, Some("modes")).frequencies.len(), 2);
 }
 
 /// A Step that names an earlier one with `after` reads its temperature field: the
@@ -3708,6 +3791,17 @@ fn unsupported_sheet_transforms_return_structured_errors_without_mutating_the_mo
         ok(&mut e, &cmd.to_string());
     }
     let before = serde_json::to_value(e.export_file()).unwrap();
+    for at in [
+        serde_json::json!({"scale":[1e308,1.0,1.0]}),
+        serde_json::json!({"scale":[4e307,1.0,1.0],"translate":["1.7e308 m","0 m","0 m"]}),
+    ] {
+        let mut cmd = commands[2].clone();
+        cmd["shape"]["at"] = at;
+        let error = err(&mut e, &cmd.to_string());
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert!(error.cause.contains("non-finite coordinates"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
     for (field, value) in
         [("rotate", serde_json::json!([15.0, 0.0, 0.0])), ("translate", serde_json::json!(["5 m", "7 m", "1 m"]))]
     {

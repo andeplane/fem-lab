@@ -510,6 +510,11 @@ pub(crate) fn transformed_sheet_loops(
     for l in &mut loops {
         for p in &mut l.pts {
             let q = at.apply([p[0], p[1], 0.0]);
+            if q.iter().any(|coordinate| !coordinate.is_finite()) {
+                return Err(GeomError(
+                    "the Sheet transform produces non-finite coordinates; reduce its scale or translation".into(),
+                ));
+            }
             *p = [q[0], q[1]];
         }
         for t in &mut l.tags {
@@ -697,6 +702,13 @@ mod tests {
             Solid::evaluate(&Shape::Revolve { sketch: Sketch::rect(1.0, 2.0), angle: 360.0, segments: Some(64) })
                 .unwrap();
         assert!((disc.volume() - 2.0 * PI).abs() < 0.02);
+    }
+
+    #[test]
+    fn sheet_loop_transform_refuses_overflow() {
+        let at = Affine3 { scale: [1e308, 1.0, 1.0], ..Default::default() };
+        let error = transformed_sheet_loops(&Sketch::rect(2.0, 1.0), &at, "", 0.1).unwrap_err();
+        assert!(error.0.contains("non-finite coordinates"));
     }
 
     #[test]

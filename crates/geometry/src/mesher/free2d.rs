@@ -67,6 +67,8 @@ pub fn free_sheet(shape: &Shape, size: f64, quadratic: bool, refine: &[RefineBox
     }
     let (sketch, at, prefix) = crate::solid::sheet_leaf(shape, &Affine3::default(), "")?;
     at.validate()?;
+    // Never pass degenerate or crossing sketch segments to the triangulator.
+    sketch.check()?;
     // Rotation preserves distances; the largest in-plane scale bounds the growth of every
     // local chord error, including a circle stretched into an ellipse.
     let local_chord_tol = CHORD_FRACTION * size / at.scale[0].max(at.scale[1]);

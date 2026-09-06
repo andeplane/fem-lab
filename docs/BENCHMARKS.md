@@ -324,3 +324,11 @@ uses local tolerance 0.1·size/max(scale_x,scale_y), which bounds world error af
 rotation and nonuniform scaling. This is mesh-dependent sampling, independent of
 the fixed display preview. Unsupported nested/out-of-plane transforms remain
 explicit errors, with engine command rejection preserving Model and Journal.
+
+### Transformed Sheet arithmetic guard (#230, #274)
+
+Finite scale and translation inputs that overflow world coordinates return structured errors
+before triangulation. A never-panic property exercises multiplication and addition overflow,
+linear/quadratic meshing and shared Solid evaluation. Registry checks verify rejected geometry
+leaves the Model and Journal unchanged. Existing transformed-hole area, boundary, refinement
+and convergence oracles continue to check ordinary geometry.
