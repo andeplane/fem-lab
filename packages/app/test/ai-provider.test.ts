@@ -291,3 +291,14 @@ it('passes cancellation to both SDKs and treats an aborted network read as inter
   } } };
   expect(await collect(anthropicProvider('k', () => anthropic).chat({ ...request(), signal: controller.signal }))).toEqual([]);
 });
+
+
+it('does not execute Anthropic tool proposals from a token-limited response', async () => {
+  const { client } = fakeAnthropic({
+    content: [{ type: 'tool_use', id: 'a', name: 'geometry_addBox', input: { name: 'partial' } } as Anthropic.ContentBlock],
+    stop_reason: 'max_tokens',
+  }, []);
+  const events = await collect(anthropicProvider('k', () => client).chat(request()));
+  expect(events.map(event => event.type)).toEqual(['usage', 'error']);
+  expect(events.at(-1)).toEqual({ type: 'error', message: 'Anthropic response incomplete: max_tokens' });
+});

@@ -75,6 +75,11 @@ export function anthropicProvider(apiKey: string, make: (key: string) => Anthrop
           if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') yield { type: 'text_delta', text: event.delta.text };
         }
         const final = await stream.finalMessage();
+        if (final.stop_reason === 'max_tokens') {
+          yield { type: 'usage', usage: usageOf(final.usage) };
+          yield { type: 'error', message: 'Anthropic response incomplete: max_tokens' };
+          return;
+        }
         for (const block of final.content) {
           if (block.type === 'tool_use') yield { type: 'tool_use', id: block.id, name: block.name, input: block.input };
         }
