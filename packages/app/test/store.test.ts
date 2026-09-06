@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Store, consoleReducer, initialState, panelsReducer, refsOf, selectionReducer } from '../src/store';
+import { Store, consoleReducer, initialState, panelsReducer, refsOf, selectionReducer, visibilityReducer } from '../src/store';
 
 const sel = (bodies: string[] = [], faces: string[] = [], sets: string[] = []) => ({ bodies, faces, sets, refs: refsOf({ bodies, faces, sets }) });
 
@@ -40,6 +40,13 @@ describe('panelsReducer', () => {
     expect(panelsReducer({}, 'examples')['examples']).toBe(true);
     expect(panelsReducer({ examples: true }, 'examples')['examples']).toBe(false);
     expect(panelsReducer({ examples: true }, 'examples', true)['examples']).toBe(true);
+  });
+});
+
+describe('visibilityReducer', () => {
+  it('hides without duplicates and shows only the named bodies', () => {
+    expect(visibilityReducer(['column'], ['beam', 'beam'], false)).toEqual(['column', 'beam']);
+    expect(visibilityReducer(['column', 'beam'], ['beam'], true)).toEqual(['column']);
   });
 });
 

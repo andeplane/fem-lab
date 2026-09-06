@@ -46,6 +46,8 @@ export interface UiState {
   deformScale: number;
   /** Panel id → open. Panels absent from the map are closed. */
   panels: Record<string, boolean>;
+  /** Body names hidden only in the viewer by `view.setVisible`; the Model is unchanged. */
+  hiddenBodies: string[];
   tab: Tab;
   /** Every `@`-mentionable object, for the picker chips and the palette. */
   objects: ObjectRef[];
@@ -135,6 +137,7 @@ export const initialState: UiState = {
   colormap: 'viridis',
   deformScale: 1,
   panels: { assistant: false, examples: false, export: false, report: false, palette: false },
+  hiddenBodies: [],
   tab: 'journal',
   objects: [],
   form: null,
@@ -198,6 +201,11 @@ export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): Console
 
 export function panelsReducer(panels: Record<string, boolean>, panel: string, open?: boolean): Record<string, boolean> {
   return { ...panels, [panel]: open ?? !panels[panel] };
+}
+
+export function visibilityReducer(hidden: string[], bodies: string[], on: boolean): string[] {
+  if (on) return hidden.filter((body) => !bodies.includes(body));
+  return [...new Set([...hidden, ...bodies])];
 }
 
 export class Store {

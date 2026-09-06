@@ -3,7 +3,7 @@
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
 import type { ModelSummary } from '@femlab/registry';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { fieldChoices, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
@@ -280,6 +280,11 @@ function Menu({ item, dispatch, close }: { item: TreeItem; dispatch: Dispatch; c
 
 export function ModelTree({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const [menu, setMenu] = useState<string | null>(null);
+  useEffect(() => {
+    const open = Object.keys(s.panels).find((panel) => panel.startsWith('tree.menu.') && s.panels[panel]);
+    if (open) setMenu(open.slice('tree.menu.'.length));
+    else setMenu(null);
+  }, [s.panels]);
   const groups = treeGroups(s);
   const stepNames = (s.model?.steps ?? []).map((x) => x.name);
   const selected = s.form ? String(s.form.values['name'] ?? '') : '';
@@ -290,72 +295,123 @@ export function ModelTree({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         <span class="mono panel-sub">rev {s.revision}</span>
       </div>
       <div class="tree-body">
-        {groups.map((group) => (
-          <div key={group.label} class="tree-group">
-            <div class="group-head">
-              <span class="mono caret">▾</span>
-              <span class="group-label">{group.label}</span>
-              <span class={`mono ${group.badgeClass}`}>{group.badge}</span>
+        {groups.map((group) => {
+          const slug = group.label.toLowerCase();
+          const panel = `tree.${slug}`;
+          const bodyId = `tree-${slug}-items`;
+          const open = s.panels[panel] !== false;
+          return (
+            <div key={group.label} class="tree-group">
+              <Cmd dispatch={dispatch} cmd="panel.toggle" class="group-head" args={{ panel, open: !open }} expanded={open} controls={bodyId} title={`${open ? 'collapse' : 'expand'} ${group.label}`}>
+                <span class="mono caret">{open ? '▾' : '▸'}</span>
+                <span class="group-label">{group.label}</span>
+                <span class={`mono ${group.badgeClass}`}>{group.badge}</span>
+              </Cmd>
+              {open ? (
+                <div id={bodyId} class="tree-group-body">
+                  {group.items.map((item, i) => {
+                    const itemKey = `${item.kind}:${item.name}`;
+                    const menuPanel = `tree.menu.${itemKey}`;
+                    const visible = !s.hiddenBodies.includes(item.name);
+                    return (
+                      <div
+                        key={itemKey}
+                        class={(item.active ?? selected === item.name) ? 'row selected' : 'row'}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          void dispatch({ cmd: 'panel.toggle', panel: menuPanel, open: true }).catch(() => undefined);
+                          setMenu(itemKey);
+                        }}
+                      >
+                        <Cmd
+                          dispatch={dispatch}
+                          cmd={item.run ? item.cmd : 'form.open'}
+                          class="row-main"
+                          args={item.run ? item.args : { command: item.cmd, args: item.args }}
+                          title={`${item.cmd} — ${item.name}`}
+                        >
+                          <span class={item.glyphClass}>{item.glyph}</span>
+                          <span class="row-text">
+                            <span class="mono name">{item.name}</span>
+                            <span class="summary">{item.summary}</span>
+                          </span>
+                        </Cmd>
+                        {group.label === 'Steps' && stepNames.length > 1 ? (
+                          <Cmd
+                            dispatch={dispatch}
+                            cmd="step.reorder"
+                            class="at"
+                            title="move this Step earlier"
+                            disabled={i === 0}
+                            args={{ order: stepNames }}
+                            onRun={() => {
+                              const order = [...stepNames];
+                              order.splice(i - 1, 0, ...order.splice(i, 1));
+                              void dispatch({ cmd: 'step.reorder', order }).catch(() => undefined);
+                            }}
+                          >
+                            ↑
+                          </Cmd>
+                        ) : null}
+                        {item.kind === 'body' ? (
+                          <Cmd
+                            dispatch={dispatch}
+                            cmd="view.setVisible"
+                            class={visible ? 'tree-action visibility' : 'tree-action visibility off'}
+                            args={{ bodies: [item.name], on: !visible }}
+                            pressed={visible}
+                            label={`${visible ? 'Hide' : 'Show'} ${item.name} in viewer`}
+                            title={`${visible ? 'hide' : 'show'} ${item.name} in viewer`}
+                          >
+                            <span class="eye" aria-hidden="true" />
+                          </Cmd>
+                        ) : null}
+                        <Cmd
+                          dispatch={dispatch}
+                          cmd="chat.insertMention"
+                          class="at"
+                          title={`reference @${item.kind}:${item.name} in chat`}
+                          onRun={() => {
+                            const ref = `${item.kind}:${item.name}`;
+                            void dispatch({ cmd: 'chat.insertMention', ref }).catch(() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'mention', ref } }).catch(() => undefined));
+                          }}
+                        >
+                          @
+                        </Cmd>
+                        <Cmd
+                          dispatch={dispatch}
+                          cmd="panel.toggle"
+                          class="tree-action menu-trigger"
+                          args={{ panel: menuPanel, open: menu !== itemKey }}
+                          pressed={menu === itemKey}
+                          label={`Actions for ${item.name}`}
+                          title={`actions for ${item.name}`}
+                          onRun={() => {
+                            void dispatch({ cmd: 'panel.toggle', panel: menuPanel, open: menu !== itemKey }).catch(() => undefined);
+                            setMenu(menu === itemKey ? null : itemKey);
+                          }}
+                        >
+                          ⋯
+                        </Cmd>
+                        {menu === itemKey ? <Menu item={item} dispatch={dispatch} close={() => setMenu(null)} /> : null}
+                      </div>
+                    );
+                  })}
+                  {group.items.length === 0 ? (
+                    <div class="empty">
+                      <div class="empty-note">{group.note}</div>
+                      {group.add ? (
+                        <Cmd dispatch={dispatch} cmd="form.open" class="chip-add" args={{ command: group.add.cmd }} title={`fill in ${group.add.cmd}`}>
+                          + add {group.add.what}
+                        </Cmd>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
-            {group.items.map((item, i) => (
-              <div key={`${item.kind}:${item.name}`} class={(item.active ?? selected === item.name) ? 'row selected' : 'row'} onContextMenu={(e) => (e.preventDefault(), setMenu(`${item.kind}:${item.name}`))}>
-                <Cmd
-                  dispatch={dispatch}
-                  cmd={item.run ? item.cmd : 'form.open'}
-                  class="row-main"
-                  args={item.run ? item.args : { command: item.cmd, args: item.args }}
-                  title={`${item.cmd} — ${item.name}`}
-                >
-                  <span class={item.glyphClass}>{item.glyph}</span>
-                  <span class="row-text">
-                    <span class="mono name">{item.name}</span>
-                    <span class="summary">{item.summary}</span>
-                  </span>
-                </Cmd>
-                {group.label === 'Steps' && stepNames.length > 1 ? (
-                  <Cmd
-                    dispatch={dispatch}
-                    cmd="step.reorder"
-                    class="at"
-                    title="move this Step earlier"
-                    disabled={i === 0}
-                    args={{ order: stepNames }}
-                    onRun={() => {
-                      const order = [...stepNames];
-                      order.splice(i - 1, 0, ...order.splice(i, 1));
-                      void dispatch({ cmd: 'step.reorder', order }).catch(() => undefined);
-                    }}
-                  >
-                    ↑
-                  </Cmd>
-                ) : null}
-                <Cmd
-                  dispatch={dispatch}
-                  cmd="chat.insertMention"
-                  class="at"
-                  title={`reference @${item.kind}:${item.name} in chat`}
-                  onRun={() => {
-                    const ref = `${item.kind}:${item.name}`;
-                    void dispatch({ cmd: 'chat.insertMention', ref }).catch(() => dispatch({ cmd: 'clipboard.copy', what: { kind: 'mention', ref } }).catch(() => undefined));
-                  }}
-                >
-                  @
-                </Cmd>
-                {menu === `${item.kind}:${item.name}` ? <Menu item={item} dispatch={dispatch} close={() => setMenu(null)} /> : null}
-              </div>
-            ))}
-            {group.items.length === 0 ? (
-              <div class="empty">
-                <div class="empty-note">{group.note}</div>
-                {group.add ? (
-                  <Cmd dispatch={dispatch} cmd="form.open" class="chip-add" args={{ command: group.add.cmd }} title={`fill in ${group.add.cmd}`}>
-                    + add {group.add.what}
-                  </Cmd>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </aside>
   );

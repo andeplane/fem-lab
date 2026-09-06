@@ -21,6 +21,9 @@ export interface CmdProps {
   title?: string;
   disabled?: boolean;
   pressed?: boolean;
+  expanded?: boolean;
+  controls?: string;
+  label?: string;
   /** `role="tab"` with `selected`, for the bottom panel's strip; anything else is a button. */
   role?: 'tab';
   selected?: boolean;
@@ -40,6 +43,9 @@ export function Cmd({ dispatch, cmd, args, children, onRun, ...rest }: CmdProps)
       {...(rest.role === undefined ? {} : { role: rest.role })}
       {...(rest.selected === undefined ? {} : { 'aria-selected': rest.selected })}
       {...(rest.pressed === undefined ? {} : { 'aria-pressed': rest.pressed })}
+      {...(rest.expanded === undefined ? {} : { 'aria-expanded': rest.expanded })}
+      {...(rest.controls === undefined ? {} : { 'aria-controls': rest.controls })}
+      {...(rest.label === undefined ? {} : { 'aria-label': rest.label })}
       onClick={(e) => {
         e.stopPropagation();
         if (onRun) return onRun();

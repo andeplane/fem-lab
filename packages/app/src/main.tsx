@@ -63,6 +63,7 @@ async function boot(): Promise<void> {
   // a lazy chunk) asks for everything again, so an example that opened solved is drawn solved.
   viewer.onReady = () => {
     viewer.current?.setMode(store.state.viewMode);
+    viewer.current?.setVisible(store.state.hiddenBodies, false);
     void refresh().catch(() => undefined);
   };
   const refresh = async (): Promise<void> => {

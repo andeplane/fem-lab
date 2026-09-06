@@ -7,9 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
-import { Store } from '../src/store';
+import { Store, visibilityReducer } from '../src/store';
 import { App } from '../src/ui/App';
 import type { WorkerTransport } from '../src/worker-transport';
+import { afterEffects, waitFor, waitForGone } from './wait-for';
 
 // `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40
 // is about *where* that chunk is mounted, so this file swaps in a marker element it can find.
@@ -42,8 +43,9 @@ const transport = { dispatch: async () => undefined, query: async () => undefine
  * each bottom tab and the ⌘K palette. If any of them names a Command the registry does not
  * have, the first test below fails.
  */
-function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLElement; registry: Registry; store: Store } {
+function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLElement; registry: Registry; store: Store; commands: ({ cmd: string } & Record<string, unknown>)[] } {
   const store = new Store();
+  const commands: ({ cmd: string } & Record<string, unknown>)[] = [];
   const viewer = { current: null };
   const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
   const registry = new Registry({
@@ -55,8 +57,13 @@ function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLEl
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
-  render(<App store={store} dispatch={async () => undefined} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root);
-  return { root, registry, store };
+  const dispatch = async (cmd: { cmd: string } & Record<string, unknown>): Promise<void> => {
+    commands.push(cmd);
+    if (cmd.cmd === 'panel.toggle') store.togglePanel(String(cmd['panel']), cmd['open'] as boolean | undefined);
+    if (cmd.cmd === 'view.setVisible') store.set({ hiddenBodies: visibilityReducer(store.state.hiddenBodies, cmd['bodies'] as string[], Boolean(cmd['on'])) });
+  };
+  render(<App store={store} dispatch={dispatch} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root);
+  return { root, registry, store, commands };
 }
 
 describe('the shell', () => {
@@ -82,11 +89,40 @@ describe('the shell', () => {
   it('opens a tree row\'s context menu, and every entry there is a Command too', async () => {
     const { root, registry } = mount();
     const known = new Set(registry.list().commands.map((d) => d.name));
+    await afterEffects();
     root.querySelector('.tree .row')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
-    await new Promise((r) => setTimeout(r, 20)); // preact re-renders after the state change
+    await waitFor(() => root.querySelector('.menu'), 'the tree context menu');
     const menu = [...root.querySelectorAll('.menu [data-cmd]')].map((el) => el.getAttribute('data-cmd')!);
     expect(menu).toEqual(['model.rename', 'model.duplicate', 'geometry.remove', 'selection.set', 'clipboard.copy']);
     expect(menu.filter((c) => !known.has(c))).toEqual([]);
+  });
+
+  it('collapses groups and exposes body visibility and row actions as Commands', async () => {
+    const { root, store, commands } = mount();
+    await afterEffects();
+    const geometry = root.querySelector<HTMLButtonElement>('.group-head')!;
+    expect(geometry.getAttribute('aria-expanded')).toBe('true');
+    geometry.click();
+    await waitFor(() => root.querySelector('.group-head')?.getAttribute('aria-expanded') === 'false', 'the Geometry group to collapse');
+    expect(root.querySelector('.group-head')!.getAttribute('aria-expanded')).toBe('false');
+    await waitForGone(() => root.querySelector('#tree-geometry-items'), 'the Geometry group body');
+    expect(store.state.revision).toBe(3);
+    root.querySelector<HTMLButtonElement>('.group-head')!.click();
+    await waitFor(() => root.querySelector('#tree-geometry-items'), 'the Geometry group body');
+
+    root.querySelector<HTMLButtonElement>('[aria-label="Hide beam in viewer"]')!.click();
+    await waitFor(() => root.querySelector('[aria-label="Show beam in viewer"]'), 'the hidden-body eye');
+    expect(store.state.hiddenBodies).toEqual(['beam']);
+    expect(root.querySelector('[aria-label="Show beam in viewer"]')).not.toBeNull();
+    root.querySelector<HTMLButtonElement>('[aria-label="Actions for beam"]')!.click();
+    await waitFor(() => root.querySelector('.menu'), 'the body actions menu');
+    expect(root.querySelector('.menu')).not.toBeNull();
+    expect(commands.slice(-4)).toEqual([
+      { cmd: 'panel.toggle', panel: 'tree.geometry', open: false },
+      { cmd: 'panel.toggle', panel: 'tree.geometry', open: true },
+      { cmd: 'view.setVisible', bodies: ['beam'], on: false },
+      { cmd: 'panel.toggle', panel: 'tree.menu.body:beam', open: true },
+    ]);
   });
 
   it('names only Commands the registry has on every clickable', () => {
