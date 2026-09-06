@@ -2200,7 +2200,8 @@ fn transient_cost_errors_are_structured_before_allocation() {
     ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
     ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
     ok(&mut e, r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":[],"loads":[]}"#);
-    assert!(matches!(e.query(Query::Cost { step: "static".into() }).unwrap(), QueryResult::Cost(_)));
+    let QueryResult::Cost(static_cost) = e.query(Query::Cost { step: "static".into() }).unwrap() else { panic!() };
+    assert_eq!(static_cost.retained_frames, 0, "a static step retains no transient frames");
 
     ok(
         &mut e,
