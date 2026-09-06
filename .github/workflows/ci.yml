@@ -100,6 +100,7 @@ jobs:
           name: wasm
           path: |
             packages/app/src/generated/wasm
+            tools/wasm-node
             engine.schema.json
 
   windows:
