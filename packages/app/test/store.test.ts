@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Store, consoleReducer, initialState, panelsReducer, refsOf, selectionReducer } from '../src/store';
+import { DEFAULT_PANEL_SIZES, Store, clampPanelSize, consoleReducer, initialState, panelsReducer, refsOf, selectionReducer } from '../src/store';
 
 const sel = (bodies: string[] = [], faces: string[] = [], sets: string[] = []) => ({ bodies, faces, sets, refs: refsOf({ bodies, faces, sets }) });
 
@@ -40,6 +40,23 @@ describe('panelsReducer', () => {
     expect(panelsReducer({}, 'examples')['examples']).toBe(true);
     expect(panelsReducer({ examples: true }, 'examples')['examples']).toBe(false);
     expect(panelsReducer({ examples: true }, 'examples', true)['examples']).toBe(true);
+  });
+});
+
+describe('panel sizing', () => {
+  it('starts with the designed dimensions and clamps host or gesture values', () => {
+    expect(initialState.panelSizes).toEqual(DEFAULT_PANEL_SIZES);
+    expect(clampPanelSize('tree', 1)).toBe(180);
+    expect(clampPanelSize('properties', 999)).toBe(440);
+    expect(clampPanelSize('bottom', 184.4)).toBe(184);
+  });
+
+  it('keeps layout state in the Store without touching model state', () => {
+    const store = new Store();
+    const model = store.state.model;
+    store.resizePanel('properties', 372);
+    expect(store.state.panelSizes.properties).toBe(372);
+    expect(store.state.model).toBe(model);
   });
 });
 

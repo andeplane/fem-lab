@@ -38,6 +38,8 @@ export const SelectionInput = z.object({
   mode: z.enum(['replace', 'add', 'remove']).optional(),
 });
 export const PickTarget = z.enum(['face', 'body', 'off']);
+/** Resizable shell panels. Their sizes are view state and never enter the Journal. */
+export const PanelTarget = z.enum(['tree', 'properties', 'bottom', 'assistant']);
 export const ScreenshotOptions = z.object({ width: int.optional(), height: int.optional(), legend: z.boolean().optional(), title: z.string().optional() });
 export const CopyWhat = z.union([
   z.object({ kind: z.literal('selection') }),
@@ -99,7 +101,7 @@ export interface HostContext {
     setPickTarget(t: z.output<typeof PickTarget>): void;
     get(): Selection;
   };
-  panels: { toggle(panel: string, open?: boolean): void };
+  panels: { toggle(panel: string, open?: boolean): void; resize(panel: z.output<typeof PanelTarget>, size: number): void };
   script: {
     run(code: string, timeoutMs?: number): Promise<ScriptResult>;
     stop(): void;
@@ -284,6 +286,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
   def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, the examples gallery, the report, the project folder and the export dialog.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
+  def('panel.resize', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
   def('script.run', 'Run TypeScript against the `fem` API (see fem.d.ts) in the script Worker with an optional timeout in milliseconds. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), ({ code, timeoutMs }, ctx) => ctx.script.run(code, timeoutMs), false),
   def('script.stop', 'Terminate the script that is currently running in the script Worker. Commands it already dispatched stay in the Journal; use journal.undo to take them back.', none, (_, ctx) => ctx.script.stop()),
   def('script.setSource', 'Put text into the Script editor, replacing its content or appending to it. Use it to hand a script to the person to review and edit rather than running it directly.', z.object({ code: z.string(), append: z.boolean().optional() }), ({ code, append }, ctx) => ctx.script.setSource(code, append)),

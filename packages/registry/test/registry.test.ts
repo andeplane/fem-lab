@@ -33,6 +33,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'selection.clear': {},
   'selection.setPickTarget': { target: 'face' },
   'panel.toggle': { panel: 'palette', open: true },
+  'panel.resize': { panel: 'tree', size: 300 },
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
   'script.setSource': { code: 'fem.model.new({ name: "a" })', append: true },
@@ -164,6 +165,8 @@ describe('Registry', () => {
 
   it('view.* and selection.* pass their arguments through', async () => {
     const { registry, host } = make();
+    await registry.dispatch({ cmd: 'panel.resize', panel: 'properties', size: 360 });
+    expect(host.panels.resize).toHaveBeenCalledWith('properties', 360);
     await registry.dispatch({ cmd: 'view.toggle', layer: 'edges', on: false });
     expect(host.view.toggle).toHaveBeenCalledWith('edges', false);
     await registry.dispatch({ cmd: 'view.setClip', plane: null });

@@ -21,6 +21,8 @@ export interface AssistantPanelProps {
   store: Store;
   /** Collapse keeps local conversation state and active tool calls alive. */
   hidden?: boolean;
+  /** Store-backed width in CSS pixels; the shell's resize handle owns the gesture. */
+  panelWidth?: number;
   /**
    * Accepted for symmetry with the rest of the shell and unused: the panel reaches the engine
    * through the registry and nothing else, which is what makes a remote host a transport change.
@@ -115,7 +117,7 @@ function ToolCard({ call }: { call: ToolCall }) {
   );
 }
 
-export function AssistantPanel({ registry, store, hidden = false }: AssistantPanelProps) {
+export function AssistantPanel({ registry, store, hidden = false, panelWidth = 392 }: AssistantPanelProps) {
   const ui = useStore(store);
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState('');
@@ -259,7 +261,7 @@ export function AssistantPanel({ registry, store, hidden = false }: AssistantPan
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
 
   return (
-    <aside class="assistant" hidden={hidden}>
+    <aside class="assistant" hidden={hidden} style={`--assistant-width:${panelWidth}px`}>
       <header>
         <span class="ring">✳</span>
         <span class="title">Assistant</span>

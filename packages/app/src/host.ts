@@ -122,7 +122,10 @@ export function makeHostContext(store: Store, transport: WorkerTransport, viewer
       setPickTarget: (t) => store.set({ pickTarget: t }),
       get: (): Selection => store.state.selection,
     },
-    panels: { toggle: (panel, open) => store.togglePanel(panel, open) },
+    panels: {
+      toggle: (panel, open) => store.togglePanel(panel, open),
+      resize: (panel, size) => store.resizePanel(panel, size),
+    },
     script: {
       // A script's Commands are the AI's, not the person's: the Journal's `who` column says so.
       run: async (code, timeoutMs) => {

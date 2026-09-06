@@ -9,7 +9,7 @@ import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
 import { lazy } from '../lazy';
-import { solveLabel, stageOf, type Store, type UiState } from '../store';
+import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
@@ -376,7 +376,10 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       addEventListener('resize', onResize);
       if (typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(onResize);
-        observer.observe(el);
+        // Observe the layout box, not the canvas' drawing buffer: a canvas can keep its old
+        // intrinsic size while its CSS track changes, so observing it alone misses a splitter
+        // or viewport resize. Viewer.resize then updates the backing store from clientWidth.
+        observer.observe(el.parentElement ?? el);
       }
       // A chunk that never arrives leaves the canvas blank rather than raising unhandled.
     }, () => undefined);
@@ -456,6 +459,66 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
   );
 }
 
+/** A view-only splitter: pointer movement previews in Store, and pointer-up emits one Command. */
+function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }: { panel: ResizablePanel; axis: 'x' | 'y'; direction: 1 | -1; store: Store; dispatch: Dispatch; fixed?: boolean }) {
+  const gesture = useRef<{ pointerId: number; start: number; size: number } | null>(null);
+  const limits = PANEL_SIZE_LIMITS[panel];
+  const position = (e: PointerEvent): number => (axis === 'x' ? e.clientX : e.clientY);
+  const preview = (size: number): void => store.resizePanel(panel, clampPanelSize(panel, size));
+  const finish = (commit: boolean): void => {
+    const active = gesture.current;
+    if (!active) return;
+    gesture.current = null;
+    if (commit && store.state.panelSizes[panel] !== active.size) void dispatch({ cmd: 'panel.resize', panel, size: store.state.panelSizes[panel] }).catch(() => preview(active.size));
+    else if (!commit) preview(active.size);
+  };
+  return (
+    <div
+      class={`resize-handle ${axis} ${panel}${fixed ? ' fixed' : ''}`}
+      style={fixed ? `--assistant-width:${store.state.panelSizes.assistant}px` : undefined}
+      role="separator"
+      tabIndex={0}
+      data-cmd="panel.resize"
+      aria-label={`Resize ${panel} panel`}
+      aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'}
+      aria-valuemin={limits.min}
+      aria-valuemax={limits.max}
+      aria-valuenow={store.state.panelSizes[panel]}
+      onPointerDown={(e) => {
+        const el = e.currentTarget as HTMLElement;
+        gesture.current = { pointerId: e.pointerId, start: position(e), size: store.state.panelSizes[panel] };
+        el.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      }}
+      onPointerMove={(e) => {
+        const active = gesture.current;
+        if (!active || active.pointerId !== e.pointerId) return;
+        preview(active.size + (position(e) - active.start) * direction);
+      }}
+      onPointerUp={(e) => {
+        if (gesture.current?.pointerId === e.pointerId) finish(true);
+      }}
+      onPointerCancel={(e) => {
+        if (gesture.current?.pointerId === e.pointerId) finish(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          finish(false);
+          return;
+        }
+        const positive = axis === 'x' ? e.key === 'ArrowRight' : e.key === 'ArrowDown';
+        const negative = axis === 'x' ? e.key === 'ArrowLeft' : e.key === 'ArrowUp';
+        if (!positive && !negative) return;
+        e.preventDefault();
+        const delta = (positive ? 10 : -10) * direction;
+        const size = clampPanelSize(panel, store.state.panelSizes[panel] + delta);
+        preview(size);
+        void dispatch({ cmd: 'panel.resize', panel, size }).catch(() => undefined);
+      }}
+    />
+  );
+}
+
 export function App({ store, dispatch, viewer, query, commands = [], registry }: AppProps) {
   const s = useStore(store);
   // Collapse hides the drawer, but keeps the conversation and any running turn alive.
@@ -487,17 +550,20 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
   return (
     <>
       {started ? (
-        <div class="shell">
+        <div class="shell" style={`--tree-width:${s.panelSizes.tree}px;--properties-width:${s.panelSizes.properties}px;--bottom-height:${s.panelSizes.bottom}px;--assistant-width:${s.panelSizes.assistant}px`}>
           <TopBar s={s} dispatch={dispatch} />
           <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
               <ModelTree s={s} dispatch={dispatch} />
+              <ResizeHandle panel="tree" axis="x" direction={1} store={store} dispatch={dispatch} />
               <div class="centre">
                 <ViewerPane s={s} store={store} dispatch={dispatch} viewer={viewer} />
                 <Bottom s={s} store={store} dispatch={dispatch} query={read} />
+                <ResizeHandle panel="bottom" axis="y" direction={-1} store={store} dispatch={dispatch} />
               </div>
               <SchemaForm s={s} store={store} dispatch={dispatch} query={read} defs={DEFS} variants={VARIANTS} />
+              <ResizeHandle panel="properties" axis="x" direction={-1} store={store} dispatch={dispatch} />
             </div>
           </div>
         </div>
@@ -513,7 +579,8 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
           it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
           layout of the design while the top bar stays full-width. Collapsing only hides the
           drawer, preserving the conversation and any running turn. */}
-      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} /> : null}
+      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
+      {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}
     </>

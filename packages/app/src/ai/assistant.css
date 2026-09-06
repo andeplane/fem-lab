@@ -3,7 +3,7 @@
 
 .assistant {
   flex: none;
-  width: 392px;
+  width: var(--assistant-width, 392px);
   display: flex;
   flex-direction: column;
   min-height: 0;
