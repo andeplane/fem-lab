@@ -165,7 +165,9 @@ directly in constraints and loads. Re-issuing with an existing name replaces the
 
 Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any
 of those) so constraints and loads can target it. Rules are re-evaluated after every
-remesh, so the Set survives refinement. Prefer the auto face names when one fits.
+remesh, so the Set survives refinement. Body `of` may be explicit geometry or the
+implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
+Body's actual mesh boundary. Prefer the auto face names when one fits.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -180,7 +182,8 @@ remesh, so the Set survives refinement. Prefer the auto face names when one fits
 
 Name a node/element Set by a region rule (a box or a whole Body), for point-like
 constraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;
-use a box slightly larger than the points you mean.
+use a box slightly larger than the points you mean. A whole-Body rule also accepts
+the implicit Body defined by a mapped or swept mapped mesher.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -193,7 +196,8 @@ use a box slightly larger than the points you mean.
 ### geometry.remove
 
 Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads
-and material assignments that still reference it; remove or retarget those first.
+(including temperature and volumetric heat sources), and named Sets that still reference
+it; remove or retarget those first.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -361,6 +365,11 @@ first. Removing a load makes existing Results of that Step stale.
 
 A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
 producing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.
+Disjoint Bodies compose independently, each using its own reference. Overlapping
+assignments must produce exactly the same increment; otherwise `solve.run` returns
+`model.ill-posed` naming both Loads and the Body. Equal increments are not added.
+When continuing a heat Step, its nodal temperatures replace `value`; these per-Body
+references still apply, with 293.15 K on Bodies without a temperature Load.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -556,7 +565,9 @@ content hash. Not available yet: returns unsupported until the plugin phase land
 
 Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
 element quality) and refuses with a suggested fix. Returns extremes and reactions;
-always check that reactions balance the applied loads before trusting a stress.
+always check that reactions balance the applied loads before trusting a stress. A Step
+with `after` requires its predecessor's Result to match the current Model state;
+after an edit, solve the predecessor again before continuing the chain.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -589,11 +600,11 @@ procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt
 | after | no | <code>{"type":["string","null"]}</code> |  |
 | nModes | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
 | shift | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
-| dt | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> |  |
+| dt | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Maximum heat-transient time increment. A uniform increment no larger than dt is chosen to finish exactly at tEnd; the Result reports the increment actually used. |
 | tEnd | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> |  |
 | theta | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
 | outputEvery | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
-| dtFactor | no | <code>{"type":["number","null"],"format":"double"}</code> |  |
+| dtFactor | no | <code>{"type":["number","null"],"format":"double"}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
 | amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}]}</code> |  |
 | initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"step.add"}</code> |  |
@@ -603,7 +614,8 @@ procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt
 ### step.remove
 
 Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
-stay in the Model and can be reused by other Steps.
+stay in the Model and can be reused by other Steps. Fails with `in-use` while another
+Step names it in `after`; re-issue that dependent Step without the reference first.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -2649,7 +2661,9 @@ mesh and quality, loads with totals, results with the reaction balance, the veri
 checks with a hand calculation where one applies, and the Journal as an appendix. Nothing
 in it depends on the clock or the machine, so two runs of the same Journal produce
 byte-identical text. `step` reports one Step instead of every solved one; `include` picks
-sections. Formulas are `$$…$$` for KaTeX.
+sections. Automatic hand references require a current static Step on an uncut 3D lattice
+box with one fully clamped end and one single-component force on the opposite end;
+other cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.
 
 Returns: `ReportText`.
 

@@ -61,7 +61,8 @@ await fem.dispatch({ cmd: 'file.save' });
 
 Undo and redo move through engine history. Camera and panel actions are callable host Commands
 but do not enter the engine Journal. Saving downloads a model file when no project folder is
-open. Autosave is browser-local recovery; export or save a file when you need a portable copy.
+open. Autosave keeps projects in this browser, and Recent projects reopens them. Use `file.save`
+or an export when you need a portable copy outside this browser.
 
 ## Run without the browser
 
