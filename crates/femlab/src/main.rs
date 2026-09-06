@@ -57,7 +57,7 @@ enum Cmd {
     },
     /// Run the Benchmark cases (Journal + checks) and report.
     Bench {
-        /// Directory of `*.json` cases (default: the engine crate's benches/cases).
+        /// Directory of `*.json` cases (default: built-in cases packaged in this executable).
         #[arg(long)]
         cases: Option<PathBuf>,
         /// Only cases whose name contains this text.
