@@ -93,3 +93,15 @@ layout and member idealisations) must not be presented as implemented reference 
 
 Remaining matrix rows, including panel resizing (#174), editable name/dirty state (#123),
 gallery presentation (#30), and the integrated workflow checks, are still open requirements.
+
+## Further field and tree findings
+
+- [#209](https://github.com/andeplane/fem-lab/issues/209): Step ordering has an earlier-arrow
+  control but lacks the specified drag gesture. Verify one final step.reorder, cancellation,
+  keyboard equivalence, dependency errors and replay.
+- [#210](https://github.com/andeplane/fem-lab/issues/210): pressure fields echo SI values but omit
+  the selected area and pressure-area calculation. Preview must query the real Set, track draft
+  and mesh changes, and distinguish scalar pressure-area totals from curved-surface resultants.
+- [#207](https://github.com/andeplane/fem-lab/issues/207): palette parameter preview before the
+  first Model is invisible because Properties only mounts in the workspace; the start-screen
+  workflow needs a visible form without losing the stable Assistant conversation.
