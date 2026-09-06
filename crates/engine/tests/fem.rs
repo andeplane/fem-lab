@@ -32,7 +32,7 @@ use femlab_engine::fem::shape::{
 use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
 use femlab_engine::post::convergence::{observed_rate, richardson};
-use femlab_engine::post::probe::{path, probe};
+use femlab_engine::post::probe::{path, probe, probe_checked};
 use femlab_engine::post::stress::{average_at_nodes, principal, stress_gp, von_mises};
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
 use femlab_engine::procedure::{self, heat, Step, StepResult};
@@ -1464,6 +1464,21 @@ fn a_curved_quadratic_probe_is_not_rejected_by_its_nodal_box() {
     let field = FieldData::new(Per::Node, 1, coords.iter().step_by(3).copied().collect());
     let (_, value) = probe(&mesh, &field, inside).expect("quadratic probing must not use the unsafe nodal box");
     assert!((value[0] - inside[0]).abs() < 1e-10, "linear-coordinate interpolation is exact");
+    assert_eq!(
+        probe_checked(&mesh, &field, [100.0; 3]),
+        Ok(None),
+        "the curved control hull proves a far point outside"
+    );
+
+    for kind in [ElementKind::Quad8, ElementKind::Hex20, ElementKind::Tri6, ElementKind::Tet10] {
+        let mesh = Structured { kind, n: [1, 1, 1] }.box_([1.0; 3]);
+        let field = FieldData::new(Per::Node, 1, vec![0.0; mesh.n_nodes()]);
+        assert_eq!(
+            probe_checked(&mesh, &field, [100.0; 3]),
+            Ok(None),
+            "a far point is positively outside a straight quadratic {kind:?}"
+        );
+    }
 }
 
 #[test]

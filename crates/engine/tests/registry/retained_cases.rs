@@ -175,7 +175,7 @@ fn difference_fields_report_partial_and_zero_coverage_without_filling_outside_no
         }
     }
     ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"],"at":["2 m","0 m","0 m"]}"#);
-    let (far_id, far_coords) = conductivity_solve(&mut e, 1, 1, 45);
+    let (far_id, far_coords) = conductivity_solve(&mut e, 1, 2, 45);
     let none = difference(
         &mut e,
         json!({"resultId":left_id,"field":"temperature","component":0}),
