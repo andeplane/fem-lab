@@ -1,9 +1,11 @@
 // Every piece of view state the app has, as one plain object with plain reducers. No immer, no
 // signals: host Commands call the reducers, components subscribe. The Model itself is never
 // here — it lives in the engine and arrives as `query.model` snapshots.
-import type { AutosaveState, Capabilities, JournalDump, ModelSummary, ObjectRef, ResultSummary, Selection, StudyReport, Warning } from '@femlab/registry';
+import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, ProjectMeta, ResultSummary, Selection, Skill, StudyReport, Warning } from '@femlab/registry';
 import type { HostCaps } from './capabilities';
 import type { ActiveBenchmark } from './benchmark';
+import { projectSkills, type ProjectFolder } from './ai/project';
+import { BUILTIN_SKILLS } from './ai/skills';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
@@ -32,9 +34,11 @@ export interface LastError {
 }
 
 export interface UiState {
+  /** The opened browser folder, shared by Assistant skill discovery and host Commands. */
+  folder: ProjectFolder | null;
+  /** One available catalog; project skills override built-ins by name. */
+  skills: Skill[];
   ready: boolean;
-  /** What `query.autosave` last reported, so the start screen can offer `file.restore`. */
-  autosave: AutosaveState['saved'];
   model: ModelSummary | null;
   journal: JournalDump | null;
   script: string;
@@ -89,9 +93,8 @@ export interface UiState {
   /** display = SI x this, for the one dimension the camera needs: length. */
   lengthFactor: number;
   /**
-   * The smallest `yield` any Material in the Journal names, in SI pascals, or `null` when
-   * none does. `query.model` does not carry it (MaterialRow has E, nu and rho), so it is read
-   * back off the Journal's own `material.add` lines — the Journal is the Model (ADR 0003).
+   * The smallest yield in the current `query.model` material rows, converted from their
+   * display units to SI pascals, or `null` when no Material specifies a positive yield.
    * The smallest is the conservative one when several Materials disagree.
    */
   yieldStress: number | null;
@@ -105,6 +108,19 @@ export interface UiState {
   reportReady: boolean;
   /** Whether the section plane is in, so the toolbar's clip toggle knows which way to flip. */
   clipOn: boolean;
+  /** Viewer layer visibility, mirrored from the Viewer so toolbar pressed state follows Commands. */
+  layerVisibility: Record<string, boolean>;
+  // --- plan D ---------------------------------------------------------------------------
+  /** `query.projects`: every project saved in this browser, newest first (the Recent list). */
+  projects: ProjectMeta[];
+  /** `query.project`: the open project and whether a write is in flight; `null` before one. */
+  project: OpenProject | null;
+  /**
+   * `data-field` path → the value the running tutorial step expects there, which `SchemaForm`
+   * shows as that input's `placeholder` (issue #46). The tutorial module never reaches into
+   * `src/ui/**`; this field is the whole of the dependency, and it points one way.
+   */
+  formHints: Record<string, string> | null;
 }
 
 /** The design's states 4–7, as one word derived from what the store already holds. */
@@ -128,8 +144,9 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
+  folder: null,
+  skills: BUILTIN_SKILLS,
   ready: false,
-  autosave: null,
   model: null,
   journal: null,
   script: '',
@@ -167,11 +184,16 @@ export const initialState: UiState = {
   assumptions: [],
   lengthFactor: 1,
   clipOn: false,
+  layerVisibility: { mesh: true, edges: true, loads: true, constraints: true, sets: true, legend: true, axes: true, grid: true },
   yieldStress: null,
   playing: false,
   phase: 0,
   screenshotScale: 1,
   reportReady: false,
+  // --- plan D ---
+  projects: [],
+  project: null,
+  formHints: null,
 };
 
 const MAX_CONSOLE = 500;
@@ -221,6 +243,11 @@ export class Store {
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /** Publish a fresh catalog even when refresh mutated the same ProjectFolder instance. */
+  setFolder(folder: ProjectFolder | null): void {
+    this.set({ folder, skills: projectSkills(BUILTIN_SKILLS, folder) });
   }
 
   set(patch: Partial<UiState>): void {

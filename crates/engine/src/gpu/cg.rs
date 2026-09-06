@@ -10,6 +10,8 @@
 //! eight-float `scalars` buffer that `cg_vec.wgsl` reads and writes. Twenty-five iterations go
 //! into one command encoder, and only then is `scalars` read back to test convergence — one
 //! round trip per 25 iterations instead of per iteration.
+//! A device-side halt flag freezes vector updates after exact convergence or scalar breakdown,
+//! preserving the correction for the f64 outer loop while the rest of the batch drains.
 //!
 //! Everything that needs a device lives in this file, including the error for not having one,
 //! so `src/solve/` reaches 100 % coverage on a machine with no adapter at all.
@@ -26,7 +28,7 @@ const RZ_OLD: u64 = 0;
 const RZ_NEW: u64 = 1;
 const PQ: u64 = 2;
 const BB: u64 = 5;
-/// Floats in `scalars` (`RZ_OLD, RZ_NEW, PQ, ALPHA, BETA, BB` and two spare).
+/// Floats in `scalars` (`RZ_OLD, RZ_NEW, PQ, ALPHA, BETA, BB, HALTED` and one spare).
 const SCALARS: u64 = 8;
 /// Iterations recorded into one command encoder before the residual is read back.
 const PER_SUBMIT: usize = 25;
@@ -308,7 +310,7 @@ impl CgContext {
             dot_bind("dot p·q", DOT_PARTIAL, &p, &q, 0),
             dot_bind("dot r·r", DOT_PARTIAL, &r, &r, 0),
             dot_bind("dot final", DOT_FINAL, &p, &q, 2),
-            vec_bind("init", INIT, &[0, 1, 2, 4, 6]),
+            vec_bind("init", INIT, &[0, 1, 2, 4, 5, 6]),
             vec_bind("alpha", ALPHA, &[5]),
             vec_bind("update_x_r", UPDATE_X_R, &[0, 1, 2, 3, 5, 6]),
             vec_bind("beta", BETA, &[5]),

@@ -235,7 +235,7 @@
         ]
       },
       {
-        "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Prefer the auto face names when one fits.",
+        "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
         "type": "object",
         "properties": {
           "name": {
@@ -260,7 +260,7 @@
         ]
       },
       {
-        "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean.",
+        "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
         "type": "object",
         "properties": {
           "name": {
@@ -281,7 +281,7 @@
         ]
       },
       {
-        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+        "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
         "type": "object",
         "properties": {
           "name": {
@@ -457,7 +457,7 @@
         ]
       },
       {
-        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+        "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
         "type": "object",
         "properties": {
           "format": {
@@ -717,7 +717,7 @@
         ]
       },
       {
-        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+        "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
         "type": "object",
         "properties": {
           "name": {
@@ -809,7 +809,7 @@
         ]
       },
       {
-        "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+        "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
         "type": "object",
         "properties": {
           "name": {
@@ -854,7 +854,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
         "type": "object",
         "properties": {
           "name": {
@@ -906,6 +906,7 @@
             "format": "double"
           },
           "dt": {
+            "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Q_time"
@@ -941,6 +942,7 @@
             "minimum": 0
           },
           "dtFactor": {
+            "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
             "type": [
               "number",
               "null"
@@ -981,7 +983,7 @@
         ]
       },
       {
-        "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps.",
+        "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
         "type": "object",
         "properties": {
           "name": {
@@ -1018,7 +1020,7 @@
         ]
       },
       {
-        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.",
+        "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
         "type": "object",
         "properties": {
           "step": {
@@ -1094,7 +1096,7 @@
         ]
       },
       {
-        "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal.",
+        "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal. If `expectedJournal` is\nsupplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise\nnothing is undone. Use this guard for a saved turn boundary while other callers can edit.",
         "type": "object",
         "properties": {
           "steps": {
@@ -1104,6 +1106,12 @@
             ],
             "format": "uint32",
             "minimum": 0
+          },
+          "expectedJournal": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "cmd": {
             "type": "string",
@@ -2763,7 +2771,7 @@
         "x-returns": "ResultSummary"
       },
       {
-        "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.",
+        "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nRefuses `result.stale` if the Model changed after solving; re-run `solve.run` first.",
         "type": "object",
         "properties": {
           "step": {
@@ -2805,7 +2813,7 @@
         "x-returns": "ProbeResult"
       },
       {
-        "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.",
+        "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.\nRefuses `result.stale` if the Model changed after solving; re-run `solve.run` first.",
         "type": "object",
         "properties": {
           "step": {
@@ -2862,7 +2870,7 @@
         "x-returns": "PathResult"
       },
       {
-        "description": "Cost of solving a Step before running it: DOF, matrix non-zeros, memory, and whether\nit fits the current host. Use it before solving large models.",
+        "description": "Cost before solving: DOF, matrix non-zero bounds and mandatory assembly memory lower\nbound. Counting uses at most 16 MiB scratch after meshing. Feasibility is false above\na fixed 1.5 GiB planning budget, otherwise unknown: solver fill/workspace are excluded.\nUse before large solves; this query does not promise that a solve fits the current host.",
         "type": "object",
         "properties": {
           "step": {
@@ -2938,6 +2946,26 @@
         "x-returns": "Converted"
       },
       {
+        "description": "Primary-source material data with dimensions, grade, condition, temperature and a source\nfor every reported property. With no `name`, lists the stable catalogue. With a canonical\nid, name or unambiguous alias, returns that entry. Missing properties are explicit nulls:\nnever infer them before material.add. Copy the entry's `materialAddSource` into that\nCommand's `source` so the Journal preserves provenance.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "type": "string",
+            "const": "query.materialLibrary"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "x-returns": "MaterialLibrary"
+      },
+      {
         "description": "Every nameable thing in the Model as `@`-mention references (`body:beam`, `set:beam.top`,\n`material:steel`, `journal:12`), with a one-line summary each; the mention picker's index.",
         "type": "object",
         "properties": {
@@ -2961,7 +2989,7 @@
         "x-returns": "ObjectList"
       },
       {
-        "description": "The whole analysis as one Markdown calculation note: assumptions, geometry, materials,\nmesh and quality, loads with totals, results with the reaction balance, the verification\nchecks with a hand calculation where one applies, and the Journal as an appendix. Nothing\nin it depends on the clock or the machine, so two runs of the same Journal produce\nbyte-identical text. `step` reports one Step instead of every solved one; `include` picks\nsections. Formulas are `$$…$$` for KaTeX.",
+        "description": "The whole analysis as one Markdown calculation note: assumptions, geometry, materials,\nmesh and quality, loads with totals, results with the reaction balance, the verification\nchecks with a hand calculation where one applies, and the Journal as an appendix. Nothing\nin it depends on the clock or the machine, so two runs of the same Journal produce\nbyte-identical text. `step` reports one Step instead of every solved one; `include` picks\nsections. Automatic hand references require a current static Step on an uncut 3D lattice\nbox with one fully clamped end and one single-component force on the opposite end;\nother cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.",
         "type": "object",
         "properties": {
           "step": {
@@ -3148,6 +3176,9 @@
       },
       {
         "$ref": "#/$defs/Converted"
+      },
+      {
+        "$ref": "#/$defs/MaterialLibrary"
       },
       {
         "$ref": "#/$defs/ObjectList"
@@ -3383,6 +3414,17 @@
             "format": "double"
           },
           "rho": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "yield": {
+            "description": "Current yield strength in the Model's display stress unit, when specified.",
             "anyOf": [
               {
                 "$ref": "#/$defs/Valued"
@@ -4292,17 +4334,35 @@
             "minimum": 0
           },
           "nnz": {
+            "description": "Upper bound on matrix non-zeros; exact when equal to nnzLower.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "nnzLower": {
+            "description": "Lower bound on matrix non-zeros.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "bytes": {
+            "description": "Mandatory assembly storage lower bound in bytes, including element slots and two CSRs.\nExcludes mesh/model, element buffers, reduction, solver storage/fill and time history.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "budgetBytes": {
+            "description": "Fixed 1.5 GiB planning budget; not measured free memory on the current host.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "feasible": {
-            "type": "boolean"
+            "description": "False if mandatory storage exceeds the planning budget; null means feasibility is\nunknown. Fitting a lower bound does not establish that assembly or factorisation fits.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "note": {
             "type": "string"
@@ -4311,8 +4371,9 @@
         "required": [
           "dofs",
           "nnz",
+          "nnzLower",
           "bytes",
-          "feasible",
+          "budgetBytes",
           "note"
         ]
       },
@@ -4320,6 +4381,10 @@
         "description": "`query.journal` response.",
         "type": "object",
         "properties": {
+          "hash": {
+            "description": "Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.",
+            "type": "string"
+          },
           "entries": {
             "type": "array",
             "items": {
@@ -4339,6 +4404,7 @@
           }
         },
         "required": [
+          "hash",
           "entries",
           "revision",
           "canUndo",
@@ -4600,7 +4666,7 @@
             ]
           },
           {
-            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Prefer the auto face names when one fits.",
+            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
             "type": "object",
             "properties": {
               "name": {
@@ -4625,7 +4691,7 @@
             ]
           },
           {
-            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean.",
+            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
             "type": "object",
             "properties": {
               "name": {
@@ -4646,7 +4712,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
             "type": "object",
             "properties": {
               "name": {
@@ -4822,7 +4888,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
             "type": "object",
             "properties": {
               "format": {
@@ -5082,7 +5148,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {
@@ -5174,7 +5240,7 @@
             ]
           },
           {
-            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
               "name": {
@@ -5219,7 +5285,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
             "type": "object",
             "properties": {
               "name": {
@@ -5271,6 +5337,7 @@
                 "format": "double"
               },
               "dt": {
+                "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/Q_time"
@@ -5306,6 +5373,7 @@
                 "minimum": 0
               },
               "dtFactor": {
+                "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
                 "type": [
                   "number",
                   "null"
@@ -5346,7 +5414,7 @@
             ]
           },
           {
-            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps.",
+            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
             "type": "object",
             "properties": {
               "name": {
@@ -5383,7 +5451,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {
@@ -5459,7 +5527,7 @@
             ]
           },
           {
-            "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal.",
+            "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal. If `expectedJournal` is\nsupplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise\nnothing is undone. Use this guard for a saved turn boundary while other callers can edit.",
             "type": "object",
             "properties": {
               "steps": {
@@ -5469,6 +5537,12 @@
                 ],
                 "format": "uint32",
                 "minimum": 0
+              },
+              "expectedJournal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "cmd": {
                 "type": "string",
@@ -7014,6 +7088,323 @@
           "unit"
         ]
       },
+      "MaterialLibrary": {
+        "description": "`query.materialLibrary` response.",
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MaterialLibraryEntry"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/MaterialCitation"
+            }
+          }
+        },
+        "required": [
+          "entries",
+          "sources"
+        ]
+      },
+      "MaterialLibraryEntry": {
+        "description": "A documented catalogue entry. Every optional property serializes as a value or `null`.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "specification": {
+            "type": "string"
+          },
+          "productForm": {
+            "type": "string"
+          },
+          "condition": {
+            "type": "string"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Q_temperature"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "temperatureBasis": {
+            "type": "string"
+          },
+          "E": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedStress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nu": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedRatio"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rho": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedDensity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "alpha": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedThermalExpansion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "k": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedConductivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cp": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedSpecificHeat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "yield": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SourcedStress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limitations": {
+            "description": "Limitations that prevent a reported value from being treated as a generic default.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "materialAddSource": {
+            "description": "Ready to copy into `material.add.source` with the applicable reported values.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "aliases",
+          "specification",
+          "productForm",
+          "condition",
+          "temperatureBasis",
+          "limitations",
+          "materialAddSource"
+        ]
+      },
+      "SourcedStress": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_stress"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "SourcedRatio": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_dimensionless"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "Q_dimensionless": {
+        "description": "A dimensionless with unit, e.g. \"0.3\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "dimensionless"
+      },
+      "SourcedDensity": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_density"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "SourcedThermalExpansion": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_thermal_expansion"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "SourcedConductivity": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_conductivity"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "SourcedSpecificHeat": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/Q_specific_heat"
+          },
+          "basis": {
+            "description": "The exact grade, direction, statistic or test condition to which the value applies.",
+            "type": "string"
+          },
+          "source": {
+            "description": "A [`MaterialCitation::id`].",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "source"
+        ]
+      },
+      "MaterialCitation": {
+        "description": "One primary source used by [`MaterialLibrary`]. Property `source` fields name its `id`.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "locator": {
+            "type": "string"
+          },
+          "retrievedOn": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "organization",
+          "title",
+          "url",
+          "locator",
+          "retrievedOn"
+        ]
+      },
       "ObjectList": {
         "description": "`query.objects` response.",
         "type": "object",
@@ -7651,6 +8042,7 @@
           "mesh.failed",
           "model.no-material",
           "model.ill-posed",
+          "result.stale",
           "constraint.conflict",
           "constraint.rigid-modes",
           "solve.not-positive-definite",
@@ -9886,7 +10278,7 @@
             ]
           },
           {
-            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Prefer the auto face names when one fits.",
+            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
             "type": "object",
             "properties": {
               "name": {
@@ -9911,7 +10303,7 @@
             ]
           },
           {
-            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean.",
+            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
             "type": "object",
             "properties": {
               "name": {
@@ -9932,7 +10324,7 @@
             ]
           },
           {
-            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\nand material assignments that still reference it; remove or retarget those first.",
+            "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), and named Sets that still reference\nit; remove or retarget those first.",
             "type": "object",
             "properties": {
               "name": {
@@ -10108,7 +10500,7 @@
             ]
           },
           {
-            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
+            "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
             "type": "object",
             "properties": {
               "format": {
@@ -10368,7 +10760,7 @@
             ]
           },
           {
-            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.",
+            "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
             "type": "object",
             "properties": {
               "name": {
@@ -10460,7 +10852,7 @@
             ]
           },
           {
-            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.",
+            "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
             "type": "object",
             "properties": {
               "name": {
@@ -10505,7 +10897,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material\nconductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its\n`theta` must lie in [0, 1].",
             "type": "object",
             "properties": {
               "name": {
@@ -10557,6 +10949,7 @@
                 "format": "double"
               },
               "dt": {
+                "description": "Maximum heat-transient time increment. A uniform increment no larger than dt is\nchosen to finish exactly at tEnd; the Result reports the increment actually used.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/Q_time"
@@ -10592,6 +10985,7 @@
                 "minimum": 0
               },
               "dtFactor": {
+                "description": "Maximum fraction of the explicit critical time step (usually 0.9). The increment\nmay be reduced uniformly to finish exactly at tEnd.",
                 "type": [
                   "number",
                   "null"
@@ -10632,7 +11026,7 @@
             ]
           },
           {
-            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps.",
+            "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
             "type": "object",
             "properties": {
               "name": {
@@ -10669,7 +11063,7 @@
             ]
           },
           {
-            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress.",
+            "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes and reactions;\nalways check that reactions balance the applied loads before trusting a stress. A Step\nwith `after` requires its predecessor's Result to match the current Model state;\nafter an edit, solve the predecessor again before continuing the chain.",
             "type": "object",
             "properties": {
               "step": {
@@ -10745,7 +11139,7 @@
             ]
           },
           {
-            "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal.",
+            "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal. If `expectedJournal` is\nsupplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise\nnothing is undone. Use this guard for a saved turn boundary while other callers can edit.",
             "type": "object",
             "properties": {
               "steps": {
@@ -10755,6 +11149,12 @@
                 ],
                 "format": "uint32",
                 "minimum": 0
+              },
+              "expectedJournal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "cmd": {
                 "type": "string",

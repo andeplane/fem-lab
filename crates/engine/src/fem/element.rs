@@ -97,11 +97,13 @@ const B_MAP: [(usize, usize, usize); 9] =
     [(0, 0, 0), (1, 1, 1), (2, 2, 2), (3, 0, 1), (3, 1, 0), (4, 0, 2), (4, 2, 0), (5, 1, 2), (5, 2, 1)];
 /// Voigt rows a plane-stress law keeps: 11, 22, 12.
 const PLANE: [usize; 3] = [0, 1, 3];
-/// `det J` at or below this fraction of the reference measure is a folded element.
+/// Dimensionless determinant tolerance after scaling the active Jacobian by its largest entry.
 const DET_TOL: f64 = 1e-14;
 
 pub(crate) fn inverted() -> Error {
-    Error::new(ErrorCode::MeshInverted, "the element is folded: det J ≤ 0 at a Gauss point").at("element")
+    Error::new(ErrorCode::MeshInverted, "the element Jacobian is inverted, numerically singular or nonfinite")
+        .at("element")
+        .suggest("check the geometry and use mesh.set to regenerate the mesh")
 }
 
 /// The idealisation's weight factor at a point: thickness, 1, or `2π r`.
@@ -128,9 +130,11 @@ fn det3(j: &[[f64; 3]; 3]) -> f64 {
         + j[0][2] * (j[1][0] * j[2][1] - j[1][1] * j[2][0])
 }
 
-/// `J⁻¹` and `det J` of `J_ij = Σ_a x_ai dN_a/dξ_j`, or `None` when the element is folded there.
+/// `J⁻¹` and `det J` of `J_ij = Σ_a x_ai dN_a/dξ_j`, or `None` for an inverted, relatively
+/// singular or nonfinite map. Normalising only the validity check makes it independent of
+/// physical length units; the returned determinant and inverse retain their physical units.
 /// In 2D the unused row and column are the identity, so the 3×3 formulas give the 2×2 answer.
-pub(crate) fn jac_inv(dim: usize, coords: &[f64], dn: &[[f64; 3]], v_ref: f64) -> Option<([[f64; 3]; 3], f64)> {
+pub(crate) fn jac_inv(dim: usize, coords: &[f64], dn: &[[f64; 3]]) -> Option<([[f64; 3]; 3], f64)> {
     let mut j = [[0.0f64; 3]; 3];
     for (a, d) in dn.iter().enumerate() {
         for (i, ji) in j.iter_mut().enumerate().take(dim) {
@@ -142,8 +146,16 @@ pub(crate) fn jac_inv(dim: usize, coords: &[f64], dn: &[[f64; 3]], v_ref: f64) -
     for (i, ji) in j.iter_mut().enumerate().skip(dim) {
         ji[i] = 1.0;
     }
+    // The padding identity in 2D must not set the length scale of a microscopic sheet.
+    let scale = j.iter().take(dim).flat_map(|row| row.iter().take(dim)).fold(0.0f64, |s, x| s.max(x.abs()));
+    let mut relative = j;
+    for row in relative.iter_mut().take(dim) {
+        for entry in row.iter_mut().take(dim) {
+            *entry /= scale;
+        }
+    }
     let det = det3(&j);
-    if det <= DET_TOL * v_ref {
+    if !(det3(&relative) > DET_TOL && det > 0.0 && det.is_finite()) {
         return None;
     }
     // (J⁻¹)_ab = (J_{b+1,a+1} J_{b+2,a+2} − J_{b+1,a+2} J_{b+2,a+1}) / det, indices mod 3
@@ -215,7 +227,6 @@ impl Kin {
 fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
     let rule = rule_of(kind);
-    let v_ref: f64 = rule.weights.iter().sum();
     let n_gp = rule.points.len();
     let n_dof = nn * dim;
     let m = n_modes(kind, c.formulation);
@@ -237,7 +248,7 @@ fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
     // The incompatible modes are differentiated at the centroid; nothing else needs J₀.
     let inv0 = if m > 0 {
         dshape_of(kind, centre_xi(kind), &mut dn);
-        jac_inv(dim, c.coords, &dn, v_ref).ok_or_else(inverted)?.0
+        jac_inv(dim, c.coords, &dn).ok_or_else(inverted)?.0
     } else {
         [[0.0; 3]; 3]
     };
@@ -245,7 +256,7 @@ fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
         let xi = rule.points[g];
         shape_of(kind, xi, &mut sh);
         dshape_of(kind, xi, &mut dn);
-        let (inv, det) = jac_inv(dim, c.coords, &dn, v_ref).ok_or_else(inverted)?;
+        let (inv, det) = jac_inv(dim, c.coords, &dn).ok_or_else(inverted)?;
         kin.min_det = kin.min_det.min(det);
         let mut xg = [0.0; 3];
         for (a, &n) in sh.iter().enumerate() {
@@ -481,6 +492,16 @@ fn mass_of(kind: ElementKind, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -
     let kin = kinematics(kind, c)?;
     let (nn, dim, nd) = (kin.n_nodes, kin.dim, kin.n_dof);
     m.fill(0.0);
+    if !c.material.rho.is_finite() || c.material.rho < 0.0 {
+        return Err(Error::new(ErrorCode::ModelIllPosed, "material density must be finite and non-negative")
+            .at("material.rho")
+            .suggest("material.add with rho >= \"0 kg/m^3\""));
+    }
+    // A material without `rho` resolves to zero density. Its consistent and lumped element
+    // masses are both the exact zero matrix; in particular HRZ must not evaluate 0 / 0.
+    if c.material.rho == 0.0 {
+        return Ok(());
+    }
     for g in 0..kin.n_gp {
         let n = &kin.n[g * nn..(g + 1) * nn];
         let wr = kin.w[g] * c.material.rho;
@@ -653,27 +674,24 @@ fn recover_of(
 pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
     let rule = rule_of(kind);
-    let v_ref: f64 = rule.weights.iter().sum();
     let mut dn = vec![[0.0; 3]; nn];
     let mut min = f64::INFINITY;
     for &xi in rule.points {
         dshape_of(kind, xi, &mut dn);
-        min = min.min(jac_inv(dim, coords, &dn, v_ref)?.1);
+        min = min.min(jac_inv(dim, coords, &dn)?.1);
     }
     Some(min)
 }
 
 fn inverse_map_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]> {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
-    let rule = rule_of(kind);
-    let v_ref: f64 = rule.weights.iter().sum();
     let mut xi = centre_xi(kind);
     let mut sh = vec![0.0; nn];
     let mut dn = vec![[0.0; 3]; nn];
     for _ in 0..20 {
         shape_of(kind, xi, &mut sh);
         dshape_of(kind, xi, &mut dn);
-        let (inv, _) = jac_inv(dim, coords, &dn, v_ref)?;
+        let (inv, _) = jac_inv(dim, coords, &dn)?;
         let mut r = [0.0; 3];
         for (i, ri) in r.iter_mut().enumerate().take(dim) {
             *ri = x[i] - (0..nn).map(|a| sh[a] * coords[3 * a + i]).sum::<f64>();
@@ -695,6 +713,11 @@ fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
     let mut mm = vec![0.0; n * n];
     // One `?`: the two integrals fail on exactly the same elements and materials.
     stiffness_of(kind, c, &mut k).and_then(|_| mass_of(kind, c, &mut mm, true))?;
+    if c.material.rho == 0.0 {
+        return Err(Error::new(ErrorCode::ModelIllPosed, "an element with zero density has no natural frequency")
+            .at("material.rho")
+            .suggest("material.add with rho, e.g. \"7850 kg/m^3\""));
+    }
     let minv: Vec<f64> = (0..n).map(|i| 1.0 / mm[i * n + i]).collect();
     let mut v: Vec<f64> = (0..n).map(|i| libm::sin(i as f64 + 1.0)).collect();
     for _ in 0..50 {

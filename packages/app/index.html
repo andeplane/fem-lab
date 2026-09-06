@@ -4,20 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FEM Lab</title>
-    <script>
-      // ADR 0013: COOP/COEP from a service worker so GitHub Pages can host a cross-origin-isolated
-      // app. The recipe is Atomify's: credentialless COEP, and one guarded reload so a browser
-      // that never activates the worker cannot loop.
-      window.coi = {
-        coepCredentialless: () => true,
-        shouldRegister: () => !sessionStorage.getItem('coi-reset'),
-        doReload: () => {
-          sessionStorage.setItem('coi-reset', '1');
-          location.reload();
-        },
-        quiet: true,
-      };
-    </script>
+    <script src="coi-bootstrap.js"></script>
     <script src="coi-serviceworker.min.js"></script>
   </head>
   <body>
