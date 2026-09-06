@@ -313,6 +313,28 @@ impl Engine {
                 text: "no constraints; a static solve needs supports (constraint.fix)".into(),
                 where_: None,
             });
+        } else if let Some(body) = implicit {
+            // Named regions select geometrically across the mesh; named faces and auto faces
+            // name their Body explicitly. A constraint left on another Body is not a support
+            // for the mapped mesher's implicit Body. This is a reference check, not a claim
+            // that the selected DOFs eliminate every rigid mode.
+            let targeted = m.constraints.iter().any(|c| {
+                if let Some(set) = m.sets.iter().find(|s| s.name == c.on) {
+                    match &set.source {
+                        SetSource::Face { of, .. } => of == body,
+                        SetSource::Region { .. } => true,
+                    }
+                } else {
+                    c.on.rsplit_once('.').is_some_and(|(prefix, _)| prefix == body)
+                }
+            });
+            if !targeted {
+                w.push(Warning {
+                    code: "model.unconstrained".into(),
+                    text: format!("no constraints target Body '{body}'; add supports on its Sets with constraint.fix"),
+                    where_: Some(format!("body '{body}'")),
+                });
+            }
         }
         if m.loads.is_empty() && has_geometry {
             w.push(Warning {

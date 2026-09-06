@@ -3351,6 +3351,37 @@ fn a_convergence_study_scales_every_mesher() {
     assert_eq!(turned.rows[1].dofs, 3 * 5 * 5 * 5, "and 4 x 4 through 4 segments");
 }
 
+#[test]
+fn mapped_body_warns_until_a_constraint_targets_its_sets() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"supports"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"other.xmin"}"#);
+    ok(&mut e, COOK);
+    let warnings = e.warnings();
+    let warning = warnings.iter().find(|w| w.code == "model.unconstrained").unwrap();
+    assert_eq!(warning.where_.as_deref(), Some("body 'sheet'"));
+    assert!(warning.text.contains("constraint.fix"));
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"sheet.left"}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+    // An explicitly named face still belongs to its declared Body, not its display name.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"support","of":"other","where":{"kind":"normal","normal":[-1,0,0]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"support"}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+    // Region predicates can select the mapped mesh directly, without naming a Body.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"region","where":{"kind":"bbox","min":["0 m","0 m","0 m"],"max":["0 m","44 m","0 m"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"region"}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+    ok(&mut e, r#"{"cmd":"constraint.remove","name":"hold"}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+}
+
 /// The mapped mesher's implicit Body is a Body: it takes a material like any other, appears in
 /// `query.model` with the extent and area of the Mesh it makes, warns while it has none, and
 /// holds that material against `material.remove`. Without this every 2D Benchmark would be
