@@ -150,7 +150,12 @@ export class ResultsView {
   /** Fetch the contoured scalar and the displacement, and hand both to the viewer. */
   private async load(result: ResultSummary): Promise<void> {
     const v = this.viewer.current;
-    if (!v) return;
+    // No Viewer yet (its chunk is still arriving): forget the key, so the refresh the Viewer
+    // asks for on arrival loads the arrays instead of finding them "already loaded".
+    if (!v) {
+      this.loadedFor = '';
+      return;
+    }
     const choice = choiceOf(this.store.state.fieldKey);
     const scalar = await this.transport.field(result.step, choice.field as never, choice.component ?? undefined);
     const { values, range, unit } = await this.contour(choice, scalar.values);

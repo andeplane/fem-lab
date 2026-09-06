@@ -12,9 +12,15 @@ import type { ColormapName } from './viewer/colormap';
 import type { CameraState, Viewer } from './viewer/viewer';
 import type { WorkerTransport } from './worker-transport';
 
-/** The viewer exists only once the canvas is mounted, so every host Command reaches it lazily. */
+/**
+ * The viewer exists only once the canvas is mounted and its chunk has arrived, so every host
+ * Command reaches it lazily — and anything pushed to it before then (an example that opened
+ * solved, a restored Journal) would be lost, which is what `onReady` is for: the shell calls it
+ * the moment a Viewer exists, and the host answers by pushing the current surface and Result.
+ */
 export interface ViewerRef {
   current: Viewer | null;
+  onReady?: () => void;
 }
 
 const soon = (what: string, suggestion: string) => (): never => {
