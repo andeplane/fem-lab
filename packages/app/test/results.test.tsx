@@ -443,7 +443,10 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
   const { waitForText } = await import('./wait-for');
   const root = document.createElement('div');
   const cost: CostEstimate = {
-    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, budgetBytes: 1_610_612_736,
+    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000,
+    retainedFrames: 3, retainedBytes: 900_000, transientWorkBytes: 50_000, transportStagingBytes: 864,
+    wasmTransportStagingBytes: 1728, wasmTransportStagingComplete: false,
+    budgetBytes: 1_610_612_736,
     feasible, note: 'Excludes direct-factor fill/workspace.',
   };
   const model = { bodies: [], warnings: [], meshSettings: {}, steps: [{ name: 'static' }] } as unknown as ModelSummary;
@@ -453,7 +456,11 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
     const text = await waitForText(() => root, feasible === false ? 'over budget' : 'not established');
     expect(query).toHaveBeenCalledWith({ query: 'query.cost', step: 'static' });
     expect(text).toContain('matrix non-zeros (upper bound)1296');
-    expect(text).toContain('mandatory memory (at least)1.7 GB');
+    expect(text).toContain('counted peak memory estimate1.7 GB');
+    expect(text).toContain('retained frames3');
+    expect(text).toContain('retained primary fields900 kB');
+    expect(text).toContain('native frame staging1 kB');
+    expect(text).toContain('browser frame staging≥ 2 kB + JSON/JS overhead');
     expect(text).toContain('planning budget1.6 GB');
     expect(text).toContain('Excludes direct-factor fill/workspace.');
     expect(text).not.toContain('feasible here');

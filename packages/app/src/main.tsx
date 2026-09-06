@@ -66,6 +66,7 @@ async function boot(): Promise<void> {
   viewer.onReady = () => {
     viewer.current?.setMode(store.state.viewMode);
     for (const [layer, visible] of Object.entries(store.state.layerVisibility)) viewer.current?.setLayer(layer, visible);
+    viewer.current?.setVisible(store.state.hiddenBodies, false);
     void refresh().catch(() => undefined);
   };
   const refresh = async (): Promise<void> => {
