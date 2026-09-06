@@ -234,7 +234,7 @@ describe('the Export dialog', () => {
 
 /** A viewer stub: the four calls `ResultsView` makes, recorded. */
 function fakeViewer() {
-  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), autoScale: vi.fn(() => 120), animate: vi.fn() };
+  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), animate: vi.fn(), autoScale: vi.fn(() => 120) };
 }
 
 function harness(result: ResultSummary | null = RESULT) {
@@ -516,6 +516,14 @@ describe('ResultsView', () => {
     await results.showField({ field: 'vonMises' });
     expect(viewer.current.setDeformed.mock.calls.at(-1)![1]).toBe(first);
     expect(first).not.toBe(1);
+  });
+
+  it('preserves an explicitly requested exaggeration when a solve completes', async () => {
+    const { store, viewer, results } = harness();
+    results.setDeformScale(200);
+    await results.onAck({ output: { type: 'solve' } });
+    expect(store.state.deformScale).toBe(200);
+    expect(viewer.current.setDeformed.mock.calls.at(-1)![1]).toBe(200);
   });
 
   it('recomputes an `auto` that had no Viewer to compute it with when one arrives', async () => {

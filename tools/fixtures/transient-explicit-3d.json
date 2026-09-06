@@ -1,0 +1,76 @@
+[
+  {
+    "cmd": "model.new",
+    "name": "transient-explicit-3d"
+  },
+  {
+    "cmd": "model.setUnits",
+    "units": {
+      "temperature": "degC",
+      "length": "mm",
+      "time": "min"
+    }
+  },
+  {
+    "cmd": "geometry.addBox",
+    "name": "bar",
+    "size": [
+      "1 m",
+      "0.1 m",
+      "0.1 m"
+    ]
+  },
+  {
+    "cmd": "material.add",
+    "name": "mat",
+    "E": "1 MPa",
+    "nu": 0.25,
+    "rho": "2 kg/m^3",
+    "k": "6 W/(m*K)",
+    "cp": "3 J/(kg*K)"
+  },
+  {
+    "cmd": "material.assign",
+    "material": "mat",
+    "bodies": [
+      "bar"
+    ]
+  },
+  {
+    "cmd": "mesh.set",
+    "mesher": {
+      "kind": "lattice",
+      "size": {
+        "nx": 2,
+        "ny": 1,
+        "nz": 1
+      }
+    },
+    "order": 1
+  },
+  {
+    "cmd": "load.gravity",
+    "name": "gravity",
+    "g": [
+      "0 m/s^2",
+      "-9.81 m/s^2",
+      "0 m/s^2"
+    ]
+  },
+  {
+    "cmd": "step.add",
+    "name": "fall",
+    "procedure": "explicit",
+    "constraints": [],
+    "loads": [
+      "gravity"
+    ],
+    "tEnd": "1.3 ms",
+    "dtFactor": 0.5,
+    "outputEvery": 3
+  },
+  {
+    "cmd": "solve.run",
+    "step": "fall"
+  }
+]

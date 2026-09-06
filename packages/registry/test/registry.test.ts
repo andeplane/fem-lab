@@ -30,6 +30,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'view.highlight': { faces: ['beam.top'] },
   'view.setTheme': { theme: 'dark' },
   'view.animate': { step: 'static', playing: true },
+  'view.playTransient': { step: 'heat', playing: false, sample: { kind: 'frame', index: 0 } },
   'selection.set': { refs: ['material:steel'], mode: 'add' },
   'selection.clear': {},
   'selection.setPickTarget': { target: 'face' },

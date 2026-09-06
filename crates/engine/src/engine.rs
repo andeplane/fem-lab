@@ -44,7 +44,7 @@ pub type OnProgress<'a> = &'a mut dyn FnMut(Progress) -> bool;
 pub const UNDO_DEPTH: usize = 200;
 
 /// Host-independent preview of one Body before finite-element mesh settings exist.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GeometrySurface {
     pub body: String,
     pub triangles: femlab_geometry::TriMesh,

@@ -5,7 +5,7 @@
 import init, { Engine, version } from './generated/wasm/femlab_engine_wasm.js';
 import wasmUrl from './generated/wasm/femlab_engine_wasm_bg.wasm?url';
 import { siUnitOf } from './fields';
-import type { ResultSummary } from '@femlab/registry';
+import type { BufferSpec, FrameResult, ResultSummary } from '@femlab/registry';
 import type { AppReq, AppRes } from './protocol';
 import { toStructured } from './protocol';
 import { restoreHistory } from './recovery';
@@ -16,7 +16,7 @@ let tail: Promise<unknown> = Promise.resolve();
 
 interface Bulk {
   value: unknown;
-  buffers: { name: string; dtype: 'f32' | 'u32' | 'u8'; length: number }[];
+  buffers: BufferSpec[];
   raw: ArrayBuffer[];
 }
 
@@ -78,8 +78,17 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
       });
       return JSON.parse(json);
     }
-    case 'query':
-      return JSON.parse(need().query(JSON.stringify(req.payload)));
+    case 'query': {
+      if ((req.payload as { query: string }).query !== 'query.frame') return JSON.parse(need().query(JSON.stringify(req.payload)));
+      // Rust uses the same Query resolver and copies f64 values into an owned JS buffer.
+      // Transfer that staging allocation; never transfer a view of the retained History.
+      const { values, ...metadata } = need().query_transfer(JSON.stringify(req.payload)) as Omit<FrameResult, 'values'> & { values: Float64Array };
+      return {
+        value: metadata,
+        buffers: [{ name: 'values', dtype: 'f64' as const, length: values.length }],
+        raw: [values.buffer as ArrayBuffer],
+      };
+    }
     case 'surface':
       return surface();
     case 'field': {
