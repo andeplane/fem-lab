@@ -2,48 +2,9 @@
 // AGENTS.md becomes, which skills override which, and that nothing outside the folder is reachable.
 import { describe, expect, it, vi } from 'vitest';
 import { BUILTIN_SKILLS } from '../src/ai/skills';
-import { kindOf, pickFolder, ProjectFolder, projectSkills, watchAgents, type DirHandle, type FileHandle } from '../src/ai/project';
+import { kindOf, pickFolder, ProjectFolder, projectSkills, watchAgents } from '../src/ai/project';
 
-/** The whole fake: a path → text map behind the handle shape `ProjectFolder` walks. */
-function fakeDir(files: Record<string, string>, name = 'bridge', at = 1): DirHandle {
-  const make = (prefix: string, dirName: string): DirHandle => ({
-    kind: 'directory',
-    name: dirName,
-    async *entries() {
-      const seen = new Set<string>();
-      for (const path of Object.keys(files)) {
-        if (!path.startsWith(prefix)) continue;
-        const rest = path.slice(prefix.length);
-        const head = rest.split('/')[0]!;
-        if (seen.has(head)) continue;
-        seen.add(head);
-        yield [head, rest.includes('/') ? make(`${prefix}${head}/`, head) : file(path)] as [string, DirHandle | FileHandle];
-      }
-    },
-    getDirectoryHandle: async (child, options) => {
-      if (!options?.create && !Object.keys(files).some((p) => p.startsWith(`${prefix}${child}/`))) throw new Error(`no directory ${child}`);
-      return make(`${prefix}${child}/`, child);
-    },
-    getFileHandle: async (child, options) => {
-      const path = prefix + child;
-      if (!(path in files)) {
-        if (!options?.create) throw new Error(`no file ${path}`);
-        files[path] = '';
-      }
-      return file(path);
-    },
-  });
-  const file = (path: string): FileHandle => ({
-    kind: 'file',
-    name: path.split('/').at(-1)!,
-    getFile: async () => ({ size: files[path]!.length, lastModified: at, text: async () => files[path]! }),
-    createWritable: async () => ({
-      write: async (data) => void (files[path] = typeof data === 'string' ? data : new TextDecoder().decode(data)),
-      close: async () => undefined,
-    }),
-  });
-  return make('', name);
-}
+import { fakeDir } from './project-fake';
 
 const SKILL = '---\nname: write-report\ndescription: The house calculation note.\n---\n\nUse the firm template.';
 
@@ -109,6 +70,34 @@ describe('the project folder', () => {
     expect(files['reports/beam.vtu']).toBe('<VTKFile/>');
   });
 
+  it('publishes refresh atomically and serializes reads from the watcher and Commands', async () => {
+    const files: Record<string, string> = { ...FILES };
+    const folder = await ProjectFolder.fromHandle(fakeDir(files));
+    const before = { files: folder.files, rules: folder.agentsMd, skills: folder.skills };
+    files['AGENTS.md'] = 'New rules.';
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const original = folder.readText.bind(folder);
+    const read = vi.spyOn(folder, 'readText').mockImplementationOnce(async () => {
+      await pending;
+      throw new Error('permission revoked');
+    });
+    const first = folder.refresh();
+    const failed = expect(first).rejects.toThrow('permission revoked');
+    const second = folder.refresh();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    expect(folder.files).toBe(before.files);
+    expect(folder.agentsMd).toBe(before.rules);
+    expect(folder.skills).toBe(before.skills);
+    read.mockImplementation(original);
+    release();
+    await failed;
+    await second;
+    expect(folder.agentsMd?.text).toBe('New rules.');
+    expect(folder.skills.map((s) => s.name)).toEqual(['write-report']);
+    read.mockRestore();
+  });
+
   it('refuses every path that would leave the folder before it touches a handle', async () => {
     const folder = await ProjectFolder.fromHandle(fakeDir({ ...FILES }));
     for (const path of ['../secrets.md', '/etc/passwd', 'C:\\keys.txt', 'a/../../b']) {
@@ -141,6 +130,50 @@ describe('watching AGENTS.md', () => {
     tick();
     await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
     stop();
+  });
+});
+
+describe('watching project skills', () => {
+  it('keeps the last catalog on read failure, reports once, and retries until skills recover', async () => {
+    const files: Record<string, string> = { 'skills/write-report/SKILL.md': SKILL };
+    const folder = await ProjectFolder.fromHandle(fakeDir(files));
+    const before = folder.skills;
+    const onChange = vi.fn();
+    const onError = vi.fn();
+    let tick = () => {};
+    const stop = watchAgents(folder, onChange, 1000, ((fn: () => void) => {
+      tick = fn;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    }) as typeof setInterval, onError);
+    const read = vi.spyOn(folder, 'readText').mockRejectedValue(new Error('permission revoked'));
+    try {
+      tick();
+      tick(); // one read at a time, even when the timer fires again before it completes
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(folder.skills).toBe(before);
+      expect(onChange).not.toHaveBeenCalled();
+      tick();
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+      expect(onError).toHaveBeenCalledTimes(1);
+      read.mockRestore();
+      files['skills/write-report/SKILL.md'] = SKILL.replace('Use the firm template.', 'Use the updated template.');
+      tick();
+      await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+      expect(folder.skills[0]!.body).toBe('Use the updated template.');
+      delete files['skills/write-report/SKILL.md'];
+      tick();
+      await vi.waitFor(() => expect(onChange).toHaveBeenCalledTimes(2));
+      expect(folder.skills).toEqual([]);
+      stop();
+      files['skills/write-report/SKILL.md'] = SKILL;
+      tick();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onChange).toHaveBeenCalledTimes(2);
+    } finally {
+      read.mockRestore();
+      stop();
+    }
   });
 });
 
