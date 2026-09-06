@@ -1052,18 +1052,16 @@ impl Engine {
         if !self.model.names(kind).contains(&name) {
             return Err(Error::not_found(kind.label(), name, &self.model.names(kind)));
         }
-        if self.model.names(kind).contains(&to) {
-            return Err(Error::new(ErrorCode::NameTaken, format!("a {} named '{to}' already exists", kind.label()))
-                .at(format!("{} '{to}'", kind.label())));
+        if self.model.names(kind).contains(&to)
+            || (kind == ObjectKind::Body && self.model.cuts.iter().any(|cut| cut.name == to))
+        {
+            return Err(Error::new(ErrorCode::NameTaken, format!("name '{to}' is already in use"))
+                .at(format!("{} '{to}'", kind.label()))
+                .suggest("retry model.rename with another name"));
         }
         let m = &mut self.model;
         match kind {
             ObjectKind::Body => {
-                if m.implicit_body() == Some(name) && m.cuts.iter().any(|cut| cut.name == to) {
-                    return Err(Error::new(ErrorCode::NameTaken, format!("'{to}' already names a cut"))
-                        .at("to")
-                        .suggest("retry model.rename with another Body name"));
-                }
                 if let Some(mesh) = &mut m.mesh {
                     mesh.mesher.rename_body(name, to);
                 }
@@ -1202,8 +1200,10 @@ impl Engine {
         if !self.model.names(kind).contains(&name) {
             return Err(Error::not_found(kind.label(), name, &self.model.names(kind)));
         }
-        if self.model.names(kind).contains(&as_) {
-            return Err(Error::new(ErrorCode::NameTaken, format!("a {} named '{as_}' already exists", kind.label()))
+        if self.model.names(kind).contains(&as_)
+            || (kind == ObjectKind::Body && self.model.cuts.iter().any(|cut| cut.name == as_))
+        {
+            return Err(Error::new(ErrorCode::NameTaken, format!("name '{as_}' is already in use"))
                 .at(format!("{} '{as_}'", kind.label())));
         }
         let m = &mut self.model;
