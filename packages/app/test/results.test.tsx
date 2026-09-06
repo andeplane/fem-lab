@@ -11,9 +11,10 @@ import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, leg
 import { makeHostContext } from '../src/host';
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
 import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
-import { Store, initialState, solveLabel, stageOf } from '../src/store';
+import { Store, initialState, solveLabel, stageOf, verificationState, type AssistantVerification } from '../src/store';
 import { exaggerationHelp, probeLine } from '../src/ui/App';
 import { Checks, PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
+
 import { specOf, unavailable } from '../src/ui/Export';
 import type { WorkerTransport } from '../src/worker-transport';
 
@@ -597,7 +598,6 @@ describe("the viewer's rounding and its stale-displacement guard", () => {
   });
 });
 
-
 it.each([null, false] as const)('shows honest cost bounds and %s feasibility in Checks', async (feasible) => {
   const { waitForText } = await import('./wait-for');
   const root = document.createElement('div');
@@ -626,4 +626,19 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
   } finally {
     render(null, root);
   }
+});
+
+describe('Assistant observations remain distinct from engine checks', () => {
+  it('marks history changes, result changes and missing history as stale or unconfirmed', () => {
+    const record: AssistantVerification = { rows: [], model: null, revision: 10, journalHash: 'saved-history', result: { step: 'static', revision: 10 } };
+    const state = { ...initialState, revision: 10, journal: { hash: 'saved-history', entries: [], revision: 10, canUndo: true, canRedo: false }, result: RESULT };
+    expect(verificationState(record, state)).toContain('Result static rev 10');
+    expect(verificationState({ ...record, result: null }, state)).toContain('Stale');
+    expect(verificationState(record, { ...state, journal: { ...state.journal, hash: 'same-revision-other-history' } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: { ...RESULT, stale: true } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: { ...RESULT, step: 'other' } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: { ...RESULT, revision: 11 } })).toContain('Stale');
+    expect(verificationState(record, { ...state, result: null })).toContain('Stale');
+    expect(verificationState({ ...record, journalHash: null }, state)).toContain('unconfirmed');
+  });
 });
