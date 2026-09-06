@@ -41,3 +41,34 @@ test.describe('@cpu the Assistant before a Model exists', () => {
     expect(await page.locator('.workspace').evaluate((el) => getComputedStyle(el).marginRight)).toBe('392px');
   });
 });
+
+test('@cpu composer suggestions and skills prepare editable drafts by keyboard', async ({ page }) => {
+  await page.goto('./');
+  await ready(page);
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'chat.setDraft', text: 'Inspect my beam' }));
+  const drawer = page.locator('aside.assistant');
+  const input = drawer.locator('textarea');
+  await expect(drawer).toBeVisible();
+  await expect(input).toHaveValue('Inspect my beam');
+  const skillMenu = drawer.getByTitle('Choose a skill for this draft');
+  await skillMenu.focus();
+  await page.keyboard.press('Enter');
+  const skill = drawer.locator('.popover button').filter({ hasText: 'beam-theory-check' });
+  await skill.focus();
+  await page.keyboard.press('Space');
+  await expect(input).toHaveValue('/beam-theory-check Inspect my beam');
+  await expect(input).toBeFocused();
+  await expect(drawer.locator('.messages')).toBeEmpty();
+  const suggestion = drawer.locator('.suggestions button').first();
+  await suggestion.focus();
+  await page.keyboard.press('Enter');
+  await expect(input).toHaveValue(/Help me build a cantilever/);
+  await expect(input).toBeFocused();
+  await expect(drawer.locator('.messages')).toBeEmpty();
+  await drawer.getByTitle('Close the assistant').click();
+  await expect(drawer).toBeHidden();
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'chat.setDraft', text: 'Reopened draft' }));
+  await expect(drawer).toBeVisible();
+  await expect(input).toHaveValue('Reopened draft');
+  await expect(input).toBeFocused();
+});
