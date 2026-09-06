@@ -648,6 +648,7 @@ impl Engine {
                 })
                 .collect(),
             applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
+            warnings: res.warnings.clone(),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
             history: res
                 .history

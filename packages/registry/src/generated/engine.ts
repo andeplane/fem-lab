@@ -3411,6 +3411,12 @@ export interface ResultSummary {
    */
   history?: HistoryRow[];
   /**
+   * Warnings the *procedure* raised about this Result: a formulation it had to switch off,
+   * an element that will lock at the mesh it was given. Warnings about the Model itself —
+   * a Body with no material, an unconstrained model — are `query.model`'s.
+   */
+  warnings?: Warning[];
+  /**
    * |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
    * by a prescribed displacement — where both totals are zero — still reports a meaningful
    * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.

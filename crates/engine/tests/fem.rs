@@ -1431,6 +1431,7 @@ fn a_folded_element_is_a_mesh_inverted_error() {
             el.thermal_load(&c, &mut v).err(),
             el.recover(&c, &u, &mut sig, &mut eps).err(),
             el.omega_max(&c).err(),
+            element_tangent(kind, &c, &u).err(),
         ];
         for e in fails {
             let e = e.expect("a folded element must fail");
@@ -1538,6 +1539,7 @@ fn a_material_with_the_wrong_props_fails_every_integral_that_calls_the_law() {
             el.thermal_load(&c, &mut v).err(),
             el.recover(&c, &u, &mut sig, &mut eps).err(),
             el.omega_max(&c).err(),
+            element_tangent(kind, &c, &u).err(),
         ];
         for e in fails {
             let e = e.expect("a props mismatch must fail");
@@ -2871,11 +2873,12 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
             solver: opts,
         },
         Step::Explicit { t_end: 1.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 },
+        Step::StaticNonlinear(nl_options(1)),
     ]
     .iter()
     .map(Step::name)
     .collect();
-    assert_eq!(names, ["static", "modal", "heat-steady", "heat-transient", "explicit"]);
+    assert_eq!(names, ["static", "modal", "heat-steady", "heat-transient", "explicit", "static-nonlinear"]);
 }
 
 /// The checks pass but the material does not: a law given the wrong number of properties
@@ -5349,10 +5352,16 @@ fn the_gauss_point_state_is_sized_read_and_written_back() {
         }
     }
 
-    // and a Body without a material is the same error every other integral over it gives
+    // and a Body without a material is the same error every other integral over it gives —
+    // reported before a single element is touched, because the state buffer is sized first
     let mut bare = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
     bare.material_of_block = vec![None; mesh.blocks.len()];
     assert_eq!(GpState::new(&bare).expect_err("no material").code, ErrorCode::ModelNoMaterial);
+    let sized = nonlinear::tangent(&bare, &pat, &vec![0.0; bare.n_dofs()], &state).expect_err("no material");
+    assert_eq!(sized.code, ErrorCode::ModelNoMaterial);
+    // and the well-posedness checks run before anything is assembled at all
+    let refused = run_nonlinear(&bare, nl_options(1), &mut nop).expect_err("an ill-posed Problem");
+    assert_eq!(refused.code, ErrorCode::ModelNoMaterial);
 }
 
 /// The reference load is the Step's external force at load factor 1, and it reports the Set it

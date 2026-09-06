@@ -638,6 +638,7 @@ mod tests {
             applied_total: [zero.clone(), zero.clone(), zero],
             frequencies: vec![],
             history: vec![],
+            warnings: vec![],
             balance: 0.0,
         };
         assert!(hand_calc(&model, &result).unwrap().contains("| Hand calculation | 0.19048 mm |"));

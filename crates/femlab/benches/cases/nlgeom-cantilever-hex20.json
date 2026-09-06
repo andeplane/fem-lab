@@ -1,0 +1,57 @@
+{
+  "name": "nlgeom-cantilever-hex20",
+  "reference": "Benchmark N2, the large-deflection cantilever, against the exact Euler elastica. A 1 m x 5 mm x 5 mm steel cantilever (L/h = 200), 20 hex20 elements, carries a fixed-direction transverse tip force of 15.084505 N, which is alpha = PL^2/EI = 1.3791547. The reference is not a published table: `the_large_deflection_cantilever_follows_the_elastica` in crates/engine/tests/fem.rs derives it by quadrature of the elastica's own first integral. With EI theta'' = -P cos theta, theta(0) = 0 and theta'(L) = 0, the first integral is theta' = sqrt(2P/EI) sqrt(sin theta_L - sin theta), so for a chosen tip slope theta_L the load parameter and the tip position are three integrals of one integrand; theta_L = 0.6 rad gives alpha = 1.3791547, x_tip = 0.90488893 L and y_tip = 0.38725775 L, and at small alpha the same quadrature reduces to theta_L = alpha/2 and y = alpha L/3, which is Euler-Bernoulli. Measured: -382.17 mm across against -387.26 mm, 1.31 %. Refining to 40 elements gives -385.27 mm (0.49 %), so the gap is the mesh and not the formulation; the gate is 2 % at 20 elements, which keeps the case fast. Linear theory would say PL^3/3EI = -459.72 mm, so the geometric stiffening this case measures is 16 % - it is not a rounding correction, and a linear Step gets it wrong by more than a quarter. Bisshopp & Drucker (1945) tabulate the same curve; their published values are **resolve** until the paper is on hand, and nothing here depends on them.",
+  "journal": [
+    { "cmd": "model.new", "name": "nlgeom-cantilever" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "stress": "MPa", "force": "N" } },
+    { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "5 mm", "5 mm"] },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] },
+    { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": { "nx": 20, "ny": 1, "nz": 1 } }, "order": 2 },
+    { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" },
+    { "cmd": "load.traction", "name": "tip", "on": "beam.xmax", "total": ["0 N", "0 N", "-15.084505 N"] },
+    {
+      "cmd": "step.add",
+      "name": "large",
+      "procedure": "static-nonlinear",
+      "constraints": ["root"],
+      "loads": ["tip"],
+      "increments": 5
+    },
+    { "cmd": "solve.run", "step": "large" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 2, "at": ["1 m", "2.5 mm", "2.5 mm"] },
+      "path": "/value/value",
+      "expect": -387.25775,
+      "tol": 0.02,
+      "rel": true,
+      "note": "tip deflection in mm, within 2 % of the exact elastica at alpha = 1.3791547"
+    },
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 0, "at": ["1 m", "2.5 mm", "2.5 mm"] },
+      "path": "/value/value",
+      "expect": -95.11107,
+      "tol": 0.05,
+      "rel": true,
+      "note": "and the tip draws in by L - x_tip, which only a finite-deformation kinematics produces at all"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the reactions balance the applied load at the converged state"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/history/5/time/value",
+      "expect": 1.0,
+      "tol": 1e-12,
+      "note": "the load-deflection curve reaches load factor 1 in five increments plus the origin"
+    },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false },
+    { "query": { "query": "query.result" }, "path": "/solver", "expect": "cpu-direct" }
+  ]
+}
