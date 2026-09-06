@@ -293,6 +293,26 @@ against a *closed form* rather than a printed number:
 Both rows revert to the NAFEMS cases the moment the published data is at hand; the chaining they
 prove is the same either way.
 
+## Named Sets on mesher-defined Bodies (#239)
+
+The registry patch `mapped_and_swept_bodies_resolve_face_and_body_selectors_for_an_exact_patch`
+uses a 2 × 1 m mapped rectangle (0.1 m plane-stress thickness) and its 3 m extrusion.
+For both element orders and subdivision scales 1, 2 and 4, geometric face rules resolve the
+actual left/right boundaries, and a whole-Body region contains every element and node. Face
+counts, nodal coordinates, boundary measures (1 m / 3 m²) and domain measures (2 m² / 6 m³)
+provide independent membership oracles after each remesh.
+
+A named right-face traction produces σxx = 20 MPa with E = 200 GPa and ν = 0.25. Named
+symmetry constraints permit the exact affine solution ux = σxx x/E and uy,z = −ν σxx y,z/E.
+Every node agrees within 1e-12 m and every stress component within 1e-3 Pa on all meshes;
+force balance is below 1e-10. A separate whole-Body nodal force adds 10 N to the 2 MN traction:
+applied force and support reactions independently recover 2,000,010 N and its negative.
+
+The lifecycle regression checks named Set query visibility, dependency errors, rename and
+copy, removal after dependent Commands are removed, undo/redo, and deterministic exported
+Journal replay with identical memberships and displacement. Unknown Bodies give structured
+errors identifying the selector argument and leave the Model and Journal unchanged.
+
 ## Where the reference values are published
 
 - NAFEMS "The Standard NAFEMS Benchmarks" P18 (1990); FV set in R0015 (1987). Values as

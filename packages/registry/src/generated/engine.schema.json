@@ -235,7 +235,7 @@
         ]
       },
       {
-        "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Prefer the auto face names when one fits.",
+        "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
         "type": "object",
         "properties": {
           "name": {
@@ -260,7 +260,7 @@
         ]
       },
       {
-        "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean.",
+        "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
         "type": "object",
         "properties": {
           "name": {
@@ -4611,7 +4611,7 @@
             ]
           },
           {
-            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Prefer the auto face names when one fits.",
+            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
             "type": "object",
             "properties": {
               "name": {
@@ -4636,7 +4636,7 @@
             ]
           },
           {
-            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean.",
+            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
             "type": "object",
             "properties": {
               "name": {
@@ -9903,7 +9903,7 @@
             ]
           },
           {
-            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Prefer the auto face names when one fits.",
+            "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
             "type": "object",
             "properties": {
               "name": {
@@ -9928,7 +9928,7 @@
             ]
           },
           {
-            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean.",
+            "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
             "type": "object",
             "properties": {
               "name": {
