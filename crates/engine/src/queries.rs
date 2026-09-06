@@ -43,6 +43,7 @@ impl Engine {
             Query::Journal { from_seq } => {
                 let from = from_seq.unwrap_or(0);
                 Ok(QueryResult::Journal(JournalDump {
+                    hash: self.journal.hash(),
                     entries: self.journal.entries.iter().filter(|e| e.seq >= from).cloned().collect(),
                     revision: self.revision(),
                     can_undo: self.can_undo(),

@@ -367,6 +367,8 @@ pub struct CostEstimate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JournalDump {
+    /// Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
+    pub hash: String,
     pub entries: Vec<crate::journal::JournalEntry>,
     pub revision: u32,
     pub can_undo: bool,
