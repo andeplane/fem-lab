@@ -71,21 +71,20 @@ under `e2e/fixtures/` found four more.
   study and the sampled path.
 - **Frequencies table** — one row per natural frequency of a modal Step, with its period and a
   `view.showField { field: "mode:k" }` chip.
-- **Mode shape and transient animation** — ▶ / ❚❚ and a phase scrub on the deformation bar.
-  A mode shape is drawn as its own deformation and swept through `A·sin(2πt)`.
-  `Engine::field_named` exposes `mode:k` but no per-frame transient arrays, so for a transient
-  Step the sweep is the amplitude of the final field, and the control says so.
+- **Mode-shape animation** — ▶ / ❚❚ and a phase scrub on the deformation bar. A selected mode
+  is drawn as its own deformation and swept through `A·sin(2πt)`. Transient history remains a
+  plot until retained frame playback can show the actual fields.
 - **Derived fields** — `n_y = f_y / σ_vM` and `σ/f_y`, computed in the app from von Mises and
   the smallest positive `yield` in `query.model`'s current material rows, converted to SI
   from their display stress units. The legend opens clamped at 1 for a utilisation and
   at the safety cap for a factor.
-- **`query.screenshot` at 1× / 2×** on the export dialog's PNG row.
+- **`query.screenshot` at 1× / 2×** on the export dialog's PNG row, with explicit pixel
+  dimensions forwarded to the viewer.
+- **Mode-shape WebM capture** at 720p or 1080p from the Export dialog. The typed `file.export`
+  Command also accepts any validated pixel size, frame rate and duration; `view.animate` uses
+  the same selected mode and phase-percentage sweep.
 
 ## Follow-ups
 
-- A WebM / GIF capture of the sweep is out of scope for this pass; the animation is on-screen
-  and `query.screenshot` writes single frames.
-- `HostContext.view.screenshot` and `buildExport`'s png branch both drop the Query's `width`
-  and `height`. Until they forward them, the chosen scale rides on `ResultsView.legendBurn()`.
-- `view.animate`'s `mode`, `speed` and `frame` are dropped by `host.ts` (`v().animate(a.playing)`);
-  the scrub therefore also calls `Viewer.setPhase` directly.
+- GIF and true transient-frame video wait for a GIF encoder and the transient frame playback
+  path respectively; the app does not advertise either as available.

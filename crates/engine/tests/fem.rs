@@ -2776,6 +2776,11 @@ fn every_well_posedness_check_has_a_failing_input() {
     let mut no_mat = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held());
     no_mat.material_of_block = vec![None];
     assert_eq!(checks::all(&no_mat)[0].code, ErrorCode::ModelNoMaterial);
+    let explicit = Step::Explicit { t_end: 1e-3, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    assert_eq!(
+        run_step(&no_mat, &explicit).expect_err("the procedure runs the checks").code,
+        ErrorCode::ModelNoMaterial
+    );
 
     let mut empty = held();
     empty.push(fix("nothing", "void", [true, false, false], 0.0));
@@ -4746,5 +4751,361 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
                 assert_eq!(e.code, ErrorCode::Cancelled, "{}", e.cause);
             }
         }
+    }
+}
+
+// ------------------------------------------------------- simplex mass regression (#131)
+const SIMPLEX_KINDS: [ElementKind; 4] = [ElementKind::Tri3, ElementKind::Tri6, ElementKind::Tet4, ElementKind::Tet10];
+type BaryPoly = Vec<(f64, [i32; 4])>;
+
+fn bary_product(a: &[(f64, [i32; 4])], b: &[(f64, [i32; 4])]) -> BaryPoly {
+    a.iter()
+        .flat_map(|(ca, ea)| b.iter().map(move |(cb, eb)| (*ca * cb, std::array::from_fn(|i| ea[i] + eb[i]))))
+        .collect()
+}
+
+/// Dirichlet's closed form: integral of barycentric powers is product(a_i!)/(d+sum(a_i))!.
+/// No quadrature points, Jacobians, or production shape evaluations enter this oracle.
+fn bary_integral(p: &[(f64, [i32; 4])], dim: usize) -> f64 {
+    p.iter()
+        .map(|(c, e)| {
+            c * e.iter().map(|&a| factorial(a)).product::<f64>() / factorial(dim as i32 + e.iter().sum::<i32>())
+        })
+        .sum()
+}
+
+fn bary_power(coefficient: f64, coordinate: usize, power: i32) -> (f64, [i32; 4]) {
+    let mut e = [0; 4];
+    e[coordinate] = power;
+    (coefficient, e)
+}
+
+fn bary_shapes(kind: ElementKind) -> Vec<BaryPoly> {
+    let corners = kind.dim() + 1;
+    let quadratic = kind.n_nodes() > corners;
+    let mut shapes: Vec<BaryPoly> =
+        (0..corners)
+            .map(|i| {
+                if quadratic {
+                    vec![bary_power(2.0, i, 2), bary_power(-1.0, i, 1)]
+                } else {
+                    vec![bary_power(1.0, i, 1)]
+                }
+            })
+            .collect();
+    if quadratic {
+        for &[a, b] in kind.edges() {
+            shapes.push(bary_product(&[bary_power(4.0, a as usize, 1)], &[bary_power(1.0, b as usize, 1)]));
+        }
+    }
+    shapes
+}
+
+#[test]
+fn simplex_product_quadrature_integrates_the_required_polynomial_degrees() {
+    use femlab_engine::fem::shape::product_rule_of;
+    for (kind, degree, exact) in [
+        (ElementKind::Tri3, 3, exact_tri as Exact),
+        (ElementKind::Tri6, 8, exact_tri as Exact),
+        (ElementKind::Tet4, 2, exact_tet as Exact),
+        (ElementKind::Tet10, 7, exact_tet as Exact),
+    ] {
+        let r = product_rule_of(kind);
+        check_exact(&r, kind.dim(), 0, degree, exact);
+        assert!(r.weights.iter().all(|&w| w > 0.0));
+        assert!(r.points.iter().all(in_simplex));
+    }
+}
+
+#[test]
+fn every_simplex_mass_and_capacity_entry_matches_barycentric_closed_forms() {
+    let mat = conductor(1.0, 2.3, 4.7);
+    for kind in SIMPLEX_KINDS {
+        let dim = kind.dim();
+        let nn = kind.n_nodes();
+        let nd = nn * dim;
+        let shapes = bary_shapes(kind);
+        // The separable quadratic map has exactly known diagonal Jacobian factors.
+        for curvature in [0.0, 0.2] {
+            if curvature > 0.0 && nn == dim + 1 {
+                continue;
+            }
+            let coords: Vec<f64> = node_xi(kind)
+                .iter()
+                .flat_map(|p| {
+                    [
+                        1.0 + 2.0 * p[0] + curvature * p[0] * p[0],
+                        2.0 * p[1] + curvature * p[1] * p[1],
+                        3.0 * p[2] + curvature * p[2] * p[2],
+                    ]
+                })
+                .collect();
+            let mut jac = vec![(1.0, [0; 4])];
+            for axis in 0..dim {
+                let slope = [2.0, 2.0, 3.0][axis];
+                jac = bary_product(&jac, &[(slope, [0; 4]), bary_power(2.0 * curvature, axis + 1, 1)]);
+            }
+            for id in idealisations(kind) {
+                let scale = match id {
+                    Idealisation::Axisymmetric => {
+                        vec![(2.0 * PI, [0; 4]), bary_power(4.0 * PI, 1, 1), bary_power(2.0 * PI * curvature, 1, 2)]
+                    }
+                    Idealisation::PlaneStress { thickness } => vec![(thickness, [0; 4])],
+                    _ => vec![(1.0, [0; 4])],
+                };
+                let weight = bary_product(&jac, &scale);
+                let volume = bary_integral(&weight, dim);
+                let c = ctx(&coords, &mat, id.clone(), Formulation::Full);
+                let mut m = vec![0.0; nd * nd];
+                let mut capacity = vec![0.0; nn * nn];
+                element_for(kind).mass(&c, &mut m, false).expect("valid simplex");
+                femlab_engine::fem::heat::capacity(kind, &c, &mut capacity).expect("valid simplex");
+                let mut scalar = vec![0.0; nn * nn];
+                for a in 0..nn {
+                    for b in 0..nn {
+                        let want =
+                            mat.rho * bary_integral(&bary_product(&bary_product(&shapes[a], &shapes[b]), &weight), dim);
+                        scalar[a * nn + b] = m[(a * dim) * nd + b * dim];
+                        assert!(
+                            (capacity[a * nn + b] - mat.cp * want).abs() < 2e-12 * mat.rho * mat.cp * volume,
+                            "{kind:?} {id:?} curvature={curvature} C[{a},{b}]"
+                        );
+                        for i in 0..dim {
+                            for j in 0..dim {
+                                let expected = if i == j { want } else { 0.0 };
+                                assert!(
+                                    (m[(a * dim + i) * nd + b * dim + j] - expected).abs() < 2e-12 * mat.rho * volume,
+                                    "{kind:?} {id:?} curvature={curvature} M[{a},{b}]"
+                                );
+                            }
+                        }
+                    }
+                }
+                // Every Cholesky pivot is positive: this detects the old rank-deficient rules.
+                for a in 0..nn {
+                    for b in 0..=a {
+                        let pivot =
+                            scalar[a * nn + b] - (0..b).map(|k| scalar[a * nn + k] * scalar[b * nn + k]).sum::<f64>();
+                        scalar[a * nn + b] = if a == b {
+                            assert!(pivot > 1e-8 * mat.rho * volume, "{kind:?} pivot {a} = {pivot}");
+                            pivot.sqrt()
+                        } else {
+                            pivot / scalar[b * nn + b]
+                        };
+                    }
+                }
+                let diagonal: Vec<f64> = (0..nn).map(|a| m[(a * dim) * nd + a * dim]).collect();
+                let trace = diagonal.iter().sum::<f64>();
+                element_for(kind).mass(&c, &mut m, true).expect("HRZ lumping");
+                for i in 0..nd {
+                    let want = diagonal[i / dim] * mat.rho * volume / trace;
+                    assert!(m[i * nd + i] > 0.0);
+                    assert!((m[i * nd + i] - want).abs() < 2e-12 * mat.rho * volume);
+                    for j in 0..nd {
+                        assert!(i == j || m[i * nd + j] == 0.0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn simplex_axial_modes_converge_to_the_closed_form_bar_frequency() {
+    for kind in SIMPLEX_KINDS {
+        let mut errors = Vec::new();
+        for n in [4, 8, 16] {
+            let mesh = Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.01, 0.01]);
+            let mut sets = sets_of(&mesh);
+            sets.insert(
+                "all".into(),
+                ResolvedSet {
+                    kind: SetKind::Node,
+                    nodes: (0..mesh.n_nodes() as u32).collect(),
+                    elems: Vec::new(),
+                    faces: Vec::new(),
+                },
+            );
+            let bodies = one_body();
+            let id = if kind.dim() == 3 { Idealisation::Solid3d } else { Idealisation::PlaneStrain };
+            let mut p = problem(
+                &mesh,
+                &sets,
+                &bodies,
+                id,
+                Formulation::Full,
+                vec![
+                    fix("root", "xmin", [true, false, false], 0.0),
+                    fix("transverse", "all", [false, true, kind.dim() == 3], 0.0),
+                ],
+            );
+            p.materials[0].props = vec![1.0, 0.0];
+            p.materials[0].rho = 1.0;
+            let res = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
+                .expect("axial bar mode");
+            // u=sin(pi*x/2), E=rho=L=1 => f=1/4 Hz.
+            errors.push((res.frequencies[0] / 0.25 - 1.0).abs());
+        }
+        let rate = observed_rate(&[0.25, 0.125, 0.0625], &errors);
+        let required = if kind.n_nodes() == kind.dim() + 1 { 1.9 } else { 3.8 };
+
+        assert!(rate > required, "{kind:?} modal rate {rate}: {errors:?}");
+        assert!(errors[2] < 0.001, "{kind:?}: {errors:?}");
+    }
+}
+
+#[test]
+fn simplex_transient_capacity_converges_to_the_forced_slab_fourier_solution() {
+    let end = 0.1;
+    // T=x(1-x)/2 - sum_{m odd} 4 sin(m*pi*x) exp(-m²*pi²*t)/(m*pi)³.
+    let exact = 1.0 / 12.0
+        - (0..40)
+            .map(|j| {
+                let m = (2 * j + 1) as f64;
+                8.0 / (m * PI).powi(4) * libm::exp(-(m * PI).powi(2) * end)
+            })
+            .sum::<f64>();
+    for kind in SIMPLEX_KINDS {
+        let mut errors = Vec::new();
+        for n in [4, 8, 16] {
+            let mesh = Structured { kind, n: [n, 1, 1] }.box_([1.0, 0.01, 0.01]);
+            let sets = sets_of(&mesh);
+            let bodies = one_body();
+            let id = if kind.dim() == 3 { Idealisation::Solid3d } else { Idealisation::PlaneStrain };
+            let p = heat_problem(
+                &mesh,
+                &sets,
+                &bodies,
+                id,
+                conductor(1.0, 1.0, 1.0),
+                vec![hold("cold", "xmin", 0.0), hold("cold2", "xmax", 0.0)],
+                vec![HeatLoad::Source { bodies: bodies.clone(), q: 1.0 }],
+            );
+            let step = Step::HeatTransient {
+                dt: 0.00001,
+                t_end: end,
+                theta: 0.5,
+                initial: 0.0,
+                output_every: 10000,
+                amplitude: None,
+                solver: SolveOptions::default(),
+            };
+            let res = run_step(&p, &step).expect("heated slab");
+            // Every structured simplex has equal volume. Integrate T_h using exact
+            // barycentric moments, independently of the capacity matrix under test.
+            let temperature = temperature_of(&res);
+            let moments: Vec<f64> = bary_shapes(kind)
+                .iter()
+                .map(|shape| bary_integral(shape, kind.dim()) * factorial(kind.dim() as i32))
+                .collect();
+            let mut mean = 0.0;
+            for elem in 0..mesh.n_elems() {
+                for (&node, &moment) in mesh.elem_nodes(elem as u32).iter().zip(&moments) {
+                    mean += temperature[node as usize] * moment / mesh.n_elems() as f64;
+                }
+            }
+            errors.push((mean - exact).abs());
+        }
+        let rate = observed_rate(&[0.25, 0.125, 0.0625], &errors);
+        let required = if kind.n_nodes() == kind.dim() + 1 { 1.8 } else { 3.5 };
+
+        assert!(errors.windows(2).all(|pair| pair[1] < pair[0]), "{kind:?}: {errors:?}");
+        assert!(rate > required, "{kind:?} transient rate {rate}: {errors:?}");
+        assert!(errors[2] < 0.0002, "{kind:?}: {errors:?}");
+    }
+}
+
+/// Every structural family must share one acceleration under uniform gravity, even where
+/// consistent higher-order nodal gravity has negative/zero entries while HRZ masses are positive.
+/// Pappus gives the axisymmetric annulus mass; its axial translation is also a rigid mode.
+#[test]
+fn explicit_gravity_uses_its_lumped_inertia_for_all_kinds_and_idealisations() {
+    let velocity = [0.0, 0.2, 0.0];
+    let gravity = [0.0, -9.81, 0.0];
+    for kind in ALL_KINDS {
+        for id in idealisations(kind) {
+            for nx in [1, 2, 4] {
+                let mut mesh = Structured { kind, n: [nx, 1, 1] }.box_([1.0, 0.1, 0.1]);
+                // r spans [1,2], away from the axis, with centroid radius 1.5.
+                for x in mesh.coords.iter_mut().step_by(3) {
+                    *x += 1.0;
+                }
+                let sets = sets_of(&mesh);
+                let bodies = one_body();
+                let mut p = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, Vec::new());
+                p.loads = vec![Load::Gravity { g: [0.0, -4.0, 0.0] }, Load::Gravity { g: [0.0, -5.81, 0.0] }];
+                let dpn = p.dofs_per_node();
+                let base = if kind.dim() == 3 { 0.01 } else { 0.1 };
+                let total_mass = DENSITY * weighted(&id, base, 1.5);
+                // The unchanged consistent path still conserves total gravity. Quadratic
+                // nodal distribution must remain consistent for static/modal calculations.
+                let mut consistent = vec![0.0; mesh.n_nodes() * dpn];
+                let totals = assemble_loads(&p, &mut consistent).unwrap();
+                assert!((totals.force[1] - total_mass * gravity[1]).abs() < 1e-11 * total_mass);
+                for factor in [0.5, 0.9] {
+                    for ratio in [0.25, 6.25] {
+                        let end = ratio * factor * critical_step(&p);
+                        let step = Step::Explicit {
+                            t_end: end,
+                            dt_factor: factor,
+                            initial_velocity: Some(velocity[..dpn].repeat(mesh.n_nodes())),
+                            output_every: 2,
+                        };
+                        let mut previous = None;
+                        for threads in [1, 4] {
+                            let mut progress = |_: Progress| true;
+                            let pool = Pool::new(threads);
+                            let res = pollster::block_on(procedure::run(&p, &step, &pool, None, None, &mut progress))
+                                .unwrap();
+                            let history = res.history.unwrap();
+                            assert_eq!(*history.times.last().unwrap(), end);
+                            for (&time, field) in history.times.iter().zip(&history.values) {
+                                for (i, value) in field.iter().enumerate() {
+                                    let c = i % dpn;
+                                    let expected = velocity[c] * time + 0.5 * gravity[c] * time * time;
+                                    assert!(
+                                        (value - expected).abs() < 1e-10 * end,
+                                        "{kind:?} {id:?} nx{nx} factor{factor} t{time}: {value} vs {expected}"
+                                    );
+                                }
+                            }
+                            // The integrator reports half-step velocity at t+dt/2. Its total
+                            // momentum increment is the impulse of the independently known weight.
+                            let expected_momentum =
+                                total_mass * (velocity[1] + gravity[1] * (end + 0.5 * res.scalars["dt"]));
+                            assert!((res.scalars["momentum_y"] - expected_momentum).abs() < 1e-10 * total_mass);
+                            if let Some(previous) = previous {
+                                assert_eq!(history, previous);
+                            }
+                            previous = Some(history);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A single affine quad8's consistent gravity has negative corner loads (-rho*A*g/12)
+/// and positive midside loads (rho*A*g/3). Explicit uses HRZ, but the general static/modal
+/// load assembler must keep these exact shape-function integrals.
+#[test]
+fn consistent_quadratic_gravity_distribution_remains_unchanged() {
+    let mesh = Structured { kind: ElementKind::Quad8, n: [1, 1, 1] }.box_([1.0, 1.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p =
+        problem(&mesh, &sets, &bodies, Idealisation::PlaneStress { thickness: 0.5 }, Formulation::Full, Vec::new());
+    p.loads = vec![Load::Gravity { g: [0.0, -12.0, 0.0] }];
+    let mut f = vec![0.0; 2 * mesh.n_nodes()];
+    let totals = assemble_loads(&p, &mut f).unwrap();
+    let weight = -12.0 * DENSITY * 0.5;
+    assert!((totals.force[1] - weight).abs() < 1e-10);
+    for i in 0..mesh.n_nodes() {
+        let [x, y, _] = mesh.node(i as u32);
+        let corner = (x == 0.0 || x == 1.0) && (y == 0.0 || y == 1.0);
+        let expected = if corner { -weight / 12.0 } else { weight / 3.0 };
+        assert!((f[2 * i + 1] - expected).abs() < 1e-10);
+        assert_eq!(f[2 * i], 0.0);
     }
 }

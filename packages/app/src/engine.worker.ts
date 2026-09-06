@@ -5,7 +5,7 @@
 import init, { Engine, version } from './generated/wasm/femlab_engine_wasm.js';
 import wasmUrl from './generated/wasm/femlab_engine_wasm_bg.wasm?url';
 import { siUnitOf } from './fields';
-import type { ResultSummary } from '@femlab/registry';
+import type { BufferSpec, FrameResult, ResultSummary } from '@femlab/registry';
 import type { AppReq, AppRes } from './protocol';
 import { toStructured } from './protocol';
 import { restoreHistory } from './recovery';
@@ -16,7 +16,7 @@ let tail: Promise<unknown> = Promise.resolve();
 
 interface Bulk {
   value: unknown;
-  buffers: { name: string; dtype: 'f32' | 'u32' | 'u8'; length: number }[];
+  buffers: BufferSpec[];
   raw: ArrayBuffer[];
 }
 
@@ -39,7 +39,13 @@ function surface(): Bulk {
     indices: Uint32Array;
     triSet: Uint32Array;
     triBody: Uint32Array;
+    edges: Uint32Array;
+    edgeSet: Uint32Array;
+    edgeBody: Uint32Array;
     setNames: string[];
+    membershipNames: string[];
+    triSetOffsets: Uint32Array;
+    triSets: Uint32Array;
     bodyNames: string[];
     source: string;
   };
@@ -48,9 +54,14 @@ function surface(): Bulk {
     { name: 'indices', dtype: 'u32' as const, view: s.indices.slice() },
     { name: 'triFace', dtype: 'u32' as const, view: s.triSet.slice() },
     { name: 'triBody', dtype: 'u32' as const, view: s.triBody.slice() },
+    { name: 'triSetOffsets', dtype: 'u32' as const, view: s.triSetOffsets.slice() },
+    { name: 'triSets', dtype: 'u32' as const, view: s.triSets.slice() },
+    { name: 'edges', dtype: 'u32' as const, view: s.edges.slice() },
+    { name: 'edgeFace', dtype: 'u32' as const, view: s.edgeSet.slice() },
+    { name: 'edgeBody', dtype: 'u32' as const, view: s.edgeBody.slice() },
   ];
   return {
-    value: { faceNames: s.setNames, bodyNames: s.bodyNames, source: s.source },
+    value: { faceNames: s.setNames, setNames: s.membershipNames, bodyNames: s.bodyNames, source: s.source },
     buffers: arrays.map((a) => ({ name: a.name, dtype: a.dtype, length: a.view.length })),
     raw: arrays.map((a) => a.view.buffer as ArrayBuffer),
   };
@@ -67,8 +78,17 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
       });
       return JSON.parse(json);
     }
-    case 'query':
-      return JSON.parse(need().query(JSON.stringify(req.payload)));
+    case 'query': {
+      if ((req.payload as { query: string }).query !== 'query.frame') return JSON.parse(need().query(JSON.stringify(req.payload)));
+      // Rust uses the same Query resolver and copies f64 values into an owned JS buffer.
+      // Transfer that staging allocation; never transfer a view of the retained History.
+      const { values, ...metadata } = need().query_transfer(JSON.stringify(req.payload)) as Omit<FrameResult, 'values'> & { values: Float64Array };
+      return {
+        value: metadata,
+        buffers: [{ name: 'values', dtype: 'f64' as const, length: values.length }],
+        raw: [values.buffer as ArrayBuffer],
+      };
+    }
     case 'surface':
       return surface();
     case 'field': {

@@ -7,6 +7,12 @@ the guided tutorial that builds it step by step). `tools/copy-examples.mjs` fold
 `packages/app/public/examples/index.json`, sorted by difficulty then name, which the Examples
 gallery (DESIGN-BRIEF §5.7) and the Start screen's "Open an example" both read.
 
+CI and the Pages deploy build the app once, replay each Journal through its real Mesh Commands
+in Chromium, and capture the viewer canvas at 320×180 before the final build. Solve and study
+Commands are omitted from this image pass, so the cards show the actual model shape without
+pretending to show a Result; the expected-value metadata beside each image carries the physics.
+The PNGs total less than 200 kB and are lazy-loaded only after the gallery opens.
+
 **Every entry ends on `solve.run`.** Opening an example therefore shows a solved Result, not a
 ready-to-solve Model: the fastest path from a blank page to a contour plot is one click.
 `crates/femlab/tests/cli.rs` replays every one of them with `--verify` — solves included — on

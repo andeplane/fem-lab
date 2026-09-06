@@ -1427,6 +1427,11 @@ export type Query =
       query: "query.model";
     }
   | {
+      kind: ObjectKind;
+      name: string;
+      query: "query.definition";
+    }
+  | {
       query: "query.mesh";
     }
   | {
@@ -1439,8 +1444,20 @@ export type Query =
     }
   | {
       step?: string | null;
+      query: "query.frames";
+    }
+  | {
+      step?: string | null;
+      index?: number | null;
+      sample?: FrameSample | null;
+      field?: Field | null;
+      query: "query.frame";
+    }
+  | {
+      step?: string | null;
       field: Field;
       component?: number | null;
+      sample?: FrameSample | null;
       /**
        * @minItems 3
        * @maxItems 3
@@ -1476,6 +1493,7 @@ export type Query =
       step?: string | null;
       field: Field;
       component?: number | null;
+      sample?: FrameSample | null;
       /**
        * @minItems 3
        * @maxItems 3
@@ -1570,6 +1588,34 @@ export type Query =
       query: "query.capabilities";
     };
 /**
+ * How to select retained output; there is no temporal interpolation or extrapolation.
+ */
+export type FrameSample =
+  | {
+      index: number;
+      kind: "frame";
+    }
+  | {
+      /**
+       * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
+       */
+      time:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      sampling: TimeSampling;
+      kind: "time";
+    };
+/**
+ * Exact accepts SI conversion roundoff only: 8 epsilon times the larger absolute time.
+ * Nearest explicitly selects a retained time; equal-distance ties (within the same relative
+ * roundoff bound on the distances) choose the earlier frame.
+ * Both reject times outside the retained interval (except endpoint conversion roundoff).
+ */
+export type TimeSampling = "exact" | "nearest";
+/**
  * A number with a unit, as text or as parts.
  */
 export type Quantity =
@@ -1588,9 +1634,12 @@ export type ReportSection =
  */
 export type QueryResult =
   | ModelSummary
+  | ObjectDefinition
   | MeshSummary
   | SetInfo
   | ResultSummary
+  | FramesResult
+  | FrameResult
   | ProbeResult
   | PathResult
   | CostEstimate
@@ -3221,6 +3270,12 @@ export interface Warning {
   where?: string | null;
 }
 /**
+ * Lossless input for editing one Model object through the same Command used to create it.
+ */
+export interface ObjectDefinition {
+  command: Command;
+}
+/**
  * `query.mesh` response.
  */
 export interface MeshSummary {
@@ -3284,6 +3339,10 @@ export interface SetInfo {
  */
 export interface ResultSummary {
   step: string;
+  /**
+   * The Journal revision after the Command that produced this Result. It stays fixed while
+   * later edits make the Result stale and when undo removes that producing Command.
+   */
   revision: number;
   stale: boolean;
   solver: string;
@@ -3305,12 +3364,6 @@ export interface ResultSummary {
    */
   appliedTotal: [Valued, Valued, Valued];
   /**
-   * Thermal stored-energy rate in power display units (zero for steady heat). Transient
-   * power totals/reactions use the last θ-method integration stage; the temperature field
-   * itself is at the final time. Positive reactions remove heat: applied − removed = storage.
-   */
-  storagePower?: Valued | null;
-  /**
    * Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
    * shape is the Result field named `mode:k`.
    */
@@ -3326,6 +3379,12 @@ export interface ResultSummary {
    * Zero is perfect balance; values above 1e-9 fail the report's conservation check.
    */
   balance: number;
+  /**
+   * Thermal stored-energy rate in power display units (zero for steady heat). Transient
+   * power totals/reactions use the last θ-method integration stage; the temperature field
+   * itself is at the final time. Positive reactions remove heat: applied − removed = storage.
+   */
+  storagePower?: Valued | null;
 }
 /**
  * One extreme of a field component.
@@ -3363,9 +3422,62 @@ export interface HistoryRow {
   max: Valued;
 }
 /**
+ * `query.frames` response; stored components describe the unpadded History storage.
+ */
+export interface FramesResult {
+  step: string;
+  modelHash: string;
+  stale: boolean;
+  nodeCount: number;
+  field: Field;
+  /**
+   * Public field layout, matching final FieldData (three components, zero-padded).
+   */
+  components: number;
+  storedComponents: number;
+  /**
+   * Logical bytes of retained f64 times and unpadded primary values; excludes allocator
+   * overhead, spare capacity, final derived fields and temporary Query response copies.
+   */
+  retainedBytes: number;
+  frames: FrameStamp[];
+}
+/**
+ * One retained frame's zero-based index and time in seconds and Model display units.
+ */
+export interface FrameStamp {
+  index: number;
+  timeSi: number;
+  time: Valued;
+}
+/**
+ * `query.frame` response: SI values in the existing component-fastest FieldData layout.
+ */
+export interface FrameResult {
+  sample: ResolvedFrame;
+  field: Field;
+  components: number;
+  nodeCount: number;
+  /**
+   * SI unit for values: K for temperature, m for displacement, never a display unit.
+   */
+  unit: string;
+  values: number[];
+}
+/**
+ * Result identity and the actual resolved sample. The solved Model hash is not a solve-instance
+ * counter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.
+ */
+export interface ResolvedFrame {
+  step: string;
+  modelHash: string;
+  frame: FrameStamp;
+}
+/**
  * `query.probe` response.
  */
 export interface ProbeResult {
+  sample?: ResolvedFrame | null;
   value: Valued;
   element: number;
   interpolated: boolean;
@@ -3374,6 +3486,7 @@ export interface ProbeResult {
  * `query.path` response.
  */
 export interface PathResult {
+  sample?: ResolvedFrame | null;
   s: number[];
   values: (number | null)[];
   unit: string;
@@ -3392,17 +3505,49 @@ export interface CostEstimate {
    */
   nnzLower: number;
   /**
-   * Mandatory assembly storage lower bound in bytes, including element slots and two CSRs.
-   * Excludes mesh/model, element buffers, reduction, solver storage/fill and time history.
+   * Estimated peak of the counted solve and frame-read phases. It includes mandatory
+   * assembly storage, retained primary values, a conservative transient f64 working-vector
+   * allowance and known native/browser frame-response storage. It is incomplete because
+   * solver fill, JSON and allocator overhead are not known before solving.
    */
   bytes: number;
+  /**
+   * Mandatory assembly storage before transient-specific values are added.
+   */
+  assemblyBytes: number;
+  /**
+   * Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
+   */
+  retainedFrames: number;
+  /**
+   * Logical f64 bytes for retained times and unpadded primary values.
+   */
+  retainedBytes: number;
+  /**
+   * Conservative full-field allowance for procedure working f64 vectors live with History.
+   * Free-DOF vectors are charged at the full nodal length.
+   */
+  transientWorkBytes: number;
+  /**
+   * One normalized three-component f64 frame owned by a native Query result.
+   */
+  transportStagingBytes: number;
+  /**
+   * Known lower bound for the WASM/Worker frame route while two normalized three-component
+   * numeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.
+   */
+  wasmTransportStagingBytes: number;
+  /**
+   * False while the generic JSON route has value- and runtime-dependent allocation overhead.
+   */
+  wasmTransportStagingComplete: boolean;
   /**
    * Fixed 1.5 GiB planning budget; not measured free memory on the current host.
    */
   budgetBytes: number;
   /**
-   * False if mandatory storage exceeds the planning budget; null means feasibility is
-   * unknown. Fitting a lower bound does not establish that assembly or factorisation fits.
+   * False if the counted conservative estimate exceeds the planning budget; null means
+   * feasibility is unknown. Fitting it does not establish that assembly or factorisation fits.
    */
   feasible?: boolean | null;
   note: string;
@@ -3709,6 +3854,7 @@ export interface EngineError {
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
     | "solve.stalled"
+    | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
     | "explicit.unstable";

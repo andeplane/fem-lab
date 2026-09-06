@@ -21,7 +21,7 @@ use crate::fem::heat::{capacity, conductivity, face_integrals, source, HeatLoad}
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, Per};
-use crate::procedure::{blank, report, time_grid, vector_field, History, StepResult};
+use crate::procedure::{blank, report, retained_frame_count, time_grid, vector_field, History, StepResult};
 use crate::solve::{direct::Direct, solve, LinearSolve, SolveInfo, SolveOptions};
 
 fn finite_positive(value: f64) -> bool {
@@ -324,6 +324,7 @@ pub fn transient(
     // prescribed values, which the amplitude scales linearly.
     let zeros = vec![0.0; a.n];
     let red = reduce(&a, &zeros, &rc);
+    drop(zeros);
     // Positive transport properties and theta make this positive definite for ordinary heat
     // boundaries. A malformed extension or unsupported boundary must still be an Error rather
     // than taking down the host Worker.
@@ -335,7 +336,8 @@ pub fn transient(
         t[dof as usize] = red.u_fixed[i] * g(0.0);
     }
     let every = output_every.max(1);
-    let mut history = History { field: Field::Temperature, times: vec![0.0], values: vec![t.clone()] };
+    let frames = retained_frame_count(n_steps, every).expect("time_grid bounds the retained-frame count");
+    let mut history = History::with_initial(Field::Temperature, t.clone(), frames);
     let mut previous = Vec::new();
     let mut rhs_full = vec![0.0; a.n];
     let mut rhs_f = vec![0.0; red.free.len()];
