@@ -97,7 +97,7 @@ describe('runtime lifecycle and the hostile message boundary', () => {
     fake.events.emit('message', text);
     expect((await result).error).toBe('invalid script runtime message');
   });
-  it.each([{}, 'x'.repeat(1024 * 1024 + 1)])('bounds raw worker messages', async (text) => {
+  it.each([{}, 'x'.repeat(1024 * 1024 + 1), '💥'.repeat(300_000)])('bounds raw worker messages', async (text) => {
     const fake = fakeRuntime();
     const result = runScript('', nothing, nothing, undefined, fake.deps);
     fake.events.emit('message', text);

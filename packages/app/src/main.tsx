@@ -1,3 +1,4 @@
+import { migratePersistentKeys } from './ai/key-storage';
 import { browserScriptValidator } from './script-validation-host';
 // Boot (plan B §7.4): capabilities → engine Worker → Registry → `window.fem` → `<App/>`.
 // The shell renders first and the engine arrives into it, so the start screen is on screen
@@ -33,6 +34,7 @@ const viewer: ViewerRef = { current: null };
 const root = document.getElementById('app')!;
 
 async function boot(): Promise<void> {
+  migratePersistentKeys();
   const host = readHostCaps();
   store.set({ hostCaps: host, notes: capabilityNotes(host, null) });
 
@@ -107,12 +109,13 @@ async function boot(): Promise<void> {
     store.set({ lastError: null });
     // Before, not after: `file.openExample` refreshes on its own way out, and by then the fork
     // has to have happened or the example is written over the project it replaced.
-    if (REPLACES_MODEL.has(cmd.cmd)) forkProject();
+    if (cmd.cmd === 'file.openExample') forkProject();
     // A long Command owns the Solve button and the solving card until it settles either way.
     const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
       const ack = await registry.dispatch(cmd);
+      if (REPLACES_MODEL.has(cmd.cmd) && cmd.cmd !== 'file.openExample') forkProject();
       store.log('command', cmd.cmd);
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, and `file.open` / `example.open` replace the engine Model and

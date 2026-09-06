@@ -197,7 +197,13 @@ async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, 
   return { name, to: dest };
 }
 
+/** Browser imports are bounded before JSON parsing or transfer to the engine Worker. */
+export const MAX_MODEL_FILE_BYTES = 16 * 1024 * 1024;
+
 async function importText(ctx: HostContext, text: string) {
+  if (text.length > MAX_MODEL_FILE_BYTES || new TextEncoder().encode(text).byteLength > MAX_MODEL_FILE_BYTES) {
+    throw new FemError('schema', 'Model file exceeds the 16 MiB import limit', 'json', 'open a smaller file written by file.save');
+  }
   let file: ModelFile;
   try {
     file = JSON.parse(text) as ModelFile;
@@ -329,7 +335,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
   def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
   def('panel.resize', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
-  def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with an optional timeout in milliseconds. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), async ({ code, timeoutMs }, ctx) => {
+  def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with a default and maximum 30000 ms execution deadline and a 64000-character source limit. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string().max(64000), timeoutMs: z.number().finite().positive().max(30000).optional() }), async ({ code, timeoutMs }, ctx) => {
     const validation = await ctx.script.validate(code);
     if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
     return ctx.script.run(code, timeoutMs);
@@ -354,7 +360,7 @@ export const HOST_COMMANDS: HostDef[] = [
     await ctx.clipboard.writeText(text);
     return { text };
   }),
-  def('file.open', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Replaces the current Model and Journal.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
+  def('file.open', 'Open a saved Model file (`femlab/1` JSON): from `json` text, from a `path` relative to the open project folder, or with the file picker. Accepts at most 16 MiB of UTF-8 JSON. Replaces the current Model and Journal after engine validation.', z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) }), z.object({ path: z.string() })]), async (how, ctx) => {
     if ('json' in how) return importText(ctx, how.json);
     if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
     return importText(ctx, await ctx.files.pick());
@@ -398,7 +404,7 @@ export const HOST_COMMANDS: HostDef[] = [
     none, (_, ctx) => ctx.projects.save()),
   def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
-  def('ai.setKey', 'Store an AI provider key in this browser only (localStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
+  def('ai.setKey', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
   def('ai.setModel', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
 ];
 
