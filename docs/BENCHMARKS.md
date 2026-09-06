@@ -92,6 +92,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | A7 | Reaction balance, every case | Σ reactions = −Σ applied loads | 1e-9 rel | Dirichlet handling and reaction recovery | engine test + green |
 | A8 | Journal replay, every case | Model hash identical after replay | exact | the engine is deterministic and scriptable | engine test |
 | A9 | GPU CG early convergence on identity and positive diagonal systems, 1 / 7 / 257 equations | `x_i = b_i / d_i`, including zero RHS | exact for powers-of-four diagonals | converged corrections survive the rest of a 25-iteration submission; reused contexts reset correctly | GPU test |
+| A10 | Simplex consistent mass and capacity, tri3/tri6/tet4/tet10 | Dirichlet barycentric integrals: ∫∏λᵢ^aᵢ = ∏aᵢ!/(d+Σaᵢ)! | 2e-12 × total mass/capacity per entry | exact entries, positive definite consistent mass, positive conservative HRZ lumping | engine test |
 
 A5 is run for all eight element kinds, driven by a prescribed end displacement so the reaction
 *is* `F`; A7's scale is the largest force that flows through the model, because a Step driven by
@@ -134,6 +135,21 @@ and `Gm^-35 = 1e-315 m^-35` remain valid. A shared native/wasm fixture verifies 
 temperature, geometry and display-unit Commands preserve the complete saved Model and Journal,
 and conversion Queries never serialize nonfinite numbers as JSON `null`.
 
+A10 (`every_simplex_mass_and_capacity_entry_matches_barycentric_closed_forms`) checks
+all entries, component blocks and Cholesky pivots on scaled affine simplices and curved
+quadratic maps. Plane stress includes thickness, plane strain unit depth, axisymmetry the
+variable `2πr` factor, and solids the full volume Jacobian. The independent oracle expands
+barycentric polynomials and integrates them by factorials; it calls neither production shape
+functions nor quadrature. Every HRZ diagonal is checked against the exact consistent diagonal
+scaled to the exact total. Positive quadrature weights avoid the zero/negative nodal masses
+that row-sum lumping would produce for quadratic simplices.
+
+`simplex_product_quadrature_integrates_the_required_polynomial_degrees` also checks every
+reference monomial, including unit-measure normalization, through degree 3 (tri3), 8 (tri6),
+2 (tet4), and 7 (tet10). The product `NᵀN` has degree 2 or 4; curved quadratic `det J`
+adds degree 2/3 in 2D/3D, and axisymmetric `r` adds degree 2. Compile-time collapsed
+Gauss tables are positive and cover these factors; stiffness/recovery retains its own rule.
+
 ## B. Beams and locking (phase 1–2)
 
 | # | Case | Reference | Tolerance | Proves | Status |
@@ -144,6 +160,11 @@ and conversion Queries never serialize nonfinite numbers as JSON `null`.
 | B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (modes 2 and 3, Timoshenko drift) | mass matrix, eigen solver | engine test + green |
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
+| B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
+
+B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
+motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
+refinements n=4,8,16 give rates about 2.00 for tri3/tet4 and 4.02/4.05 for tri6/tet10.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
@@ -256,6 +277,7 @@ hands out simplices, so `split_to_simplices` is reachable only from the geometry
 | E2 | Ansys VM97 fin, conduction + convection | 1D fin with a convective tip, `θ(L)/θ₀ = 1/[cosh mL + (h/mk) sinh mL]` | 2 % (see below) | convection with an analytical fin solution | engine test |
 | E3 | NAFEMS T3 1D transient, sinusoidal boundary | T = 36.60 °C, 20 mm inside the driven face at t = 32 s | 0.5 °C | transient integrator, θ-method order | engine test + green |
 | E4 | NAFEMS T2 conduction + radiation | T(B) = 927 K | 1 % | radiation BC (if/when added) | |
+| E5 | Forced transient slab, all four simplex kinds | mean T(t) = 1/12 − Σ(m odd) 8 exp(−m²π²t)/(mπ)⁴, at t=0.1 | finest mean error < 2e-4; monotone refinement, rate > 1.8 (linear), > 3.5 (quadratic) | capacity and transient mesh convergence | engine test |
 
 E1 runs the four element families on the same bar and checks every node, not just a probe: the
 profile is linear to 1e-10 for all of them, and the heat that enters at the hot end leaves at
@@ -289,6 +311,15 @@ and a matching prescribed-temperature ramp, on two mesh sizes with both θ = 0.5
 Requested `(dt, tEnd)` pairs `(0.6, 1)`, `(0.4, 0.9)`, and `(2, 0.25)` must reach exactly
 `tEnd` in the saved history and the correct temperature at every node. The requested step is
 an upper bound; a uniform adjusted step preserves one reusable factorisation.
+
+The simplex E5 regression (`simplex_transient_capacity_converges_to_the_forced_slab_fourier_solution`)
+starts at zero, holds both ends at zero, and applies a unit volumetric source with
+k=ρ=cₚ=L=1. The sides are insulated. It refines the axial mesh n=4,8,16 for tri3,
+tri6, tet4 and tet10. Crank–Nicolson uses Δt=1e-5, keeping temporal error below the
+finest spatial error. Stored heat is integrated independently with exact barycentric moments
+of the temperature field on the equal-volume simplices, then compared to the Fourier mean.
+The polynomial steady contribution is integrated in closed form, so the exponentially decaying
+40-term series has negligible truncation error. No numerical reference mesh is the oracle.
 
 ## F. Dynamics and explicit (phase 2, 6)
 

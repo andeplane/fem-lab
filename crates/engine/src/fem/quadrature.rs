@@ -1,6 +1,5 @@
 //! Quadrature rules on the reference domains: Gauss–Legendre tensor products on the square
-//! `[-1,1]²` and cube `[-1,1]³`, and the degree-1/degree-2 rules on the unit triangle and
-//! tetrahedron. Every rule is a static table; the element code picks one per reference element.
+//! `[-1,1]²` and cube `[-1,1]³`, and simplex rules selected for the integral degree. Every rule is a static table.
 
 /// Points (`[ξ, η, ζ]`, unused coordinates zero) and weights of one rule. Weights sum to the
 /// reference measure: 4 (square), 8 (cube), 1/2 (triangle), 1/6 (tetrahedron).
@@ -148,3 +147,67 @@ pub const TET_4: Rule = Rule {
     points: &[[TET_A, TET_B, TET_B], [TET_B, TET_A, TET_B], [TET_B, TET_B, TET_A], [TET_B, TET_B, TET_B]],
     weights: &[1.0 / 24.0; 4],
 };
+
+// Positive Gauss–Legendre rules on [0, 1]. Collapsing a square/cube onto a simplex
+// multiplies the integrand by (1-u) / (1-u)^2(1-v), respectively. The tables below
+// are formed at compile time; no runtime quadrature construction or allocation is needed.
+const UNIT_GL3: [(f64, f64); 3] = [((1.0 - G3) / 2.0, W5 / 2.0), (0.5, W8 / 2.0), ((1.0 + G3) / 2.0, W5 / 2.0)];
+const UNIT_GL5: [(f64, f64); 5] = [
+    (0.046_910_077_030_668, 0.118_463_442_528_095),
+    (0.230_765_344_947_158_45, 0.239_314_335_249_683_25),
+    (0.5, 0.284_444_444_444_444_44),
+    (0.769_234_655_052_841_5, 0.239_314_335_249_683_25),
+    (0.953_089_922_969_332, 0.118_463_442_528_095),
+];
+
+const TRI_9_TABLE: ([[f64; 3]; 9], [f64; 9]) = {
+    let mut points = [[0.0; 3]; 9];
+    let mut weights = [0.0; 9];
+    let mut i = 0;
+    while i < 9 {
+        let (u, wu) = UNIT_GL3[i / 3];
+        let (v, wv) = UNIT_GL3[i % 3];
+        points[i] = [u, (1.0 - u) * v, 0.0];
+        weights[i] = wu * wv * (1.0 - u);
+        i += 1;
+    }
+    (points, weights)
+};
+
+/// Positive collapsed Gauss rule on the unit triangle, exact through total degree 4.
+pub const TRI_9: Rule = Rule { points: &TRI_9_TABLE.0, weights: &TRI_9_TABLE.1 };
+
+const TRI_25_TABLE: ([[f64; 3]; 25], [f64; 25]) = {
+    let mut points = [[0.0; 3]; 25];
+    let mut weights = [0.0; 25];
+    let mut i = 0;
+    while i < 25 {
+        let (u, wu) = UNIT_GL5[i / 5];
+        let (v, wv) = UNIT_GL5[i % 5];
+        points[i] = [u, (1.0 - u) * v, 0.0];
+        weights[i] = wu * wv * (1.0 - u);
+        i += 1;
+    }
+    (points, weights)
+};
+
+/// Positive collapsed Gauss rule on the unit triangle, exact through total degree 8.
+pub const TRI_25: Rule = Rule { points: &TRI_25_TABLE.0, weights: &TRI_25_TABLE.1 };
+
+const TET_125_TABLE: ([[f64; 3]; 125], [f64; 125]) = {
+    let mut points = [[0.0; 3]; 125];
+    let mut weights = [0.0; 125];
+    let mut i = 0;
+    while i < 125 {
+        let (u, wu) = UNIT_GL5[i / 25];
+        let (v, wv) = UNIT_GL5[(i / 5) % 5];
+        let (z, wz) = UNIT_GL5[i % 5];
+        points[i] = [u, (1.0 - u) * v, (1.0 - u) * (1.0 - v) * z];
+        weights[i] = wu * wv * wz * (1.0 - u) * (1.0 - u) * (1.0 - v);
+        i += 1;
+    }
+    (points, weights)
+};
+
+/// Positive collapsed Gauss rule on the unit tetrahedron, exact through total degree 7.
+pub const TET_125: Rule = Rule { points: &TET_125_TABLE.0, weights: &TET_125_TABLE.1 };
