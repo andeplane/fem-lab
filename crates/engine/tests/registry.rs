@@ -2866,7 +2866,7 @@ fn thermal_reactions_keep_power_units_in_every_result_view() {
                 let md = report(&mut e, Some("heat"), Some(vec![ReportSection::Results])).markdown;
                 assert!(md.contains("| Constraint | Power | Unit |"), "{md}");
                 assert!(md.contains("max|Q|"), "{md}");
-                let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#).output;
+                let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"heat"}"#).output;
                 let output = serde_json::to_value(output).unwrap();
                 assert!(output["text"].as_str().unwrap().contains("Name=\"ReactionPower_W\""));
                 assert_eq!(e.field(Some("heat"), Field::Reaction).unwrap(), &raw);
