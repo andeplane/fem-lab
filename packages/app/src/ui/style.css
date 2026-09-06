@@ -867,13 +867,15 @@ textarea:focus {
 .jrow,
 .crow {
   display: flex;
-  gap: 12px;
   width: 100%;
-  padding: 2.5px 14px;
   font-family: var(--mono);
   font-size: 11.5px;
   text-align: left;
   border-left: 2px solid transparent;
+}
+.crow {
+  gap: 12px;
+  padding: 2.5px 14px;
 }
 .jrow:hover {
   background: #171a20;
@@ -881,6 +883,29 @@ textarea:focus {
 .jrow.stale {
   background: var(--warn-bg);
   border-left-color: var(--yellow);
+}
+.jrow-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 12px;
+  padding: 2.5px 8px 2.5px 12px;
+  text-align: left;
+}
+.jrow-main:disabled {
+  opacity: 0.58;
+  cursor: default;
+}
+.jcopy {
+  flex: none;
+  padding: 2.5px 14px 2.5px 8px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  opacity: 0.45;
+}
+.jrow:hover .jcopy,
+.jcopy:focus-visible {
+  opacity: 1;
 }
 .no {
   width: 24px;
@@ -1514,6 +1539,18 @@ textarea:focus {
 }
 
 /* ── start screen ──────────────────────────────────────────────────────────────────────── */
+.start-layout {
+  height: 100%;
+  min-width: 0;
+}
+.start-layout.with-properties {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--properties-width, 308px);
+}
+.start-layout > .start {
+  min-width: 0;
+  overflow: auto;
+}
 .start {
   display: flex;
   flex-direction: column;
@@ -1696,6 +1733,8 @@ button.solve.stale {
   right: 190px;
   bottom: 10px;
   display: flex;
+  flex-wrap: wrap;
+  max-width: calc(100% - 200px);
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
@@ -1709,6 +1748,9 @@ button.solve.stale {
   width: 120px;
   accent-color: var(--accent);
 }
+.transient-speed { display: inline-flex; align-items: center; gap: 4px; }
+.transient-speed select { max-width: 76px; }
+.transient-time { white-space: nowrap; }
 
 .stale-banner {
   position: absolute;
@@ -2308,8 +2350,8 @@ input.model-name:focus {
    sit over its composer. Wide enough for the 880 px column plus the drawer, it moves aside and
    centres in what is left; narrower, the drawer simply floats over it. */
 @media (min-width: 1320px) {
-  .start:has(~ .assistant) {
-    margin-right: 416px;
+  #app:has(> .assistant:not([hidden])) > .start-layout {
+    margin-right: var(--assistant-width, 392px);
   }
 }
 
@@ -2360,10 +2402,14 @@ input.model-name:focus {
   .deform-bar {
     right: 10px;
     left: 10px;
+    max-width: calc(100% - 20px);
     justify-content: flex-end;
   }
 }
 
+.palette-intent { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-divider); }
+.palette-intent button { color: var(--accent); border: 1px solid var(--border-panel); padding: 4px 8px; border-radius: 3px; }
+.palette-intent .faint { font-size: 11px; }
 /* Plan F · #42: what was solved, spanning both Result columns. */
 .result-header {
   grid-column: 1 / -1;

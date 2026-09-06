@@ -3,12 +3,14 @@
 // a pure function or a component over one `query.result` fixture, so none of this needs wasm.
 import type { ResultSummary, StudyReport } from '@femlab/registry';
 import { render } from 'preact';
+import { act } from 'preact/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DERIVED_CHOICES, choiceOf, displayUnitOf, fieldChoices, modeChoice, showFieldArgs, siUnitOf } from '../src/fields';
 import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnitude } from '../src/results';
 import { Store, initialState, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
+import type { Dispatch } from '../src/ui/cmd';
 import { Frequencies, History, LineChart, axisTicks, extremeLabel } from '../src/ui/Results';
 import { resultItems } from '../src/ui/Tree';
 
@@ -234,12 +236,12 @@ describe('the deformation bar', () => {
     document.body.innerHTML = '';
   });
 
-  const mount = (patch: Partial<UiState>): { root: HTMLElement; store: Store } => {
+  const mount = (patch: Partial<UiState>, dispatch: Dispatch = async () => undefined): { root: HTMLElement; store: Store } => {
     const store = new Store();
     store.set({ ready: true, model: { name: 'm', units: { length: 'mm' }, bodies: [{ name: 'b', faces: [], measure: v(1, 'm^3'), bbox: [v(0, 'mm'), v(0, 'mm'), v(0, 'mm'), v(1, 'mm'), v(1, 'mm'), v(1, 'mm')] }], materials: [], sets: [], constraints: [], loads: [], steps: [], warnings: [] } as never, revision: 3, viewMode: 'results', ...patch });
     const root = document.createElement('div');
     document.body.append(root);
-    render(<App store={store} dispatch={async () => undefined} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+    render(<App store={store} dispatch={dispatch} viewer={{ current: null }} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
     return { root, store };
   };
 
@@ -253,7 +255,9 @@ describe('the deformation bar', () => {
   it('offers the scrub once the Result is a mode shape or has a history', () => {
     expect(mount({ result: modal, fieldKey: 'mode:2' }).root.querySelector('.deform-bar input.phase')).not.toBeNull();
     document.body.innerHTML = '';
-    expect(mount({ result: transient }).root.querySelector('.deform-bar input.phase')).not.toBeNull();
+    const catalogue = { step: 'heat', modelHash: 'h', stale: false, nodeCount: 1, field: 'temperature', components: 3, storedComponents: 1, retainedBytes: 48, frames: transient.history!.map((row, index) => ({ index, timeSi: row.time.value, time: row.time })) } as const;
+    const shown = { generation: 1, catalogue, frame: catalogue.frames[1]!, playing: false, speed: 1 };
+    expect(mount({ result: transient, transient: shown }).root.querySelector('.deform-bar [aria-label="retained transient frame"]')).not.toBeNull();
   });
 
   it('requests playback through the registry and reflects the acknowledged host state', () => {
@@ -270,9 +274,10 @@ describe('the deformation bar', () => {
     expect(root.querySelector('.deform-bar [data-cmd="view.animate"]')!.textContent).toBe('❚❚');
   });
 
-  it('tells the truth about a transient sweep: the Result keeps one field', () => {
+  it('offers actual retained-frame playback instead of a transient amplitude sweep', () => {
     const { root } = mount({ result: transient });
-    expect(root.querySelector<HTMLButtonElement>('.deform-bar [data-cmd="view.animate"]')!.title).toContain('the sweep is the amplitude');
+    expect(root.querySelector<HTMLButtonElement>('.deform-bar [data-cmd="view.playTransient"]')!.title).toBe('play retained transient frames');
+    expect(root.querySelector('.deform-bar [data-cmd="view.animate"]')).toBeNull();
   });
 
   it('previews phase movement and records only a completed gesture, not cancellation', () => {
@@ -309,6 +314,49 @@ describe('the deformation bar', () => {
     await vi.waitFor(() => expect(store.state.phase).toBe(0.25));
     expect(store.state.playing).toBe(false);
     expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, 0.25);
+  });
+
+  it('offers explicit WebM resolutions and a registry-callable cancel while recording', () => {
+    const first = mount({ result: modal, fieldKey: 'mode:2', panels: { export: true } });
+    const row = [...first.root.querySelectorAll('.export-row')].find((el) => el.textContent?.includes('Viewer animation'))!;
+    expect([...row.querySelectorAll('[data-cmd="file.export"]')].map((el) => el.textContent?.trim())).toEqual(['720p', '1080p', 'export']);
+    document.body.innerHTML = '';
+    const active = mount({ result: modal, fieldKey: 'mode:2', panels: { export: true }, capturingAnimation: true });
+    const cancel = active.root.querySelector('[data-cmd="file.cancelAnimationCapture"]');
+    expect(cancel?.textContent?.trim()).toBe('cancel recording');
+  });
+
+  it('waits for a selected WebM export before starting the next selected file', async () => {
+    let finishRecording = (): void => {
+      throw new Error('recording did not start');
+    };
+    const recording = new Promise<void>((resolve) => {
+      finishRecording = resolve;
+    });
+    const calls: { cmd: string; spec?: { format?: string } }[] = [];
+    const dispatch: Dispatch = async (cmd): Promise<void> => {
+      calls.push({ cmd: cmd.cmd, spec: cmd['spec'] as { format?: string } | undefined });
+      if (calls.length === 1) await recording;
+    };
+    const { root } = mount({ result: modal, fieldKey: 'mode:2', panels: { export: true } }, dispatch);
+    const rows = [...root.querySelectorAll('.export-row')];
+    const animation = rows.find((row) => row.textContent?.includes('Viewer animation'))!;
+    const image = rows.find((row) => row.textContent?.includes('Viewer image'))!;
+    await act(async () => {
+      animation.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+      image.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+    });
+
+    root.querySelector<HTMLButtonElement>('.export-foot .apply')!.click();
+    await Promise.resolve();
+    expect(calls.map((call) => call.spec?.format)).toEqual(['webm']);
+
+    finishRecording();
+    await act(async () => {
+      await recording;
+      await Promise.resolve();
+    });
+    expect(calls.map((call) => call.spec?.format)).toEqual(['webm', 'png']);
   });
 });
 

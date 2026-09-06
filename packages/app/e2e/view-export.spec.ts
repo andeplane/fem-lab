@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { readFile } from 'node:fs/promises';
 
 test('@cpu screenshot requests render exact pixels and restore the interactive camera and canvas', async ({ page }) => {

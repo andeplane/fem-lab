@@ -24,6 +24,8 @@
     "@femlab/registry": "*",
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/ibm-plex-sans": "^5.3.0",
+    "katex": "^0.16.47",
+    "marked": "^16.4.2",
     "openai": "^7.10.0",
     "preact": "^10.29.8",
     "sucrase": "^3.35.1",
