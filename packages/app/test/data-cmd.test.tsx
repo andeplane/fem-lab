@@ -2,14 +2,21 @@
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
 import { HOST_COMMANDS, Registry, type EngineSchema, type ModelSummary } from '@femlab/registry';
-import { render } from 'preact';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { h, render } from 'preact';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import { Store } from '../src/store';
 import { App } from '../src/ui/App';
 import type { WorkerTransport } from '../src/worker-transport';
+
+// `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40
+// is about *where* that chunk is mounted, so this file swaps in a marker element it can find.
+vi.mock('../src/ai', () => ({
+  AssistantPanel: () => h('aside', { class: 'assistant' }),
+  chatBridge: { send: () => undefined, insertMention: () => undefined, clear: () => undefined },
+}));
 
 const model = (): ModelSummary =>
   ({
@@ -48,7 +55,7 @@ function mount(patch: Partial<Parameters<Store['set']>[0]> = {}): { root: HTMLEl
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
-  render(<App store={store} dispatch={async () => undefined} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+  render(<App store={store} dispatch={async () => undefined} viewer={viewer} commands={registry.list().commands} query={async () => ({ value: 1, unit: 'Pa' })} registry={registry} />, root);
   return { root, registry, store };
 }
 
@@ -129,6 +136,32 @@ describe('the shell', () => {
     expect(opens.length).toBeGreaterThan(0);
     expect(opens.filter((el) => el.getAttribute('data-cmd') !== 'form.open').map((el) => el.getAttribute('data-opens'))).toEqual([]);
     expect([...new Set(opens.map((el) => el.getAttribute('data-opens')!))].filter((c) => !known.has(c))).toEqual([]);
+  });
+
+  // Issue #40: the drawer used to be a column of `.workspace`, which only exists once a Model
+  // does, so "Ask the Assistant" on the start screen did nothing at all.
+  it('mounts the Assistant drawer on the start screen, with no Model at all', async () => {
+    const store = new Store();
+    const viewer = { current: null };
+    const host = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host: makeHostContext(store, transport, viewer, host), hostCommands: HOST_COMMANDS });
+    store.set({ panels: { assistant: true } });
+    const root = document.createElement('div');
+    document.body.append(root);
+    render(<App store={store} dispatch={async () => undefined} viewer={viewer} registry={registry} />, root);
+    // The drawer is a lazy chunk; give the `import()` a turn.
+    for (let i = 0; i < 40 && !root.querySelector('aside.assistant'); i++) await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 5)));
+    expect(root.querySelector('.start')).not.toBeNull();
+    expect(root.querySelector('aside.assistant')).not.toBeNull();
+    render(null, root);
+  });
+
+  it('keeps the drawer outside the workspace once a Model exists, and reserves its width', async () => {
+    const { root } = mount({ panels: { assistant: true } });
+    for (let i = 0; i < 40 && !root.querySelector('aside.assistant'); i++) await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 5)));
+    expect(root.querySelector('aside.assistant')).not.toBeNull();
+    expect(root.querySelector('.workspace aside.assistant')).toBeNull();
+    expect(root.querySelector('.under-bar')!.className).toBe('under-bar with-assistant');
   });
 
   it('renders the start screen with its four paths before a Model exists', () => {

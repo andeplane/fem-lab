@@ -11,7 +11,73 @@ async function ready(page: Page): Promise<void> {
   await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
+async function expectCanvasSized(page: Page): Promise<void> {
+  await expect
+    .poll(() =>
+      page.locator('.viewer canvas').evaluate((el) => {
+        const canvas = el as HTMLCanvasElement;
+        const scale = Math.min(devicePixelRatio, 2);
+        return [canvas.width - Math.round(canvas.clientWidth * scale), canvas.height - Math.round(canvas.clientHeight * scale)];
+      }),
+    )
+    .toEqual([0, 0]);
+}
+
 test.describe('@cpu the shell', () => {
+  test('Assistant stays on the right and spans the workspace when toggled', async ({ page }) => {
+    await page.goto('./');
+    await ready(page);
+    await page.evaluate(() => window.fem.model.new({ name: 'assistant-layout' }));
+    for (const width of [1600, 1494, 1280, 1180, 1100]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expectCanvasSized(page);
+      for (let cycle = 0; cycle < 2; cycle++) {
+        await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
+        const assistant = page.locator('.assistant');
+        await expect(assistant).toBeVisible();
+        const drawer = (await assistant.boundingBox())!;
+        const workspace = (await page.locator('.workspace').boundingBox())!;
+        const properties = (await page.locator('.workspace > .panel').last().boundingBox())!;
+        const banner = (await page.locator('.banner').boundingBox())!;
+        expect(drawer.width).toBe(392);
+        expect(drawer.y).toBe(workspace.y);
+        expect(drawer.height).toBe(workspace.height);
+        expect(drawer.x + drawer.width).toBe(width);
+        expect(banner.x + banner.width).toBe(width);
+        if (width >= 1494) {
+          expect(drawer.x).toBe(properties.x + properties.width);
+        } else {
+          expect(properties.x + properties.width).toBe(width);
+        }
+        expect(drawer.x).toBeGreaterThanOrEqual(workspace.x);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+        await expectCanvasSized(page);
+        await assistant.getByTitle('Close the assistant', { exact: true }).click();
+        await expect(assistant).toHaveCount(0);
+        const centre = (await page.locator('.centre').boundingBox())!;
+        expect(centre.y).toBe(workspace.y);
+        expect(centre.height).toBe(workspace.height);
+        await expectCanvasSized(page);
+      }
+    }
+
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
+    await expect(page.locator('.banner')).toHaveCount(0);
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await expectCanvasSized(page);
+    await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
+    const assistant = page.locator('.assistant');
+    await expect(assistant).toBeVisible();
+    const drawer = (await assistant.boundingBox())!;
+    const workspace = (await page.locator('.workspace').boundingBox())!;
+    expect(drawer.y).toBe(workspace.y);
+    expect(drawer.height).toBe(workspace.height);
+    await expectCanvasSized(page);
+    await assistant.getByTitle('Close the assistant', { exact: true }).click();
+    await expect(assistant).toHaveCount(0);
+    await expectCanvasSized(page);
+  });
+
   test('boots, builds a Model from window.fem, and shows it', async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
@@ -21,6 +87,15 @@ test.describe('@cpu the shell', () => {
     // The start screen is up before the engine is.
     await expect(page.getByText('Open an example')).toBeVisible();
     const painted = Date.now() - t0;
+    const loadedFonts = await page.evaluate(async () => {
+      const specs = ["400 12px 'IBM Plex Sans'", "500 12px 'IBM Plex Sans'", "600 12px 'IBM Plex Sans'", "400 12px 'IBM Plex Mono'", "500 12px 'IBM Plex Mono'", "600 12px 'IBM Plex Mono'"];
+      await Promise.all(specs.map((spec) => document.fonts.load(spec)));
+      await document.fonts.ready;
+      return [...document.fonts].filter((font) => font.status === 'loaded').map((font) => `${font.family}:${font.weight}`);
+    });
+    for (const family of ['IBM Plex Sans', 'IBM Plex Mono']) {
+      for (const weight of ['400', '500', '600']) expect(loadedFonts).toContain(`${family}:${weight}`);
+    }
     await ready(page);
     // `store.ready` flips the start screen's build control; before it, `model.new` is disabled
     // (asserting *that* would be a race against a fast engine, so only the flip is checked).

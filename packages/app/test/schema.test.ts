@@ -3,7 +3,7 @@
 import type { EngineSchema, JsonSchema } from '@femlab/registry';
 import { describe, expect, it } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
-import { applyLabel, blockers, commandLine, type Defs, type Field, dimensionTag, fieldsOf, getAt, humanise, parseQuantity, resolve, setAt, siUnit, step, tsValue } from '../src/ui/schema';
+import { applyLabel, blockers, commandLine, defaultTaggedUnions, type Defs, type Field, dimensionTag, fieldsOf, getAt, humanise, parseQuantity, resolve, setAt, siUnit, step, tsValue } from '../src/ui/schema';
 
 const doc = schema as unknown as EngineSchema;
 const DEFS: Defs = { ...doc.commands.$defs, ...doc.queries.$defs };
@@ -113,6 +113,20 @@ describe('the recorded-as line', () => {
 });
 
 describe('paths and labels', () => {
+  it('keeps an untouched optional tagged union absent, but defaults it once present', () => {
+    const optional: Field = {
+      kind: 'union',
+      path: ['choice'],
+      label: 'Choice',
+      hint: '',
+      required: false,
+      tag: 'kind',
+      variants: [{ kind: 'first', fields: [] }],
+    };
+    expect(defaultTaggedUnions({}, [optional])).toEqual({});
+    expect(defaultTaggedUnions({ choice: {} }, [optional])).toEqual({ choice: { kind: 'first' } });
+  });
+
   it('sets and reads nested values, and removes a key when the value goes away', () => {
     expect(setAt({}, ['mesher', 'size'], '25 mm')).toEqual({ mesher: { size: '25 mm' } });
     expect(getAt({ mesher: { size: '25 mm' } }, ['mesher', 'size'])).toBe('25 mm');
