@@ -161,9 +161,25 @@ Rendered Markdown: assumptions, geometry, materials, mesh and quality, loads wit
 result tables, pictures (viewer screenshots at set resolution), benchmark comparison, Journal
 as appendix. Print / export.
 
+### 5.8b Onboarding, tutorials and examples
+First-run onboarding and a tutorial system are part of the product, not a help page:
+- **Guided tutorials**: step-by-step walkthroughs of simple models (a cantilever, a plate with
+  a hole, a thermal bar), where each step names one Command, explains why, highlights the
+  control that emits it, and lets the person either click it or press "do it for me". A step
+  is complete when the Journal contains the expected Command; the tutorial reads the Journal,
+  never a hidden flag. Progress is visible (step n of m), skippable, resumable.
+- **Many examples**: the gallery (§5.7) holds every benchmark plus everyday models; each opens
+  in one click, has a one-paragraph explanation, its reference value and a theory panel.
+  Simpler examples have a tutorial variant ("build this yourself, step by step").
+- **First-run tour**: on the first visit, a short overlay tour of the five regions (tree,
+  viewer, properties, bottom panel, assistant), one sentence each, dismissable, with a
+  "start the cantilever tutorial" button at the end.
+- **Contextual help**: every panel header and every form field has a `?` that opens the
+  relevant glossary entry or theory section; errors link to the fix.
+
 ### 5.9 Start / empty state
-A blank Model with three obvious paths: "Ask the AI" (chat box), "Open an example",
-"Start from geometry". A one-line capability check underneath.
+A blank Model with four obvious paths: "Ask the AI" (chat box), "Start a tutorial",
+"Open an example", "Start from geometry". A one-line capability check underneath.
 
 ## 6. The 3D viewer
 
@@ -199,7 +215,8 @@ Bring-your-own API key, stored locally, with a plain notice about cost.
   with a hand estimate; the UI should give those checks a place (a "verification" card in the
   chat and the Checks tab).
 - The person and the AI share one Model; either can act next. No "AI mode".
-- Cost/time shown per turn. Model choice in settings.
+- Cost/time shown per turn. Settings: provider (Anthropic or OpenAI), model, API key and
+  where it came from (typed in, or injected by the local dev server from the shell).
 - **@-mentions**: typing `@` in the chat opens a picker over everything in the Model and the
   project: bodies, faces, sets, materials, constraints, loads, steps, results, Journal entries,
   project files. `@bracket.top` or `@result:static-1` inserts a chip; the AI receives the
@@ -211,6 +228,14 @@ Bring-your-own API key, stored locally, with a plain notice about cost.
   and pasted into the chat as a chip (the clipboard carries a plain-text form such as
   `@face:bracket.top`, so the paste also works in any other text field). Chips are also drag
   targets from the model tree and the viewer.
+- **Images in**: the chat accepts images by paste, drag-and-drop or a file button: a hand
+  drawing of a geometry, a photo of a sketch or a hand calculation, a screenshot of a drawing
+  or a table from a report, a plot to compare with. The image shows as a thumbnail chip in the
+  composer (removable, with a caption field) and in the sent message; the model receives it as
+  an image block next to the text, so "build this" with a drawing produces geometry Commands,
+  and "does my hand calc agree?" with a photo produces a comparison. Several images per
+  message; the viewer screenshot can be attached with one click ("attach current view").
+  Images are kept with the conversation, never in the Journal.
 - **Skills**: reusable instruction packs the AI can invoke, shown as a `/` menu in the chat
   (built-in: "verify against beam theory", "mesh convergence study", "write report", "NAFEMS
   benchmark"; user skills come from the project folder). A skill card shows name, one-line
@@ -308,8 +333,11 @@ table, then opens the script the AI wrote, changes the load and reruns.
 3. Properties form patterns: quantity field, enum, face/set picker, validation message.
 4. Journal ↔ Script panel and the "AI did this" diff.
 5. AI chat with visible tool calls, a verification card, the `@` mention picker, the `/`
-   skills menu and the AGENTS.md badge.
+   skills menu, image attachments (chips in the composer and the message) and the AGENTS.md
+   badge.
 6. Examples gallery card and the theory-next-to-result view.
+6b. Tutorial mode: the step panel, the highlighted control, "do it for me", progress; the
+   first-run tour.
 7. Viewer chrome: legend, deformation scale, glyph toggles, clip plane, animation bar.
 8. Command palette.
 8b. Export dialog and project-folder panel.

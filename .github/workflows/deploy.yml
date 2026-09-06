@@ -1,0 +1,59 @@
+name: deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The app is a static site: it needs no server, so GitHub Pages is the whole deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.94"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: install the wasm-bindgen CLI matching Cargo.lock
+        run: |
+          V=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | tail -1 | cut -d'"' -f2)
+          cargo install --locked wasm-bindgen-cli --version "$V"
+      # `npm ci` first: `build-wasm.mjs` runs the binaryen `wasm-opt` from node_modules, and
+      # without it the published module is a third larger.
+      - run: npm ci
+      - run: node tools/build-wasm.mjs
+      # `prebuild` copies the Journal fixtures into public/examples; `postbuild` refuses to
+      # publish a bundle with an API key in it.
+      - run: npm run build -w packages/app
+      # Jekyll would drop the underscore-prefixed files GitHub Pages otherwise serves fine.
+      - run: touch packages/app/dist/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/app/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

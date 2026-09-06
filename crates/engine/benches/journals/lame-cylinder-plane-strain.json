@@ -1,0 +1,176 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "lame-cylinder-plane-strain"
+    },
+    "hashAfter": "fcb36b843bdc6b74f8cd1f3eb4a3b37560af23f36b495760de96b3bf2f88c6de"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "2a5167d77283bc9829d981c74c887aa556b875f96c67a4f9430b244363e95c97"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStrain"
+      }
+    },
+    "hashAfter": "89784ae8f4bde121588f046d66d2933bc655d166ad83bbcd4d2d441daeb74b60"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "source": "SimScale SSLV04"
+    },
+    "hashAfter": "feccd679015ceb2c02b7abf8cbc859c5cf522e7fe5e5a88181d4c2153470c96c"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "cylinder",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "100.0 mm",
+                "0 mm"
+              ],
+              [
+                "200.0 mm",
+                "0 mm"
+              ],
+              [
+                "0 mm",
+                "200.0 mm"
+              ],
+              [
+                "0 mm",
+                "100.0 mm"
+              ]
+            ],
+            "edges": [
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 mm",
+                  "0 mm"
+                ],
+                "ccw": true
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 mm",
+                  "0 mm"
+                ],
+                "ccw": false
+              }
+            ],
+            "n": [
+              8,
+              16
+            ],
+            "tags": [
+              "ymin",
+              "outer",
+              "xmin",
+              "inner"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    "hashAfter": "8c8606d635a4f29d10d91c995f7f4ea26a489b1780d13d800d55bd2fbbb09869"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "cylinder"
+      ]
+    },
+    "hashAfter": "9e9e890e81304d6bacd438490a9d0ad6a19c267ba0a93086d1a7e867f9d25c7f"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.symmetry",
+      "name": "symx",
+      "on": "cylinder.xmin",
+      "normal": "x"
+    },
+    "hashAfter": "ec6aa83b22b6f99a4a67f049c7de81d328fdf38b012c50c20027539d4a4c95e6"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "constraint.symmetry",
+      "name": "symy",
+      "on": "cylinder.ymin",
+      "normal": "y"
+    },
+    "hashAfter": "10ec71c78e7b2a289e3ec61aec7b1ef9d3de37a7bd80690a4128c868337f040d"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "internal",
+      "on": "cylinder.inner",
+      "value": "60 MPa"
+    },
+    "hashAfter": "7be76259d327fca07ce5c7cfb1c3b50e5279607b35160f1248bbeb595d5c8e05"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "symx",
+        "symy"
+      ],
+      "loads": [
+        "internal"
+      ]
+    },
+    "hashAfter": "79fd5aed81af75e54b594bf9294488228dd7fb8a2367dc72a439d879985ebbd8"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "79fd5aed81af75e54b594bf9294488228dd7fb8a2367dc72a439d879985ebbd8"
+  }
+]

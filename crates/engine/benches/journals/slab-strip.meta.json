@@ -1,0 +1,20 @@
+{
+  "title": "One-way slab strip",
+  "tag": "everyday",
+  "tags": [
+    "static",
+    "concrete",
+    "distributed-load"
+  ],
+  "difficulty": 1,
+  "sentence": "A one-way reinforced-concrete slab strip, pinned and rollered at its ends, under a uniform floor load.",
+  "expected": {
+    "quantity": "peak von Mises",
+    "value": 1.55,
+    "unit": "MPa",
+    "reference": "simply supported: M = wL²/8, σ = 6M/bh²"
+  },
+  "theory": "A simply supported strip under a uniform load $w$ carries $M_{max} = \\dfrac{wL^2}{8}$ at mid-span and $\\sigma = \\dfrac{6M}{bh^2}$ in the extreme fibre. This is an elastic solid model: it says nothing about cracking or the reinforcement, which is what a code check (see the `eurocode-1992-check` skill) is for.",
+  "tutorial": null,
+  "thumbnail": null
+}

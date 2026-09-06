@@ -29,3 +29,12 @@ cross-checked against the GPU path, but both are checked against the independent
   promoted to required once green for a week. Software adapters are never used for timing.
 - 100 % coverage is a threshold on the core, not a claim about the renderer; the render and
   DOM layers are covered by the browser smoke test and by keeping them thin.
+
+## Status 2026-09-05
+
+The first kernel (`dot.wgsl`, `crates/engine/shaders/`) runs on Metal locally with results
+inside the f32 bound and bit-identical across runs for every tested size, and `src/gpu/` is
+at 100 % coverage under `--features gpu-tests`. The Mesa lavapipe lane is the `gpu` job in
+`ci.yml`, `continue-on-error: true` until it has been green three runs in a row; until then the
+`rust` job's coverage gate excludes `src/gpu/` as a bridge. The Chromium + SwiftShader lane
+lands with the browser shell.

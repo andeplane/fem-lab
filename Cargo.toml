@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/geometry", "crates/engine", "crates/engine-wasm", "crates/femlab"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.94"
+repository = "https://github.com/andeplane/fem-lab"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+schemars = "1.2"
+libm = "0.2"
+thiserror = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+# Only `tools/build-wasm.mjs` uses this profile, so tuning it for size cannot touch the numbers
+# `cargo test` checks: the native `release` profile above is unchanged.
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

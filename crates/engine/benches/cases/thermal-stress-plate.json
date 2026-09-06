@@ -1,0 +1,263 @@
+{
+  "name": "thermal-stress-plate",
+  "reference": "Benchmark C8 (thermal-to-structural chaining). A 1 m square plate in plane strain is conducted to a linear temperature field by a heat Step (0 degC on y = 0, 100 degC on y = 1), and a static Step named after it picks that field up as thermal strain. The plate is held against x displacement on both vertical edges and free in y, so the exact answer is sigma_xx = -E alpha dT / (1 - nu) with sigma_yy = 0: at mid-height dT = 50 K and alpha = 1e-5, giving -150 MPa. The published NAFEMS T1 hot-spot geometry and temperature table were not available when this was written, so plan A section 9's fallback is used: a chained case whose oracle is a closed form rather than a printed number.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "thermal-stress"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "temperature": "degC"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStrain"
+      }
+    },
+    {
+      "cmd": "geometry.add",
+      "name": "plate",
+      "shape": {
+        "kind": "sheet",
+        "sketch": {
+          "outer": [
+            {
+              "kind": "line",
+              "to": [
+                "1.0 m",
+                "0 m"
+              ],
+              "tag": "ymin"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "1.0 m",
+                "1.0 m"
+              ],
+              "tag": "xmax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "1.0 m"
+              ],
+              "tag": "ymax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "0 m"
+              ],
+              "tag": "xmin"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "slab",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "alpha": "1e-5 1/K",
+      "k": "45 W/(m K)",
+      "cp": "460 J/(kg K)"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "slab",
+      "bodies": [
+        "plate"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 10,
+          "ny": 10,
+          "nz": 1
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.temperature",
+      "name": "cool",
+      "on": "plate.ymin",
+      "value": "0 degC"
+    },
+    {
+      "cmd": "constraint.temperature",
+      "name": "warm",
+      "on": "plate.ymax",
+      "value": "100 degC"
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "pin",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-0.01 m",
+          "-0.01 m",
+          "-0.01 m"
+        ],
+        "max": [
+          "0.01 m",
+          "0.01 m",
+          "0.01 m"
+        ]
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "left",
+      "on": "plate.xmin",
+      "dofs": [
+        "ux"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "right",
+      "on": "plate.xmax",
+      "dofs": [
+        "ux"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "pinned",
+      "on": "pin",
+      "dofs": [
+        "uy"
+      ]
+    },
+    {
+      "cmd": "load.temperature",
+      "name": "reference",
+      "bodies": [
+        "plate"
+      ],
+      "value": "0 degC",
+      "reference": "0 degC"
+    },
+    {
+      "cmd": "step.add",
+      "name": "conduct",
+      "procedure": "heat-steady",
+      "constraints": [
+        "cool",
+        "warm"
+      ],
+      "loads": [],
+      "output": [
+        "temperature"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "stress",
+      "procedure": "static",
+      "after": "conduct",
+      "constraints": [
+        "left",
+        "right",
+        "pinned"
+      ],
+      "loads": [
+        "reference"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "conduct"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "stress"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ],
+        "step": "conduct"
+      },
+      "path": "/value/value",
+      "expect": 50.0,
+      "tol": 1e-09,
+      "note": "the conducted field is linear in y"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "at": [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ],
+        "component": 0,
+        "step": "stress"
+      },
+      "path": "/value/value",
+      "expect": -150.0,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_xx = -E alpha dT / (1 - nu) at mid-height"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "at": [
+          "0.5 m",
+          "0.25 m",
+          "0 m"
+        ],
+        "component": 0,
+        "step": "stress"
+      },
+      "path": "/value/value",
+      "expect": -75.0,
+      "tol": 0.02,
+      "rel": true,
+      "note": "and it is linear in y, like the temperature"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "at": [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ],
+        "component": 1,
+        "step": "stress"
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 0.5,
+      "note": "sigma_yy vanishes: the plate is free to stretch in y"
+    }
+  ]
+}

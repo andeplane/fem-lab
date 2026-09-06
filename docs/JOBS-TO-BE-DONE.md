@@ -180,6 +180,7 @@ reason for the "everything is a Command" rule (see the glossary and ADR 0003).
 | J13.5 | I want the script API to be discoverable and typed so I (or the AI) can find the right call without reading a manual | API reference; autocomplete |
 | J13.9 | When I talk to the AI, I want to point at things (`@top`, `@steel`, `@result`) instead of describing them, so it acts on exactly what I mean | none; screenshots pasted into chat |
 | J13.10 | I want reusable instruction packs (skills: "verify against beam theory", "write the report our way") that I or the AI can invoke | none; prompt copy-paste |
+| J13.12 | I want to show the AI a picture (a drawing of the part, a photo of my sketch or hand calculation, a screenshot from a report) and have it build or check the model from it | none; re-describing the drawing in words |
 | J13.11 | I want the AI to respect my project's standing rules (an `AGENTS.md` in the project folder: material limits, units, naming, report template) and my project's own skills | none |
 
 ## J14 Learn and teach
@@ -190,6 +191,8 @@ reason for the "everything is a Command" rule (see the glossary and ADR 0003).
 | J14.2 | I want to understand an error or a warning (what it means, how to fix it) | forums |
 | J14.3 | I want to see the effect of a choice immediately (linear vs quadratic tets; coarse vs fine; fixed vs pinned) | re-run |
 | J14.4 | I want the theory (weak form, element matrices, solver) alongside the tool, with the notation the course uses | textbooks |
+| J14.5 | When I open the tool for the first time, I want a guided, step-by-step tutorial that builds a simple model with me (each step one Command, explained), so I learn the workflow by doing | vendor tutorials as PDFs/videos |
+| J14.6 | I want a large gallery of examples, from trivial to benchmark, that open in one click and explain themselves | vendor example libraries |
 
 ## J15 Interoperate
 

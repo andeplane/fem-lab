@@ -1,0 +1,228 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "kirsch-quarter-plate"
+    },
+    "hashAfter": "84b0a58474280172fff3ba75bf1b50b47a2d6ae08ac9d33be080a587422ea202"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "04d48a3569061484e75b218eb15f4a1c9ac0cb6810deec2647d8bf010584bd5b"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "1 m"
+      }
+    },
+    "hashAfter": "6fbbc6abf6fd2d54bd3fe518485387489c2af4ded447cadd5c7656f0d9220b10"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3
+    },
+    "hashAfter": "872bf752e9159d328954075501366f5469cd5321fd67ec4a4491565deeed5deb"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "plate",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "1 m",
+                "0 m"
+              ],
+              [
+                "20 m",
+                "0 m"
+              ],
+              [
+                "20 m",
+                "20 m"
+              ],
+              [
+                "0.7071067811865476 m",
+                "0.7071067811865476 m"
+              ]
+            ],
+            "edges": [
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 m",
+                  "0 m"
+                ],
+                "ccw": false
+              }
+            ],
+            "n": [
+              32,
+              32
+            ],
+            "grading": [
+              1.25,
+              1.0
+            ],
+            "tags": [
+              "ymin",
+              "xmax",
+              null,
+              "hole"
+            ]
+          },
+          {
+            "corners": [
+              [
+                "0.7071067811865476 m",
+                "0.7071067811865476 m"
+              ],
+              [
+                "20 m",
+                "20 m"
+              ],
+              [
+                "0 m",
+                "20 m"
+              ],
+              [
+                "0 m",
+                "1 m"
+              ]
+            ],
+            "edges": [
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 m",
+                  "0 m"
+                ],
+                "ccw": false
+              }
+            ],
+            "n": [
+              32,
+              32
+            ],
+            "grading": [
+              1.25,
+              1.0
+            ],
+            "tags": [
+              null,
+              "ymax",
+              "xmin",
+              "hole"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    "hashAfter": "0468d02673cfca4040e0dee32223471db38b998ec0cde0768d00f7cadfed79b2"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    "hashAfter": "1c51c4da6c7e984964bd924fda033b918dbbef72f695f257e3ed99198fb70ac5"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.symmetry",
+      "name": "symx",
+      "on": "plate.xmin",
+      "normal": "x"
+    },
+    "hashAfter": "3622f30ad1ca7f0b70c736f18d4b720770af8e52ca62044d610a354725917441"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "constraint.symmetry",
+      "name": "symy",
+      "on": "plate.ymin",
+      "normal": "y"
+    },
+    "hashAfter": "c272b028fae5bbf89caabf893f4b50f01021560794409765ca5b6e28b1ff3879"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "tension",
+      "on": "plate.xmax",
+      "value": "-100 MPa"
+    },
+    "hashAfter": "648bec6d903c02a828598b11a75504e34fdc97be3fec2bfb0c74c9a011d7964f"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "symx",
+        "symy"
+      ],
+      "loads": [
+        "tension"
+      ]
+    },
+    "hashAfter": "ab46f709824c09bf4a1803d4021038ad97e1491d0972b9595d3937779dfb1c7e"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "ab46f709824c09bf4a1803d4021038ad97e1491d0972b9595d3937779dfb1c7e"
+  }
+]

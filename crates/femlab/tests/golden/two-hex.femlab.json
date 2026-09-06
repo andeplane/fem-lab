@@ -1,0 +1,218 @@
+{
+  "format": "femlab/1",
+  "engineVersion": "0.1.0",
+  "model": {
+    "name": "two-hex",
+    "units": {
+      "length": "mm",
+      "force": "kN",
+      "stress": "MPa"
+    },
+    "idealisation": {
+      "kind": "solid3d"
+    },
+    "bodies": [
+      {
+        "name": "bar",
+        "shape": {
+          "kind": "box",
+          "size": [
+            2.0,
+            1.0,
+            1.0
+          ]
+        },
+        "material": "steel"
+      }
+    ],
+    "cuts": [],
+    "sets": [],
+    "materials": [
+      {
+        "name": "steel",
+        "e": 210000000000.0,
+        "nu": 0.3,
+        "rho": 7850.0,
+        "source": "EN 10025"
+      }
+    ],
+    "constraints": [
+      {
+        "name": "root",
+        "on": "bar.xmin",
+        "kind": "fix",
+        "dofs": [
+          "ux",
+          "uy",
+          "uz"
+        ]
+      }
+    ],
+    "loads": [
+      {
+        "name": "tip",
+        "kind": "traction",
+        "on": "bar.xmax",
+        "total": [
+          0.0,
+          0.0,
+          -1000.0
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "name": "static",
+        "procedure": "static",
+        "constraints": [
+          "root"
+        ],
+        "loads": [
+          "tip"
+        ],
+        "output": [
+          "displacement",
+          "stress",
+          "vonMises",
+          "reaction"
+        ]
+      }
+    ],
+    "mesh": {
+      "mesher": {
+        "kind": "lattice",
+        "size": null,
+        "counts": [
+          2,
+          1,
+          1
+        ]
+      },
+      "order": 1,
+      "formulation": "incompatible-modes"
+    },
+    "plugins": []
+  },
+  "journal": {
+    "entries": [
+      {
+        "seq": 0,
+        "cmd": {
+          "cmd": "model.new",
+          "name": "two-hex"
+        },
+        "hashAfter": "6e0be998a2764f307e59a1d7162d2bb22b90a325a3be5b7f812ec1677620eb31"
+      },
+      {
+        "seq": 1,
+        "cmd": {
+          "cmd": "model.setUnits",
+          "units": {
+            "length": "mm",
+            "force": "kN",
+            "stress": "MPa"
+          }
+        },
+        "hashAfter": "c9912542436ad8ebc08a6ac5c34f0053141639a7b2ddc83a0a99bbe1d60d104b"
+      },
+      {
+        "seq": 2,
+        "cmd": {
+          "cmd": "geometry.addBox",
+          "name": "bar",
+          "size": [
+            "2 m",
+            "1 m",
+            "1 m"
+          ]
+        },
+        "hashAfter": "610b91ebbe19d253d48bfa23c544322a2ca915445d8cd924418251d195c67258"
+      },
+      {
+        "seq": 3,
+        "cmd": {
+          "cmd": "material.add",
+          "name": "steel",
+          "E": "210 GPa",
+          "nu": 0.3,
+          "rho": "7850 kg/m^3",
+          "source": "EN 10025"
+        },
+        "hashAfter": "c5d4947d7e348d7210e1a17161815ae3437fe55cd1893ec743c3fe145b6bfc43"
+      },
+      {
+        "seq": 4,
+        "cmd": {
+          "cmd": "material.assign",
+          "material": "steel",
+          "bodies": [
+            "bar"
+          ]
+        },
+        "hashAfter": "59cb297ac8e68f0084ec09fac71dc17ab95045c9512839a33603c9aad0d80f0b"
+      },
+      {
+        "seq": 5,
+        "cmd": {
+          "cmd": "mesh.set",
+          "mesher": {
+            "kind": "lattice",
+            "size": {
+              "nx": 2,
+              "ny": 1,
+              "nz": 1
+            }
+          },
+          "order": 1
+        },
+        "hashAfter": "18798bab3873eb9ec3e110d794813611314a95973791bbe6e59e7a5a4b86a51f"
+      },
+      {
+        "seq": 6,
+        "cmd": {
+          "cmd": "constraint.fix",
+          "name": "root",
+          "on": "bar.xmin"
+        },
+        "hashAfter": "96e28684e69a8b2f1c067fd8bb2979bedb1b5676fe956c741e9f83b8987538cf"
+      },
+      {
+        "seq": 7,
+        "cmd": {
+          "cmd": "load.traction",
+          "name": "tip",
+          "on": "bar.xmax",
+          "total": [
+            "0 N",
+            "0 N",
+            "-1 kN"
+          ]
+        },
+        "hashAfter": "baaecf852f366fa73cae275a5929ded170368e6fe39ab786813b13bdbfb5304b"
+      },
+      {
+        "seq": 8,
+        "cmd": {
+          "cmd": "step.add",
+          "name": "static",
+          "procedure": "static",
+          "constraints": [
+            "root"
+          ],
+          "loads": [
+            "tip"
+          ]
+        },
+        "hashAfter": "d972c205232a01abea7f5fa690245708571dbc1f9f2907266f24134fb29e0bca"
+      },
+      {
+        "seq": 9,
+        "cmd": {
+          "cmd": "solve.run",
+          "step": "static"
+        },
+        "hashAfter": "d972c205232a01abea7f5fa690245708571dbc1f9f2907266f24134fb29e0bca"
+      }
+    ]
+  }
+}

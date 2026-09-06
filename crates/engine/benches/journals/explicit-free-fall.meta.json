@@ -1,0 +1,20 @@
+{
+  "title": "Explicit dynamics: free fall",
+  "tag": "P1 · verify",
+  "tags": [
+    "explicit",
+    "dynamics",
+    "gravity"
+  ],
+  "difficulty": 3,
+  "sentence": "An unconstrained block under gravity, integrated by central differences — explicit dynamics checked against a schoolbook drop.",
+  "expected": {
+    "quantity": "u_z after 1 ms",
+    "value": -0.004915,
+    "unit": "mm",
+    "reference": "gt²/2 = −4.905 µm"
+  },
+  "theory": "Central differences advance $\\mathbf{M}\\ddot{\\mathbf{u}} = \\mathbf{f}_{ext} - \\mathbf{f}_{int}$ with a lumped $\\mathbf{M}$, so each step costs one matrix-free force pass and no factorisation. Stability needs $\\Delta t \\le \\dfrac{L_e}{c}$ with $c = \\sqrt{E/\\rho}$ (the Courant condition); `dtFactor` is the safety margin on the Irons estimate. For a constant acceleration the leapfrog is exact, so after $t$ the block has fallen $u = \\tfrac{1}{2}gt^2 = 4.905\\,\\mathrm{\\mu m}$.",
+  "tutorial": null,
+  "thumbnail": null
+}

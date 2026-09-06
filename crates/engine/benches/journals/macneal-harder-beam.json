@@ -1,0 +1,294 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "macneal-harder-beam"
+    },
+    "hashAfter": "6aa1ecde4df0cba3170c9047ae0ff7e7011420d5dc59bea96ad9ca4c022a88ee"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "force": "N",
+        "stress": "Pa"
+      }
+    },
+    "hashAfter": "75bc9472d17a87fde55e1d003e1636f564fd77120b3919669826a0ccd9032825"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "0.1 m"
+      }
+    },
+    "hashAfter": "cf81921f2264ee4ec3bac9e2173aaba474738e9e2545219cdad14344aca67162"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "generic",
+      "E": "1e7 Pa",
+      "nu": 0.3
+    },
+    "hashAfter": "29d98913e6bcfb6454bb4bd4b58575d2bd2889342b2d0756430b3a9417105ba2"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "beam",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0 m",
+                "0 m"
+              ],
+              [
+                "1 m",
+                "0 m"
+              ],
+              [
+                "1 m",
+                "0.2 m"
+              ],
+              [
+                "0 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              "root"
+            ]
+          },
+          {
+            "corners": [
+              [
+                "1 m",
+                "0 m"
+              ],
+              [
+                "2 m",
+                "0 m"
+              ],
+              [
+                "2 m",
+                "0.2 m"
+              ],
+              [
+                "1 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "2 m",
+                "0 m"
+              ],
+              [
+                "3 m",
+                "0 m"
+              ],
+              [
+                "3 m",
+                "0.2 m"
+              ],
+              [
+                "2 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "3 m",
+                "0 m"
+              ],
+              [
+                "4 m",
+                "0 m"
+              ],
+              [
+                "4 m",
+                "0.2 m"
+              ],
+              [
+                "3 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "4 m",
+                "0 m"
+              ],
+              [
+                "5 m",
+                "0 m"
+              ],
+              [
+                "5 m",
+                "0.2 m"
+              ],
+              [
+                "4 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "corners": [
+              [
+                "5 m",
+                "0 m"
+              ],
+              [
+                "6 m",
+                "0 m"
+              ],
+              [
+                "6 m",
+                "0.2 m"
+              ],
+              [
+                "5 m",
+                "0.2 m"
+              ]
+            ],
+            "n": [
+              1,
+              1
+            ],
+            "tags": [
+              null,
+              "tip",
+              null,
+              null
+            ]
+          }
+        ]
+      },
+      "order": 1
+    },
+    "hashAfter": "f7263acfe32a41aafbe00f1605b6b2eca0afbe7eb7e770e088f5cc12b9e91435"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "generic",
+      "bodies": [
+        "beam"
+      ]
+    },
+    "hashAfter": "baeab3b04f564f092979672e0076b0d2dc05a277720c96e0c6fca4ce0033aee8"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.root"
+    },
+    "hashAfter": "7e939dacc63d55c4b191bae57132f75c00c6cdc22d0114127b1c8b65169c910b"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "load.traction",
+      "name": "tip",
+      "on": "beam.tip",
+      "total": [
+        "0 N",
+        "1 N",
+        "0 N"
+      ]
+    },
+    "hashAfter": "4640181f12db3bbe685e248842e83c83cf8cb7db1fa9eade0cfdd314b057c972"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "tip"
+      ]
+    },
+    "hashAfter": "105d2a208c4e104750755f99ed487770180702b8e79a36ed6502097a90cf795f"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "105d2a208c4e104750755f99ed487770180702b8e79a36ed6502097a90cf795f"
+  }
+]

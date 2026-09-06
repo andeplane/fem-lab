@@ -1,0 +1,23 @@
+disallowed-methods = [
+  { path = "f64::sin", reason = "use libm::sin: identical bits on native and wasm" },
+  { path = "f64::cos", reason = "use libm::cos" },
+  { path = "f64::tan", reason = "use libm::tan" },
+  { path = "f64::exp", reason = "use libm::exp" },
+  { path = "f64::ln", reason = "use libm::log" },
+  { path = "f64::log10", reason = "use libm::log10" },
+  { path = "f64::powf", reason = "use libm::pow" },
+  { path = "f64::cbrt", reason = "use libm::cbrt" },
+  { path = "f64::atan2", reason = "use libm::atan2" },
+  { path = "f64::acos", reason = "use libm::acos" },
+  { path = "f64::asin", reason = "use libm::asin" },
+  { path = "f64::sinh", reason = "use libm::sinh" },
+  { path = "f64::cosh", reason = "use libm::cosh" },
+  { path = "std::thread::spawn", reason = "hosts own concurrency; the library uses the par shim" },
+]
+disallowed-types = [
+  { path = "std::collections::HashMap", reason = "iteration order is not deterministic; use BTreeMap" },
+  { path = "std::collections::HashSet", reason = "use BTreeSet" },
+  { path = "std::fs::File", reason = "the library has no file system (ADR 0011)" },
+  { path = "std::net::TcpStream", reason = "the library has no network (ADR 0011)" },
+  { path = "std::time::Instant", reason = "the clock is injected by the host" },
+]

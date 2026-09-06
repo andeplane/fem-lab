@@ -1,0 +1,260 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "thermal-stress-plate"
+    },
+    "hashAfter": "297788a299aa7c9515bb556b48c2408fadac4aa31fee69f5722d408ca9e07f73"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "temperature": "degC"
+      }
+    },
+    "hashAfter": "467a73ec01d8d663c9f26cfdaf321f348941993d39eb02f88898f6029e95e2f9"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStrain"
+      }
+    },
+    "hashAfter": "9aa0f5987a432ffe5334113acb862478977d7b9118408678ba4b0769abe86924"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "geometry.add",
+      "name": "plate",
+      "shape": {
+        "kind": "sheet",
+        "sketch": {
+          "outer": [
+            {
+              "kind": "line",
+              "to": [
+                "1.0 m",
+                "0 m"
+              ],
+              "tag": "ymin"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "1.0 m",
+                "1.0 m"
+              ],
+              "tag": "xmax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "1.0 m"
+              ],
+              "tag": "ymax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "0 m"
+              ],
+              "tag": "xmin"
+            }
+          ]
+        }
+      }
+    },
+    "hashAfter": "dd3dc6c0fe7e03dc2d110ffff59ab6c8512baae57a60d06149fb69aa1f65053f"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "slab",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "alpha": "1e-5 1/K",
+      "k": "45 W/(m K)",
+      "cp": "460 J/(kg K)"
+    },
+    "hashAfter": "e9d323436af261ef2fdc7f438bf29fd2804a22b73ac214cab35800346f9e7bba"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "slab",
+      "bodies": [
+        "plate"
+      ]
+    },
+    "hashAfter": "3540bf94a059072f7a0ab5e52f271f60dc08689a063582be4eaed25d5b0c82b8"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 10,
+          "ny": 10,
+          "nz": 1
+        }
+      },
+      "order": 2
+    },
+    "hashAfter": "49b5b5bd9775c9027fae263ae4e68783db41e5dda1b1aff3666f42ab39076dcf"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "constraint.temperature",
+      "name": "cool",
+      "on": "plate.ymin",
+      "value": "0 degC"
+    },
+    "hashAfter": "de0397e5433fe582a9088a54961aff03fea1622ab4fa8fae1e6df4bfa8d832e9"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "constraint.temperature",
+      "name": "warm",
+      "on": "plate.ymax",
+      "value": "100 degC"
+    },
+    "hashAfter": "c86bd3544fbee1a01001b8555a8eed851d5768c9e14192fb95256da2df1da3b1"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "geometry.nameRegion",
+      "name": "pin",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-0.01 m",
+          "-0.01 m",
+          "-0.01 m"
+        ],
+        "max": [
+          "0.01 m",
+          "0.01 m",
+          "0.01 m"
+        ]
+      }
+    },
+    "hashAfter": "5b0527ae49722d803d8ef02002d713d7a08451bf99b4979d2e4769808cfb1a08"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "left",
+      "on": "plate.xmin",
+      "dofs": [
+        "ux"
+      ]
+    },
+    "hashAfter": "ed8ec7820e2d1cc321f8010fc9d9aadca0b604c28f48f7d2dd342f603cec5661"
+  },
+  {
+    "seq": 11,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "right",
+      "on": "plate.xmax",
+      "dofs": [
+        "ux"
+      ]
+    },
+    "hashAfter": "bec2121baf513e575ad5bda66312da76681e2e8052e371284f1d181cf8cc961c"
+  },
+  {
+    "seq": 12,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "pinned",
+      "on": "pin",
+      "dofs": [
+        "uy"
+      ]
+    },
+    "hashAfter": "5b7533b9f9f3e1e6be430678d69dc7988cfa2d7146d89159d18fe9a158f84593"
+  },
+  {
+    "seq": 13,
+    "cmd": {
+      "cmd": "load.temperature",
+      "name": "reference",
+      "bodies": [
+        "plate"
+      ],
+      "value": "0 degC",
+      "reference": "0 degC"
+    },
+    "hashAfter": "d5909b4aeee21eb712a0e28021a574eca1d01e3755232a375b7006789e774736"
+  },
+  {
+    "seq": 14,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "conduct",
+      "procedure": "heat-steady",
+      "constraints": [
+        "cool",
+        "warm"
+      ],
+      "loads": [],
+      "output": [
+        "temperature"
+      ]
+    },
+    "hashAfter": "064766205125a780cf257a04aef807def871fefbe9633d706a5741c20603c361"
+  },
+  {
+    "seq": 15,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "stress",
+      "procedure": "static",
+      "constraints": [
+        "left",
+        "right",
+        "pinned"
+      ],
+      "loads": [
+        "reference"
+      ],
+      "after": "conduct"
+    },
+    "hashAfter": "a5ef767d8e8d7b55fda0964597ed00687b2b251063083304ca5a61645af79730"
+  },
+  {
+    "seq": 16,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "conduct"
+    },
+    "hashAfter": "a5ef767d8e8d7b55fda0964597ed00687b2b251063083304ca5a61645af79730"
+  },
+  {
+    "seq": 17,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "stress"
+    },
+    "hashAfter": "a5ef767d8e8d7b55fda0964597ed00687b2b251063083304ca5a61645af79730"
+  }
+]

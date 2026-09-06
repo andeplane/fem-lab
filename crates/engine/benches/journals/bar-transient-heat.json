@@ -1,0 +1,129 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "bar-transient-heat"
+    },
+    "hashAfter": "012f96c1301b0d98e7681918a6658e7fd6e9fc529da36b388ac4a887e1227100"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    "hashAfter": "ba101bc46408b038bf6ac71c2d6ec612e063da14abad10cf40ceaba0ff0fd355"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addBox",
+      "name": "bar",
+      "size": [
+        "0.1 m",
+        "5 mm",
+        "5 mm"
+      ]
+    },
+    "hashAfter": "4bac1870ad679a9ba13cae85de9a7490bd743c61f083ef17e214403af50336f6"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "slab",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7200 kg/m^3",
+      "k": "35 W/(m K)",
+      "cp": "440.5 J/(kg K)",
+      "source": "NAFEMS T3"
+    },
+    "hashAfter": "78f609583aba9fd2639dfb2694cf5c0a0a0d9c6c4ecd6346dfddc9da5e99e307"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "slab",
+      "bodies": [
+        "bar"
+      ]
+    },
+    "hashAfter": "9b0b58b06401dd902d73ca8b972759c6ca75d7ef5cfd6acde725d7512f734f1a"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 20,
+          "ny": 1,
+          "nz": 1
+        }
+      }
+    },
+    "hashAfter": "76d14d152d9c61d8f6b55ce847181fbc555c6a1baf639248488194cf5b9900d5"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.temperature",
+      "name": "driven",
+      "on": "bar.xmax",
+      "value": "100 K"
+    },
+    "hashAfter": "a60378954c4af54d204a6450650270f794af42f71231ee38b00b288e323846ee"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "constraint.temperature",
+      "name": "cold",
+      "on": "bar.xmin",
+      "value": "0 K"
+    },
+    "hashAfter": "c5f6c7ad7af78258599d1f9b085744cbbb98b6971e38fabd523a9668ac145205"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "transient",
+      "procedure": "heat-transient",
+      "constraints": [
+        "driven",
+        "cold"
+      ],
+      "loads": [],
+      "output": [
+        "temperature"
+      ],
+      "dt": "0.5 s",
+      "tEnd": "32 s",
+      "theta": 0.5,
+      "outputEvery": 16,
+      "amplitude": {
+        "kind": "sine",
+        "amplitude": 1.0,
+        "period": "80 s"
+      },
+      "initial": "0 K"
+    },
+    "hashAfter": "41cf7bf1697ae76eae248eda9398da93c171b53f5c207bf909b11ee15829b86d"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "transient"
+    },
+    "hashAfter": "41cf7bf1697ae76eae248eda9398da93c171b53f5c207bf909b11ee15829b86d"
+  }
+]

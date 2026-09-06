@@ -1,0 +1,20 @@
+{
+  "title": "Plate with a hole (free mesh)",
+  "tag": "everyday",
+  "tags": [
+    "static",
+    "plane-stress",
+    "free-mesh"
+  ],
+  "difficulty": 2,
+  "sentence": "A plane-stress plate with a circular hole in tension, free-meshed with local refinement around the hole.",
+  "expected": {
+    "quantity": "peak von Mises",
+    "value": 104.5,
+    "unit": "MPa",
+    "reference": "≈ 3σ with σ = 10 kN / (80 × 10 mm) = 12.5 MPa, raised by the finite width"
+  },
+  "theory": "The everyday counterpart of `kirsch-quarter-plate`: the same $K_t \\approx 3$ concentration, but on an unstructured triangular mesh over the whole plate rather than a graded quarter model. The finite width raises $K_t$ above the infinite-plate value, and the ligament between hole and edge carries more than the nominal stress.",
+  "tutorial": "plate-with-hole",
+  "thumbnail": null
+}

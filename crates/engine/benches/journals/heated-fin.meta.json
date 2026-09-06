@@ -1,0 +1,20 @@
+{
+  "title": "Heated fin (thermal strain)",
+  "tag": "everyday",
+  "tags": [
+    "thermal",
+    "static",
+    "expansion"
+  ],
+  "difficulty": 1,
+  "sentence": "An aluminium fin fixed at its root and uniformly heated — thermal strain with no mechanical load at all.",
+  "expected": {
+    "quantity": "peak von Mises",
+    "value": 160.2,
+    "unit": "MPa",
+    "reference": "no closed form; the restraint is what makes the stress"
+  },
+  "theory": "A uniform temperature change produces a free thermal strain $\\varepsilon_{th} = \\alpha\\,\\Delta T$ in every direction. Restraining the root is what turns that strain into stress; a fully free body would expand and stay stress-free.",
+  "tutorial": "thermal-bar",
+  "thumbnail": null
+}

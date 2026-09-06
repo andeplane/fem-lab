@@ -1,0 +1,143 @@
+{
+  "name": "cook-membrane-plane-stress-quad8",
+  "reference": "Benchmark C4. Cook's membrane: the tapered trapezoid (0,0)-(48,44)-(48,60)-(0,44), E = 1 Pa, nu = 1/3, thickness 1 m, the left edge clamped and a total shear force of 1 N spread over the right edge. The monitored quantity is the vertical displacement at C = (48, 52), the midpoint of the loaded edge, which is the point the literature values belong to; plans A and C say (48, 60), the top corner, and that is a different number (25.18 plane stress, 22.6 plane strain by the same extrapolation). Richardson extrapolation over n = 4, 8, 16, 32 quad8 (tests/registry.rs runs the four meshes) gives 23.9687 here, confirming the published 23.9 (Cook 1974; Simo-Rifai 23.96) for this idealisation; the n = 32 mesh in this case file reaches 23.955125, 0.057 % from the extrapolated value. Both literature numbers are real: they are the two idealisations of the same problem, which is what C4's 'resolve' was about.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "cook-membrane"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "Pa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "1 m"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "soft",
+      "E": "1 Pa",
+      "nu": 0.3333333333333333
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "membrane",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0 m",
+                "0 m"
+              ],
+              [
+                "48 m",
+                "44 m"
+              ],
+              [
+                "48 m",
+                "60 m"
+              ],
+              [
+                "0 m",
+                "44 m"
+              ]
+            ],
+            "n": [
+              32,
+              32
+            ],
+            "tags": [
+              "bottom",
+              "right",
+              "top",
+              "left"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "soft",
+      "bodies": [
+        "membrane"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "clamp",
+      "on": "membrane.left"
+    },
+    {
+      "cmd": "load.traction",
+      "name": "shear",
+      "on": "membrane.right",
+      "total": [
+        "0 N",
+        "1 N",
+        "0 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "clamp"
+      ],
+      "loads": [
+        "shear"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 1,
+        "at": [
+          "48 m",
+          "52 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 23.9687,
+      "tol": 0.01,
+      "rel": true,
+      "note": "u_y(C) within 1 % of the extrapolated 23.9687"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "A7: reactions balance the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

@@ -11,8 +11,8 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
   and Python binding and to wasm + WebGPU (wgpu) for the browser; the app, its UI Commands and
   the MCP server are TypeScript. The boundary is the registry. (ADR 0012)
 - **The engine is a library and headless.** It has no screen, no file system, no `navigator`,
-  no `window`, no Babylon. It receives the GPU, storage and clock as constructor arguments and
-  runs unchanged in the browser, in Node, and in a container. Hosts own I/O and concurrency.
+  no `window`, no renderer. It receives the GPU and clock as constructor arguments and runs
+  unchanged in the browser, in Node, and in a container. Hosts own I/O and concurrency.
   (ADR 0011)
 - **Dependency injection everywhere a boundary exists.** Anything that touches a device, a
   clock, randomness, storage, the network or a Worker is passed in as a typed interface, so
@@ -21,8 +21,10 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
   actions: camera moves, selection, view toggles, panel state. If a person can do it by
   clicking, an AI can do it by calling, and a test enumerates the registry against the UI.
   Commands take explicit targets; selectors are named Sets or geometric predicates. (ADR 0003)
-- **The Journal is the model.** Every Command is appended; replay rebuilds the Model; export
-  yields a script; undo pops. Interactive gestures emit one Command with final values.
+- **The Journal is the model.** Every engine Command is appended; replay rebuilds the Model;
+  export yields a script; undo pops. Interactive gestures emit one Command with final values.
+  The registry is engine Commands ∪ host Commands (camera, selection, panels); the Journal holds
+  engine Commands only, so view state is callable by an AI but never replayed on open.
 - **Composable by construction.** Elements, material laws, loads, procedures (static now,
   implicit dynamics and nonlinear later), meshers and solvers each implement a fixed
   Extension Point that the built-ins also use. A new feature is a new implementation of an
@@ -50,9 +52,11 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
 
 ## Testing
 
-- **100 % coverage on the engine** is a CI threshold (lines, branches, functions, statements),
-  and the only acceptable way to meet it is tests that would fail if the logic broke. Hosts are
-  thin and covered by smoke tests.
+- **100 % coverage on the engine and geometry crates** is a CI threshold (lines, functions and
+  regions as `cargo llvm-cov` measures them on stable; regions stand in for branches), and the
+  only acceptable way to meet it is tests that would fail if the logic broke. GPU code counts
+  too: it is covered by running it on the software adapter, never by excluding it. Hosts are
+  thin and covered by smoke tests; `packages/registry` has 100 % vitest thresholds.
 - **Every numerical capability ships with Benchmarks from `docs/BENCHMARKS.md`**: analytical
   solutions, NAFEMS and MacNeal–Harder values, patch tests, and a convergence study where a
   rate is known. A case that only passes at one mesh size is not a Benchmark. Add the case to
@@ -66,6 +70,13 @@ tests in `docs/BENCHMARKS.md`. Read the ADR a rule cites before departing from i
   inverses, symmetric PSD stiffness for any admissible element, `parse∘format` identity for
   units.
 - **Software adapters are for correctness, never for timing.**
+- **Coverage mechanics that bite.** `cargo llvm-cov` does not merge generic or async
+  instantiations across test binaries, so a crate's integration tests live in ONE
+  `tests/*.rs` binary, in-source `#[cfg(test)]` tests only exercise the small pure functions
+  of their own module, generic helpers take `fn` pointers rather than closures where each
+  call site would otherwise be its own instantiation, and test code avoids `matches!`,
+  `_ => panic!()` arms and `unwrap_or_else(|| panic!())` (their never-taken arms count).
+  Unreachable code is designed out (restructure), never excluded.
 
 ## Working
 

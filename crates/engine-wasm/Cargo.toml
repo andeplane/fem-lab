@@ -1,0 +1,18 @@
+[package]
+name = "femlab-engine-wasm"
+description = "wasm-bindgen host surface for the FEM Lab engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+femlab-engine = { path = "../engine" }
+wasm-bindgen = "0.2.128"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde_json.workspace = true
+console_error_panic_hook = "0.1"

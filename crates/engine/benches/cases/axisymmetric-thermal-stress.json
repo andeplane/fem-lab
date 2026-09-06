@@ -1,0 +1,240 @@
+{
+  "name": "axisymmetric-thermal-stress",
+  "reference": "Benchmark D2 (axisymmetric thermal stress). A solid cylinder of radius 1 m carries a uniform volumetric source q = 208 W/m^3 with its curved surface held at 0 degC, so the heat Step produces the parabolic field dT = A (1 - (r/a)^2) with A = q a^2 / 4k = 1 K. A static Step named after it holds both flat ends against axial displacement, which is the plane-strain thermal-stress problem of Timoshenko section 151: sigma_rr = sigma_thth = -alpha E A / (4 (1 - nu)) and sigma_zz = nu (sigma_rr + sigma_thth) - E alpha A on the axis, giving -58.654 MPa for E = 210 GPa, nu = 0.3, alpha = 2.3e-4. The published NAFEMS LE11 profile coordinates were not available when this was written, so plan A section 9's fallback is used: the same physics on a geometry whose closed form is known.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "axisymmetric-thermal"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "temperature": "degC"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "axisymmetric"
+      }
+    },
+    {
+      "cmd": "geometry.add",
+      "name": "cyl",
+      "shape": {
+        "kind": "sheet",
+        "sketch": {
+          "outer": [
+            {
+              "kind": "line",
+              "to": [
+                "1.0 m",
+                "0 m"
+              ],
+              "tag": "ymin"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "1.0 m",
+                "0.2 m"
+              ],
+              "tag": "xmax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "0.2 m"
+              ],
+              "tag": "ymax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "0 m"
+              ],
+              "tag": "xmin"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "slab",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "alpha": "2.3e-4 1/K",
+      "k": "52 W/(m K)",
+      "cp": "460 J/(kg K)"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "slab",
+      "bodies": [
+        "cyl"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 20,
+          "ny": 4,
+          "nz": 1
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.temperature",
+      "name": "surface",
+      "on": "cyl.xmax",
+      "value": "0 degC"
+    },
+    {
+      "cmd": "load.heatSource",
+      "name": "ohmic",
+      "bodies": [
+        "cyl"
+      ],
+      "q": "208 W/m^3"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "bottom",
+      "on": "cyl.ymin",
+      "dofs": [
+        "uy"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "top",
+      "on": "cyl.ymax",
+      "dofs": [
+        "uy"
+      ]
+    },
+    {
+      "cmd": "load.temperature",
+      "name": "reference",
+      "bodies": [
+        "cyl"
+      ],
+      "value": "0 degC",
+      "reference": "0 degC"
+    },
+    {
+      "cmd": "step.add",
+      "name": "conduct",
+      "procedure": "heat-steady",
+      "constraints": [
+        "surface"
+      ],
+      "loads": [
+        "ohmic"
+      ],
+      "output": [
+        "temperature"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "stress",
+      "procedure": "static",
+      "after": "conduct",
+      "constraints": [
+        "bottom",
+        "top"
+      ],
+      "loads": [
+        "reference"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "conduct"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "stress"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": [
+          "0 m",
+          "0.1 m",
+          "0 m"
+        ],
+        "step": "conduct"
+      },
+      "path": "/value/value",
+      "expect": 1.0,
+      "tol": 0.001,
+      "rel": true,
+      "note": "dT on the axis is q a^2 / 4k"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": [
+          "0.5 m",
+          "0.1 m",
+          "0 m"
+        ],
+        "step": "conduct"
+      },
+      "path": "/value/value",
+      "expect": 0.75,
+      "tol": 0.001,
+      "rel": true,
+      "note": "and parabolic across the radius"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "at": [
+          "0 m",
+          "0.1 m",
+          "0 m"
+        ],
+        "component": 1,
+        "step": "stress"
+      },
+      "path": "/value/value",
+      "expect": -58.6543,
+      "tol": 0.03,
+      "rel": true,
+      "note": "sigma_zz on the axis, Timoshenko section 151"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "at": [
+          "1 m",
+          "0.1 m",
+          "0 m"
+        ],
+        "component": 0,
+        "step": "stress"
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1.0,
+      "note": "and the curved surface is traction free"
+    }
+  ]
+}

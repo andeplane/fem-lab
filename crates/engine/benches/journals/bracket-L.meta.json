@@ -1,0 +1,20 @@
+{
+  "title": "L-bracket",
+  "tag": "everyday",
+  "tags": [
+    "static",
+    "csg",
+    "lattice"
+  ],
+  "difficulty": 1,
+  "sentence": "Two boxes unioned into an L-shaped bracket, wall-mounted and end-loaded — `geometry.add`'s union in one model.",
+  "expected": {
+    "quantity": "peak von Mises",
+    "value": 15.71,
+    "unit": "MPa",
+    "reference": "no closed form; the peak sits at the re-entrant corner"
+  },
+  "theory": "The peak stress is at the re-entrant corner, where the exact elastic solution is singular: refine the mesh and the number keeps rising. Report a stress away from the corner, or a fillet radius, never the corner value itself.",
+  "tutorial": null,
+  "thumbnail": null
+}

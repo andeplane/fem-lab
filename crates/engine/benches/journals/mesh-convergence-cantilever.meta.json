@@ -1,0 +1,20 @@
+{
+  "title": "Mesh convergence: cantilever",
+  "tag": "P1 · verify",
+  "tags": [
+    "convergence",
+    "study",
+    "static"
+  ],
+  "difficulty": 2,
+  "sentence": "The cantilever solved at three mesh sizes by `study.converge`, with the observed rate and a Richardson estimate of the converged value.",
+  "expected": {
+    "quantity": "Richardson estimate of δ",
+    "value": -0.19073,
+    "unit": "mm",
+    "reference": "Euler–Bernoulli δ = PL³/3EI = 0.1905 mm"
+  },
+  "theory": "With a refinement ratio $r = 2$ and values $f_1, f_2, f_3$ from coarse to fine, the observed order is $p = \\dfrac{\\ln\\!\\left(\\dfrac{f_1 - f_2}{f_2 - f_3}\\right)}{\\ln r}$ and Richardson extrapolation gives $f_\\infty \\approx f_3 + \\dfrac{f_3 - f_2}{r^p - 1}$. This run reports $p \\approx 1.1$: the tip probe sits in the Saint-Venant zone of the applied traction, so the mesh is not yet in the asymptotic range even though $f_\\infty$ already lands within $0.2\\,\\%$ of beam theory.",
+  "tutorial": "mesh-convergence",
+  "thumbnail": null
+}

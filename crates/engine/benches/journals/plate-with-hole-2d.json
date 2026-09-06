@@ -1,0 +1,230 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "plate-with-hole-2d"
+    },
+    "hashAfter": "783c36874647d8443ab03ccd49b24dd105919a8556437e39ac7eec32308e0852"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "b7ea9495450b3a401bc44c956027a8b4dd9e3a779d42cb22563591c7d0818886"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "10 mm"
+      }
+    },
+    "hashAfter": "a6d5e3703ecf2815725262cce40a845726003c54e73431a7d047964c3796408a"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "geometry.add",
+      "name": "plate",
+      "shape": {
+        "kind": "sheet",
+        "sketch": {
+          "outer": [
+            {
+              "kind": "line",
+              "to": [
+                "100.0 mm",
+                "0 mm"
+              ],
+              "tag": "xmax0"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "100.0 mm",
+                "80.0 mm"
+              ],
+              "tag": "ymax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 mm",
+                "80.0 mm"
+              ],
+              "tag": "xmin0"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 mm",
+                "0 mm"
+              ],
+              "tag": "ymin"
+            }
+          ],
+          "holes": [
+            [
+              {
+                "kind": "arc",
+                "center": [
+                  "50.0 mm",
+                  "40.0 mm"
+                ],
+                "to": [
+                  "50.0 mm",
+                  "25.0 mm"
+                ],
+                "ccw": true,
+                "tag": "hole"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "50.0 mm",
+                  "40.0 mm"
+                ],
+                "to": [
+                  "65.0 mm",
+                  "40.0 mm"
+                ],
+                "ccw": true,
+                "tag": "hole"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "50.0 mm",
+                  "40.0 mm"
+                ],
+                "to": [
+                  "50.0 mm",
+                  "55.0 mm"
+                ],
+                "ccw": true,
+                "tag": "hole"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "50.0 mm",
+                  "40.0 mm"
+                ],
+                "to": [
+                  "35.0 mm",
+                  "40.0 mm"
+                ],
+                "ccw": true,
+                "tag": "hole"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "hashAfter": "8357559629a8ce6d32afd2d8d8b72f28aa6a3090f0af66287029af5c15fb3ed1"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "source": "EN 10025"
+    },
+    "hashAfter": "409c5e260b9024aba10bc8b56abb544b3d89216eeb9f514a4aadf56e7009b985"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    "hashAfter": "fac900e15a1339e8d494a4ebd851c16e908d60484a5d900d678a6b7f3e002229"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "free",
+        "of": "plate",
+        "size": "5 mm",
+        "refine": [
+          {
+            "min": [
+              "20.0 mm",
+              "10.0 mm"
+            ],
+            "max": [
+              "80.0 mm",
+              "70.0 mm"
+            ],
+            "size": "1.5 mm"
+          }
+        ]
+      },
+      "order": 2
+    },
+    "hashAfter": "5a0d35be300a3541334c5ca999c2c1083bcc978a046dfe871ac4bef67bc64863"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "left",
+      "on": "plate.xmin0"
+    },
+    "hashAfter": "5e0588a7503356ecf2c9ff5fa956a58105a8adcb474e7e07fbb2ab5a0182ac37"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "load.traction",
+      "name": "pull",
+      "on": "plate.xmax0",
+      "total": [
+        "10 kN",
+        "0 N",
+        "0 N"
+      ]
+    },
+    "hashAfter": "81ff2d55cd4da68833d2bc69f7363abb7a6f8d3311116e7714f24a1efd8764cb"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "left"
+      ],
+      "loads": [
+        "pull"
+      ]
+    },
+    "hashAfter": "c42409f886e93f8fc42533dd2ce81acef791ae88dd94d2f397f5be89a8f5e0f2"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "c42409f886e93f8fc42533dd2ce81acef791ae88dd94d2f397f5be89a8f5e0f2"
+  }
+]

@@ -1,0 +1,189 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "nafems-le10-plate"
+    },
+    "hashAfter": "9baef805953184bf86ecb68856a20de46330c73030b75f0b2d89e514f4fcca6a"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "14da3f6931a2c5243dd1452b85963bc918c9b5126ffc78bb1aefef0d39da4638"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3
+    },
+    "hashAfter": "c84cccfe1e4586c75f8ecce8c270e37e2c82bae775a8fd37f3f3dace32d1905f"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "sweep",
+        "base": {
+          "kind": "mapped",
+          "body": "plate",
+          "blocks": [
+            {
+              "corners": [
+                [
+                  "2 m",
+                  "0 m"
+                ],
+                [
+                  "3.25 m",
+                  "0 m"
+                ],
+                [
+                  "0 m",
+                  "2.75 m"
+                ],
+                [
+                  "0 m",
+                  "1 m"
+                ]
+              ],
+              "edges": [
+                {
+                  "kind": "line"
+                },
+                {
+                  "kind": "ellipse",
+                  "center": [
+                    "0 m",
+                    "0 m"
+                  ],
+                  "semiAxes": [
+                    "3.25 m",
+                    "2.75 m"
+                  ]
+                },
+                {
+                  "kind": "line"
+                },
+                {
+                  "kind": "ellipse",
+                  "center": [
+                    "0 m",
+                    "0 m"
+                  ],
+                  "semiAxes": [
+                    "2 m",
+                    "1 m"
+                  ]
+                }
+              ],
+              "n": [
+                12,
+                12
+              ],
+              "tags": [
+                "y0",
+                "outer",
+                "x0",
+                "inner"
+              ]
+            }
+          ]
+        },
+        "sweep": {
+          "kind": "extrude",
+          "layers": 4,
+          "height": "0.6 m"
+        }
+      },
+      "order": 2
+    },
+    "hashAfter": "b03a37e3a316fb122020a03c44f92491efb96fd6c93ef1d435f670d883a40300"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    "hashAfter": "2a99a8192bee11faeb91465f529b0d51a26a52d4fc61dd992efd4116b0d18d44"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "constraint.symmetry",
+      "name": "symx",
+      "on": "plate.x0",
+      "normal": "x"
+    },
+    "hashAfter": "0539c7386a1f454f0da8ace408db4cac09f586c17ecb49565c5b04a6fd401040"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.symmetry",
+      "name": "symy",
+      "on": "plate.y0",
+      "normal": "y"
+    },
+    "hashAfter": "02d253069dfb0d1e19a345e61b61d76b6bd28787e61b62c3c56154dabf619c19"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "rim",
+      "on": "plate.outer"
+    },
+    "hashAfter": "0afcfc26c8fbc8e80a1dd37c59a63df0666eb90d47cf80a6d84fc8a1b2477a93"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "top",
+      "on": "plate.top",
+      "value": "1 MPa"
+    },
+    "hashAfter": "0e170b3d9e06d6bdd2fb875ead97f54ca069126d94701224f347a1607334bf56"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "symx",
+        "symy",
+        "rim"
+      ],
+      "loads": [
+        "top"
+      ]
+    },
+    "hashAfter": "c9f41ad6c17141069eb9a4992cb8834b3f4af09b590028680471f9659074c4d7"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "c9f41ad6c17141069eb9a4992cb8834b3f4af09b590028680471f9659074c4d7"
+  }
+]

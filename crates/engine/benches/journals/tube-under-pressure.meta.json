@@ -1,0 +1,21 @@
+{
+  "title": "Tube under internal pressure",
+  "tag": "everyday",
+  "tags": [
+    "static",
+    "revolve",
+    "pressure",
+    "sweep"
+  ],
+  "difficulty": 2,
+  "sentence": "A pipe wall meshed as a revolved section and loaded with internal pressure — the sweep mesher's revolve in one model.",
+  "expected": {
+    "quantity": "peak von Mises",
+    "value": 86.22,
+    "unit": "MPa",
+    "reference": "thin wall: σ_θ ≈ pr/t = 8 × 47.5/5 = 76 MPa away from the base"
+  },
+  "theory": "For a thin wall the hoop stress is $\\sigma_\\theta \\approx \\dfrac{p r}{t}$; the peak here is higher because the welded base restrains the hoop expansion, which is a local bending boundary layer of length $\\approx 2.5\\sqrt{rt}$ and not a wall-thickness problem.",
+  "tutorial": null,
+  "thumbnail": null
+}

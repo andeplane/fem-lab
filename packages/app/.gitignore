@@ -1,0 +1,7 @@
+# Copied from crates/engine/benches/journals by tools/copy-examples.mjs (predev / prebuild).
+public/examples/
+# Playwright output
+test-results/
+playwright-report/
+# Screenshots written by e2e/build.spec.ts on every run
+e2e/screenshots/

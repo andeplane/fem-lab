@@ -1,0 +1,20 @@
+{
+  "title": "Cantilever beam, hex20",
+  "tag": "P1 · verify",
+  "tags": [
+    "static",
+    "beam",
+    "hex20"
+  ],
+  "difficulty": 1,
+  "sentence": "The same cantilever at quadratic order (hex20) — bending accuracy from one lattice mesh setting.",
+  "expected": {
+    "quantity": "tip deflection δ",
+    "value": -0.1899,
+    "unit": "mm",
+    "reference": "Euler–Bernoulli δ = PL³/3EI = 0.1905 mm"
+  },
+  "theory": "The same $\\delta = \\dfrac{PL^3}{3EI} = 0.1905\\,\\mathrm{mm}$ as `cantilever`, reached with quadratic elements: hex20 represents the linear bending strain exactly, so it does not need the incompatible modes hex8 relies on.",
+  "tutorial": "cantilever",
+  "thumbnail": null
+}

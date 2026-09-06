@@ -1,0 +1,142 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "bracket-L"
+    },
+    "hashAfter": "5f81322decf70923c9e50622dc81ff41b483fbdf0f7ecc57bd3066edbeff2a52"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "af3bcbce4c5b08d94ad97438694dcdd88fcd6df519eaeeded0eb1a4d14ae1100"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.add",
+      "name": "bracket",
+      "shape": {
+        "kind": "union",
+        "shapes": [
+          {
+            "kind": "box",
+            "size": [
+              "20 mm",
+              "200 mm",
+              "80 mm"
+            ]
+          },
+          {
+            "kind": "transform",
+            "shape": {
+              "kind": "box",
+              "size": [
+                "140 mm",
+                "20 mm",
+                "80 mm"
+              ]
+            },
+            "at": {
+              "translate": [
+                "20 mm",
+                "0 mm",
+                "0 mm"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "hashAfter": "ebd027dd4a1c127e5dc3a22538e2e056a3fef63f57cb98b5249457bc50e5d659"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025"
+    },
+    "hashAfter": "e7c9436c176cf80289a6e35fb9b78713881c8061cae0be1d516ec0f7f8bb8f81"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "bracket"
+      ]
+    },
+    "hashAfter": "75738b7be697312b9de53c5f71ee6d975834784cdff278729044756f96f21cb1"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "10 mm"
+      },
+      "order": 1
+    },
+    "hashAfter": "090e8ed6a70a81b90d2b4db7864482c83746af0fab556f6a63330fb9ab30532c"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "wall",
+      "on": "bracket.ymax"
+    },
+    "hashAfter": "3c2ae41fd327a1f8c4ffa3ae36a4515ce55866154e31587bfe1defa7a8a8a35c"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "load.force",
+      "name": "tip",
+      "on": "bracket.xmax",
+      "total": [
+        "0 N",
+        "-500 N",
+        "0 N"
+      ]
+    },
+    "hashAfter": "cb64fe5f738aaabd25769a77ceb448e242aeba8926ebce23e0e54ab04b970256"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "wall"
+      ],
+      "loads": [
+        "tip"
+      ]
+    },
+    "hashAfter": "40540eae608a5a396a208c2c1659fe2bc4de3782f535c9fb582b357ab23e8f31"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "40540eae608a5a396a208c2c1659fe2bc4de3782f535c9fb582b357ab23e8f31"
+  }
+]

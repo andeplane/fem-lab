@@ -1,0 +1,131 @@
+[
+  {
+    "seq": 0,
+    "cmd": {
+      "cmd": "model.new",
+      "name": "simply-supported-beam"
+    },
+    "hashAfter": "cea48b263cad7771b7f98be63bf0dbe9f01d17ccabd3fe35f6a0ce46a4bae807"
+  },
+  {
+    "seq": 1,
+    "cmd": {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "force": "N",
+        "stress": "MPa"
+      }
+    },
+    "hashAfter": "eeb4a5f7cac90a8e7a1ac80d45705b35fceccb294d61d30db772ac2078685fec"
+  },
+  {
+    "seq": 2,
+    "cmd": {
+      "cmd": "geometry.addBox",
+      "name": "beam",
+      "size": [
+        "2000 mm",
+        "150 mm",
+        "300 mm"
+      ]
+    },
+    "hashAfter": "62856a8bf899fa82ec99c882cdc262841f259a142bab2975f4893001aa9cc549"
+  },
+  {
+    "seq": 3,
+    "cmd": {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025"
+    },
+    "hashAfter": "4b57b7cf8b6d940e5593dac45d0e9e3dc5e0bcc8b423c73bca4a3ec3410fbbad"
+  },
+  {
+    "seq": 4,
+    "cmd": {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "beam"
+      ]
+    },
+    "hashAfter": "d78a7b145046d4a7e73678981c8c19a8e3be27de34683fbf80097ca9e80f0c2e"
+  },
+  {
+    "seq": 5,
+    "cmd": {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "50 mm"
+      },
+      "order": 1
+    },
+    "hashAfter": "ab5e6e6e6048c3bf11ad89e2c67b6fe27a941124024170dfd72730e8537bffbe"
+  },
+  {
+    "seq": 6,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "pin",
+      "on": "beam.xmin",
+      "dofs": [
+        "ux",
+        "uy",
+        "uz"
+      ]
+    },
+    "hashAfter": "f4aeb3bcfcef800160c3032ad36a5010ec30bd271e231bd3ed034d5a702e99a1"
+  },
+  {
+    "seq": 7,
+    "cmd": {
+      "cmd": "constraint.fix",
+      "name": "roller",
+      "on": "beam.xmax",
+      "dofs": [
+        "uy",
+        "uz"
+      ]
+    },
+    "hashAfter": "a52cac25e5b027e1a8eb8f19f5c15d5da6b3560223758d41d74414cf1f0b272e"
+  },
+  {
+    "seq": 8,
+    "cmd": {
+      "cmd": "load.pressure",
+      "name": "udl",
+      "on": "beam.zmax",
+      "value": "-0.02 MPa"
+    },
+    "hashAfter": "38c4527f9665a007d8349ae1163596a2158e36ae6a266de04fd85fbcb3b36b23"
+  },
+  {
+    "seq": 9,
+    "cmd": {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "pin",
+        "roller"
+      ],
+      "loads": [
+        "udl"
+      ]
+    },
+    "hashAfter": "5683d49258387d2698790a558a57c905c8d772bc06bb5225563e412f2ea6e42e"
+  },
+  {
+    "seq": 10,
+    "cmd": {
+      "cmd": "solve.run",
+      "step": "static"
+    },
+    "hashAfter": "5683d49258387d2698790a558a57c905c8d772bc06bb5225563e412f2ea6e42e"
+  }
+]

@@ -5,7 +5,32 @@ first host and a Node server as its second. Every action is a typed Command, so 
 script, a Python notebook or an AI can do anything the UI can do. Solves on the GPU through
 WebGPU, in the browser and on the server alike.
 
-**Status: research and plan. Nothing is implemented yet.** Read in this order:
+## Run it
+
+You need Rust 1.94 with the `wasm32-unknown-unknown` target and Node 22. Chromium is the
+supported browser (ADR 0014).
+
+```sh
+cargo install --locked wasm-bindgen-cli --version "$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | tail -1 | cut -d'"' -f2)"
+node tools/build-wasm.mjs      # engine → packages/app/src/generated/wasm (gitignored)
+npm ci
+npm run dev                    # http://localhost:5173/fem-lab/
+```
+
+`npm run build` writes `packages/app/dist`, which is what GitHub Pages serves. In the browser
+console, `fem` is the whole registry: `await fem.dispatch({ cmd: 'model.new', name: 'demo' })`,
+`await fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] })`,
+`await fem.query.model()`, `fem.registry.list()`.
+
+Without a browser, `cargo run -p femlab --` replays a Journal (`run`), runs the Benchmarks
+(`bench`), writes an export (`export <file> --format vtu|msh|inp|stl|report|script|journal`), and
+serves the whole registry to an editor over MCP (`mcp --project <dir>`; see
+[`packages/mcp/README.md`](packages/mcp/README.md) for the `mcpServers` snippet).
+
+Tests: `npm test` (vitest), `npm run typecheck`, and in `packages/app`,
+`npx playwright install chromium && npx playwright test` for the browser smokes.
+
+**Status: research, plan, engine, and a browser shell. Read in this order:**
 
 1. [`docs/PROPOSAL.md`](docs/PROPOSAL.md): the questions answered (can FEniCS run in a
    browser, is a new WebGPU solver sensible, what people do today, who has built what), what we

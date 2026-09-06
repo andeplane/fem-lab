@@ -1,0 +1,20 @@
+{
+  "title": "Column under self-weight",
+  "tag": "everyday",
+  "tags": [
+    "static",
+    "gravity",
+    "body-load"
+  ],
+  "difficulty": 1,
+  "sentence": "A standing column loaded only by its own self-weight — `load.gravity` on a single fixed-base body.",
+  "expected": {
+    "quantity": "peak von Mises",
+    "value": 0.07819,
+    "unit": "MPa",
+    "reference": "σ_base = ρ g L"
+  },
+  "theory": "Self-weight gives a stress that grows linearly with depth, $\\sigma(z) = \\rho g (L - z)$, so the base carries $\\rho g L$ regardless of the cross-section. `load.gravity` is a body force on every element, not a traction on a face, so it needs `rho` on the Material.",
+  "tutorial": null,
+  "thumbnail": null
+}

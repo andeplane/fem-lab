@@ -209,7 +209,7 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 | 4.1 | `window.fem`: the registry (Commands, Queries, Journal) on the page, typed | Chrome DevTools MCP `evaluate_script` builds and solves a cantilever (recorded transcript in `docs/`) |
 | 4.2 | Tool derivation: `toToolDefinitions()` → Anthropic tool array; plus `run_script` whose input is TypeScript and whose output is the script's return value, console, and thrown errors | schema snapshot test; every Command has a doc string ≥ 1 sentence |
 | 4.3 | Read-back Queries the papers say models need: `query.model` summary, `query.mesh` stats, `query.result` extremes/reactions, `query.screenshot` (PNG from the viewer), `query.journal` | an agent with *no* screenshot can still detect a wrong BC from reaction totals (eval case) |
-| 4.4 | In-page agent: Anthropic Messages API from the browser (`dangerouslyAllowBrowser`), BYO key in localStorage with a plain notice, streaming, tool loop, "show me what you did" as Journal diff | the success story runs with a stated model ID; cost shown |
+| 4.4 | In-page agent behind a small **provider interface** (`chat(messages, tools, images) → stream of text / tool calls`): Anthropic Messages API (default, `dangerouslyAllowBrowser`) and OpenAI (Responses/Chat Completions with function calling); BYO key per provider in localStorage with a plain notice; streaming, tool loop, "show me what you did" as Journal diff. **Local dev always works**: `vite.config.ts` injects `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` from the shell into the dev server only (`command === 'serve'`; production builds get nothing), and the app uses the first present as the default provider and key when none is stored; settings show provider, model, key and where the key came from | the success story runs with a stated model ID on both providers; cost shown; a production bundle contains no key (a build test greps `dist/`) |
 | 4.5 | System prompt = generated API reference (from schemas) + units rule + verification habit ("after solving, check reactions and compare with a hand estimate") | prompt is generated, never hand-edited |
 | 4.6 | **Agent eval suite** (FEABench-style, ours): 20 tasks from student problems with reference answers; run by a script against a frozen build; pass = within tolerance and reactions balanced | ≥ 80 % pass before shipping the agent; failures listed in `docs/` with causes |
 | 4.7 | Guardrails: `run_script` runs in the Worker with a timeout; the agent cannot call `file.load` on arbitrary URLs; no key ever in a Journal or export | tests |
@@ -219,6 +219,7 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 | 4.12 | **Skills**: `skills/<name>/SKILL.md` (frontmatter: name, description, when) from the app's built-ins and from the project folder; `/` menu in the chat; a skill is prepended to the turn when invoked, and the AI may invoke one itself from its description | built-in skills: beam-theory check, convergence study, report, NAFEMS benchmark; a project skill overrides a built-in of the same name |
 | 4.13 | **Project folder**: open a directory via the File System Access API (Chromium, ADR 0014); the Journal, scripts, plugins and exports live in it; `AGENTS.md`/`CLAUDE.md` in the folder is read into the system prompt with a visible badge; the AI gets `file.read`/`file.write` scoped to that folder | a project rule ("all stresses in MPa, S355 yield 355 MPa") is followed without being repeated in the chat |
 | 4.14 | **Export** Commands: `file.exportVTU` (mesh + fields), `file.exportMsh` (Gmsh 4.1), `file.exportInp` (Abaqus/CalculiX), `file.exportSTL` (geometry surface), `file.exportCSV` (any table/probe/path), `file.exportPNG`/`SVG` (viewer, legend burned in), `file.exportScript`, `file.exportReport` (Markdown; PDF via print); STEP when B-rep lands (7.2) | each exporter has a round-trip or reference-file test; the UI Export menu enumerates the registry |
+| 4.15 | **Images in the chat**: paste, drop or pick images (PNG/JPEG/WebP, downscaled client-side to ≤ 1568 px on the long edge, ≤ 5 MB), shown as chips with optional captions, sent as `image` content blocks (base64) alongside the text; "attach current view" adds a `query.screenshot` PNG; images live in the conversation store, never in the Journal or a Model file; the eval suite gains "build from this drawing" tasks with hand-drawn inputs | an eval task whose only geometry description is a drawing produces a Model within tolerance of the intended one |
 | 4.10 | `femlab mcp`: the CLI host serves the registry's tool definitions plus `run_script` over stdio with the MCP SDK; a running engine, headless, with dawn.node if a GPU exists (ADR 0011) | Claude Code builds and solves a cantilever through `femlab mcp` with no browser; the eval suite of 4.6 runs against both hosts |
 
 ## 7. Phase 5: post-processing and reporting
@@ -234,6 +235,8 @@ Goal: the in-page agent does the proposal's story end to end; Claude Code can dr
 | 5.7 | Report Command: Markdown with assumptions, geometry, materials, mesh + quality, loads (with totals), results tables, Benchmarks run, the Journal as an appendix; KaTeX theory sections as the other demos do | J11.2, J11.3, J14.4 |
 | 5.8 | Share link: compressed Journal in the URL fragment; save/load to file; IndexedDB autosave | J11.4, J12.2 |
 | 5.9 | Journal diff between two Models (J12.1, J12.4) | |
+| 5.10 | **Tutorials**: a `Tutorial` is data (`tutorials/<name>.json`: steps with `explain`, `expect: Command pattern`, `highlight: control id`, `doIt: Command`); the runner watches `query.journal` and advances when the expected Command appears; "do it for me" dispatches it; progress in the URL; first-run tour; built-in tutorials: cantilever, plate with hole, thermal bar, "read a result" | J14.5; a tutorial completes by driving the UI only and by driving `window.fem` only (two e2e tests) |
+| 5.11 | **Examples gallery**: every Benchmark Journal plus ~20 everyday models (bracket, L-plate, tube, bolt flange, slab strip, heated fin), each with explanation, reference/expected values, thumbnail generated by the viewer in CI, theory snippet; simple ones link to their tutorial variant | J14.1, J14.6; every example replays green in `femlab bench` |
 
 ## 8. Phase 6: nonlinear
 
@@ -366,6 +369,8 @@ Phase numbers refer to §2–§10. "Out" means deliberately out of scope with th
 | | | | | J13.7 bring Fortran/C++, run on GPU | P.5 (wasm), P.4 (WGSL) |
 | | | | | J13.8 result records plugin hash | P.2, P.7 |
 | J4.5 quality | 3.5 | J8.1 contours | 1, 5.1 | J13.4 AI | 4 |
+| | | | | J14.5 tutorials | 5.10 |
+| | | | | J14.6 examples gallery | 5.11 |
 | J4.6 convergence study | 3.6 | J8.2 probe/path/extremes | 1, 5.2 | J13.5 discoverable API | 0.3, 4.2 |
 | J4.7 cost estimate | 2.9 | J8.3 reactions | 1 | J14.1–J14.4 learn | 11 |
 | J4.8 mesh import/export | 3.8 | J8.4 XY plots | 5.3 | J15.1–J15.2 interop | 1, 3.8, 7.2 |
@@ -374,6 +379,7 @@ Phase numbers refer to §2–§10. "Out" means deliberately out of scope with th
 | J4.9 sets survive remesh | 1 (design), 3.2 | J8.5 animation | 5.4 | J13.9 @-mentions | 4.11 |
 | | | | | J13.10 skills | 4.12 |
 | | | | | J13.11 project AGENTS.md | 4.13 |
+| | | | | J13.12 images to the AI | 4.15 |
 | | | | | J15.4 export formats | 4.14, 3.8, 7.2 (STEP) |
 
 Every job has a phase or an explicit Out. The Outs: frictional contact and topology

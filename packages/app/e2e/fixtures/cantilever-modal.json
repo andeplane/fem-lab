@@ -1,0 +1,11 @@
+[
+  { "cmd": "model.new", "name": "cantilever-modal" },
+  { "cmd": "model.setUnits", "units": { "length": "mm", "force": "N", "stress": "MPa" } },
+  { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "100 mm", "100 mm"] },
+  { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "yield": "355 MPa", "source": "EN 10025" },
+  { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] },
+  { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "50 mm" }, "order": 1 },
+  { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" },
+  { "cmd": "load.traction", "name": "tip", "on": "beam.xmax", "total": ["0 N", "0 N", "-1 kN"] },
+  { "cmd": "step.add", "name": "modes", "procedure": "modal", "constraints": ["root"], "loads": [], "nModes": 4 }
+]

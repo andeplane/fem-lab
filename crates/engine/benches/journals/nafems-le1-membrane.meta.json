@@ -1,0 +1,20 @@
+{
+  "title": "NAFEMS LE1 elliptic membrane",
+  "tag": "NAFEMS",
+  "tags": [
+    "static",
+    "plane-stress",
+    "curved-boundary"
+  ],
+  "difficulty": 3,
+  "sentence": "An elliptical plate with an elliptical hole under outward pressure — the standard curved-boundary benchmark.",
+  "expected": {
+    "quantity": "σ_yy at D",
+    "value": 92.16,
+    "unit": "MPa",
+    "reference": "NAFEMS LE1: 92.7 MPa"
+  },
+  "theory": "LE1 exists to test curved boundaries: the quadratic elements put their mid-side nodes on the true ellipse, so the geometry is represented to second order rather than by chords. The target is the tangential stress $\\sigma_{yy} = 92.7\\,\\mathrm{MPa}$ at point D on the inner ellipse.",
+  "tutorial": null,
+  "thumbnail": null
+}

@@ -1,0 +1,36 @@
+*HEADING
+two-hex
+*NODE
+1, 0, 0, 0
+2, 1, 0, 0
+3, 2, 0, 0
+4, 0, 1, 0
+5, 1, 1, 0
+6, 2, 1, 0
+7, 0, 0, 1
+8, 1, 0, 1
+9, 2, 0, 1
+10, 0, 1, 1
+11, 1, 1, 1
+12, 2, 1, 1
+*ELEMENT, TYPE=C3D8, ELSET=BLOCK1
+1, 1, 2, 5, 4, 7, 8, 11, 10
+2, 2, 3, 6, 5, 8, 9, 12, 11
+*ELSET, ELSET=all
+1, 2
+*SURFACE, TYPE=ELEMENT, NAME=bar.xmax
+2, S4
+*SURFACE, TYPE=ELEMENT, NAME=bar.xmin
+1, S6
+*SURFACE, TYPE=ELEMENT, NAME=bar.ymax
+1, S5
+2, S5
+*SURFACE, TYPE=ELEMENT, NAME=bar.ymin
+1, S3
+2, S3
+*SURFACE, TYPE=ELEMENT, NAME=bar.zmax
+1, S2
+2, S2
+*SURFACE, TYPE=ELEMENT, NAME=bar.zmin
+1, S1
+2, S1

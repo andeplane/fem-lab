@@ -1,0 +1,24 @@
+[package]
+name = "femlab"
+description = "FEM Lab command-line host: run, bench, schema, export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "femlab"
+path = "src/main.rs"
+
+[dependencies]
+femlab-engine = { path = "../engine" }
+femlab-geometry = { path = "../geometry" }
+clap = { version = "4.6", features = ["derive"] }
+serde = { workspace = true }
+serde_json.workspace = true
+anyhow = "1"
+pollster = "1.0"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"

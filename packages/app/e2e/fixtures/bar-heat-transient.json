@@ -1,0 +1,11 @@
+[
+  { "cmd": "model.new", "name": "bar-heat-transient" },
+  { "cmd": "model.setUnits", "units": { "length": "mm", "force": "N", "stress": "MPa" } },
+  { "cmd": "geometry.addBox", "name": "bar", "size": ["200 mm", "20 mm", "20 mm"] },
+  { "cmd": "material.add", "name": "aluminium", "E": "70 GPa", "nu": 0.33, "rho": "2700 kg/m^3", "k": "205 W/(m*K)", "cp": "900 J/(kg*K)", "source": "EN 573-3 6061-T6" },
+  { "cmd": "material.assign", "material": "aluminium", "bodies": ["bar"] },
+  { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "20 mm" }, "order": 1 },
+  { "cmd": "constraint.temperature", "name": "cold_end", "on": "bar.xmin", "value": "20 degC" },
+  { "cmd": "load.heatFlux", "name": "hot_end", "on": "bar.xmax", "q": "5000 W/m^2" },
+  { "cmd": "step.add", "name": "warmup", "procedure": "heat-transient", "constraints": ["cold_end"], "loads": ["hot_end"], "dt": "5 s", "tEnd": "60 s", "initial": "20 degC", "outputEvery": 1 }
+]
