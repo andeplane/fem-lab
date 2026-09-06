@@ -57,6 +57,8 @@ pub fn free(sketch: &Sketch, size: f64, quadratic: bool, refine: &[RefineBox]) -
             return Err(GeomError(format!("refine box {i} has size {}; it must be finite and positive", b.size)));
         }
     }
+    // weka panics on crossing or degenerate input segments, so no sketch reaches it unchecked.
+    sketch.check()?;
     let loops = sketch.loops(CHORD_FRACTION * size)?;
     let mut lo = [f64::INFINITY; 2];
     let mut hi = [f64::NEG_INFINITY; 2];
@@ -116,7 +118,15 @@ pub fn free(sketch: &Sketch, size: f64, quadratic: bool, refine: &[RefineBox]) -
                         (coarse.points[t[0]][1] + coarse.points[t[1]][1] + coarse.points[t[2]][1]) / 3.0,
                     ];
                     // 0 means "no local bound"; the global max_area still applies everywhere.
-                    refine.iter().filter(|b| b.contains(c)).map(|b| max_area(b.size)).fold(0.0, f64::max)
+                    // When boxes overlap, the smallest area is the finest requested size.
+                    // When boxes overlap, the smallest area is the finest requested size.
+                    refine.iter().filter(|b| b.contains(c)).map(|b| max_area(b.size)).fold(0.0, |best, area| {
+                        if best == 0.0 {
+                            area
+                        } else {
+                            best.min(area)
+                        }
+                    })
                 })
                 .collect();
             let input = InputMesh {

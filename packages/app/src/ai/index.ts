@@ -34,7 +34,7 @@ export {
   type VerifyStatus,
 } from './context';
 export { defaultProvider, maskKey, resolveKey, storedModel, storeKey, DEFAULT_MODEL, KEY_SLOT, MODEL_SLOT, MODELS, PROVIDER_IDS, type KeyInfo, type KeySource } from './keys';
-export { openaiProvider, OPENAI_DEFAULT, OPENAI_MODELS, toChatMessages, type OpenAILike } from './openai';
+export { openaiProvider, OPENAI_DEFAULT, OPENAI_MODELS, toResponseInput, type OpenAILike } from './openai';
 export {
   forgetHandle,
   kindOf,

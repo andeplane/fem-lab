@@ -50,6 +50,7 @@ pub enum Query {
 
     /// A field value interpolated at a point (default: the last solved Step). Component
     /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
+    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
     #[serde(rename = "query.probe", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ProbeResult"))]
     Probe {
@@ -62,6 +63,7 @@ pub enum Query {
     },
 
     /// A field sampled at `n` points along the line from `from` to `to`, for a line plot.
+    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
     #[serde(rename = "query.path", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "PathResult"))]
     Path {
@@ -116,7 +118,9 @@ pub enum Query {
     /// checks with a hand calculation where one applies, and the Journal as an appendix. Nothing
     /// in it depends on the clock or the machine, so two runs of the same Journal produce
     /// byte-identical text. `step` reports one Step instead of every solved one; `include` picks
-    /// sections. Formulas are `$$…$$` for KaTeX.
+    /// sections. Automatic hand references require a current static Step on an uncut 3D lattice
+    /// box with one fully clamped end and one single-component force on the opposite end;
+    /// other cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.
     #[serde(rename = "query.report", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ReportText"))]
     Report {
@@ -164,6 +168,9 @@ pub struct MaterialRow {
     pub nu: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rho: Option<Valued>,
+    /// Current yield strength in the Model's display stress unit, when specified.
+    #[serde(rename = "yield", default, skip_serializing_if = "Option::is_none")]
+    pub yield_: Option<Valued>,
     pub assigned_to: Vec<String>,
 }
 
@@ -359,6 +366,8 @@ pub struct CostEstimate {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct JournalDump {
+    /// Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
+    pub hash: String,
     pub entries: Vec<crate::journal::JournalEntry>,
     pub revision: u32,
     pub can_undo: bool,

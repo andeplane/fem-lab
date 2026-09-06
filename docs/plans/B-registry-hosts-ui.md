@@ -555,7 +555,9 @@ pub struct ModelFile { pub format: String /* "femlab/1" */, pub engine_version: 
   `dispatch` each entry in order (which also rebuilds the undo stack); per-entry `hash_after` is
   recomputed and compared, and the first mismatch is reported with its `seq` (this is how the
   native-vs-wasm CI job localises a divergence). With `skip_solves`, `solve.run`/`study.converge`
-  entries are appended to the Journal unchanged (so `hash_after` still lines up) without running.
+  calculations are omitted while every entry retains its undo snapshot and recomputed hash.
+  A `study.converge` with `restore: false` still applies its final mesh settings, so skipping
+  numerical work preserves the same Model and Journal as normal replay (#145).
 - **Script export** (`Journal::as_script`, exposed as `query.script`): one line per entry,
   `await fem.geometry.addBox({ name: "beam", size: ["1 m", "100 mm", "100 mm"] });` with the `cmd`
   key removed. The formatter walks the `serde_json::Value` (never a regex over text, which a string
@@ -999,6 +1001,13 @@ HTML element with a CSS gradient and min/max in display units from `query.result
 
 ### 7.3 Panels and controls as data
 
+> **Superseded in part by plan D** (`docs/plans/D-projects-and-start.md`, issues #40 and #41).
+> The top bar's "model name + unsaved flag" is now the **project** name with a saved chip, and it
+> gains **Projects** (`panel.toggle { panel: 'projects' }`), **Save** (`project.save`) and
+> **Save as file** (`file.save`). The Assistant drawer is mounted outside `.workspace`, so it
+> exists on the start screen. `file.restore` and `query.autosave` are deleted; Recent projects
+> replaces them.
+
 `src/panels.ts` declares `PANELS: { id, title, side, defaultOpen }[]` and
 `CONTROLS: { id, label, cmd: string, args?: unknown, panel: PanelId, kind: 'button'|'toggle'|'form' }[]`.
 Components render from these tables; every rendered control carries `data-cmd`. The vitest
@@ -1161,7 +1170,14 @@ built-in has `name`, `description` ≥ 40 chars and a body; `query.skills` == me
 `skill.invoke` unknown → `NotFound` listing names; a Playwright step types `/beam` and asserts
 the menu shows the built-in.
 
-### 7.9 Project folder (`src/project.ts`, `packages/registry/src/project-paths.ts`)
+### 7.9 Project folder (`src/ai/project.ts`, `packages/registry/src/project-paths.ts`)
+
+> **Renamed by plan D.** A *project* is now one saved Model in this browser (issue #41), so the
+> disk-side Commands here are `folder.open | folder.close | folder.refresh` and the Query is
+> `query.folder`; `HostContext.project` is `HostContext.folder` and `ProjectInfo` is `FolderInfo`.
+> The handle store is `src/db.ts`'s `handles` object store — one module owns the `femlab`
+> database, which is what fixes the two-modules-at-version-1 collision described there. Read the
+> Commands below as `folder.*`.
 
 Chromium's File System Access API (ADR 0014; `showDirectoryPicker` needs a user gesture and is
 Window-only, so `project.open { picker: true }` runs on the main thread from a click). The handle

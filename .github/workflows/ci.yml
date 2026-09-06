@@ -4,6 +4,13 @@ on:
     branches: [main]
   pull_request:
 
+# One run per ref: a new push cancels the older run of the same branch, so the shared queue holds
+# only what can still matter (issue #290). Not on main: merges land minutes apart there, and a run
+# that is always cancelled never tells anyone whether main is green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -83,6 +90,7 @@ jobs:
       # `web` job's size budget is measured on the module this job uploads.
       - run: npm ci
       - run: node tools/build-wasm.mjs
+      - run: node tools/test-units-wasm.mjs
       - run: cargo build -p femlab --release
       - run: ./target/release/femlab schema --out engine.schema.json
       - name: replay every fixture natively and in wasm
