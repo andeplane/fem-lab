@@ -514,6 +514,10 @@ pub struct CostEstimate {
     pub bytes: u64,
     /// Mandatory assembly storage before transient-specific values are added.
     pub assembly_bytes: u64,
+    /// Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.
+    pub resident_result_bytes: u64,
+    /// Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.
+    pub result_mesh_bytes: u64,
     /// Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
     pub retained_frames: u64,
     /// Logical f64 bytes for retained times and unpadded primary values.

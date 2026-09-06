@@ -4910,6 +4910,18 @@
             "format": "uint64",
             "minimum": 0
           },
+          "residentResultBytes": {
+            "description": "Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "resultMeshBytes": {
+            "description": "Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "retainedFrames": {
             "description": "Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.",
             "type": "integer",
@@ -4967,6 +4979,8 @@
           "nnzLower",
           "bytes",
           "assemblyBytes",
+          "residentResultBytes",
+          "resultMeshBytes",
           "retainedFrames",
           "retainedBytes",
           "transientWorkBytes",

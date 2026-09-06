@@ -424,3 +424,32 @@ fn evicting_the_only_result_of_a_step_removes_its_default_selection() {
     assert_eq!(retained_error(&mut e, json!({"query":"query.result","step":"conduct-0"})).code, ErrorCode::NotFound);
     assert_eq!(retained_query(&mut e, json!({"query":"query.result"}))["step"], "conduct-8");
 }
+
+#[test]
+fn retained_cost_counts_all_live_records_before_the_next_solve() {
+    for nx in [2, 4, 8] {
+        let mut e = engine();
+        retained_conductor(&mut e);
+        ok(&mut e, &json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":nx,"ny":1,"nz":1}}}).to_string());
+        let empty = retained_query(&mut e, json!({"query":"query.cost","step":"conduct"}));
+        assert_eq!(empty["residentResultBytes"], 0);
+        for _ in 0..9 {
+            retained_solve(&mut e, "conduct");
+            let records = retained_records(&mut e);
+            let expected: u64 =
+                records.iter().map(|r| r["fieldBytes"].as_u64().unwrap() + r["meshBytes"].as_u64().unwrap()).sum();
+            let cost = retained_query(&mut e, json!({"query":"query.cost","step":"conduct"}));
+            assert_eq!(cost["residentResultBytes"], expected);
+            assert_eq!(cost["resultMeshBytes"], records[0]["meshBytes"]);
+            assert_eq!(cost["bytes"].as_u64().unwrap(), empty["bytes"].as_u64().unwrap() + expected);
+        }
+        let records = retained_records(&mut e);
+        assert_eq!(records.len(), 8);
+        // The oldest record still contributes; it is evicted only after the next solve succeeds.
+        let cost = retained_query(&mut e, json!({"query":"query.cost","step":"conduct"}));
+        assert_eq!(
+            cost["residentResultBytes"].as_u64().unwrap(),
+            8 * (records[0]["fieldBytes"].as_u64().unwrap() + records[0]["meshBytes"].as_u64().unwrap())
+        );
+    }
+}

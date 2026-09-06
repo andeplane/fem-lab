@@ -461,3 +461,9 @@ An end-to-end heat regression first stores a valid Result, then requests 1,000,0
 Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
 An explicit regression independently checks that the pre-solve count equals the history rows
 produced by its element-frequency-derived integration schedule.
+
+Retained-Result budget checks (#280) run 2-, 4- and 8-division conduction meshes through
+nine successful solves. After each solve, `query.cost` includes every live record's numeric
+field and Mesh payload, plus the new Mesh snapshot. At the eight-record limit the oldest
+record remains charged during preparation; reads and rejected solves cannot advance eviction.
+These are payload accounting checks, not estimates of allocator or serialized Model overhead.

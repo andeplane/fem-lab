@@ -2151,7 +2151,7 @@ fn the_cost_of_a_step_is_the_sparsity_of_its_mesh() {
     assert!(c.bytes > c.nnz * 12 + c.dofs * 32);
     assert_eq!(c.nnz_lower, c.nnz);
     assert_eq!((c.retained_frames, c.retained_bytes, c.transient_work_bytes, c.transport_staging_bytes), (0, 0, 0, 0));
-    assert_eq!(c.bytes, c.assembly_bytes);
+    assert_eq!(c.bytes, c.assembly_bytes + c.resident_result_bytes + c.result_mesh_bytes);
     assert_eq!(c.feasible, None);
     assert_eq!(c.budget_bytes, 1_610_612_736);
     assert!(c.note.starts_with("cpu-direct"), "{}", c.note);
@@ -2172,7 +2172,14 @@ fn the_cost_of_a_step_is_the_sparsity_of_its_mesh() {
             assert_eq!(heat.retained_bytes, 11 * (1025 + 1) * 8);
             assert_eq!(heat.transient_work_bytes, 1025 * 5 * 8);
             assert_eq!(heat.transport_staging_bytes, 1025 * 3 * 8);
-            assert_eq!(heat.bytes, heat.assembly_bytes + heat.retained_bytes + heat.transient_work_bytes);
+            assert_eq!(
+                heat.bytes,
+                heat.assembly_bytes
+                    + heat.retained_bytes
+                    + heat.transient_work_bytes
+                    + heat.resident_result_bytes
+                    + heat.result_mesh_bytes
+            );
         } else {
             assert_eq!(heat.retained_frames, 0);
         }

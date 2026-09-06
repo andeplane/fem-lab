@@ -69,6 +69,10 @@ impl Engine {
         }
     }
 
+    pub(crate) fn resident_result_bytes(&self) -> u64 {
+        self.retained.iter().map(|r| r.field_bytes() + mesh_bytes(&r.built)).sum()
+    }
+
     /// Resets drop records but never recycle their identities within this Engine.
     pub(crate) fn clear_results(&mut self) {
         self.results.clear();
@@ -108,23 +112,17 @@ impl ResultRecord {
         })
     }
 
-    fn info(&self, current_hash: &str) -> crate::query::RetainedResult {
+    pub(crate) fn field_bytes(&self) -> u64 {
         let r = &self.result;
         let values = r.fields.values().map(|f| f.data.len()).sum::<usize>()
             + r.modes.iter().map(|f| f.data.len()).sum::<usize>()
             + r.frequencies.len()
             + r.history.as_ref().map_or(0, |h| h.times.len() + h.values.iter().map(Vec::len).sum::<usize>());
+        (values * 8) as u64
+    }
+
+    fn info(&self, current_hash: &str) -> crate::query::RetainedResult {
         let mesh = &self.built.mesh;
-        let mesh_bytes = mesh.coords.len() * 8
-            + mesh.blocks.iter().map(|b| b.conn.len() * 4).sum::<usize>()
-            + mesh.node_sets.values().chain(mesh.elem_sets.values()).map(|s| s.len() * 4).sum::<usize>()
-            + mesh.face_sets.values().map(|s| std::mem::size_of_val(s.as_slice())).sum::<usize>()
-            + self
-                .built
-                .sets
-                .values()
-                .map(|s| (s.nodes.len() + s.elems.len()) * 4 + std::mem::size_of_val(s.faces.as_slice()))
-                .sum::<usize>();
         crate::query::RetainedResult {
             id: self.id.clone(),
             step: self.step.clone(),
@@ -135,8 +133,8 @@ impl ResultRecord {
             stale: self.input_hash != current_hash,
             nodes: mesh.n_nodes(),
             elements: mesh.n_elems(),
-            field_bytes: (values * 8) as u64,
-            mesh_bytes: mesh_bytes as u64,
+            field_bytes: self.field_bytes(),
+            mesh_bytes: mesh_bytes(&self.built),
             model_json_bytes: serde_json::to_vec(&self.model).expect("a Model serializes").len() as u64,
         }
     }
@@ -198,6 +196,21 @@ impl Engine {
             values: field.data.clone(),
         })
     }
+}
+
+/// Logical numeric snapshot payload, excluding allocator and Model metadata overhead.
+pub(crate) fn mesh_bytes(built: &BuiltMesh) -> u64 {
+    let mesh = &built.mesh;
+    let mesh_bytes = mesh.coords.len() * 8
+        + mesh.blocks.iter().map(|b| b.conn.len() * 4).sum::<usize>()
+        + mesh.node_sets.values().chain(mesh.elem_sets.values()).map(|s| s.len() * 4).sum::<usize>()
+        + mesh.face_sets.values().map(|s| std::mem::size_of_val(s.as_slice())).sum::<usize>()
+        + built
+            .sets
+            .values()
+            .map(|s| (s.nodes.len() + s.elems.len()) * 4 + std::mem::size_of_val(s.faces.as_slice()))
+            .sum::<usize>();
+    mesh_bytes as u64
 }
 
 #[cfg(test)]

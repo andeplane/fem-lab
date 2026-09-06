@@ -338,7 +338,7 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
   const { waitForText } = await import('./wait-for');
   const root = document.createElement('div');
   const cost: CostEstimate = {
-    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000,
+    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000, residentResultBytes: 0, resultMeshBytes: 0,
     retainedFrames: 3, retainedBytes: 900_000, transientWorkBytes: 50_000, transportStagingBytes: 864,
     wasmTransportStagingBytes: 1728, wasmTransportStagingComplete: false,
     budgetBytes: 1_610_612_736,

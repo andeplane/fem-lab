@@ -227,6 +227,15 @@ pub(crate) fn planned_cost(
 }
 
 impl PlannedCost {
+    pub(crate) fn with_records(mut self, resident: u64, mesh: u64) -> Self {
+        self.estimate.resident_result_bytes = resident;
+        self.estimate.result_mesh_bytes = mesh;
+        self.estimate.bytes = self.estimate.bytes.saturating_add(resident).saturating_add(mesh);
+        self.estimate.feasible = if self.estimate.bytes > self.estimate.budget_bytes { Some(false) } else { None };
+        self.estimate.note.push_str(&format!(" Existing retained Result numeric payload: {resident} bytes; new Result Mesh snapshot: {mesh} bytes; these remain resident through preparation. Model/allocator overhead is additional. Total counted peak: {} bytes.", self.estimate.bytes));
+        self
+    }
+
     fn enforce(&self, step: &str) -> Result<(), Error> {
         let (steps, every, procedure) = self.transient.expect("solve_run calls this only for transient Steps");
         crate::solve::enforce_transient_budget(&self.estimate, step, procedure, steps, every)
@@ -289,7 +298,9 @@ impl Engine {
                 p.temperature = Some((t.component(0), t_ref));
             }
             if matches!(&proc_step, procedure::Step::HeatTransient { .. } | procedure::Step::Explicit { .. }) {
-                planned_cost(p.mesh, Some(&p), &proc_step)?.enforce(&step.name)?;
+                planned_cost(p.mesh, Some(&p), &proc_step)?
+                    .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
+                    .enforce(&step.name)?;
             }
             procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
         };

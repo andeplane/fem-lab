@@ -3565,6 +3565,14 @@ export interface CostEstimate {
    */
   assemblyBytes: number;
   /**
+   * Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.
+   */
+  residentResultBytes: number;
+  /**
+   * Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.
+   */
+  resultMeshBytes: number;
+  /**
    * Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
    */
   retainedFrames: number;
