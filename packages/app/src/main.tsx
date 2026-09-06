@@ -111,7 +111,8 @@ async function boot(): Promise<void> {
       const ack = await registry.dispatch(cmd);
       store.log('command', cmd.cmd);
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
-      // journals like any other, so the Journal has to be re-read after it too.
+      // journals like any other, and `file.open` / `example.open` replace the engine Model and
+      // Journal outright, so the store, viewer and Results have to catch up after those too.
       if (registry.describe(cmd.cmd).provider === 'engine' || REFRESHES.has(cmd.cmd)) {
         const { seq } = ack as { seq?: number };
         if (typeof seq === 'number' && seq >= 0) store.set({ journalWho: { ...store.state.journalWho, [seq]: { who: store.state.source, at: Date.now() } } });
