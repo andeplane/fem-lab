@@ -40,6 +40,7 @@ pub struct RunOptions {
     pub as_script: bool,
     pub journal: bool,
     pub json: bool,
+    pub queries: Vec<Query>,
     pub threads: Option<usize>,
     pub cpu: bool,
 }
@@ -109,6 +110,20 @@ pub fn run(file: &Path, opts: RunOptions) -> i32 {
             return if e.code == femlab_engine::ErrorCode::Internal { 3 } else { 1 };
         }
     };
+    if !opts.queries.is_empty() {
+        let mut results = Vec::with_capacity(opts.queries.len());
+        for query in opts.queries {
+            match engine.query(query) {
+                Ok(result) => results.push(result),
+                Err(e) => {
+                    eprintln!("{}", serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()));
+                    return 1;
+                }
+            }
+        }
+        println!("{}", serde_json::to_string(&results).unwrap_or_default());
+        return 0;
+    }
     if opts.hashes {
         for h in hashes {
             println!("{h}");
