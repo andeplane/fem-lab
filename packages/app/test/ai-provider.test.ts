@@ -217,3 +217,88 @@ it('both adapters send the entire real registry with provider-compatible object 
     for (const key of ['anyOf', 'oneOf', 'allOf']) expect(tool.input_schema, tool.name).not.toHaveProperty(key);
   }
 });
+
+
+it('reveals interleaved OpenAI tool arguments before response completion, without executable calls', async () => {
+  const call = (id: string, name: string, args = '') => ({ type: 'function_call', call_id: id, name, arguments: args });
+  const { client } = fakeOpenAI([
+    { type: 'response.output_item.added', output_index: 1, item: call('a', 'geometry_addBox') },
+    { type: 'response.output_item.added', output_index: 2, item: call('b', 'view_fit') },
+    { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"name":' },
+    { type: 'response.function_call_arguments.delta', output_index: 2, delta: '{}' },
+    { type: 'response.function_call_arguments.delta', output_index: 1, delta: '"beam"}' },
+    { type: 'response.function_call_arguments.done', output_index: 1, arguments: '{"name":"beam"}' },
+    { type: 'response.completed', response: { output: [call('a', 'geometry_addBox', '{"name":"beam"}'), call('b', 'view_fit', '{}')] } },
+  ]);
+  const stream = openaiProvider('k', () => client).chat(request())[Symbol.asyncIterator]();
+  const progress = [];
+  for (let i = 0; i < 6; i++) progress.push((await stream.next()).value);
+  expect(progress).toEqual([
+    { type: 'tool_progress', id: 'a', name: 'geometry_addBox', arguments: '' },
+    { type: 'tool_progress', id: 'b', name: 'view_fit', arguments: '' },
+    { type: 'tool_progress', id: 'a', name: 'geometry_addBox', arguments: '{"name":' },
+    { type: 'tool_progress', id: 'b', name: 'view_fit', arguments: '{}' },
+    { type: 'tool_progress', id: 'a', name: 'geometry_addBox', arguments: '{"name":"beam"}' },
+    { type: 'tool_progress', id: 'a', name: 'geometry_addBox', arguments: '{"name":"beam"}' },
+  ]);
+  expect((await stream.next()).value).toEqual({ type: 'tool_use', id: 'a', name: 'geometry_addBox', input: { name: 'beam' } });
+});
+
+it('reports a disconnected OpenAI stream without turning partial arguments into a call', async () => {
+  const { client } = fakeOpenAI([
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'a', name: 'geometry_addBox', arguments: '' } },
+    { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"name":' },
+  ]);
+  const events = await collect(openaiProvider('k', () => client).chat(request()));
+  expect(events.filter(e => e.type === 'tool_use')).toEqual([]);
+  expect(events.at(-1)).toEqual({ type: 'error', message: 'OpenAI stream ended before the response completed' });
+});
+
+it('reveals Anthropic argument fragments before requesting the final message', async () => {
+  let finalized = false;
+  const client: AnthropicLike = { messages: { stream: () => ({
+    async *[Symbol.asyncIterator]() {
+      yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'a', name: 'geometry_addBox', input: {} } } as Anthropic.MessageStreamEvent;
+      for (const partial_json of ['{"name":', '"beam"}']) {
+        yield { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json } } as Anthropic.MessageStreamEvent;
+      }
+    },
+    finalMessage: async () => {
+      finalized = true;
+      return { content: [{ type: 'tool_use', id: 'a', name: 'geometry_addBox', input: { name: 'beam' } }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } } as Anthropic.Message;
+    },
+  }) } };
+  const stream = anthropicProvider('k', () => client).chat(request())[Symbol.asyncIterator]();
+  expect((await stream.next()).value).toEqual({ type: 'tool_progress', id: 'a', name: 'geometry_addBox', arguments: '' });
+  expect((await stream.next()).value).toEqual({ type: 'tool_progress', id: 'a', name: 'geometry_addBox', arguments: '{"name":' });
+  expect((await stream.next()).value).toEqual({ type: 'tool_progress', id: 'a', name: 'geometry_addBox', arguments: '{"name":"beam"}' });
+  expect(finalized).toBe(false);
+  expect((await stream.next()).value).toEqual({ type: 'tool_use', id: 'a', name: 'geometry_addBox', input: { name: 'beam' } });
+  expect(finalized).toBe(true);
+});
+
+it('passes cancellation to both SDKs and treats an aborted network read as interruption', async () => {
+  const controller = new AbortController();
+  const abort = () => { controller.abort(); throw new DOMException('aborted', 'AbortError'); };
+  const openai: OpenAILike = { responses: { create: async (_params, options) => {
+    expect(options?.signal).toBe(controller.signal);
+    return abort();
+  } } };
+  expect(await collect(openaiProvider('k', () => openai).chat({ ...request(), signal: controller.signal }))).toEqual([]);
+  const anthropic: AnthropicLike = { messages: { stream: (_params, options) => {
+    expect(options?.signal).toBe(controller.signal);
+    return abort();
+  } } };
+  expect(await collect(anthropicProvider('k', () => anthropic).chat({ ...request(), signal: controller.signal }))).toEqual([]);
+});
+
+
+it('does not execute Anthropic tool proposals from a token-limited response', async () => {
+  const { client } = fakeAnthropic({
+    content: [{ type: 'tool_use', id: 'a', name: 'geometry_addBox', input: { name: 'partial' } } as Anthropic.ContentBlock],
+    stop_reason: 'max_tokens',
+  }, []);
+  const events = await collect(anthropicProvider('k', () => client).chat(request()));
+  expect(events.map(event => event.type)).toEqual(['usage', 'error']);
+  expect(events.at(-1)).toEqual({ type: 'error', message: 'Anthropic response incomplete: max_tokens' });
+});

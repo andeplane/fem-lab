@@ -41,6 +41,8 @@ export const SelectionInput = z.object({
   mode: z.enum(['replace', 'add', 'remove']).optional(),
 });
 export const PickTarget = z.enum(['face', 'body', 'off']);
+/** Resizable shell panels. Their sizes are view state and never enter the Journal. */
+export const PanelTarget = z.enum(['tree', 'properties', 'bottom', 'assistant']);
 export const ScreenshotOptions = z.object({ width: int.optional(), height: int.optional(), legend: z.boolean().optional(), title: z.string().optional() });
 export const CopyWhat = z.union([
   z.object({ kind: z.literal('selection') }),
@@ -128,7 +130,7 @@ export interface HostContext {
     setPickTarget(t: z.output<typeof PickTarget>): void;
     get(): Selection;
   };
-  panels: { toggle(panel: string, open?: boolean): void };
+  panels: { toggle(panel: string, open?: boolean): void; resize(panel: z.output<typeof PanelTarget>, size: number): void };
   script: {
     validate(code: string, timeoutMs?: number): Promise<ScriptValidation>;
     run(code: string, timeoutMs?: number): Promise<ScriptResult>;
@@ -313,7 +315,7 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.setCamera', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up`. Use `view.preset` for the standard views; this is for a reproducible screenshot angle.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
   def('view.preset', 'Jump to a standard view (iso, front, back, left, right, top, bottom) framed on the mesh bounding box; the same as the view buttons and keys.', z.object({ view: ViewPreset }), ({ view }, ctx) => ctx.view.preset(view)),
   def('view.setProjection', 'Switch between perspective and orthographic projection. Orthographic is the right choice for dimensioned screenshots and for comparing deformed shapes.', z.object({ projection: Projection }), ({ projection }, ctx) => ctx.view.setProjection(projection)),
-  def('view.showField', 'Show a result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off.', FieldChoice, (f, ctx) => ctx.view.showField(f)),
+  def('view.showField', 'Show a browser-supported result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off. Unsupported fields or components return a structured `unsupported` error; choose a field and component from the Results picker.', FieldChoice, (f, ctx) => ctx.view.showField(f)),
   def('view.setLegend', 'Set the contour legend: colormap (viridis or rainbow), number of discrete bands (null for continuous) and the value range as `[min, max]` or `"auto"`.', LegendSpec, (l, ctx) => ctx.view.setLegend(l)),
   def('view.setDeformScale', 'Scale the displayed deformed shape: a number, `"auto"` (a visible exaggeration) or `"true"` (scale 1, the real displacement). Only the display changes; results do not.', z.object({ scale: DeformScale }), ({ scale }, ctx) => ctx.view.setDeformScale(scale)),
   def('view.setClip', 'Cut the view with a section plane `{ normal, offset }` in metres to look inside a body, or `{ plane: null }` to remove the cut. Contours are drawn on the cut surface too.', z.object({ plane: ClipPlane.nullable() }), ({ plane }, ctx) => ctx.view.setClip(plane)),
@@ -324,7 +326,8 @@ export const HOST_COMMANDS: HostDef[] = [
   def('selection.set', 'Select bodies, faces (named face Sets) and Sets by name, never by id. `mode` is replace (default), add or remove, like shift-click; the selection drives `view.fit` and `@selection` in the chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
   def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
-  def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, the examples gallery, the report, the project folder and the export dialog.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
+  def('panel.toggle', 'Open, close or flip a panel by id, including the command palette, examples gallery, report, project folder and export dialog. Model-tree groups are `tree.geometry` through `tree.plugins`; row menus are `tree.menu.<kind>:<name>`.', z.object({ panel: z.string(), open: z.boolean().optional() }), ({ panel, open }, ctx) => ctx.panels.toggle(panel, open)),
+  def('panel.resize', 'Resize one shell panel in CSS pixels. `panel` is `tree`, `properties`, `bottom` or `assistant`; the size is constrained to preserve a usable viewer and is view state, never a Journal entry. During a drag, issue exactly one final Command with the ending size; use the keyboard for accessible step changes.', z.object({ panel: PanelTarget, size: z.number().int().min(120).max(640) }), ({ panel, size }, ctx) => ctx.panels.resize(panel, size)),
   def('script.run', 'Validate TypeScript against the generated `fem` types (fem.d.ts) with a separate 10000 ms validation deadline, then run it in the script Worker with an optional timeout in milliseconds. Returns `{ result, console, error? }`; Commands it issues enter the Journal like any other.', z.object({ code: z.string(), timeoutMs: z.number().optional() }), async ({ code, timeoutMs }, ctx) => {
     const validation = await ctx.script.validate(code);
     if (!validation.ok) return { result: null, console: [], error: 'script.validation: correct validation diagnostics before running', diagnostics: validation.diagnostics } satisfies ScriptResult;
@@ -332,7 +335,7 @@ export const HOST_COMMANDS: HostDef[] = [
   }, false),
   def('script.stop', 'Terminate the script that is currently running in the script Worker. Commands it already dispatched stay in the Journal; use journal.undo to take them back.', none, (_, ctx) => ctx.script.stop()),
   def('script.setSource', 'Put text into the Script editor, replacing its content or appending to it. Use it to hand a script to the person to review and edit rather than running it directly.', z.object({ code: z.string(), append: z.boolean().optional() }), ({ code, append }, ctx) => ctx.script.setSource(code, append)),
-  def('chat.send', 'Send a chat turn as the person would; the text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
+  def('chat.send', 'Send a chat turn, or queue it while the Assistant works. Empty text while a message is queued interrupts the current response and starts the next after any active tool finishes. The text may contain `@kind:name` chips and a leading `/skill`. Not a tool: the AI is the receiver of chat turns, never their author.', z.object({ text: z.string() }), ({ text }, ctx) => ctx.chat.send(text), false),
   def('chat.insertMention', 'Insert an `@kind:name` chip into the chat input, as a viewer or tree click does while the chat is focused. Not a tool; the AI receives chips, it does not type them.', z.object({ ref: z.string() }), ({ ref }, ctx) => ctx.chat.insertMention(ref), false),
   def('chat.clear', 'Start a new conversation: clears the chat history and the AI context. The Model and Journal are untouched.', none, (_, ctx) => ctx.chat.clear(), false),
   def('skill.invoke', 'Load a skill by name and return its instructions (`{ name, body, source }`) so they enter the conversation at the point they are needed; `args` is the rest of the person\'s `/name` line. Use query.skills to see what exists.', z.object({ name: z.string(), args: z.string().optional() }), ({ name, args }, ctx) => {
