@@ -367,6 +367,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
         return;
       }
       viewer.current = v;
+      viewer.onReady?.();
       v.onPick((p) => {
         setProbe(probeLine(p));
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);

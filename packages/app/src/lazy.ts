@@ -9,7 +9,9 @@ export function lazy<P extends object>(load: () => Promise<ComponentType<P>>): C
   let loaded: ComponentType<P> | null = null;
   let pending: Promise<void> | null = null;
   return function Lazy(props: P) {
-    const [Comp, setComp] = useState<ComponentType<P> | null>(loaded);
+    // As an initialiser, not a value: `useState(fn)` would *call* a loaded function component
+    // with no props on every mount after the first (issue #36).
+    const [Comp, setComp] = useState<ComponentType<P> | null>(() => loaded);
     useEffect(() => {
       if (Comp) return;
       let live = true;

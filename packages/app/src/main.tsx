@@ -53,6 +53,12 @@ async function boot(): Promise<void> {
   // One sink is enough: the transport runs one Command at a time, so `Solving n %` can only
   // ever be about the Command the person is waiting for.
   transport.onProgress((p) => store.set({ progress: { phase: p.phase, fraction: p.fraction ?? 0 } }));
+  // A Viewer that arrives after the Model did (the canvas mounts with the workspace, three.js is
+  // a lazy chunk) asks for everything again, so an example that opened solved is drawn solved.
+  viewer.onReady = () => {
+    viewer.current?.setMode(store.state.viewMode);
+    void refresh().catch(() => undefined);
+  };
   const refresh = async (): Promise<void> => {
     const model = (await transport.query({ query: 'query.model' })) as never;
     const journal = (await transport.query({ query: 'query.journal' })) as never;
