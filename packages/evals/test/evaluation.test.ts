@@ -316,6 +316,7 @@ describe('lane orchestration and artifacts', () => {
       status: 'completed',
       assistantText: 'Validation repaired.',
       usage: { input: 30, output: 6, cacheRead: 3 },
+      cost: null,
       trace: [
         { command: 'query.validateScript', output: { ok: false }, journalBefore: 'stable', journalAfter: 'stable' },
         { command: 'query.validateScript', output: { ok: true }, journalBefore: 'stable', journalAfter: 'stable' },

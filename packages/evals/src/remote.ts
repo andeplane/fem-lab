@@ -133,6 +133,7 @@ export async function evaluateCase(remote: RemoteEngine, provider: Provider, mod
       ...(errors.length === 0 ? {} : { reason: errors.join('; ') }),
       assistantText: text,
       usage: turn?.usage,
+      cost: turn?.cost,
       elapsedMs: turn?.ms,
       capabilities,
       model: modelResult,

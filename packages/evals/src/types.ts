@@ -44,6 +44,7 @@ export interface EvalEvidence {
   reason?: string;
   assistantText?: string;
   usage?: unknown;
+  cost?: number | null;
   elapsedMs?: number;
   capabilities?: unknown;
   model?: unknown;
