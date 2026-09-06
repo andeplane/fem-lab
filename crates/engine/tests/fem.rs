@@ -1360,8 +1360,60 @@ fn thermal_load_is_the_stiffness_times_the_free_expansion() {
     }
 }
 
+struct LegacyInverseMap {
+    inner: &'static dyn Element,
+    mapped: Option<[f64; 3]>,
+}
+
+impl Element for LegacyInverseMap {
+    fn kind(&self) -> ElementKind {
+        self.inner.kind()
+    }
+    fn n_dof(&self) -> usize {
+        self.inner.n_dof()
+    }
+    fn n_gp(&self) -> usize {
+        self.inner.n_gp()
+    }
+    fn stiffness(&self, c: &ElementCtx<'_>, k: &mut [f64]) -> Result<f64, Error> {
+        self.inner.stiffness(c, k)
+    }
+    fn mass(&self, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -> Result<(), Error> {
+        self.inner.mass(c, m, lumped)
+    }
+    fn body_load(&self, c: &ElementCtx<'_>, f: &dyn Fn([f64; 3]) -> [f64; 3], out: &mut [f64]) -> Result<(), Error> {
+        self.inner.body_load(c, f, out)
+    }
+    fn thermal_load(&self, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<(), Error> {
+        self.inner.thermal_load(c, out)
+    }
+    fn face_load(&self, c: &ElementCtx<'_>, local_face: u8, load: FaceLoad, out: &mut [f64]) -> Result<(), Error> {
+        self.inner.face_load(c, local_face, load, out)
+    }
+    fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
+        self.inner.recover(c, u, stress, strain)
+    }
+    fn gp_xi(&self, i: usize) -> [f64; 3] {
+        self.inner.gp_xi(i)
+    }
+    fn shape_at(&self, xi: [f64; 3], n: &mut [f64]) {
+        self.inner.shape_at(xi, n);
+    }
+    fn inverse_map(&self, _coords: &[f64], _x: [f64; 3]) -> Option<[f64; 3]> {
+        self.mapped
+    }
+    fn omega_max(&self, c: &ElementCtx<'_>) -> Result<f64, Error> {
+        self.inner.omega_max(c)
+    }
+}
+
 #[test]
 fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
+    let legacy = LegacyInverseMap { inner: element_for(ElementKind::Hex8), mapped: Some([0.25, -0.5, 0.75]) };
+    assert_eq!(legacy.inverse_map_status(&[], [0.0; 3]), InverseMap::Inside([0.25, -0.5, 0.75]));
+    let legacy = LegacyInverseMap { inner: element_for(ElementKind::Hex8), mapped: None };
+    assert_eq!(legacy.inverse_map_status(&[], [0.0; 3]), InverseMap::Failed);
+
     for kind in ALL_KINDS {
         let el = element_for(kind);
         let coords = distorted(kind);
@@ -1381,12 +1433,10 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
                 assert!((back[k] - xi[k]).abs() <= 1e-10, "{kind:?} gp {i} dir {k}");
             }
         }
-        let outside_xi =
-            if matches!(kind, ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8) {
-                [1.1, 0.0, 0.0]
-            } else {
-                [-0.1, 0.0, 0.0]
-            };
+        let outside_xi = match kind {
+            ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8 => [1.1, 0.0, 0.0],
+            ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Tri3 | ElementKind::Tri6 => [-0.1, 0.0, 0.0],
+        };
         el.shape_at(outside_xi, &mut n);
         let outside =
             std::array::from_fn(|k| n.iter().enumerate().map(|(node, value)| value * coords[3 * node + k]).sum());

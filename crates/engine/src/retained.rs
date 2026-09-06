@@ -212,6 +212,20 @@ fn selected_at(field: &crate::post::FieldData, node: usize, component: Option<u8
     }
 }
 
+fn finite_difference(left: f64, right: f64, node: usize, component: usize) -> Result<f64, Error> {
+    let value = left - right;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(Error::new(
+            ErrorCode::Unsupported,
+            format!("left minus right is nonfinite at comparison node {node}, component {component}"),
+        )
+        .at(format!("values[{node}][{component}]"))
+        .suggest("compare Results whose SI difference remains within the finite f64 range"))
+    }
+}
+
 fn resolved_operand(input: &DifferenceInput<'_>) -> crate::query::ResolvedDifferenceOperand {
     crate::query::ResolvedDifferenceOperand {
         result_id: input.record.id.clone(),
@@ -353,12 +367,10 @@ impl Engine {
                 projected_at(&source.record.built.mesh, source.field, source.component, point)?
             };
             if let Some(source_value) = source_value {
-                values.extend(
-                    target_value
-                        .iter()
-                        .zip(source_value)
-                        .map(|(target, source)| Some(if target_is_left { *target - source } else { source - *target })),
-                );
+                for (component, (target, source)) in target_value.iter().zip(source_value).enumerate() {
+                    let (left_value, right_value) = if target_is_left { (*target, source) } else { (source, *target) };
+                    values.push(Some(finite_difference(left_value, right_value, node, component)?));
+                }
             } else {
                 outside_nodes.push(node as u32);
                 values.extend((0..components).map(|_| None));
@@ -437,5 +449,14 @@ mod tests {
         let error = projected_at(&degenerate, &field, None, [0.0; 3]).expect_err("a singular map cannot be outside");
         assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::Unsupported, Some("onto")));
         assert!(error.cause.contains("element 0"));
+    }
+
+    #[test]
+    fn difference_overflow_is_a_structured_error_instead_of_a_null_inside_value() {
+        assert_eq!(finite_difference(3.0, 1.0, 0, 0).unwrap(), 2.0);
+        let error = finite_difference(f64::MAX, -f64::MAX, 2, 1).expect_err("finite operands can overflow");
+        assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::Unsupported, Some("values[2][1]")));
+        assert!(error.cause.contains("nonfinite"));
+        assert!(error.suggestion.is_some());
     }
 }

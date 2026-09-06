@@ -75,7 +75,8 @@ pub enum Query {
 
     /// Subtract two explicitly retained nodal fields as `left - right` on either Result's
     /// Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
-    /// null values; no current Result, display conversion, or node-number pairing is implied.
+    /// null values; nonfinite arithmetic is a structured error. No current Result, display
+    /// conversion, or node-number pairing is implied.
     #[serde(rename = "query.difference", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "DifferenceField"))]
     Difference { left: DifferenceOperand, right: DifferenceOperand, onto: DifferenceOnto },

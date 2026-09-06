@@ -70,6 +70,8 @@ fn difference_fields_project_closed_form_temperature_between_unequal_linear_and_
     let (left_id, left_coords) = conductivity_solve(&mut e, 2, 1, 45);
     ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"in","temperature":"K"}}"#);
     let (right_id, right_coords) = conductivity_solve(&mut e, 4, 2, 90);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"10 degC"}"#);
+    let (offset_id, _) = conductivity_solve(&mut e, 4, 2, 45);
     let before = serde_json::to_value(e.export_file()).unwrap();
     let retained_before = retained_query(&mut e, json!({"query":"query.results"}));
     for (onto, coords) in [("left", &left_coords), ("right", &right_coords)] {
@@ -95,11 +97,12 @@ fn difference_fields_project_closed_form_temperature_between_unequal_linear_and_
     }
     let constant = difference(
         &mut e,
-        json!({"resultId":left_id,"field":"temperature","component":1}),
-        json!({"resultId":right_id,"field":"temperature","component":1}),
+        json!({"resultId":offset_id,"field":"temperature","component":0}),
+        json!({"resultId":left_id,"field":"temperature","component":0}),
         "right",
     );
-    assert!(constant.interpolated && constant.values.iter().all(|value| *value == Some(0.0)));
+    assert!(constant.interpolated);
+    assert!(constant.values.iter().all(|value| value.is_some_and(|value| (value - 10.0).abs() < 1e-8)));
     let reversed = difference(
         &mut e,
         json!({"resultId":right_id,"field":"temperature","component":0}),
@@ -172,6 +175,9 @@ fn difference_fields_report_partial_and_zero_coverage_without_filling_outside_no
         assert_eq!(field.coverage.inside_nodes + outside.len(), coords.len() / 3);
         for (node, value) in field.values.iter().enumerate() {
             assert_eq!(value.is_none(), outside.contains(&(node as u32)));
+            if let Some(value) = value {
+                assert!((value - 10.0).abs() < 1e-8, "covered node {node}: {value} K versus 10 K");
+            }
         }
     }
     ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"],"at":["2 m","0 m","0 m"]}"#);
@@ -185,6 +191,45 @@ fn difference_fields_report_partial_and_zero_coverage_without_filling_outside_no
     assert_eq!(none.coverage.inside_nodes, 0);
     assert_eq!(none.coverage.outside_nodes, (0..far_coords.len() as u32 / 3).collect::<Vec<_>>());
     assert!(none.values.iter().all(Option::is_none));
+}
+
+#[test]
+fn difference_reactions_require_the_same_physical_quantity_and_keep_thermal_power_in_watts() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}},"order":1}"#);
+    let mechanical_id = retained_solve(&mut e, "static");
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"beam.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"heater","on":"beam.xmax","q":"900 W/m^2"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold"],"loads":["heater"],"output":["temperature"]}"#,
+    );
+    let thermal_left = retained_solve(&mut e, "conduct");
+    let thermal_right = retained_solve(&mut e, "conduct");
+
+    let mismatch = retained_error(
+        &mut e,
+        json!({"query":"query.difference",
+          "left":{"resultId":mechanical_id,"field":"reaction"},
+          "right":{"resultId":thermal_left,"field":"reaction"},"onto":"left"}),
+    );
+    assert_eq!((mismatch.code, mismatch.where_.as_deref()), (ErrorCode::UnitDimension, Some("right.field")));
+
+    let thermal = difference(
+        &mut e,
+        json!({"resultId":thermal_left,"field":"reaction"}),
+        json!({"resultId":thermal_right,"field":"reaction"}),
+        "left",
+    );
+    assert_eq!(thermal.unit, "W");
+    assert!(!thermal.interpolated);
+    assert_eq!(thermal.coverage.inside_nodes, thermal.node_count);
+    assert!(thermal.values.iter().all(|value| *value == Some(0.0)));
 }
 
 #[test]

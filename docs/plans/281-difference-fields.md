@@ -53,14 +53,18 @@ isoparametric point probe; the target value is already nodal. Choosing `onto: le
 Different 2D/3D mesh dimensions, non-nodal fields, unsupported element/field layouts, and a
 numerical locator failure return `unsupported`; these failures are distinct from a target point
 that the locator positively classifies outside the source domain and must never masquerade as
-zero coverage. Missing ids or fields remain `not-found`. A physical-dimension mismatch returns
-`unit.dimension`. Missing, one-sided, or out-of-range component choices return `schema` at the
-specific operand path. No path pairs nodes by count, substitutes the current Model or Mesh, reads
-a file, mutates retention order, or extends a record lifetime.
+zero coverage. Subtraction or interpolation that produces a nonfinite value also returns
+`unsupported` at the exact output node and component instead of serializing that value as the
+same `null` used for outside coverage. Missing ids or fields remain `not-found`. A
+physical-dimension mismatch returns `unit.dimension`. Missing, one-sided, or out-of-range
+component choices return `schema` at the specific operand path. No path pairs nodes by count,
+substitutes the current Model or Mesh, reads a file, mutates retention order, or extends a record
+lifetime.
 
 ## Independent verification
 
-A constant field gives exact zero after projection between unequal linear and quadratic meshes.
+A nonzero constant temperature offset gives exactly 10 K after projection between unequal linear
+and quadratic meshes.
 An affine field gives its closed-form left-minus-right value at every covered target node in both
 projection directions; this checks sign, SI units, interpolation and quadratic mid-edge nodes
 without comparing one implementation to another. The operands use different Model display units,
