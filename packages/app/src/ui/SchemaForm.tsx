@@ -7,7 +7,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type { LastError, Store, UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 import { SketchEditor } from './SketchEditor';
-import { applyLabel, commandLine, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
+import { applyLabel, commandLine, defaultTaggedUnions, type Defs, type Field, fieldsOf, getAt, missingRequired, parseQuantity, setAt, siUnit, step } from './schema';
 
 export type Query = (q: { query: string } & Record<string, unknown>) => Promise<unknown>;
 
@@ -20,9 +20,11 @@ export interface FormProps {
   variants: Map<string, JsonSchema>;
 }
 
+type FieldProps = FormProps & { field: Field; values: Record<string, unknown>; fields: Field[] };
+
 /** Every control writes the whole argument object back through `form.open`; that is its Command. */
-const editor = (s: UiState, dispatch: Dispatch) => (path: string[], value: unknown) =>
-  void dispatch({ cmd: 'form.open', command: s.form?.cmd ?? '', args: setAt(s.form?.values ?? {}, path, value), keepInitial: true }).catch(() => undefined);
+const editor = (s: UiState, dispatch: Dispatch, values: Record<string, unknown>, fields: Field[]) => (path: string[], value: unknown) =>
+  void dispatch({ cmd: 'form.open', command: s.form?.cmd ?? '', args: defaultTaggedUnions(setAt(values, path, value), fields), keepInitial: true }).catch(() => undefined);
 
 /**
  * A multi-valued field's current value as a list. The form's values come from anywhere a
@@ -158,10 +160,9 @@ function Segmented({ options, active, onPick }: { options: string[]; active: (o:
   );
 }
 
-function FieldView(props: FormProps & { field: Field }) {
-  const { field, s, store, dispatch, query, defs, variants } = props;
-  const set = editor(s, dispatch);
-  const values = s.form?.values ?? {};
+function FieldView(props: FieldProps) {
+  const { field, fields, values, s, store, dispatch, query, defs, variants } = props;
+  const set = editor(s, dispatch, values, fields);
   const value = getAt(values, field.path);
   const error = errorFor(s.formError, field.path);
   const onChange = (v: unknown) => set(field.path, v);
@@ -311,10 +312,11 @@ export function SchemaForm(props: FormProps) {
     );
   }
   const fields = fieldsOf(variant, defs);
-  const cmd = { cmd: form.cmd, ...form.values };
-  const name = String(form.values['name'] ?? '—');
+  const values = defaultTaggedUnions(form.values, fields);
+  const cmd = { cmd: form.cmd, ...values };
+  const name = String(values['name'] ?? '—');
   const label = applyLabel(form.cmd);
-  const missing = missingRequired(fields, form.values);
+  const missing = missingRequired(fields, values);
   const apply = (): void => {
     // The panel is a real `<form>`, so ↵ in any field lands here whatever the button says: the
     // rule lives in `apply`, and `disabled` below is only its visible half (issue #43).
@@ -338,7 +340,7 @@ export function SchemaForm(props: FormProps) {
         </div>
         <div class="prop-hint">{String(variant['description'] ?? '').split('\n').join(' ')}</div>
         {fields.map((f) => (
-          <FieldView key={f.path.join('.')} {...props} field={f} />
+          <FieldView key={f.path.join('.')} {...props} field={f} values={values} fields={fields} />
         ))}
         {s.formError && !fields.some((f) => errorFor(s.formError, f.path)) ? (
           <div class="surface error">
@@ -357,7 +359,7 @@ export function SchemaForm(props: FormProps) {
               dispatch={dispatch}
               cmd={form.cmd}
               class="apply"
-              args={form.values}
+              args={values}
               disabled={missing.length > 0}
               title={missing.length > 0 ? `fill in ${missing.join(', ')}` : form.cmd}
               onRun={apply}

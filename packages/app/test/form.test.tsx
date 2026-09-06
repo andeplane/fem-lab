@@ -168,12 +168,13 @@ describe('SchemaForm', () => {
     expect(store.state.form!.values['bodies']).toBeUndefined();
   });
 
-  it('writes the chosen kind of a tagged union, then its sub-form', () => {
-    const { root, store } = mount('mesh.set');
-    field(root, 'mesher').querySelector<HTMLButtonElement>('button')!.click();
-    expect(store.state.form!.values).toEqual({ mesher: { kind: 'lattice' } });
-    type(field(root, 'mesher.size').querySelector('input')!, '25 mm');
-    expect(store.state.form!.values).toEqual({ mesher: { kind: 'lattice', size: '25 mm' } });
+  it('dispatches the visually selected default kind when its tagged-union sub-form is edited', () => {
+    const { root, store, sent } = mount('mesh.set');
+    expect(root.querySelector('.recorded-cmd')!.textContent).toContain('mesher: { kind: "lattice" }');
+    type(field(root, 'mesher.size').querySelector('input')!, '50 mm');
+    expect(store.state.form!.values).toEqual({ mesher: { kind: 'lattice', size: '50 mm' } });
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'mesh.set', mesher: { kind: 'lattice', size: '50 mm' } });
   });
 
   it('renders an enum as a segmented control and a boolean as yes / no', () => {

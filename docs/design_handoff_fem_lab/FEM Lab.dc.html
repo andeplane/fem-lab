@@ -1,0 +1,1607 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" />
+<script>
+  if (!window.__femThreeLoading) {
+    window.__femThreeLoading = true;
+    var s = document.createElement('script');
+    s.src = 'https://unpkg.com/three@0.150.1/build/three.min.js';
+    document.head.appendChild(s);
+  }
+</script>
+<style>
+  html, body { margin: 0; padding: 0; background: #0a0b0e; }
+  * { box-sizing: border-box; }
+  a { color: #58b7d6; text-decoration: none; }
+  a:hover { color: #7fcde5; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: #262a33; border-radius: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  @keyframes fl-spin { to { transform: rotate(360deg); } }
+  @keyframes fl-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+</style>
+</helmet>
+
+<div style="height:100vh;min-height:790px;min-width:1180px;display:flex;flex-direction:column;background:#0a0b0e;color:#c8cdd4;font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;overflow:auto">
+
+  <div style="height:46px;flex:none;display:flex;align-items:center;gap:14px;padding:0 12px;background:#101218;border-bottom:1px solid #23262e">
+    <div style="display:flex;align-items:center;gap:8px;padding-right:12px;border-right:1px solid #23262e;height:100%">
+      <div style="width:16px;height:16px;border:1.5px solid #e2703a;transform:rotate(45deg)"></div>
+      <span style="font-weight:600;font-size:13px;letter-spacing:.04em;color:#e7e9ec">FEM&nbsp;Lab</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;min-width:0">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#e7e9ec;white-space:nowrap">Corbel_axis-D_C30-37</span>
+      <span style="width:6px;height:6px;border-radius:50%;background:#d9a441" title="unsaved changes"></span>
+    </div>
+    <div onClick="{{ openPalette }}" style="display:flex;align-items:center;gap:10px;flex:1;max-width:330px;height:28px;padding:0 10px;background:#0a0b0e;border:1px solid #262a33;border-radius:3px;color:#666c76;cursor:pointer" style-hover="border-color:#3a4150;color:#8b929d">
+      <span style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Search commands or ask in plain words</span>
+      <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#555b64;border:1px solid #262a33;border-radius:3px;padding:1px 5px">⌘K</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:2px;margin-left:auto">
+      <div style="display:flex;border:1px solid #262a33;border-radius:3px;overflow:hidden;margin-right:8px">
+        <div onClick="{{ setUnitsMm }}" style="padding:4px 9px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;background:{{ unitsMmBg }};color:{{ unitsMmFg }}">mm N MPa</div>
+        <div onClick="{{ setUnitsM }}" style="padding:4px 9px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;border-left:1px solid #262a33;background:{{ unitsMBg }};color:{{ unitsMFg }}">m N Pa</div>
+      </div>
+      <div title="Undo" style="width:26px;height:26px;display:grid;place-items:center;border-radius:3px;cursor:pointer;color:#8b929d;font-size:14px" style-hover="background:#181b21;color:#e7e9ec">↶</div>
+      <div title="Redo" style="width:26px;height:26px;display:grid;place-items:center;border-radius:3px;cursor:pointer;color:#555b64;font-size:14px" style-hover="background:#181b21;color:#8b929d">↷</div>
+      <div style="display:flex;align-items:center;gap:6px;margin:0 10px 0 6px;padding:3px 8px;border:1px solid #23262e;border-radius:3px">
+        <span style="width:5px;height:5px;border-radius:50%;background:#5fbf8f"></span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#8b929d">local GPU · 8 threads</span>
+      </div>
+      <div onClick="{{ solveClick }}" style="display:flex;align-items:center;gap:8px;height:28px;padding:0 13px;border-radius:3px;font-weight:600;font-size:12.5px;cursor:pointer;background:{{ solveBg }};color:{{ solveFg }};border:1px solid {{ solveBorder }}">
+        <span>{{ solveLabel }}</span>
+        <sc-if value="{{ isSolving }}" hint-placeholder-val="{{ false }}">
+          <span style="width:11px;height:11px;border:1.5px solid #0a0b0e;border-top-color:transparent;border-radius:50%;animation:fl-spin .8s linear infinite"></span>
+        </sc-if>
+      </div>
+      <div onClick="{{ openExamples }}" style="padding:5px 8px;border-radius:3px;cursor:pointer;color:#8b929d;font-size:12px" style-hover="background:#181b21;color:#e7e9ec">Examples</div>
+      <div onClick="{{ openExport }}" style="padding:5px 8px;border-radius:3px;cursor:pointer;color:#8b929d;font-size:12px" style-hover="background:#181b21;color:#e7e9ec">Export</div>
+      <div onClick="{{ openReport }}" style="padding:5px 8px;border-radius:3px;cursor:pointer;color:#8b929d;font-size:12px" style-hover="background:#181b21;color:#e7e9ec">Report</div>
+      <div onClick="{{ toggleAi }}" style="display:flex;align-items:center;gap:7px;height:28px;padding:0 11px;margin-left:6px;border:1px solid {{ aiBorder }};border-radius:3px;cursor:pointer;color:{{ aiFg }};font-size:12px;font-weight:500">
+        <span style="width:13px;height:13px;border:1.5px solid currentColor;border-radius:50%;display:grid;place-items:center;font-size:8px">✳</span>
+        <span>Assistant</span>
+      </div>
+    </div>
+  </div>
+
+  <sc-if value="{{ solveReason }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:none;display:flex;align-items:center;gap:10px;padding:7px 14px;background:#1c1410;border-bottom:1px solid #3a2418;color:#f0a97b;font-size:12px">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#d9a441;border:1px solid #56391c;padding:1px 5px;border-radius:3px">{{ solveReasonCode }}</span>
+      <span style="text-wrap:pretty">{{ solveReason }}</span>
+      <span onClick="{{ solveReasonFix }}" style="margin-left:4px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#58b7d6;cursor:pointer;border-bottom:1px solid #2c4a57">{{ solveReasonFixLabel }}</span>
+    </div>
+  </sc-if>
+
+  <div style="flex:1;display:flex;min-height:0">
+
+    <div style="width:274px;flex:none;display:flex;flex-direction:column;background:#101218;border-right:1px solid #23262e;min-height:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px 7px;border-bottom:1px solid #1b1e25">
+        <span style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76">Model</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#555b64">{{ rev }}</span>
+      </div>
+      <div style="flex:1;overflow:auto;padding:4px 0 20px">
+        <sc-for list="{{ tree }}" as="grp" hint-placeholder-count="6">
+          <div style="margin-bottom:2px">
+            <div style="display:flex;align-items:center;gap:7px;padding:5px 12px;cursor:pointer" style-hover="background:#171a20">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#555b64;width:7px">{{ grp.caret }}</span>
+              <span style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#8b929d;font-weight:500">{{ grp.name }}</span>
+              <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ grp.badgeFg }}">{{ grp.badge }}</span>
+            </div>
+            <sc-for list="{{ grp.items }}" as="it" hint-placeholder-count="2">
+              <div onClick="{{ it.select }}" style="display:flex;align-items:flex-start;gap:8px;padding:4px 12px 4px 26px;cursor:pointer;background:{{ it.bg }};border-left:2px solid {{ it.mark }}" style-hover="background:#171a20">
+                <span style="width:9px;flex:none;margin-top:3px;font-size:9px;color:{{ it.dotFg }}">{{ it.dot }}</span>
+                <span style="min-width:0;flex:1">
+                  <span style="display:block;font-size:12.5px;color:{{ it.fg }};font-family:'IBM Plex Mono',monospace">{{ it.name }}</span>
+                  <span style="display:block;font-size:11px;color:#666c76;margin-top:1px;text-wrap:pretty">{{ it.summary }}</span>
+                </span>
+                <span onClick="{{ it.mention }}" title="Reference in chat" style="flex:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ it.atFg }};margin-top:1px" style-hover="color:#58b7d6">@</span>
+              </div>
+            </sc-for>
+            <sc-if value="{{ grp.empty }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:2px 12px 8px 26px">
+                <div style="font-size:11px;color:#5c626b;text-wrap:pretty;margin-bottom:4px">{{ grp.emptyText }}</div>
+                <span onClick="{{ grp.add }}" style="display:inline-block;font-size:11px;color:#58b7d6;cursor:pointer;border:1px dashed #2c4a57;border-radius:3px;padding:2px 7px" style-hover="background:#131a1e">+ add {{ grp.addWhat }}</span>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="flex:1;min-width:520px;display:flex;flex-direction:column">
+
+      <div style="flex:1;position:relative;min-height:460px;background:#0d0f13">
+        <x-import component-from-global-scope="fem-viewer" from="./fem-viewer.js" mode="{{ viewerMode }}" scale="{{ scaleAttr }}" colormap="{{ colormap }}" glyphs="{{ glyphsAttr }}" clip="{{ clipAttr }}" play="{{ playAttr }}" dim="{{ dimAttr }}" built="{{ builtAttr }}" meshed="{{ meshedAttr }}" style="position:absolute;inset:0" hint-size="100%,100%"></x-import>
+
+        <sc-if value="{{ noGeom }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:400px;text-align:center;pointer-events:none">
+            <div style="font-size:13px;color:#8b929d;margin-bottom:6px">No geometry yet</div>
+            <div style="font-size:11.5px;color:#5c626b;line-height:1.6;text-wrap:pretty">Add a box in Properties, import IFC / SAF / STEP from the BIM model, or describe the part to the Assistant. The banner above always says what is missing before Solve can run.</div>
+          </div>
+        </sc-if>
+
+        <div style="position:absolute;top:10px;left:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <div style="display:flex;background:#101218cc;border:1px solid #262a33;border-radius:3px;overflow:hidden;backdrop-filter:blur(6px)">
+            <sc-for list="{{ displayModes }}" as="m" hint-placeholder-count="3">
+              <div onClick="{{ m.pick }}" style="padding:5px 11px;font-size:11.5px;cursor:pointer;background:{{ m.bg }};color:{{ m.fg }};border-right:1px solid #262a33">{{ m.label }}</div>
+            </sc-for>
+          </div>
+          <div style="display:flex;background:#101218cc;border:1px solid #262a33;border-radius:3px;overflow:hidden">
+            <sc-for list="{{ viewToggles }}" as="t" hint-placeholder-count="4">
+              <div onClick="{{ t.pick }}" title="{{ t.title }}" style="padding:5px 9px;font-size:11px;cursor:pointer;color:{{ t.fg }};border-right:1px solid #262a33;font-family:'IBM Plex Mono',monospace">{{ t.label }}</div>
+            </sc-for>
+          </div>
+          <div style="display:flex;background:#101218cc;border:1px solid #262a33;border-radius:3px;overflow:hidden">
+            <sc-for list="{{ camPresets }}" as="c" hint-placeholder-count="4">
+              <div style="padding:5px 8px;font-size:11px;cursor:pointer;color:#8b929d;border-right:1px solid #262a33;font-family:'IBM Plex Mono',monospace" style-hover="color:#e7e9ec">{{ c.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="position:absolute;top:44px;left:10px;max-width:calc(100% - 20px);display:flex;align-items:center;gap:9px;padding:5px 9px;background:#101218e6;border:1px solid {{ selBorder }};border-radius:3px;backdrop-filter:blur(6px);white-space:nowrap;overflow:hidden">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fd0e6;min-width:0;overflow:hidden;text-overflow:ellipsis">{{ selChip }}</span>
+          <span style="font-size:10.5px;color:#666c76;min-width:0;overflow:hidden;text-overflow:ellipsis">{{ selMeta }}</span>
+          <span onClick="{{ copySelection }}" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ copyFg }};border:1px solid #2b3038;border-radius:3px;padding:1px 5px;cursor:pointer" style-hover="color:#e7e9ec">{{ copyLabel }}</span>
+          <span onClick="{{ nameByRule }}" style="font-size:11px;color:#58b7d6;cursor:pointer">name by rule</span>
+        </div>
+
+        <sc-if value="{{ isSolving }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:340px;padding:16px 18px;background:#101218ee;border:1px solid #2b3038;border-radius:4px;backdrop-filter:blur(8px)">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+              <span style="font-size:12.5px;color:#e7e9ec;font-weight:500">Solving · ULS 6.10b</span>
+              <span onClick="{{ cancelSolve }}" style="font-size:11.5px;color:#e05252;cursor:pointer">Cancel</span>
+            </div>
+            <div style="height:3px;background:#22262e;border-radius:2px;overflow:hidden;margin-bottom:10px">
+              <div style="height:100%;background:#e2703a;width:{{ progressPct }}"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8b929d">
+              <span>iter <span style="color:#e7e9ec">{{ solveIter }}</span></span>
+              <span>‖r‖ <span style="color:#e7e9ec">{{ solveRes }}</span></span>
+              <span>eta <span style="color:#e7e9ec">{{ solveEta }}</span></span>
+            </div>
+            <div style="margin-top:9px;font-size:11px;color:#666c76">PCG + AMG · 125 709 DOF · viewer stays interactive</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isStale }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;top:10px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:7px 12px;background:#1c1410ee;border:1px solid #3a2418;border-radius:3px">
+            <span style="font-size:12px;color:#f0a97b">Result is stale — Model changed after journal line {{ solveLine }}</span>
+            <span onClick="{{ runSolve }}" style="font-size:11.5px;font-weight:600;color:#0a0b0e;background:#e2703a;padding:3px 9px;border-radius:3px;cursor:pointer">Re-solve</span>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isError }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;top:82px;left:50%;transform:translateX(-50%);width:520px;padding:11px 14px;background:#1a1012ee;border:1px solid #4a2226;border-radius:3px">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:5px">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#e05252;border:1px solid #4a2226;padding:1px 5px;border-radius:3px">E-3140</span>
+              <span style="font-size:12.5px;color:#f0908f;font-weight:500">Mesh contains 3 inverted elements</span>
+            </div>
+            <div style="font-size:11.5px;color:#c8cdd4;line-height:1.5;text-wrap:pretty">The re-entrant corner at <span style="font-family:'IBM Plex Mono',monospace">y=400 z=1400</span> is sharper than one element. Elements 20 118, 20 119 and 20 144 have a negative Jacobian, so the Step was never started.</div>
+            <div style="display:flex;gap:10px;margin-top:9px;align-items:center">
+              <span onClick="{{ fixError }}" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0a0b0e;background:#58b7d6;padding:3px 8px;border-radius:3px;cursor:pointer">mesh.set({ size: "25 mm" })</span>
+              <span onClick="{{ askAiAboutError }}" style="font-size:11.5px;color:#58b7d6;cursor:pointer">Send this error to the Assistant</span>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showLegend }}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;top:56px;right:12px;bottom:58px;width:168px;padding:10px;background:#101218e6;border:1px solid #262a33;border-radius:3px;backdrop-filter:blur(6px);overflow:auto">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px">
+              <span style="font-size:11.5px;color:#e7e9ec;font-weight:500">σ von Mises</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#666c76">MPa</span>
+            </div>
+            <div style="font-size:10.5px;color:#666c76;margin-bottom:8px">ULS 6.10b · deformed ×{{ scaleAttr }}</div>
+            <div style="display:flex;gap:8px">
+              <div style="width:16px;height:132px;border-radius:2px;background:{{ legendGradient }};border:1px solid #262a33"></div>
+              <div style="flex:1;display:flex;flex-direction:column;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:10.5px;text-align:right">
+                <sc-for list="{{ legendTicks }}" as="tk" hint-placeholder-count="6">
+                  <span style="color:{{ tk.fg }}">{{ tk.v }}</span>
+                </sc-for>
+              </div>
+            </div>
+            <div style="margin-top:8px;padding-top:7px;border-top:1px solid #1b1e25;font-size:10.5px;color:#8b929d;line-height:1.6">
+              <div style="display:flex;justify-content:space-between"><span>peak</span><span style="font-family:'IBM Plex Mono',monospace;color:#f0824b">18.7</span></div>
+              <div style="display:flex;justify-content:space-between"><span>f_cd C30/37</span><span style="font-family:'IBM Plex Mono',monospace;color:#c8cdd4">17.0</span></div>
+            </div>
+            <div style="display:flex;gap:5px;margin-top:8px">
+              <sc-for list="{{ colormaps }}" as="cm" hint-placeholder-count="3">
+                <div onClick="{{ cm.pick }}" title="{{ cm.name }}" style="flex:1;height:12px;border-radius:2px;cursor:pointer;background:{{ cm.grad }};outline:1px solid {{ cm.ring }}"></div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showLegend }}" hint-placeholder-val="{{ true }}">
+          <div style="position:absolute;bottom:12px;right:12px;display:flex;align-items:center;gap:12px;padding:7px 11px;background:#101218e6;border:1px solid #262a33;border-radius:3px;backdrop-filter:blur(6px)">
+            <span onClick="{{ togglePlay }}" style="width:22px;height:22px;display:grid;place-items:center;border:1px solid #2b3038;border-radius:3px;cursor:pointer;color:{{ playFg }};font-size:10px">{{ playIcon }}</span>
+            <span style="font-size:11px;color:#8b929d">deformation</span>
+            <input type="range" min="0" max="400" step="10" value="{{ scale }}" onInput="{{ onScale }}" onPointerUp="{{ commitScale }}" style="width:104px;accent-color:#e2703a;height:14px" />
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#e7e9ec;width:40px">×{{ scaleAttr }}</span>
+            <span onClick="{{ trueScale }}" style="font-size:11px;color:#58b7d6;cursor:pointer">true scale</span>
+            <span onClick="{{ openExport }}" style="font-size:11px;color:#8b929d;cursor:pointer;padding-left:6px;border-left:1px solid #262a33" style-hover="color:#e7e9ec">screenshot</span>
+          </div>
+        </sc-if>
+      </div>
+
+      <div style="height:252px;flex:0 1 252px;display:flex;flex-direction:column;background:#101218;border-top:1px solid #23262e;min-height:184px">
+        <div style="display:flex;align-items:center;gap:1px;padding:0 8px;border-bottom:1px solid #1b1e25;flex:none">
+          <sc-for list="{{ tabs }}" as="tb" hint-placeholder-count="5">
+            <div onClick="{{ tb.pick }}" style="display:flex;align-items:center;gap:6px;padding:8px 12px 7px;font-size:12px;cursor:pointer;color:{{ tb.fg }};border-bottom:2px solid {{ tb.mark }}">
+              <span>{{ tb.label }}</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ tb.countFg }}">{{ tb.count }}</span>
+            </div>
+          </sc-for>
+          <div style="margin-left:auto;display:flex;gap:10px;font-size:11px;color:#666c76">
+            <span onClick="{{ toggleScript }}" style="cursor:pointer;color:{{ scriptToggleFg }}">{{ scriptToggleLabel }}</span>
+            <span style="cursor:pointer" style-hover="color:#c8cdd4">copy</span>
+            <span onClick="{{ openExport }}" style="cursor:pointer" style-hover="color:#c8cdd4">download .ts</span>
+          </div>
+        </div>
+
+        <div style="flex:1;overflow:auto;min-height:0">
+          <sc-if value="{{ tabJournal }}" hint-placeholder-val="{{ true }}">
+            <div style="padding:6px 0">
+              <sc-for list="{{ journal }}" as="j" hint-placeholder-count="8">
+                <div style="display:flex;gap:12px;padding:2.5px 14px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;cursor:pointer;background:{{ j.bg }};border-left:2px solid {{ j.mark }}" style-hover="background:#171a20">
+                  <span style="width:22px;flex:none;color:#4c525b;text-align:right">{{ j.n }}</span>
+                  <span style="color:{{ j.cmdFg }};flex:none">{{ j.cmd }}</span>
+                  <span style="color:{{ j.argFg }};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ j.args }}</span>
+                  <span style="margin-left:auto;flex:none;color:#4c525b;font-size:10.5px">{{ j.who }}</span>
+                  <span style="flex:none;color:#3f444d;font-size:10.5px">{{ j.t }}</span>
+                </div>
+                <sc-if value="{{ j.boundary }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;gap:8px;padding:4px 14px 5px 38px">
+                    <span style="flex:1;height:1px;background:#2b3038"></span>
+                    <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#666c76">{{ j.boundaryLabel }}</span>
+                    <span style="flex:1;height:1px;background:#2b3038"></span>
+                  </div>
+                </sc-if>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ tabScript }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;height:100%;min-height:0">
+              <div style="flex:1;min-width:0;overflow:auto;padding:8px 0">
+                <sc-for list="{{ script }}" as="s" hint-placeholder-count="14">
+                  <div style="display:flex;gap:14px;padding:0 14px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.75">
+                    <span style="width:20px;flex:none;color:#3f444d;text-align:right">{{ s.n }}</span>
+                    <span style="color:{{ s.fg }};white-space:pre-wrap">{{ s.txt }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="width:214px;flex:none;border-left:1px solid #1b1e25;padding:10px 12px;background:#0d0f13">
+                <div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76;margin-bottom:8px">Run</div>
+                <div onClick="{{ runSolve }}" style="text-align:center;padding:5px;background:#e2703a;color:#0a0b0e;font-weight:600;font-size:11.5px;border-radius:3px;cursor:pointer;margin-bottom:10px">▶ Run script</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5fbf8f;line-height:1.7">
+                  <div>› 21 commands applied</div>
+                  <div>› model rebuilt, rev 41</div>
+                  <div style="color:#666c76">› 0.42 s</div>
+                </div>
+                <div style="margin-top:12px;padding-top:10px;border-top:1px solid #1b1e25;font-size:11px;color:#666c76;line-height:1.6;text-wrap:pretty">The Journal, typed. Edit a line and rerun and the Model replays from there.</div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ tabResultsEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:22px 14px;display:flex;flex-direction:column;gap:6px;align-items:flex-start">
+              <div style="font-size:12.5px;color:#8b929d">No Result yet</div>
+              <div style="font-size:11.5px;color:#5c626b;text-wrap:pretty;max-width:520px">Extremes, reactions with the balance check, Eurocode utilisations and the convergence study appear here the moment a Step finishes. The banner at the top says what is still missing.</div>
+              <span onClick="{{ solveReasonFix }}" style="margin-top:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#58b7d6;cursor:pointer;border:1px solid #2c4a57;padding:2px 8px;border-radius:3px">{{ nextLabel }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ tabResults }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:10px 14px 18px;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:20px">
+              <div>
+                <div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76;margin-bottom:7px">Extremes · ULS 6.10b</div>
+                <div style="display:grid;grid-template-columns:1.1fr .8fr .8fr 1.5fr">
+                  <sc-for list="{{ extremes }}" as="r" hint-placeholder-count="4">
+                    <span style="padding:4px 8px 4px 0;font-size:11.5px;color:{{ r.fg }};border-bottom:1px solid #1b1e25">{{ r.field }}</span>
+                    <span style="padding:4px 8px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:{{ r.fg }};text-align:right;border-bottom:1px solid #1b1e25;font-variant-numeric:tabular-nums">{{ r.min }}</span>
+                    <span style="padding:4px 8px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:{{ r.maxFg }};text-align:right;border-bottom:1px solid #1b1e25;font-variant-numeric:tabular-nums">{{ r.max }}</span>
+                    <span style="padding:4px 0 4px 10px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#666c76;border-bottom:1px solid #1b1e25">{{ r.at }}</span>
+                  </sc-for>
+                </div>
+                <div style="margin-top:14px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76;margin-bottom:7px">Code check · NS-EN 1992-1-1, NA Norway</div>
+                <sc-for list="{{ ecChecks }}" as="c" hint-placeholder-count="3">
+                  <div style="display:flex;align-items:baseline;gap:10px;padding:4px 0;border-bottom:1px solid #1b1e25">
+                    <span style="width:14px;color:{{ c.fg }};font-size:11px">{{ c.icon }}</span>
+                    <span style="flex:1;font-size:11.5px;color:#c8cdd4">{{ c.name }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:{{ c.fg }};font-variant-numeric:tabular-nums">{{ c.util }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#666c76;width:104px;text-align:right">{{ c.ref }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div>
+                <div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76;margin-bottom:7px">Reactions · kN</div>
+                <div style="display:grid;grid-template-columns:1.3fr .9fr .9fr .9fr">
+                  <sc-for list="{{ reactions }}" as="r" hint-placeholder-count="4">
+                    <span style="padding:4px 8px 4px 0;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:{{ r.fg }};border-bottom:1px solid #1b1e25">{{ r.name }}</span>
+                    <span style="padding:4px 6px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;text-align:right;color:{{ r.fg }};border-bottom:1px solid #1b1e25;font-variant-numeric:tabular-nums">{{ r.fx }}</span>
+                    <span style="padding:4px 6px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;text-align:right;color:{{ r.fg }};border-bottom:1px solid #1b1e25;font-variant-numeric:tabular-nums">{{ r.fy }}</span>
+                    <span style="padding:4px 0 4px 6px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;text-align:right;color:{{ r.fg }};border-bottom:1px solid #1b1e25;font-variant-numeric:tabular-nums">{{ r.fz }}</span>
+                  </sc-for>
+                </div>
+                <div style="display:flex;align-items:center;gap:9px;margin-top:9px;padding:7px 10px;background:#0f1613;border:1px solid #1e3128;border-radius:3px">
+                  <span style="color:#5fbf8f;font-size:12px">✓</span>
+                  <span style="font-size:11.5px;color:#c8cdd4">Σ reactions = −Σ loads</span>
+                  <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#5fbf8f">0.0000 %</span>
+                </div>
+                <div style="margin-top:14px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76;margin-bottom:7px">Mesh convergence · u_z at bearing</div>
+                <div style="display:flex;align-items:flex-end;gap:4px;height:52px">
+                  <sc-for list="{{ convBars }}" as="b" hint-placeholder-count="4">
+                    <span style="flex:1;background:{{ b.bg }};height:{{ b.h }};border-radius:1px 1px 0 0"></span>
+                  </sc-for>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#666c76;margin-top:3px">
+                  <span>100 mm</span><span>50 mm</span><span>25 mm → −1.42 mm (Δ 0.7 %)</span>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ tabChecks }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:10px 14px 18px">
+              <sc-for list="{{ checkGroups }}" as="cg" hint-placeholder-count="4">
+                <div style="margin-bottom:12px">
+                  <div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76;margin-bottom:5px">{{ cg.name }}</div>
+                  <sc-for list="{{ cg.rows }}" as="r" hint-placeholder-count="3">
+                    <div style="display:flex;align-items:baseline;gap:10px;padding:3.5px 0;border-bottom:1px solid #1b1e25">
+                      <span style="width:12px;flex:none;color:{{ r.fg }};font-size:11px">{{ r.icon }}</span>
+                      <span style="flex:1;font-size:11.5px;color:#c8cdd4;text-wrap:pretty">{{ r.text }}</span>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ r.valFg }};flex:none">{{ r.val }}</span>
+                      <sc-if value="{{ r.action }}" hint-placeholder-val="{{ false }}">
+                        <span onClick="{{ r.run }}" style="flex:none;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#58b7d6;cursor:pointer;border:1px solid #2c4a57;padding:1px 6px;border-radius:3px">{{ r.action }}</span>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ tabConsole }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:8px 14px 18px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.8">
+              <sc-for list="{{ logLines }}" as="l" hint-placeholder-count="8">
+                <div style="display:flex;gap:10px">
+                  <span style="color:#3f444d;flex:none">{{ l.t }}</span>
+                  <span style="color:{{ l.fg }};flex:none;width:54px">{{ l.lvl }}</span>
+                  <span style="color:{{ l.txtFg }};min-width:0;text-wrap:pretty">{{ l.txt }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+
+    <div style="width:308px;flex:none;display:flex;flex-direction:column;background:#101218;border-left:1px solid #23262e;min-height:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px 7px;border-bottom:1px solid #1b1e25;flex:none">
+        <span style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76">Properties</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#555b64">{{ propType }}</span>
+      </div>
+      <div style="flex:1;overflow:auto;padding:12px;min-height:0">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:2px">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#e7e9ec">{{ propName }}</span>
+          <span onClick="{{ mentionSelected }}" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#4c6b78;cursor:pointer" style-hover="color:#58b7d6">@ reference in chat</span>
+        </div>
+        <div style="font-size:11.5px;color:#666c76;margin-bottom:14px;text-wrap:pretty">{{ propHint }}</div>
+
+        <sc-for list="{{ fields }}" as="f" hint-placeholder-count="4">
+          <div style="margin-bottom:13px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
+              <span style="font-size:11.5px;color:#8b929d">{{ f.label }}</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4c525b">{{ f.dim }}</span>
+            </div>
+
+            <sc-if value="{{ f.isQty }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;height:29px;background:#0a0b0e;border:1px solid {{ f.border }};border-radius:3px;padding:0 9px;gap:8px">
+                <span style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#e7e9ec">{{ f.value }}</span>
+                <span onClick="{{ f.dec }}" style="width:16px;height:20px;display:grid;place-items:center;color:#8b929d;cursor:pointer;font-size:11px" style-hover="color:#e7e9ec">−</span>
+                <span onClick="{{ f.inc }}" style="width:16px;height:20px;display:grid;place-items:center;color:#8b929d;cursor:pointer;font-size:11px" style-hover="color:#e7e9ec">+</span>
+              </div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:{{ f.echoFg }};margin-top:3px">{{ f.echo }}</div>
+            </sc-if>
+
+            <sc-if value="{{ f.isEnum }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;border:1px solid #262a33;border-radius:3px;overflow:hidden">
+                <sc-for list="{{ f.options }}" as="o" hint-placeholder-count="3">
+                  <div onClick="{{ o.pick }}" style="flex:1;text-align:center;padding:5px 4px;font-size:11.5px;cursor:pointer;background:{{ o.bg }};color:{{ o.fg }};border-right:1px solid #262a33">{{ o.label }}</div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ f.isPicker }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center">
+                <sc-for list="{{ f.chips }}" as="ch" hint-placeholder-count="2">
+                  <span style="display:flex;align-items:center;gap:6px;padding:3px 7px;background:#131a1e;border:1px solid #2c4a57;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fd0e6">
+                    <span>{{ ch.name }}</span>
+                    <span style="color:#4c6b78;font-size:10px">{{ ch.count }}</span>
+                    <span style="color:#4c6b78;cursor:pointer">×</span>
+                  </span>
+                </sc-for>
+                <span style="padding:3px 8px;border:1px dashed #3a4150;border-radius:3px;font-size:11px;color:#8b929d;cursor:pointer" style-hover="color:#e7e9ec;border-color:#4c525b">pick in viewer</span>
+              </div>
+              <div style="margin-top:5px;font-size:11px;color:#666c76;text-wrap:pretty">{{ f.ruleNote }}</div>
+            </sc-if>
+
+            <sc-if value="{{ f.error }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;gap:7px;margin-top:5px;padding:6px 8px;background:#1a1012;border:1px solid #4a2226;border-radius:3px">
+                <span style="color:#e05252;font-size:11px">✕</span>
+                <span style="font-size:11px;color:#f0908f;line-height:1.5;text-wrap:pretty">{{ f.error }}</span>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ f.warn }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;gap:7px;margin-top:5px;padding:6px 8px;background:#1c1712;border:1px solid #3e2f18;border-radius:3px;align-items:flex-start">
+                <span style="color:#d9a441;font-size:11px">!</span>
+                <span style="flex:1;font-size:11px;color:#e0bd85;line-height:1.5;text-wrap:pretty">{{ f.warn }}</span>
+                <sc-if value="{{ f.warnFixLabel }}" hint-placeholder-val="{{ false }}">
+                  <span onClick="{{ f.warnFix }}" style="flex:none;font-size:11px;color:#0a0b0e;background:#d9a441;padding:2px 7px;border-radius:3px;cursor:pointer;font-weight:600">{{ f.warnFixLabel }}</span>
+                </sc-if>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid #1b1e25">
+          <div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76;margin-bottom:6px">Will be recorded as</div>
+          <div style="padding:8px 9px;background:#0a0b0e;border:1px solid #23262e;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fd0e6;line-height:1.6;word-break:break-all;white-space:pre-wrap">{{ propCommand }}</div>
+          <div style="display:flex;gap:7px;margin-top:9px">
+            <span onClick="{{ applyProp }}" style="flex:1;text-align:center;padding:6px;background:#e2703a;color:#0a0b0e;font-weight:600;font-size:12px;border-radius:3px;cursor:pointer">{{ applyLabel }}</span>
+            <span style="padding:6px 11px;border:1px solid #2b3038;border-radius:3px;font-size:12px;color:#8b929d;cursor:pointer" style-hover="color:#e7e9ec">Revert</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <sc-if value="{{ aiOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="width:392px;flex:none;display:flex;flex-direction:column;background:#0d0f13;border-left:1px solid #23262e;min-height:0">
+        <div style="display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #1b1e25;flex:none">
+          <span style="width:14px;height:14px;border:1.5px solid #e2703a;border-radius:50%;display:grid;place-items:center;font-size:8px;color:#e2703a">✳</span>
+          <span style="font-size:12px;color:#e7e9ec;font-weight:500">Assistant</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#555b64">shares this Model</span>
+          <span onClick="{{ toggleAi }}" style="margin-left:auto;color:#666c76;cursor:pointer;font-size:13px" style-hover="color:#e7e9ec">×</span>
+        </div>
+
+        <div style="flex:none;padding:8px 12px;border-bottom:1px solid #1b1e25;background:#0a0b0e">
+          <div onClick="{{ toggleRules }}" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#555b64">{{ rulesCaret }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fd0e6">AGENTS.md</span>
+            <span style="font-size:11px;color:#666c76">4 project rules in force</span>
+            <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4c525b">/AGENTS.md · /calc/AGENTS.md</span>
+          </div>
+          <sc-if value="{{ rulesOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:7px;padding-left:15px;display:flex;flex-direction:column;gap:3px">
+              <sc-for list="{{ agentRules }}" as="r" hint-placeholder-count="4">
+                <div style="display:flex;gap:7px;font-size:11px;color:#8b929d;line-height:1.5">
+                  <span style="color:#4c6b78;flex:none">›</span>
+                  <span style="text-wrap:pretty">{{ r.text }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;align-items:center">
+            <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#4c525b;margin-right:2px">Skills</span>
+            <sc-for list="{{ skills }}" as="s" hint-placeholder-count="4">
+              <span onClick="{{ s.toggle }}" title="{{ s.desc }}" style="display:flex;align-items:center;gap:5px;padding:2px 7px;border:1px solid {{ s.border }};border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:{{ s.fg }};cursor:pointer">
+                <span style="width:4px;height:4px;border-radius:50%;background:{{ s.dot }}"></span>
+                <span>{{ s.name }}</span>
+              </span>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="flex:1;overflow:auto;padding:12px;min-height:0;display:flex;flex-direction:column;gap:10px">
+          <sc-for list="{{ aiMessages }}" as="m" hint-placeholder-count="4">
+            <sc-if value="{{ m.isUser }}" hint-placeholder-val="{{ false }}">
+              <div style="align-self:flex-end;max-width:92%;padding:8px 11px;background:#181b21;border:1px solid #262a33;border-radius:3px;font-size:12px;color:#e7e9ec;line-height:1.6;text-wrap:pretty">
+                <sc-for list="{{ m.parts }}" as="p" hint-placeholder-count="2">
+                  <span style="font-family:{{ p.family }};color:{{ p.fg }};background:{{ p.bg }};padding:{{ p.pad }};border-radius:2px;font-size:{{ p.size }}">{{ p.text }}</span>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ m.isText }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:12px;color:#c8cdd4;line-height:1.6;text-wrap:pretty">{{ m.text }}</div>
+            </sc-if>
+            <sc-if value="{{ m.isSkill }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;gap:8px;padding:5px 9px;border:1px dashed #3e2f18;border-radius:3px;background:#14110d">
+                <span style="color:#d9a441;font-size:10px">◆</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#e0bd85">skill: {{ m.skill }}</span>
+                <span style="font-size:11px;color:#666c76;min-width:0;text-wrap:pretty">{{ m.text }}</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{ m.isTool }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1px solid {{ m.border }};border-radius:3px;background:#101218">
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 9px;border-bottom:1px solid #1b1e25">
+                  <span style="color:{{ m.iconFg }};font-size:10px">{{ m.icon }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#e7e9ec">{{ m.cmd }}</span>
+                  <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#555b64">{{ m.ms }}</span>
+                </div>
+                <div style="padding:6px 9px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fd0e6;line-height:1.6;word-break:break-all">{{ m.args }}</div>
+                <sc-if value="{{ m.result }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:5px 9px;border-top:1px solid #1b1e25;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ m.resultFg }};text-wrap:pretty">{{ m.result }}</div>
+                </sc-if>
+              </div>
+            </sc-if>
+            <sc-if value="{{ m.isVerify }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1px solid #2c4a57;border-radius:3px;background:#0e1418">
+                <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid #1b2b33">
+                  <span style="color:#58b7d6;font-size:11px">◎</span>
+                  <span style="font-size:11.5px;color:#8fd0e6;font-weight:600;letter-spacing:.04em">VERIFICATION</span>
+                  <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4c6b78">also in Checks</span>
+                </div>
+                <div style="padding:8px 10px;display:flex;flex-direction:column;gap:5px">
+                  <sc-for list="{{ m.rows }}" as="v" hint-placeholder-count="3">
+                    <div style="display:flex;align-items:baseline;gap:8px">
+                      <span style="width:11px;flex:none;color:{{ v.fg }};font-size:11px">{{ v.icon }}</span>
+                      <span style="flex:1;font-size:11.5px;color:#c8cdd4;text-wrap:pretty">{{ v.text }}</span>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ v.fg }};flex:none">{{ v.val }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ m.isDiff }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1px solid #262a33;border-radius:3px;background:#101218">
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 9px;border-bottom:1px solid #1b1e25">
+                  <span style="font-size:11.5px;color:#e7e9ec">Journal diff · this turn</span>
+                  <span onClick="{{ undoTurn }}" style="margin-left:auto;font-size:11px;color:#e05252;cursor:pointer;border:1px solid #4a2226;padding:1px 6px;border-radius:3px">Undo turn</span>
+                </div>
+                <div style="padding:6px 9px;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.75">
+                  <sc-for list="{{ m.lines }}" as="d" hint-placeholder-count="3">
+                    <div style="color:{{ d.fg }};white-space:pre-wrap">{{ d.txt }}</div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ m.isFiles }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1px solid #262a33;border-radius:3px;background:#101218">
+                <div style="padding:6px 9px;border-bottom:1px solid #1b1e25;font-size:11.5px;color:#e7e9ec">Wrote 3 files</div>
+                <sc-for list="{{ m.files }}" as="f" hint-placeholder-count="3">
+                  <div style="display:flex;align-items:baseline;gap:8px;padding:5px 9px;border-bottom:1px solid #14171d">
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fd0e6;flex:1;min-width:0">{{ f.name }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#666c76">{{ f.size }}</span>
+                    <span style="font-size:11px;color:#58b7d6;cursor:pointer">download</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </sc-for>
+          <sc-if value="{{ aiThinking }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:#8b929d">
+              <span style="width:9px;height:9px;border:1.5px solid #e2703a;border-top-color:transparent;border-radius:50%;animation:fl-spin .8s linear infinite"></span>
+              <span style="animation:fl-pulse 1.4s ease-in-out infinite">{{ aiThinking }}</span>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="flex:none;border-top:1px solid #1b1e25;padding:9px 12px;position:relative">
+          <sc-if value="{{ mentionOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position:absolute;left:12px;right:12px;bottom:100%;margin-bottom:6px;background:#101218;border:1px solid #2b3038;border-radius:4px;overflow:hidden;box-shadow:0 12px 30px #000000aa">
+              <div style="padding:5px 10px;border-bottom:1px solid #1b1e25;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#666c76">@{{ mentionQuery }} — reference anything in the Model, the Journal or the project folder</div>
+              <div style="max-height:236px;overflow:auto">
+                <sc-for list="{{ mentionItems }}" as="mi" hint-placeholder-count="6">
+                  <div onClick="{{ mi.pick }}" style="display:flex;align-items:baseline;gap:9px;padding:5px 10px;cursor:pointer;background:{{ mi.bg }}" style-hover="background:#181b21">
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ mi.kindFg }};width:74px;flex:none">{{ mi.kind }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#e7e9ec;flex:none">{{ mi.name }}</span>
+                    <span style="font-size:11px;color:#666c76;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ mi.meta }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ pasteHint }}" hint-placeholder-val="{{ false }}">
+            <div onClick="{{ pasteSelection }}" style="display:flex;align-items:center;gap:8px;margin-bottom:7px;padding:5px 8px;border:1px dashed #2c4a57;border-radius:3px;background:#0e1418;cursor:pointer">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8fd0e6;border:1px solid #2c4a57;border-radius:2px;padding:1px 4px">⌘V</span>
+              <span style="font-size:11px;color:#8fd0e6">paste {{ pasteHint }} as a reference</span>
+              <span style="margin-left:auto;font-size:10.5px;color:#4c6b78">copied from the viewer</span>
+            </div>
+          </sc-if>
+
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+            <sc-for list="{{ aiSuggestions }}" as="s" hint-placeholder-count="2">
+              <span onClick="{{ s.run }}" style="padding:3px 8px;border:1px solid #2b3038;border-radius:3px;font-size:11px;color:#8b929d;cursor:pointer" style-hover="color:#e7e9ec;border-color:#4c525b">{{ s.label }}</span>
+            </sc-for>
+          </div>
+
+          <div style="padding:7px 9px;background:#0a0b0e;border:1px solid {{ composerBorder }};border-radius:3px">
+            <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;min-height:22px">
+              <sc-for list="{{ draftTokens }}" as="t" hint-placeholder-count="1">
+                <span style="display:flex;align-items:center;gap:5px;padding:2px 6px;background:#131a1e;border:1px solid #2c4a57;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8fd0e6">
+                  <span>{{ t.label }}</span>
+                  <span onClick="{{ t.remove }}" style="color:#4c6b78;cursor:pointer">×</span>
+                </span>
+              </sc-for>
+              <span style="flex:1;min-width:80px;font-size:12px;color:#555b64">{{ composerPlaceholder }}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:7px;padding-top:6px;border-top:1px solid #14171d">
+              <span onClick="{{ openMentions }}" title="Reference a Model object, a file or a Result" style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#8b929d;cursor:pointer;border:1px solid #262a33;border-radius:3px;padding:1px 7px" style-hover="color:#e7e9ec">@</span>
+              <span onClick="{{ mentionSelected }}" style="font-size:11px;color:#8b929d;cursor:pointer" style-hover="color:#e7e9ec">@selection</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#4c525b">/skill</span>
+              <span onClick="{{ aiRun }}" style="margin-left:auto;font-size:11px;color:#0a0b0e;background:#e2703a;font-weight:600;padding:3px 9px;border-radius:3px;cursor:pointer">Send</span>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4c525b">
+            <span>{{ aiCost }}</span>
+            <span>key stored in this browser</span>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+
+  <div style="flex:none;display:flex;align-items:center;gap:10px;height:30px;padding:0 12px;background:#0d0f13;border-top:1px solid #23262e">
+    <span style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#4c525b">Design review · key states</span>
+    <sc-for list="{{ stages }}" as="s" hint-placeholder-count="7">
+      <span onClick="{{ s.pick }}" style="padding:2px 9px;border-radius:3px;font-size:11px;cursor:pointer;background:{{ s.bg }};color:{{ s.fg }};border:1px solid {{ s.border }}">{{ s.label }}</span>
+    </sc-for>
+    <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#4c525b">{{ statusRight }}</span>
+  </div>
+</div>
+
+<sc-if value="{{ isStart }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;background:#0a0b0e;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;font-family:'IBM Plex Sans',system-ui,sans-serif;z-index:40">
+    <div style="text-align:center">
+      <div style="display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:12px">
+        <div style="width:20px;height:20px;border:2px solid #e2703a;transform:rotate(45deg)"></div>
+        <span style="font-size:20px;font-weight:600;letter-spacing:.04em;color:#e7e9ec">FEM Lab</span>
+      </div>
+      <div style="font-size:13.5px;color:#8b929d;max-width:540px;text-wrap:pretty;line-height:1.6">Finite element analysis in a browser tab. Every action is a Command, the Journal is the model, and every number carries its unit.</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,248px);gap:12px">
+      <sc-for list="{{ startCards }}" as="c" hint-placeholder-count="3">
+        <div onClick="{{ c.pick }}" style="padding:16px;background:#101218;border:1px solid {{ c.border }};border-radius:4px;cursor:pointer;min-height:136px;display:flex;flex-direction:column" style-hover="border-color:#3a4150">
+          <div style="font-size:13px;color:#e7e9ec;font-weight:600;margin-bottom:6px">{{ c.title }}</div>
+          <div style="font-size:11.5px;color:#8b929d;line-height:1.55;text-wrap:pretty;flex:1">{{ c.body }}</div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:{{ c.cueFg }};margin-top:10px">{{ c.cue }}</div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="display:flex;gap:16px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#666c76">
+      <span><span style="color:#5fbf8f">●</span> WebGPU available</span>
+      <span><span style="color:#5fbf8f">●</span> 8 worker threads</span>
+      <span><span style="color:#d9a441">●</span> meshers load on demand (1.2 MB)</span>
+      <span>no install · no server · nothing leaves the tab</span>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ paletteOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeOverlays }}" style="position:fixed;inset:0;background:#05060899;backdrop-filter:blur(2px);z-index:60;display:flex;justify-content:center;align-items:flex-start;padding-top:12vh;font-family:'IBM Plex Sans',system-ui,sans-serif">
+    <div style="width:640px;background:#101218;border:1px solid #2b3038;border-radius:5px;overflow:hidden;box-shadow:0 24px 60px #000000aa">
+      <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid #1b1e25">
+        <span style="color:#e2703a;font-family:'IBM Plex Mono',monospace;font-size:13px">›</span>
+        <span style="flex:1;font-size:13.5px;color:#e7e9ec;font-family:'IBM Plex Mono',monospace">{{ paletteQuery }}<span style="color:#e2703a">▏</span></span>
+        <span style="font-size:11px;color:#555b64">every entry is one Command</span>
+      </div>
+      <div style="max-height:360px;overflow:auto;padding:5px 0">
+        <sc-for list="{{ paletteItems }}" as="p" hint-placeholder-count="7">
+          <div onClick="{{ p.run }}" style="display:flex;align-items:baseline;gap:12px;padding:6px 14px;cursor:pointer;background:{{ p.bg }}" style-hover="background:#181b21">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:{{ p.cmdFg }};width:206px;flex:none">{{ p.cmd }}</span>
+            <span style="flex:1;font-size:12px;color:#8b929d;min-width:0;text-wrap:pretty">{{ p.desc }}</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4c525b;flex:none">{{ p.key }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display:flex;gap:16px;padding:8px 14px;border-top:1px solid #1b1e25;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4c525b">
+        <span>↑↓ move</span><span>↵ run</span><span>⇥ fill parameters</span><span>@ reference an object</span><span>esc close</span>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ exportOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;background:#050608e0;backdrop-filter:blur(3px);z-index:65;display:flex;justify-content:center;align-items:center;padding:40px;font-family:'IBM Plex Sans',system-ui,sans-serif">
+    <div style="width:min(880px,100%);max-height:100%;display:flex;flex-direction:column;background:#0d0f13;border:1px solid #2b3038;border-radius:5px;overflow:hidden">
+      <div style="display:flex;align-items:baseline;gap:12px;padding:14px 18px;border-bottom:1px solid #1b1e25">
+        <span style="font-size:14px;color:#e7e9ec;font-weight:600">Export</span>
+        <span style="font-size:11.5px;color:#8b929d">Writes into the project folder and downloads. Every row is a Command, so the Assistant can export too.</span>
+        <span onClick="{{ closeOverlays }}" style="margin-left:auto;color:#666c76;cursor:pointer;font-size:15px" style-hover="color:#e7e9ec">×</span>
+      </div>
+      <div style="flex:1;overflow:auto;padding:14px 18px 20px">
+        <sc-for list="{{ exportGroups }}" as="g" hint-placeholder-count="3">
+          <div style="margin-bottom:16px">
+            <div style="font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#666c76;margin-bottom:6px">{{ g.name }}</div>
+            <sc-for list="{{ g.rows }}" as="r" hint-placeholder-count="4">
+              <div style="display:flex;align-items:baseline;gap:12px;padding:6px 0;border-bottom:1px solid #1b1e25;cursor:pointer" style-hover="background:#12141a">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#e7e9ec;width:104px;flex:none">{{ r.ext }}</span>
+                <span style="font-size:12px;color:#c8cdd4;width:186px;flex:none">{{ r.name }}</span>
+                <span style="flex:1;font-size:11.5px;color:#666c76;min-width:0;text-wrap:pretty">{{ r.note }}</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#8fd0e6;flex:none">{{ r.cmd }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+      <div style="padding:10px 18px;border-top:1px solid #1b1e25;display:flex;gap:18px;align-items:center;font-size:11.5px;color:#666c76">
+        <span>Round trip: IFC and SAF come back in through <span style="font-family:'IBM Plex Mono',monospace;color:#8fd0e6">import.model()</span>, so a BIM model can seed the geometry.</span>
+        <span style="margin-left:auto;padding:5px 12px;background:#e2703a;color:#0a0b0e;font-weight:600;border-radius:3px;cursor:pointer">Export selected</span>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ examplesOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;background:#050608e0;backdrop-filter:blur(3px);z-index:60;display:flex;justify-content:center;align-items:center;padding:40px;font-family:'IBM Plex Sans',system-ui,sans-serif">
+    <div style="width:min(1080px,100%);max-height:100%;display:flex;flex-direction:column;background:#0d0f13;border:1px solid #2b3038;border-radius:5px;overflow:hidden">
+      <div style="display:flex;align-items:baseline;gap:12px;padding:14px 18px;border-bottom:1px solid #1b1e25">
+        <span style="font-size:14px;color:#e7e9ec;font-weight:600">Examples &amp; benchmarks</span>
+        <span style="font-size:11.5px;color:#8b929d">Each one opens as a Journal you can read, edit and rerun. Reference values ship with the app.</span>
+        <span onClick="{{ closeOverlays }}" style="margin-left:auto;color:#666c76;cursor:pointer;font-size:15px" style-hover="color:#e7e9ec">×</span>
+      </div>
+      <div style="flex:1;overflow:auto;padding:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(238px,1fr));gap:12px">
+        <sc-for list="{{ examples }}" as="e" hint-placeholder-count="8">
+          <div onClick="{{ e.open }}" style="background:#101218;border:1px solid #23262e;border-radius:4px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column" style-hover="border-color:#3a4150">
+            <div style="height:96px;background:{{ e.thumb }};border-bottom:1px solid #23262e;position:relative">
+              <span style="position:absolute;left:8px;bottom:6px;font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#0a0b0e;background:#c8cdd4;padding:1px 5px;border-radius:2px">{{ e.tag }}</span>
+            </div>
+            <div style="padding:10px 11px;display:flex;flex-direction:column;flex:1">
+              <div style="font-size:12.5px;color:#e7e9ec;font-weight:600;margin-bottom:4px">{{ e.title }}</div>
+              <div style="font-size:11px;color:#8b929d;line-height:1.5;text-wrap:pretty;flex:1">{{ e.body }}</div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:9px;padding-top:8px;border-top:1px solid #1b1e25;font-family:'IBM Plex Mono',monospace;font-size:10.5px">
+                <span style="color:#666c76">{{ e.refLabel }}</span>
+                <span style="color:#8fd0e6">{{ e.refValue }}</span>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="padding:10px 18px;border-top:1px solid #1b1e25;display:flex;gap:20px;font-size:11.5px;color:#666c76">
+        <span>A theory panel (KaTeX) opens beside the result for every benchmark.</span>
+        <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px">examples.open("rc-corbel-strut-and-tie")</span>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ reportBlocked }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeOverlays }}" style="position:fixed;inset:0;background:#05060899;backdrop-filter:blur(2px);z-index:70;display:flex;justify-content:center;align-items:center;font-family:'IBM Plex Sans',system-ui,sans-serif">
+    <div style="width:440px;padding:18px 20px;background:#101218;border:1px solid #2b3038;border-radius:5px">
+      <div style="font-size:13px;color:#e7e9ec;font-weight:600;margin-bottom:6px">No Result to report yet</div>
+      <div style="font-size:12px;color:#8b929d;line-height:1.6;text-wrap:pretty">The calculation note is generated from a Result and the Journal that produced it. Finish the model and press Solve; the report then opens with every assumption, table and figure filled in.</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <span onClick="{{ solveReasonFix }}" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#0a0b0e;background:#58b7d6;padding:4px 9px;border-radius:3px;cursor:pointer">{{ nextLabel }}</span>
+        <span style="padding:4px 10px;border:1px solid #2b3038;border-radius:3px;font-size:11.5px;color:#8b929d;cursor:pointer">Close</span>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ reportOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;background:#050608;z-index:70;display:flex;flex-direction:column;font-family:'IBM Plex Sans',system-ui,sans-serif">
+    <div style="flex:none;display:flex;align-items:center;gap:12px;padding:10px 16px;background:#101218;border-bottom:1px solid #23262e">
+      <span style="font-size:12.5px;color:#e7e9ec;font-weight:600">Report · Corbel_axis-D_C30-37</span>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#666c76">from rev 41 · Markdown · skill: calc-note-no</span>
+      <span style="margin-left:auto;display:flex;gap:8px">
+        <span onClick="{{ openExport }}" style="padding:4px 10px;border:1px solid #2b3038;border-radius:3px;font-size:11.5px;color:#c8cdd4;cursor:pointer">Export PDF</span>
+        <span style="padding:4px 10px;border:1px solid #2b3038;border-radius:3px;font-size:11.5px;color:#c8cdd4;cursor:pointer">Copy Markdown</span>
+        <span onClick="{{ closeOverlays }}" style="padding:4px 10px;border:1px solid #2b3038;border-radius:3px;font-size:11.5px;color:#8b929d;cursor:pointer">Close</span>
+      </span>
+    </div>
+    <div style="flex:1;overflow:auto;display:flex;justify-content:center;padding:26px 20px 60px">
+      <div style="width:820px;max-width:100%;background:#f7f6f3;color:#1a1c21;padding:52px 58px;font-size:13px;line-height:1.65">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:#7b7468">Calculation note · NS-EN 1992-1-1</div>
+        <div style="font-size:25px;margin:8px 0 4px;font-weight:600;letter-spacing:-.01em">Reinforced concrete corbel, axis D</div>
+        <div style="color:#5f5a52;font-size:12.5px;margin-bottom:22px">Bearing for precast beam · C30/37 · model rev 41 · 5 September 2026</div>
+        <sc-for list="{{ reportSections }}" as="r" hint-placeholder-count="5">
+          <div style="margin-bottom:22px">
+            <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#8a8377;border-bottom:1px solid #ddd8ce;padding-bottom:4px;margin-bottom:9px">{{ r.name }}</div>
+            <sc-if value="{{ r.text }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-bottom:9px;text-wrap:pretty">{{ r.text }}</div>
+            </sc-if>
+            <sc-for list="{{ r.rows }}" as="row" hint-placeholder-count="3">
+              <div style="display:flex;gap:14px;padding:3px 0;border-bottom:1px solid #eae5db">
+                <span style="width:250px;flex:none;color:#5f5a52">{{ row.k }}</span>
+                <span style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:12px;font-variant-numeric:tabular-nums;color:{{ row.fg }}">{{ row.v }}</span>
+                <span style="width:160px;flex:none;font-size:11.5px;color:#8a8377;text-align:right">{{ row.note }}</span>
+              </div>
+            </sc-for>
+            <sc-if value="{{ r.figure }}" hint-placeholder-val="{{ false }}">
+              <div style="height:186px;margin-top:10px;background:repeating-linear-gradient(135deg,#e8e3d8 0 9px,#e2dcd0 9px 18px);border:1px solid #d6d0c4;display:flex;align-items:center;justify-content:center">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7b7468">{{ r.figure }}</span>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+        <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#8a8377;border-bottom:1px solid #ddd8ce;padding-bottom:4px;margin-bottom:9px">Appendix · Journal as script</div>
+        <div style="background:#1a1c21;color:#c8cdd4;padding:14px 16px;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.75;border-radius:3px">
+          <sc-for list="{{ script }}" as="s" hint-placeholder-count="8">
+            <div style="white-space:pre-wrap">{{ s.txt }}</div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:1000},&quot;initialStage&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Start&quot;,&quot;Geometry&quot;,&quot;Meshed&quot;,&quot;Solving&quot;,&quot;Results&quot;,&quot;Stale&quot;,&quot;Error&quot;],&quot;default&quot;:&quot;Results&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Review&quot;},&quot;aiDocked&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Review&quot;},&quot;colorMap&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;viridis&quot;,&quot;turbo&quot;,&quot;rainbow&quot;],&quot;default&quot;:&quot;viridis&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Viewer&quot;},&quot;unitSystem&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;mm N MPa&quot;,&quot;m N Pa&quot;],&quot;default&quot;:&quot;mm N MPa&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Viewer&quot;}}">
+const OR = '#e2703a', ORH = '#f0824b', CY = '#58b7d6', GR = '#5fbf8f', RD = '#e05252', YL = '#d9a441';
+const HI = '#e7e9ec', MID = '#c8cdd4', LOW = '#8b929d', FAINT = '#666c76', DIM = '#4c525b';
+const MONO = "'IBM Plex Mono',monospace";
+const VIRIDIS = 'linear-gradient(to top,#440154,#414487,#2a788e,#22a884,#7ad151,#fde725)';
+const TURBO = 'linear-gradient(to top,#30123b,#4145ab,#4675ed,#39a2fc,#1bcfd4,#24eca6,#61fc6c,#a4fc3b,#d1e834,#f3c63a,#fe9b2d,#f36315,#cb2a04,#7a0403)';
+const RAINBOW = 'linear-gradient(to top,#0000ff,#00ffff,#00ff00,#ffff00,#ff0000)';
+
+class Component extends DCLogic {
+  state = {
+    stage: null, tab: 'journal', sel: 'load.bearing',
+    palette: false, examples: false, report: false, exportOpen: false, ai: false,
+    mode: null, scale: 120, colormap: null, glyphs: true, clip: false, play: false,
+    units: null, element: 'hex20', pressure: 2.4, meshSize: 50,
+    iter: 12, aiStep: 4, aiThinking: '', extraJournal: [],
+    rulesOpen: false, mentionOpen: false, tokens: ['@bearing_top'], copied: null, pasted: false,
+    skillsOff: {}, built: null, aiBuild: false
+  };
+
+  // how much of the model exists, 0..9. Demo stages imply a value; the from-scratch path counts up.
+  builtNow(stage) {
+    if (stage === 'build' || this.state.scratch) return this.state.built || 0;
+    return stage === 'start' ? 0 : stage === 'geometry' ? 3 : stage === 'results' || stage === 'stale' ? 9 : 8;
+  }
+  advance = () => {
+    const b = this.builtNow(this.stageNow());
+    if (b >= 8) return this.runSolve();
+    const nb = b + 1;
+    const selFor = ['new', 'body', 'body', 'face.bearing', 'mat', 'mesh', 'con.fix', 'load.bearing', 'step.uls'];
+    this.setState({ stage: 'build', built: nb, sel: selFor[nb], mode: null, tab: nb === 5 ? 'checks' : 'journal', extraJournal: [] });
+  };
+  startScratch = (ai) => () => this.setState({ stage: 'build', scratch: true, built: 0, sel: 'new', mode: null, tab: 'journal', extraJournal: [], ai: !!ai, aiBuild: false, aiStep: 0, aiThinking: '', tokens: [] });
+  // a Model edit only makes a Result stale if a Result exists; otherwise it is just recorded
+  recordEdit(patch, line) {
+    const s = this.stageNow(), hasResult = s === 'results' || s === 'stale';
+    this.setState(Object.assign({}, patch, hasResult ? { stage: 'stale', tab: 'journal' } : {}, line ? { extraJournal: [line] } : {}));
+  }
+
+  componentDidMount() {
+    this._key = (e) => {
+      const k = (e.key || '').toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && k === 'k') { e.preventDefault(); this.setState({ palette: !this.state.palette }); }
+      if ((e.metaKey || e.ctrlKey) && k === 'c' && !this.state.report) this.copySelection();
+      if ((e.metaKey || e.ctrlKey) && k === 'v' && this.state.copied) this.pasteSelection();
+      if (k === 'escape') this.setState({ palette: false, examples: false, report: false, exportOpen: false, mentionOpen: false });
+    };
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this._key);
+    clearInterval(this._solveTimer); (this._aiTimers || []).forEach(clearTimeout);
+  }
+
+  stageNow() {
+    if (this.state.stage) return this.state.stage;
+    const p = (this.props.initialStage || 'Results').toLowerCase();
+    return p === 'start' ? 'start' : p === 'geometry' ? 'geometry' : p === 'meshed' ? 'mesh'
+      : p === 'solving' ? 'solving' : p === 'stale' ? 'stale' : p === 'error' ? 'error' : 'results';
+  }
+
+  runSolve = () => {
+    clearInterval(this._solveTimer);
+    this.setState({ stage: 'solving', iter: 1, mode: null, tab: 'console' });
+    this._solveTimer = setInterval(() => {
+      const it = this.state.iter + 1;
+      if (it > 11) { clearInterval(this._solveTimer); this.setState({ stage: 'results', built: 9, iter: 12, tab: 'results', sel: 'res.vm' }); }
+      else this.setState({ iter: it });
+    }, 900);
+  };
+  cancelSolve = () => { clearInterval(this._solveTimer); this.setState({ stage: 'build', built: 8, tab: 'console' }); };
+  solveClick = () => {
+    const s = this.stageNow();
+    if (s === 'solving') return this.cancelSolve();
+    if (s === 'error' || this.builtNow(s) < 8) return;
+    this.runSolve();
+  };
+
+  bumpPressure = (d) => {
+    const p = Math.max(0.2, Math.round((this.state.pressure + d) * 10) / 10);
+    this.recordEdit({ pressure: p }, { cmd: 'load.pressure', args: '("bearing_top", "' + p.toFixed(1) + ' MPa")', who: 'you' });
+  };
+  applyProp = () => this.recordEdit({});
+  fixElement = () => this.recordEdit({ element: 'hex20', tab: 'checks' }, { cmd: 'mesh.set', args: '({ element: "hex20" })', who: 'you' });
+  fixError = () => this.setState({ meshSize: 25, stage: 'mesh', tab: 'checks' });
+  onScale = (e) => this.setState({ scale: parseInt(e.target.value, 10) });
+  commitScale = () => this.setState({ extraJournal: [{ cmd: 'view.contour', args: '({ scale: ' + this.state.scale + ' })', who: 'you' }] });
+  trueScale = () => this.setState({ scale: 0 });
+  togglePlay = () => this.setState({ play: !this.state.play });
+  toggleAi = () => this.setState({ ai: !this.state.ai });
+  toggleRules = () => this.setState({ rulesOpen: !this.state.rulesOpen });
+  openPalette = () => this.setState({ palette: true });
+  openExamples = () => this.setState({ examples: true });
+  openReport = () => this.setState({ report: true });
+  openExport = () => this.setState({ exportOpen: true });
+  closeOverlays = () => this.setState({ palette: false, examples: false, report: false, exportOpen: false, mentionOpen: false });
+  openMentions = () => this.setState({ mentionOpen: !this.state.mentionOpen });
+  setUnitsMm = () => this.setState({ units: 'mm' });
+  setUnitsM = () => this.setState({ units: 'm' });
+  toggleScript = () => this.setState({ tab: this.state.tab === 'script' ? 'journal' : 'script' });
+
+  selName() {
+    const s = this.state.sel;
+    const map = { 'body': 'corbel', 'face.base': 'base', 'face.bearing': 'bearing_top', 'face.corner': 'reentrant_corner',
+      'mesh': 'mesh', 'mat': 'C30/37', 'mat.rebar': 'B500NC', 'con.fix': 'Fix@base', 'con.sym': 'Symmetry@wall_back',
+      'load.bearing': 'bearing_pressure', 'load.horiz': 'horizontal_restraint', 'load.g': 'self_weight',
+      'step.uls': 'ULS_6.10b', 'step.sls': 'SLS_char', 'step.modal': 'Modal', 'res.vm': 'sigma_vM', 'res.uz': 'u_z', 'res.rf': 'reactions' };
+    return map[s] || s;
+  }
+  copySelection = () => this.setState({ copied: this.selName(), pasted: false, ai: true });
+  pasteSelection = () => {
+    const t = '@' + (this.state.copied || this.selName());
+    const tokens = this.state.tokens.indexOf(t) < 0 ? this.state.tokens.concat([t]) : this.state.tokens;
+    this.setState({ tokens, pasted: true, copied: null });
+  };
+  mention = (name) => () => {
+    const t = '@' + name;
+    const tokens = this.state.tokens.indexOf(t) < 0 ? this.state.tokens.concat([t]) : this.state.tokens;
+    this.setState({ tokens, ai: true, mentionOpen: false });
+  };
+  mentionSelected = () => this.mention(this.selName())();
+  removeToken = (t) => () => this.setState({ tokens: this.state.tokens.filter((x) => x !== t) });
+  nameByRule = () => this.setState({ sel: 'face.corner', extraJournal: [{ cmd: 'geo.nameFaceByRule', args: '("reentrant_corner", { where: "edge y == 400 mm and z == 1400 mm" })', who: 'you' }] });
+  askAiAboutError = () => { this.setState({ ai: true, copied: 'error E-3140' }); };
+  toggleSkill = (id) => () => {
+    const off = Object.assign({}, this.state.skillsOff); off[id] = !off[id];
+    this.setState({ skillsOff: off });
+  };
+
+  aiRun = () => {
+    (this._aiTimers || []).forEach(clearTimeout); this._aiTimers = [];
+    const stage = this.stageNow();
+    if (stage === 'build' && this.builtNow(stage) < 8) {
+      // the Assistant builds the model itself: one Command per beat, all landing in the Journal
+      this.setState({ ai: true, aiBuild: true, aiThinking: 'reading AGENTS.md · planning 13 Commands…' });
+      let t = 900;
+      for (let n = this.builtNow(stage); n < 8; n++) { this._aiTimers.push(setTimeout(this.advance, t)); t += 850; }
+      this._aiTimers.push(setTimeout(() => { this.setState({ aiThinking: 'solving ULS 6.10b…' }); this.runSolve(); }, t));
+      return;
+    }
+    this.setState({ aiStep: 0, aiThinking: 'reading @bearing_top and AGENTS.md…', ai: true });
+    [[700, { aiStep: 1, aiThinking: 'raising the bearing pressure…' }],
+     [1600, { aiStep: 2, aiThinking: 'solving ULS 6.10b…' }],
+     [2700, { aiStep: 3, aiThinking: 'skill: eurocode-1992 · clause 6.5…' }],
+     [3700, { aiStep: 4, aiThinking: 'writing the calc note…' }],
+     [4600, { aiStep: 5, aiThinking: '' }]
+    ].forEach((s) => this._aiTimers.push(setTimeout(() => this.setState(s[1]), s[0])));
+  };
+  undoTurn = () => this.setState({ aiStep: 0, stage: 'results', pressure: 2.4, extraJournal: [] });
+
+  renderVals() {
+    const st = this.state;
+    const stage = this.stageNow();
+    const isStart = stage === 'start', isSolving = stage === 'solving', isStale = stage === 'stale';
+    const isError = stage === 'error', isResults = stage === 'results' || isStale;
+    const b = this.builtNow(stage);
+    const scratch = !!st.scratch;
+    const hasGeom = b >= 1, hasNib = b >= 2, hasFaces = b >= 3, hasMat = b >= 4, hasMesh = b >= 5, hasFix = b >= 6, hasLoad = b >= 7, hasStep = b >= 8, full = b >= 9 && !scratch;
+    const isGeom = hasGeom && !hasMat;
+    const isBuild = stage === 'build' || scratch;
+    const mode = st.mode || (isResults ? 'results' : hasMesh ? 'mesh' : 'geometry');
+    const units = st.units || (this.props.unitSystem === 'm N Pa' ? 'm' : 'mm');
+    const colormap = st.colormap || this.props.colorMap || 'viridis';
+    const sel = st.sel;
+    const pick = (id) => () => this.setState({ sel: id });
+    const V = (kN) => kN;
+
+    let solveLabel = 'Solve', solveBg = OR, solveFg = '#0a0b0e', solveBorder = OR;
+    let reason = null, reasonCode = '', reasonFixLabel = '', reasonFix = this.runSolve;
+    if (isSolving) { solveLabel = 'Solving ' + Math.min(99, st.iter * 8 + 4) + ' %'; solveBg = '#3a2a20'; solveFg = ORH; solveBorder = '#56391c'; }
+    else if (isStale) solveLabel = 'Re-solve';
+    else if (!isError && b < 8) {
+      solveBg = '#191b21'; solveFg = '#555b64'; solveBorder = '#262a33';
+      const missing = [
+        ['W-1000', 'Nothing to analyse yet. Frame the model and add a body.', 'geo.addBox({ size: [300, 400, 1800], name: "column" })'],
+        ['W-1001', 'One body, "column". Add the nib and join them into one solid.', 'geo.union(["column", "nib"], { name: "corbel" })'],
+        ['W-1002', 'Name the faces you will hold and load — by rule, so remeshing cannot break them.', 'geo.nameFaceByRule("bearing_top", { where: "z == 1800 mm and y > 400 mm" })'],
+        ['W-1101', 'Body "corbel" has no material — nothing carries stiffness.', 'mat.assign("corbel", library("C30/37"))'],
+        ['W-1200', 'No mesh. Pick a size and element; counts and cost show before you solve.', 'mesh.set({ size: "50 mm", element: "hex20" })'],
+        ['W-1300', 'Nothing holds the body — 6 rigid body modes.', 'constraint.fix("base")'],
+        ['W-1400', 'No load. A solve would return zeros.', 'load.pressure("bearing_top", "2.4 MPa", { group: "Q" })'],
+        ['W-1500', 'No Step. Choose a combination per NS-EN 1990.', 'step.static({ name: "ULS 6.10b", combination: "1.35*G + 1.5*Q" })']
+      ][b];
+      reasonCode = missing[0]; reason = missing[1]; reasonFixLabel = missing[2]; reasonFix = this.advance;
+    } else if (isError) {
+      solveBg = '#191b21'; solveFg = '#555b64'; solveBorder = '#262a33';
+      reason = 'Step not started: 3 inverted elements at the re-entrant corner.';
+      reasonCode = 'E-3140'; reasonFixLabel = 'mesh.set({ size: "25 mm" })'; reasonFix = this.fixError;
+    } else if (isResults) { solveLabel = 'Solved · rev ' + (isBuild ? 13 : 41); solveBg = '#16211c'; solveFg = GR; solveBorder = '#1e3128'; }
+
+    const item = (id, name, summary, dot, dotFg) => ({
+      name, summary, dot, dotFg, select: pick(id), mention: this.mention(name),
+      bg: sel === id ? '#1b1f26' : 'transparent', mark: sel === id ? OR : 'transparent',
+      fg: sel === id ? HI : MID, atFg: sel === id ? '#4c6b78' : '#3a4048'
+    });
+    const kN = st.pressure * 105;
+    const nodes = hasMesh ? (st.meshSize === 25 ? '61 218 el · 268 431 nodes' : '8 214 el · 41 903 nodes') : '';
+    const revN = isBuild ? [0, 2, 4, 6, 7, 8, 9, 11, 12, 13][b] + st.extraJournal.length : 41 + st.extraJournal.length;
+    const rev = 'rev ' + revN;
+    const geomItems = [];
+    if (hasGeom) geomItems.push(item('body', hasNib ? 'corbel' : 'column', hasNib ? 'union of column + nib · 300 × 750 × 1800 mm' : 'box · 300 × 400 × 1800 mm', '◈', LOW));
+    if (hasFaces) geomItems.push(item('face.base', 'base', 'rule: z == 0 mm · 96 faces', '▣', CY), item('face.bearing', 'bearing_top', 'rule: z == 1800 mm and y > 400 mm', '▣', CY));
+    if (full) geomItems.push(item('face.corner', 'reentrant_corner', 'rule: edge y == 400 and z == 1400', '▣', CY));
+    const matItems = hasMat ? [item('mat', 'C30/37', 'E 33 000 MPa · ν 0.20 · ρ 2500 kg/m³', '●', '#8b7355')] : [];
+    if (full) matItems.push(item('mat.rebar', 'B500NC (smeared)', 'ρ_s 1.24 % in nib · E 200 000 MPa', '●', '#6f7b86'));
+    const conItems = hasFix ? [item('con.fix', 'Fix', 'all DOF on base', '△', CY)] : [];
+    if (full) conItems.push(item('con.sym', 'Symmetry', 'wall_back · normal y', '△', CY));
+    const loadItems = hasLoad ? [item('load.bearing', 'Bearing pressure', st.pressure.toFixed(1) + ' MPa on bearing_top → ' + kN.toFixed(0) + ' kN', '↓', ORH),
+      item('load.g', 'Self weight', 'gravity 9.81 m/s² · 6.45 kN', '↓', ORH)] : [];
+    if (full) loadItems.splice(1, 0, item('load.horiz', 'Horizontal restraint', '0.2 × V_Ed = ' + (kN * 0.2).toFixed(1) + ' kN', '→', ORH));
+    const stepItems = hasStep ? [item('step.uls', 'ULS 6.10b', 'static · 1.35·G + 1.5·Q · NS-EN 1990', '▶', isResults ? GR : LOW)] : [];
+    if (full) stepItems.push(item('step.sls', 'SLS characteristic', 'static · 1.0·G + 1.0·Q', '▶', LOW), item('step.modal', 'Modal', '6 modes · consistent mass', '▶', LOW));
+    const grp = (name, items, badge, badgeFg, emptyText, addWhat, addSel) => ({
+      name, caret: '▾', items, badge, badgeFg, empty: items.length === 0, emptyText, addWhat,
+      add: addSel ? () => this.setState({ sel: addSel, stage: isBuild || stage === 'start' ? 'build' : stage }) : this.advance
+    });
+    const tree = [
+      grp('Geometry', geomItems, hasGeom ? (hasNib ? '1 body' : '1 box') : 'empty', hasGeom ? FAINT : YL,
+        'Boxes, cylinders and extruded polygons, joined with booleans. Or import IFC / SAF / STEP.', 'body', 'new'),
+      grp('Materials', matItems, hasMat ? String(matItems.length) : hasGeom ? 'missing' : '—', hasMat ? FAINT : hasGeom ? YL : FAINT,
+        'Nothing carries stiffness yet. Every body needs a material before a Step can start.', 'material', null),
+      grp('Mesh', hasMesh ? [item('mesh', 'global ' + st.meshSize + ' mm', (st.element === 'hex20' ? 'quadratic hex' : st.element === 'hex8' ? 'linear hex' : 'linear tet') + ' · ' + nodes, '▦', LOW)] : [],
+        isError ? '3 errors' : !hasMesh ? '—' : st.element === 'tet4' ? '1 warning' : 'ok', isError ? RD : !hasMesh ? FAINT : st.element === 'tet4' ? YL : GR,
+        'One global size and an element type. Counts and cost are known before you solve.', 'mesh', null),
+      grp('Constraints', conItems, hasFix ? String(conItems.length) : '—', FAINT,
+        'Fix, roller, symmetry or prescribed displacement on a named face. Without one the body floats.', 'constraint', null),
+      grp('Loads', loadItems, hasLoad ? String(loadItems.length) : '—', FAINT,
+        'Pressure, traction, total force, gravity or temperature on a named face — each drawn on the model with its total.', 'load', null),
+      grp('Steps', stepItems, hasStep ? String(stepItems.length) : '—', FAINT,
+        'Static, modal, heat or explicit; chain them. A Step carries its NS-EN 1990 combination.', 'step', null),
+      grp('Results', isResults ? [item('res.vm', 'σ von Mises', 'max 18.7 MPa at reentrant_corner', '◧', isStale ? FAINT : GR),
+          item('res.uz', 'u_z', 'min −1.42 mm at bearing_top', '◧', isStale ? FAINT : GR),
+          item('res.rf', 'Reactions', 'Σ = −386.7 kN · balance 0.0000 %', '◧', isStale ? FAINT : GR)] : [],
+        isStale ? 'stale' : isResults ? rev : '—', isStale ? YL : isResults ? GR : FAINT,
+        'A Result appears when a Step finishes, tied to the revision it came from.', hasStep ? 'result — Solve' : 'step first', null),
+      { name: 'Plugins', caret: '▸', badge: '2', badgeFg: FAINT, empty: false, emptyText: '', addWhat: '', add: () => {}, items: [
+        item('plug.ec2', 'Eurocode checks', 'NS-EN 1992-1-1 · NA Norway', '⚙', LOW),
+        item('plug.conv', 'Convergence study', '3 refinements · Richardson', '⚙', LOW)] }
+    ];
+
+    const displayModes = [['geometry', 'Geometry'], ['mesh', 'Mesh'], ['results', 'Results']].map((p) => ({
+      label: p[1], pick: () => this.setState({ mode: p[0] }),
+      bg: mode === p[0] ? '#22262e' : 'transparent', fg: mode === p[0] ? HI : LOW }));
+    const viewToggles = [
+      ['glyphs', st.glyphs, () => this.setState({ glyphs: !st.glyphs }), 'Constraint and load glyphs'],
+      ['clip', st.clip, () => this.setState({ clip: !st.clip }), 'Section cut through the nib'],
+      ['edges', mode !== 'results', () => this.setState({ mode: mode === 'results' ? 'mesh' : 'results' }), 'Element edges'],
+      ['rebar', false, () => {}, 'Smeared reinforcement overlay']
+    ].map((v) => ({ label: v[0], title: v[3], pick: v[2], fg: v[1] ? CY : '#5c626b' }));
+    const grads = { viridis: VIRIDIS, turbo: TURBO, rainbow: RAINBOW };
+    const colormaps = ['viridis', 'turbo', 'rainbow'].map((n) => ({
+      name: n, grad: grads[n], pick: () => this.setState({ colormap: n }), ring: colormap === n ? HI : '#262a33' }));
+
+    const enumField = (label, dim, opts, cur, onPick) => ({ label, dim, isEnum: true,
+      options: opts.map((o) => ({ label: o[1], pick: () => onPick(o[0]),
+        bg: cur === o[0] ? '#22262e' : 'transparent', fg: cur === o[0] ? HI : LOW })) });
+    const flagField = (label, dim, opts) => ({ label, dim, isEnum: true,
+      options: opts.map((o) => ({ label: o[0], pick: () => {}, bg: o[1] ? '#22262e' : 'transparent', fg: o[1] ? HI : LOW })) });
+
+    let propType = 'load.pressure', propName = 'Bearing pressure', propHint = '', propCommand = '', fields = [];
+    const applyProp = isBuild && b < 8 ? this.advance : this.applyProp;
+    let applyLabel = 'Apply';
+    if (sel === 'new' || !hasGeom) {
+      propType = 'geo.addBox'; propName = 'New body'; applyLabel = 'Add body';
+      propHint = 'Frame the model and place the first box. Any length unit works in the size fields; the display system is set here.';
+      fields = [
+        { label: 'Model name', dim: 'text', isQty: true, value: 'Corbel_axis-D_C30-37', border: '#262a33', echo: 'saved in the share link and the file name' },
+        enumField('Display units', 'model.setUnits', [['mm', 'mm · N · MPa'], ['m', 'm · N · Pa']], units, (u) => this.setState({ units: u })),
+        flagField('Idealisation', 'enum', [['3D solid', true], ['Plane stress', false], ['Axisymmetric', false]]),
+        { label: 'Size', dim: 'length ³', isQty: true, value: '300 × 400 × 1800 mm', border: '#2c4a57', echo: 'V = 0.216 m³ · 5.4 kN self weight', echoFg: CY },
+        { label: 'Position', dim: 'length ³', isQty: true, value: '0, 0, 0 mm', border: '#262a33', echo: 'corner at the origin, z up' },
+        { label: 'Name', dim: 'text', isQty: true, value: 'column', border: '#262a33', echo: 'names are how loads and the Assistant refer to it' }
+      ];
+      propCommand = 'model.setUnits("' + units + '", "N", "' + (units === 'mm' ? 'MPa' : 'Pa') + '")\ngeo.addBox({ size: [300, 400, 1800], name: "column" })';
+    } else if (sel === 'body' && !hasNib) {
+      propType = 'geo.addBox'; propName = 'column'; applyLabel = 'Add nib + union';
+      propHint = 'Second box, then a boolean union so the corbel is one body with one material.';
+      fields = [
+        { label: 'Column', dim: 'size', isQty: true, value: '300 × 400 × 1800 mm', border: '#262a33', echo: 'V = 0.216 m³' },
+        { label: 'Nib', dim: 'size', isQty: true, value: '300 × 350 × 400 mm', border: '#2c4a57', echo: 'at 0, 400, 1400 mm · projection 350 mm', echoFg: CY },
+        enumField('Boolean', 'enum', [['union', 'Union'], ['subtract', 'Subtract'], ['keep', 'Keep separate']], 'union', () => {}),
+        { label: 'Result name', dim: 'text', isQty: true, value: 'corbel', border: '#262a33', echo: 'replaces "column" and "nib" in the tree' }
+      ];
+      propCommand = 'geo.addBox({ size: [300, 350, 400], at: [0, 400, 1400], name: "nib" })\ngeo.union(["column", "nib"], { name: "corbel" })';
+    } else if (sel === 'body' && !hasFaces) {
+      propType = 'geo.nameFaceByRule'; propName = 'corbel'; applyLabel = 'Name faces';
+      propHint = 'Name the faces you will hold and load. Click one in the viewer and the rule is proposed; the rule is what gets saved.';
+      fields = [
+        { label: 'bearing_top', dim: 'rule', isQty: true, value: 'z == 1800 mm and y > 400 mm', border: '#2c4a57', echo: 'resolves to 24 faces · 105 000 mm²', echoFg: CY },
+        { label: 'base', dim: 'rule', isQty: true, value: 'z == 0 mm', border: '#2c4a57', echo: 'resolves to 96 faces', echoFg: CY },
+        { label: 'Pick in viewer', dim: 'selection', isPicker: true, chips: [{ name: 'top of nib', count: 'clicked' }], ruleNote: 'The click proposed "z == 1800 mm and y > 400 mm". A bare face id is never stored.' }
+      ];
+      propCommand = 'geo.nameFaceByRule("bearing_top", { where: "z == 1800 mm and y > 400 mm" })\ngeo.nameFaceByRule("base", { where: "z == 0 mm" })';
+    } else if (isBuild && b === 3 && sel !== 'body') {
+      propType = 'mat.assign'; propName = 'Material for corbel'; applyLabel = 'Assign C30/37';
+      propHint = 'Pick from the library or type E, ν, ρ, α. Norwegian national annex factors come with the library entry.';
+      fields = [
+        enumField('Library', 'enum', [['c30', 'C30/37'], ['c35', 'C35/45'], ['s355', 'S355'], ['custom', 'Custom']], 'c30', () => {}),
+        { label: 'E modulus', dim: 'pressure', isQty: true, value: '33 000 MPa', border: '#262a33', echo: 'E_cm per NS-EN 1992-1-1 tab. 3.1' },
+        { label: 'f_ck / γ_c', dim: 'NA Norway', isQty: true, value: '30 MPa / 1.50', border: '#262a33', echo: 'f_cd = 0.85 · 30 / 1.5 = 17.0 MPa', echoFg: CY },
+        { label: 'Assign to', dim: 'body set', isPicker: true, chips: [{ name: 'corbel', count: '1 body' }], ruleNote: 'The banner clears as soon as every body has a material.' }
+      ];
+      propCommand = 'mat.assign("corbel", library("C30/37"), { annex: "NO" })';
+    } else if (isBuild && b === 4 && sel !== 'body') {
+      propType = 'mesh.set'; propName = 'Mesh'; applyLabel = 'Mesh';
+      propHint = 'Counts and cost are known before you solve. The warning below appears the moment you pick linear tets.';
+      fields = [
+        { label: 'Global size', dim: 'length', isQty: true, value: st.meshSize + ' mm', border: '#2c4a57', echo: st.meshSize === 25 ? '61 218 elements · 268 431 nodes' : '8 214 elements · 41 903 nodes · 125 709 DOF', echoFg: CY,
+          inc: () => this.setState({ meshSize: st.meshSize + 5 }), dec: () => this.setState({ meshSize: Math.max(10, st.meshSize - 5) }) },
+        enumField('Element', 'topology · order', [['hex20', 'Hex 20'], ['hex8', 'Hex 8'], ['tet4', 'Tet 4']], st.element, (id) => this.setState({ element: id })),
+        { label: 'Quality', dim: '', warn: st.element === 'tet4' ? 'Linear tetrahedra are too stiff in bending — about 30 % error in the nib.' : null, warnFixLabel: st.element === 'tet4' ? 'Hex 20' : null, warnFix: () => this.setState({ element: 'hex20' }) },
+        { label: 'Predicted cost', dim: 'local GPU', isQty: true, value: st.meshSize === 25 ? '19 s · 3.1 GB' : '4.1 s · 780 MB', border: '#262a33', echo: 'PCG + AMG · fits in GPU memory', echoFg: GR }
+      ];
+      propCommand = 'mesh.set({ size: "' + st.meshSize + ' mm", element: "' + st.element + '" })';
+    } else if (isBuild && b === 5 && sel !== 'body') {
+      propType = 'constraint.fix'; propName = 'New constraint'; applyLabel = 'Add constraint';
+      propHint = 'Fix holds all three translations on the base. Drawn on the model as pins.';
+      fields = [
+        enumField('Type', 'enum', [['fix', 'Fix'], ['roller', 'Roller'], ['sym', 'Symmetry'], ['pres', 'Prescribed']], 'fix', () => {}),
+        { label: 'On', dim: 'face set', isPicker: true, chips: [{ name: 'base', count: '96 faces' }], ruleNote: 'Rule: z == 0 mm.' },
+        flagField('Held DOF', 'enum', [['u_x', true], ['u_y', true], ['u_z', true]])
+      ];
+      propCommand = 'constraint.fix("base")';
+    } else if (isBuild && b === 6 && sel !== 'body') {
+      propType = 'load.pressure'; propName = 'New load'; applyLabel = 'Add load';
+      propHint = 'Bearing from the precast beam. The total force is echoed so you can check it against the load take-down.';
+      fields = [
+        enumField('Kind', 'enum', [['pressure', 'Pressure'], ['force', 'Total force'], ['gravity', 'Gravity'], ['temp', 'Temperature']], 'pressure', () => {}),
+        { label: 'Magnitude', dim: 'pressure', isQty: true, value: st.pressure.toFixed(1) + ' MPa', border: '#2c4a57', echo: '= ' + kN.toFixed(1) + ' kN over 105 000 mm²', echoFg: CY,
+          inc: () => this.setState({ pressure: Math.round((st.pressure + 0.2) * 10) / 10 }), dec: () => this.setState({ pressure: Math.max(0.2, Math.round((st.pressure - 0.2) * 10) / 10) }) },
+        { label: 'Applied to', dim: 'face set', isPicker: true, chips: [{ name: 'bearing_top', count: '24 faces' }], ruleNote: 'Self weight (gravity, 6.45 kN) is added in the same Command batch as group G.' },
+        flagField('Load group', 'NS-EN 1990', [['Permanent G', false], ['Variable Q', true], ['Accidental A', false]])
+      ];
+      propCommand = 'load.pressure("bearing_top", "' + st.pressure.toFixed(1) + ' MPa", { group: "Q" })\nload.gravity([0, 0, "-9.81 m/s^2"])';
+    } else if (isBuild && b === 7 && sel !== 'body') {
+      propType = 'step.static'; propName = 'New step'; applyLabel = 'Add step';
+      propHint = 'The combination is built from the load groups per NS-EN 1990 with the Norwegian annex.';
+      fields = [
+        enumField('Analysis', 'enum', [['static', 'Static'], ['modal', 'Modal'], ['heat', 'Heat']], 'static', () => {}),
+        enumField('Combination', 'NS-EN 1990', [['610b', 'ULS 6.10b'], ['610a', 'ULS 6.10a'], ['sls', 'SLS char.']], '610b', () => {}),
+        { label: 'Factors', dim: 'NA Norway', isQty: true, value: '1.35·G + 1.50·Q', border: '#262a33', echo: 'total ' + (kN * 1.5 + 8.7).toFixed(1) + ' kN' },
+        enumField('Geometry', 'enum', [['lin', '1st order'], ['nl', '2nd order']], 'lin', () => {})
+      ];
+      propCommand = 'step.static({ name: "ULS 6.10b", combination: "1.35*G + 1.5*Q" })';
+    } else if (sel.indexOf('load') === 0) {
+      propHint = 'Precast beam bearing on the nib. Type any pressure unit — it is normalised to the display system.';
+      fields = [
+        { label: 'Magnitude', dim: 'pressure · M L⁻¹ T⁻²', isQty: true, value: st.pressure.toFixed(1) + ' MPa', border: '#262a33',
+          echo: '= ' + (st.pressure * 1e6).toExponential(2) + ' Pa · ' + kN.toFixed(1) + ' kN over 105 000 mm²',
+          inc: () => this.bumpPressure(0.2), dec: () => this.bumpPressure(-0.2) },
+        { label: 'Applied to', dim: 'face set', isPicker: true, chips: [{ name: 'bearing_top', count: '24 faces' }],
+          ruleNote: 'Stored as a rule (z == 1800 mm and y > 400 mm), so it survives remeshing.' },
+        enumField('Direction', 'enum', [['normal', 'Face normal'], ['vector', 'Vector'], ['follow', 'Follower']], 'normal', () => {}),
+        flagField('Load group', 'NS-EN 1990', [['Permanent G', false], ['Variable Q', true], ['Accidental A', false]]),
+        { label: 'Sanity', dim: '', warn: st.pressure > 3.2 ? 'At ' + st.pressure.toFixed(1) + ' MPa the local peak passes f_cd = 17.0 MPa. Concrete alone will not carry it — check strut-and-tie per §6.5.' : null }
+      ];
+      propCommand = 'load.pressure("bearing_top", "' + st.pressure.toFixed(1) + ' MPa", { group: "Q" })';
+    } else if (sel === 'mesh') {
+      propType = 'mesh.set'; propName = 'Mesh'; propHint = 'One global size. Counts and cost are known before you solve.';
+      fields = [
+        { label: 'Global size', dim: 'length', isQty: true, value: st.meshSize + ' mm', border: '#262a33',
+          echo: '8 214 elements · 41 903 nodes · 125 709 DOF',
+          inc: () => this.recordEdit({ meshSize: st.meshSize + 5 }, { cmd: 'mesh.set', args: '({ size: "' + (st.meshSize + 5) + ' mm" })', who: 'you' }),
+          dec: () => this.recordEdit({ meshSize: Math.max(10, st.meshSize - 5) }, { cmd: 'mesh.set', args: '({ size: "' + Math.max(10, st.meshSize - 5) + ' mm" })', who: 'you' }) },
+        enumField('Element', 'topology · order', [['hex20', 'Hex 20'], ['hex8', 'Hex 8'], ['tet4', 'Tet 4']], st.element, (id) => this.recordEdit({ element: id }, { cmd: 'mesh.set', args: '({ element: "' + id + '" })', who: 'you' })),
+        { label: 'Quality', dim: '', warn: st.element === 'tet4' ? 'Linear tetrahedra are too stiff in bending — expect roughly 30 % error in the nib. Quadratic hexes cost 1.4× here.' : null,
+          warnFixLabel: st.element === 'tet4' ? 'Switch to Hex 20' : null, warnFix: this.fixElement },
+        { label: 'Predicted cost', dim: 'local GPU', isQty: true, value: '4.1 s · 780 MB', border: '#262a33', echo: 'PCG + AMG · fits in GPU memory', echoFg: GR }
+      ];
+      propCommand = 'mesh.set({ size: "' + st.meshSize + ' mm", element: "' + st.element + '" })';
+    } else if (sel.indexOf('mat') === 0) {
+      propType = 'mat.assign'; propName = 'C30/37 concrete'; propHint = 'From the library, with Norwegian national annex factors.';
+      fields = [
+        { label: 'E modulus', dim: 'pressure', isQty: true, value: '33 000 MPa', border: '#262a33', echo: 'E_cm per NS-EN 1992-1-1 tab. 3.1' },
+        { label: 'Poisson ν', dim: 'dimensionless', isQty: true, value: '0.20', border: '#262a33', echo: 'uncracked concrete' },
+        { label: 'Density ρ', dim: 'mass · volume⁻¹', isQty: true, value: '2500 kg/m³', border: '#262a33', echo: 'reinforced: 25.0 kN/m³' },
+        { label: 'f_ck / γ_c', dim: 'NA Norway', isQty: true, value: '30 MPa / 1.50', border: '#262a33', echo: 'f_cd = α_cc · f_ck / γ_c = 17.0 MPa', echoFg: CY },
+        { label: 'Assigned to', dim: 'body set', isPicker: true, chips: [{ name: 'corbel', count: '1 body' }], ruleNote: 'Every body must carry a material before a Step can start.' }
+      ];
+      propCommand = 'mat.assign("corbel", library("C30/37"), { annex: "NO" })';
+    } else if (sel.indexOf('con') === 0) {
+      propType = 'constraint.fix'; propName = 'Fix'; propHint = 'Plain language first: Fix holds all three translations. (Abaqus calls it Encastre.)';
+      fields = [
+        enumField('Type', 'enum', [['fix', 'Fix'], ['roller', 'Roller'], ['sym', 'Symmetry'], ['pres', 'Prescribed']], 'fix', () => {}),
+        { label: 'On', dim: 'face set', isPicker: true, chips: [{ name: 'base', count: '96 faces' }], ruleNote: 'Rule: z == 0 mm.' },
+        flagField('Held DOF', 'enum', [['u_x', true], ['u_y', true], ['u_z', true]])
+      ];
+      propCommand = 'constraint.fix("base")';
+    } else if (sel.indexOf('step') === 0) {
+      propType = 'step.static'; propName = 'ULS 6.10b'; propHint = 'Load combination per NS-EN 1990 with the Norwegian national annex.';
+      fields = [
+        { label: 'Combination', dim: 'factors', isQty: true, value: '1.35·G + 1.50·Q', border: '#262a33', echo: 'γ_G = 1.35 · γ_Q = 1.50 · ψ₀ = 0.7' },
+        enumField('Analysis', 'enum', [['static', 'Static'], ['modal', 'Modal'], ['heat', 'Heat']], 'static', () => {}),
+        enumField('Geometry', 'enum', [['lin', '1st order'], ['nl', '2nd order']], 'lin', () => {}),
+        { label: 'Total applied', dim: 'force', isQty: true, value: (kN * 1.5 + 8.7).toFixed(1) + ' kN', border: '#262a33',
+          echo: '1.35 × 6.45 kN self weight + 1.50 × ' + kN.toFixed(0) + ' kN bearing' }
+      ];
+      propCommand = 'step.static({ name: "ULS 6.10b", combination: "1.35*G + 1.5*Q" })';
+    } else if (sel.indexOf('face') === 0) {
+      propType = 'geo.nameFaceByRule'; propName = 'bearing_top'; propHint = 'A named face defined by a rule, not by picked ids — remeshing cannot break it.';
+      fields = [
+        { label: 'Rule', dim: 'predicate', isQty: true, value: 'z == 1800 mm and y > 400 mm', border: '#2c4a57', echo: 'resolves to 24 faces · 350 × 300 mm', echoFg: CY },
+        { label: 'Members', dim: 'face set', isPicker: true, chips: [{ name: '24 faces', count: '105 000 mm²' }], ruleNote: 'Re-evaluated after every geometry or mesh Command.' }
+      ];
+      propCommand = 'geo.nameFaceByRule("bearing_top", { where: "z == 1800 mm and y > 400 mm" })';
+    } else if (sel.indexOf('res') === 0) {
+      propType = 'result.contour'; propName = 'σ von Mises'; propHint = 'View state: contoured on the deformed shape. Command-driven, not saved in the Model.';
+      fields = [
+        enumField('Field', 'enum', [['vm', 'σ_vM'], ['s1', 'σ₁'], ['uz', 'u_z']], 'vm', () => {}),
+        { label: 'Clamp range', dim: 'pressure', isQty: true, value: '0.2 … 18.7 MPa', border: '#262a33', echo: 'auto from the Result · 12 bands' },
+        flagField('Colour map', 'perceptual', [['viridis', colormap === 'viridis'], ['turbo', colormap === 'turbo'], ['rainbow', colormap === 'rainbow']])
+      ];
+      propCommand = 'result.contour({ field: "vonMises", on: "deformed", scale: ' + st.scale + ' })';
+    } else {
+      propType = 'geo.union'; propName = 'corbel'; propHint = 'Boxes, cylinders and extruded polygons with booleans. No sketcher in v1.';
+      fields = [
+        { label: 'Column', dim: 'size', isQty: true, value: '300 × 400 × 1800 mm', border: '#262a33', echo: 'V = 0.216 m³' },
+        { label: 'Nib', dim: 'size', isQty: true, value: '300 × 350 × 400 mm', border: '#262a33', echo: 'projection 350 mm · a_c = 175 mm' },
+        flagField('Idealisation', 'enum', [['3D solid', true], ['Plane stress', false], ['Shell', false]]),
+        { label: 'Sanity', dim: '', error: isGeom ? 'This body has no material. Every body needs one before a Step can start.' : null }
+      ];
+      propCommand = 'geo.union(["column", "nib"], { name: "corbel" })';
+    }
+    fields = fields.map((f) => Object.assign({ isQty: false, isEnum: false, isPicker: false, error: null, warn: null,
+      warnFixLabel: null, warnFix: () => {}, options: [], chips: [], dim: '', echo: '', echoFg: FAINT, ruleNote: '',
+      border: '#262a33', inc: () => {}, dec: () => {} }, f));
+
+    const tabs = [['journal', 'Journal', '41'], ['script', 'Script', 'ts'], ['results', 'Results', isResults ? '3' : '—'],
+      ['checks', 'Checks', isError ? '1 err' : st.element === 'tet4' ? '1 warn' : 'ok'], ['console', 'Console', '']]
+      .map((t) => ({ label: t[1], count: t[2], pick: () => this.setState({ tab: t[0] }),
+        fg: st.tab === t[0] ? HI : LOW, mark: st.tab === t[0] ? OR : 'transparent', countFg: st.tab === t[0] ? FAINT : DIM }));
+
+    const who = st.aiBuild ? 'ai' : 'you';
+    const jfull = [
+      ['model.setUnits', '("' + units + '", "N", "' + (units === 'mm' ? 'MPa' : 'Pa') + '")', who, '14:02:11'],
+      ['geo.addBox', '({ size: [300, 400, 1800], name: "column" })', who, '14:02:19'],
+      ['geo.addBox', '({ size: [300, 350, 400], at: [0, 400, 1400], name: "nib" })', who, '14:02:31'],
+      ['geo.union', '(["column", "nib"], { name: "corbel" })', who, '14:02:33'],
+      ['geo.nameFaceByRule', '("bearing_top", { where: "z == 1800 mm and y > 400 mm" })', who, '14:03:02'],
+      ['geo.nameFaceByRule', '("base", { where: "z == 0 mm" })', who, '14:03:04'],
+      ['mat.assign', '("corbel", library("C30/37"), { annex: "NO" })', isBuild ? who : 'ai', '14:03:20'],
+      ['mesh.set', '({ size: "' + st.meshSize + ' mm", element: "' + st.element + '" })', isBuild ? who : 'ai', '14:04:05'],
+      ['constraint.fix', '("base")', who, '14:04:44'],
+      ['load.pressure', '("bearing_top", "' + st.pressure.toFixed(1) + ' MPa", { group: "Q" })', who, '14:05:10'],
+      ['load.gravity', '([0, 0, "-9.81 m/s^2"])', who, '14:05:12'],
+      ['step.static', '({ name: "ULS 6.10b", combination: "1.35*G + 1.5*Q" })', who, '14:05:58'],
+      ['solve.run', '("ULS 6.10b")', who, '14:06:04']
+    ];
+    const jcount = [0, 2, 4, 6, 7, 8, 9, 11, 12, 13][b];
+    const jlines = jfull.slice(0, jcount);
+    const offset = isBuild ? 1 : 29;
+    const journal = jlines.map((j, i) => ({ n: String(i + offset), cmd: j[0], args: j[1], who: j[2], t: isBuild ? 'now' : j[3],
+      boundary: i === jlines.length - 1 && isResults, boundaryLabel: st.extraJournal.length ? 'result produced here · undo boundary' : 'undo boundary',
+      bg: 'transparent', mark: 'transparent', cmdFg: j[0].indexOf('solve') === 0 ? GR : CY, argFg: MID }))
+      .concat(st.extraJournal.map((e, i) => ({ n: String(jlines.length + offset + i), cmd: e.cmd, args: e.args, who: e.who || 'you', t: 'now',
+        boundary: false, boundaryLabel: '', bg: '#1c1712', mark: YL, cmdFg: ORH, argFg: '#e0bd85' })));
+
+    const scriptSrc = [
+      ['import { geo, mat, mesh, constraint, load, step, solve, check, xport } from "femlab";', FAINT],
+      ['', FAINT],
+      ['model.setUnits("' + units + '", "N", "' + (units === 'mm' ? 'MPa' : 'Pa') + '");', MID],
+      ['geo.addBox({ size: [300, 400, 1800], name: "column" });', MID],
+      ['geo.addBox({ size: [300, 350, 400], at: [0, 400, 1400], name: "nib" });', MID],
+      ['geo.union(["column", "nib"], { name: "corbel" });', MID],
+      ['geo.nameFaceByRule("bearing_top", { where: "z == 1800 mm and y > 400 mm" });', MID],
+      ['geo.nameFaceByRule("base", { where: "z == 0 mm" });', MID],
+      ['', FAINT],
+      ['mat.assign("corbel", library("C30/37"), { annex: "NO" });', MID],
+      ['mesh.set({ size: "' + st.meshSize + ' mm", element: "' + st.element + '" });', MID],
+      ['constraint.fix("base");', MID],
+      ['load.pressure("bearing_top", "' + st.pressure.toFixed(1) + ' MPa", { group: "Q" });', st.extraJournal.length ? ORH : MID],
+      ['load.gravity([0, 0, "-9.81 m/s^2"]);', MID],
+      ['', FAINT],
+      ['const uls = step.static({ name: "ULS 6.10b", combination: "1.35*G + 1.5*Q" });', MID],
+      ['const r = await solve.run(uls);', MID],
+      ['', FAINT],
+      ['// the same checks the Assistant runs', FAINT],
+      ['assert.reactionsBalance(r, { tol: "0.1 %" });', GR],
+      ['check.eurocode(r, "NS-EN 1992-1-1", { clause: "6.5" });', GR],
+      ['await xport.report("calc-note.pdf", { skill: "calc-note-no" });', CY]
+    ];
+    const scount = [3, 4, 6, 8, 10, 11, 12, 14, 16, 22][b];
+    const script = scriptSrc.slice(0, scount).map((s, i) => ({ n: String(i + 1), txt: s[0], fg: s[1] }));
+
+    const extremes = [
+      ['σ von Mises', '0.21', '18.70', 'reentrant_corner (0, 400, 1400)', ORH],
+      ['σ₁ principal', '−24.10', '4.85', 'under the bearing plate', MID],
+      ['u_z', '−1.42', '0.00', 'bearing_top (0, 750, 1800)', MID],
+      ['ε principal', '−7.3e−4', '1.5e−4', 'reentrant_corner', MID]
+    ].map((r) => ({ field: r[0], min: r[1], max: r[2], at: r[3], fg: isStale ? LOW : MID, maxFg: isStale ? LOW : r[4] }));
+
+    const ecChecks = [
+      ['Bearing pressure under plate', '0.87', '§6.7 (2)', GR, '✓'],
+      ['Strut compression in nib', '1.10', '§6.5.2 (1)', RD, '✕'],
+      ['Tie reinforcement A_s,main', '0.94', '§6.5.3 · NA', YL, '!'],
+      ['Deflection SLS a_c/300', '0.31', '§7.4.1', GR, '✓']
+    ].map((c) => ({ name: c[0], util: c[1], ref: c[2], fg: c[3], icon: c[4] }));
+
+    const reactions = [
+      ['Fix@base', '−50.4', '0.0', '−386.7', MID],
+      ['Symmetry@wall_back', '0.0', '+12.6', '0.0', MID],
+      ['Σ reactions', '−50.4', '+12.6', '−386.7', HI],
+      ['Σ applied loads', '+50.4', '−12.6', '+386.7', LOW]
+    ].map((r) => ({ name: r[0], fx: r[1], fy: r[2], fz: r[3], fg: isStale ? LOW : r[4] }));
+
+    const convBars = ['34%', '78%', '96%', '100%'].map((h, i) => ({ h, bg: i === 3 ? GR : '#2f3a44' }));
+
+    const checkGroups = [
+      { name: 'Well-posedness', rows: [
+        { icon: hasGeom ? '✓' : '✕', fg: hasGeom ? GR : RD, text: hasGeom ? (hasNib ? 'One body, "corbel", closed solid' : 'One body, "column"') : 'No body', val: hasGeom ? 'ok' : '0 bodies', valFg: FAINT, action: hasGeom ? null : 'geo.addBox(…)', run: this.advance },
+        { icon: hasMat ? '✓' : '✕', fg: hasMat ? GR : RD, text: hasMat ? 'Every body carries a material' : 'Body has no material', val: hasMat ? 'ok' : '1 body', valFg: FAINT, action: hasMat ? null : 'mat.assign(…)', run: this.advance },
+        { icon: hasFix ? '✓' : '✕', fg: hasFix ? GR : RD, text: hasFix ? 'Constraints remove all 6 rigid body modes' : 'Nothing holds the body — 6 rigid body modes', val: hasFix ? 'ok' : '6 modes', valFg: FAINT, action: hasFix ? null : 'constraint.fix(…)', run: this.advance },
+        { icon: hasLoad ? '✓' : '!', fg: hasLoad ? GR : YL, text: hasLoad ? 'Loads applied · total ' + (kN * 1.5 + 8.7).toFixed(1) + ' kN in ULS' : 'No load — a solve would return zeros', val: hasLoad ? 'ok' : '0 kN', valFg: FAINT, action: hasLoad ? null : 'load.pressure(…)', run: this.advance },
+        { icon: hasFaces ? '✓' : '!', fg: hasFaces ? GR : YL, text: hasFaces ? 'No empty face sets · ' + (full ? 4 : 2) + ' named faces resolve' : 'No named faces yet', val: hasFaces ? (full ? '4/4' : '2/2') : '0', valFg: FAINT }
+      ]},
+      { name: 'Mesh quality', rows: !hasMesh ? [{ icon: '·', fg: FAINT, text: 'No mesh yet — quality is measured the moment one exists', val: '—', valFg: FAINT }] : [
+        { icon: isError ? '✕' : '✓', fg: isError ? RD : GR, text: isError ? '3 elements have a negative Jacobian at the re-entrant corner' : 'Minimum scaled Jacobian', val: isError ? '3 el' : '0.62', valFg: isError ? RD : FAINT, action: isError ? 'mesh.set({ size: "25 mm" })' : null, run: this.fixError },
+        { icon: st.element === 'tet4' ? '!' : '✓', fg: st.element === 'tet4' ? YL : GR, text: st.element === 'tet4' ? 'Linear tets are too stiff in bending — about 30 % error expected' : 'Quadratic hexes: bending is captured', val: st.element, valFg: FAINT, action: st.element === 'tet4' ? 'switch to hex20' : null, run: this.fixElement },
+        { icon: '✓', fg: GR, text: 'Worst aspect ratio', val: '3.1', valFg: FAINT }
+      ]},
+      { name: 'Cost estimate · local GPU', rows: !hasMesh ? [{ icon: '·', fg: FAINT, text: 'Known as soon as the mesh exists', val: '—', valFg: FAINT }] : [
+        { icon: '·', fg: FAINT, text: (st.meshSize === 25 ? '805 293 DOF · 61 218 elements' : '125 709 DOF · 8 214 elements'), val: st.meshSize === 25 ? '3.1 GB' : '780 MB', valFg: MID },
+        { icon: '·', fg: FAINT, text: 'Predicted solve time (PCG + AMG)', val: st.meshSize === 25 ? '19 s' : '4.1 s', valFg: MID }
+      ]},
+      { name: 'Assumption log · every default the solver used', rows: [
+        { icon: '·', fg: FAINT, text: 'Small strain, linear elastic. Concrete uncracked (E_cm, ν = 0.2)', val: 'default', valFg: FAINT },
+        { icon: '·', fg: FAINT, text: 'Reinforcement smeared, not modelled as bars — peaks at the corner are indicative', val: 'default', valFg: FAINT },
+        { icon: '·', fg: FAINT, text: 'γ_G = 1.35, γ_Q = 1.50 from NS-EN 1990 NA Norway', val: 'AGENTS.md', valFg: CY }
+      ]}
+    ];
+    checkGroups.forEach((g) => g.rows = g.rows.map((r) => Object.assign({ action: null, run: () => {} }, r)));
+
+    const logBase = [
+      ['14:06:04', 'command', GR, 'solve.run("ULS 6.10b")', MID],
+      ['14:06:04', 'engine', CY, 'local GPU · WebGPU adapter "Apple M3 Pro" · 8 worker threads', LOW],
+      ['14:06:04', 'assemble', LOW, '8 214 elements → 125 709 DOF in 0.31 s', LOW],
+      ['14:06:05', 'solve', LOW, 'PCG + AMG · iter ' + Math.max(1, st.iter) + ' · ‖r‖ ' + (5.4e-3 / Math.max(1, st.iter)).toExponential(2), LOW],
+      ['14:06:08', 'warn', YL, 'W-2210 peak σ_vM 18.7 MPa exceeds f_cd 17.0 MPa at reentrant_corner — singularity or real overstress, check with a coarser probe path', '#e0bd85'],
+      ['14:06:08', 'check', GR, 'reaction balance 0.0000 % · Σ F_z = −386.7 kN', LOW],
+      ['14:06:08', 'result', GR, 'Result r41 stored · tied to rev 41', LOW]
+    ];
+    const logErr = [['14:11:02', 'error', RD, 'E-3140 mesh contains 3 inverted elements (20 118, 20 119, 20 144) — Step not started', '#f0908f']];
+    const logBuild = jlines.map((j) => ['now', 'command', CY, j[0] + j[1], MID]).concat(
+      b === 0 ? [['now', 'ready', GR, 'WebGPU adapter ready · 8 worker threads · meshers will load on first mesh.set', LOW]] : [],
+      hasMesh && !isSolving ? [['now', 'mesher', LOW, 'hex mesher loaded (1.2 MB) · ' + nodes, LOW]] : []);
+    const logLines = (isError ? logBase.slice(0, 3).concat(logErr) : isBuild && !isSolving ? logBuild : isSolving && isBuild ? logBuild.concat(logBase.slice(0, 4)) : logBase)
+      .map((l) => ({ t: l[0], lvl: l[1], fg: l[2], txt: l[3], txtFg: l[4] }));
+
+    // ---- AI panel
+    const agentRules = [
+      'Norwegian national annex (NA) partial factors on every code check — never the recommended Eurocode values.',
+      'Calc notes in Norwegian, SI with mm/N/MPa, three significant digits, and always an assumption log.',
+      'Never start a Step above 2 M DOF without asking first — this laptop is the solver.',
+      'Reinforcement is smeared in v1: say so in the note whenever a peak stress is reported near a corner.'
+    ].map((t) => ({ text: t }));
+
+    const skillDefs = [
+      ['eurocode-1992', 'Concrete checks: strut-and-tie, bearing, crack width — NS-EN 1992-1-1 + NA'],
+      ['eurocode-1993', 'Steel checks: cross-section resistance and buckling — NS-EN 1993-1-1'],
+      ['load-combos-1990', 'Builds ULS 6.10a/b and SLS combinations from load groups'],
+      ['calc-note-no', 'Writes the Norwegian calculation note the checker expects'],
+      ['convergence', 'Runs a 3-level mesh refinement and a Richardson extrapolation'],
+      ['beam-theory', 'Hand-calculation cross-check for beams, plates and thick cylinders']
+    ];
+    const skills = skillDefs.map((s) => {
+      const on = !st.skillsOff[s[0]];
+      return { name: s[0], desc: s[1], toggle: this.toggleSkill(s[0]),
+        border: on ? '#3e2f18' : '#262a33', fg: on ? '#e0bd85' : '#5c626b', dot: on ? YL : '#3a4048' };
+    });
+
+    const userParts = [
+      { text: '@bearing_top', family: MONO, fg: '#8fd0e6', bg: '#131a1e', pad: '1px 4px', size: '11.5px' },
+      { text: ' goes up to 300 kN. Rerun ULS and tell me if the corbel still checks out — and give me the note.', family: 'inherit', fg: HI, bg: 'transparent', pad: '0', size: '12px' }
+    ];
+    const tool = (cmd, args, ms, result, resultFg, ok) => ({ isTool: true, cmd, args, ms, result, resultFg,
+      border: ok === false ? '#4a2226' : '#262a33', icon: ok === false ? '✕' : '✓', iconFg: ok === false ? RD : GR });
+    const aiAll = [
+      { isUser: true, parts: userParts },
+      { isText: true, text: '300 kN over the 350 × 300 mm bearing is 2.86 MPa. Raising it, then re-solving the ULS step.' },
+      tool('load.pressure', '("bearing_top", "2.86 MPa", { group: "Q" })', '3 ms', 'journal 42 · result r41 now stale', FAINT, true),
+      tool('solve.run', '("ULS 6.10b")', '4.4 s', 'Result r42 · peak σ_vM 22.3 MPa · u_z −1.69 mm', FAINT, true),
+      { isSkill: true, skill: 'eurocode-1992', text: 'strut-and-tie for corbels, §6.5 + NA' },
+      tool('check.eurocode', '(r42, "NS-EN 1992-1-1", { clause: "6.5" })', '0.2 s', 'strut utilisation 1.31 → fails', '#f0908f', false),
+      { isVerify: true, rows: [
+        { icon: '✓', fg: GR, text: 'Reaction balance Σ F_z = −(1.35·G + 1.5·Q)', val: '0.0000 %', },
+        { icon: '✓', fg: GR, text: 'Hand check: strut angle 58°, F_strut = 531 kN vs FEM 528 kN', val: 'Δ 0.6 %' },
+        { icon: '✕', fg: RD, text: 'σ_Rd,max = 0.6·ν′·f_cd = 8.9 MPa at the strut node', val: '1.31' },
+        { icon: '!', fg: YL, text: 'Peak at the re-entrant corner is mesh-sensitive (smeared rebar)', val: 'see note' }
+      ]},
+      { isText: true, text: 'It does not check out. The strut node under the bearing plate is over by 31 %. Two ways out: deepen the nib from 400 to 520 mm (utilisation → 0.94), or add a 200 × 300 × 20 mm steel bearing plate to spread the load (→ 0.88). I did not apply either — say which and I will.' },
+      { isFiles: true, files: [
+        { name: 'calc/corbel-axis-D_rev42.md', size: '14 kB' },
+        { name: 'calc/corbel-axis-D_rev42.pdf', size: '412 kB' },
+        { name: 'exchange/corbel-axis-D.ifc', size: '1.8 MB' }
+      ]},
+      { isDiff: true, lines: [
+        { txt: '+ 42  load.pressure("bearing_top", "2.86 MPa", { group: "Q" })', fg: GR },
+        { txt: '+ 43  solve.run("ULS 6.10b")', fg: GR },
+        { txt: '+ 44  check.eurocode(r42, "NS-EN 1992-1-1", { clause: "6.5" })', fg: GR },
+        { txt: '+ 45  xport.report("calc/corbel-axis-D_rev42.pdf", { skill: "calc-note-no" })', fg: GR },
+        { txt: '  41  solve.run("ULS 6.10b")   ← turn started here', fg: FAINT }
+      ]}
+    ];
+    const shown = [1, 3, 4, 6, 7, 10, 11][Math.min(6, st.aiStep)];
+    let aiList = aiAll.slice(0, shown);
+    if (isBuild || (st.aiBuild && (isSolving || isResults))) {
+      const buildPrompt = [{ text: 'A 300×400×1800 mm C30/37 corbel with a 350 mm nib, ', family: 'inherit', fg: HI, bg: 'transparent', pad: '0', size: '12px' },
+        { text: '@calc/axis-D-loads.xlsx', family: MONO, fg: '#8fd0e6', bg: '#131a1e', pad: '1px 4px', size: '11.5px' },
+        { text: ' bearing at the top. Build it, mesh with quadratic hexes, run ULS per NS-EN 1990 and check §6.5.', family: 'inherit', fg: HI, bg: 'transparent', pad: '0', size: '12px' }];
+      aiList = st.aiBuild ? [{ isUser: true, parts: buildPrompt },
+        { isText: true, text: 'Building it one Command at a time — each lands in the Journal as it runs, so you can stop me and edit any line.' },
+        { isSkill: true, skill: 'load-combos-1990', text: 'γ_G 1.35 · γ_Q 1.50 from AGENTS.md (NA Norway)' }]
+        .concat(jlines.map((j) => tool(j[0], j[1], '4 ms', null, FAINT, true)))
+        .concat(isResults ? [
+          { isVerify: true, rows: [
+            { icon: '✓', fg: GR, text: 'Reaction balance Σ F_z = −(1.35·G + 1.5·Q)', val: '0.0000 %' },
+            { icon: '✓', fg: GR, text: 'Hand check: strut angle 58°, F_strut = 447 kN vs FEM 445 kN', val: 'Δ 0.4 %' },
+            { icon: '!', fg: YL, text: 'Strut node under the plate is at 1.10 of σ_Rd,max — over by 10 %', val: '1.10' },
+            { icon: '!', fg: YL, text: 'Corner peak 18.7 MPa is mesh-sensitive (smeared rebar)', val: 'noted' } ] },
+          { isText: true, text: 'Solved. The bearing and tie reinforcement pass; the compression strut under the bearing plate is 10 % over. Deepen the nib to 520 mm or add a steel bearing plate — say which and I will rerun and write the note.' }] : [])
+        : [{ isText: true, text: hasGeom ? 'I can take it from here — the ' + (8 - b) + ' remaining Commands are listed in the banner order — or you keep going in Properties and I only check.' : 'Describe the part, or drop an IFC / SAF / STEP file and a load take-down. I build it as Commands you can read, edit and rerun. @ references any object or file; AGENTS.md rules apply.' }];
+    }
+    const aiMessages = aiList.map((m) => Object.assign({
+      isUser: false, isText: false, isTool: false, isVerify: false, isDiff: false, isSkill: false, isFiles: false,
+      parts: [], rows: [], lines: [], files: [], result: null, resultFg: FAINT, text: '', skill: '' }, m));
+
+    const mentionAll = [
+      ['face', 'bearing_top', '24 faces · 105 000 mm² · rule-defined'],
+      ['face', 'reentrant_corner', 'edge y == 400, z == 1400 · where the peak sits'],
+      ['body', 'corbel', 'union of column + nib'],
+      ['load', 'bearing_pressure', st.pressure.toFixed(1) + ' MPa → ' + kN.toFixed(0) + ' kN'],
+      ['result', 'sigma_vM@r41', 'max 18.7 MPa · rev 41'],
+      ['journal', 'lines 36–41', 'material through solve'],
+      ['file', 'AGENTS.md', 'project rules · 4 in force'],
+      ['file', 'calc/axis-D-loads.xlsx', 'load take-down from the BIM model'],
+      ['file', 'exchange/axis-D.ifc', 'IFC 4.3 from Revit · imported geometry'],
+      ['selection', 'viewer selection', 'whatever is picked · ⌘C then ⌘V here']
+    ];
+    const kindFg = { face: CY, body: LOW, load: ORH, result: GR, journal: '#8fd0e6', file: YL, selection: HI };
+    const mentionItems = mentionAll.map((m, i) => ({ kind: m[0], name: m[1], meta: m[2],
+      kindFg: kindFg[m[0]] || LOW, bg: i === 0 ? '#181b21' : 'transparent', pick: this.mention(m[1]) }));
+
+    const draftTokens = st.tokens.map((t) => ({ label: t, remove: this.removeToken(t) }));
+    const aiSuggestions = isBuild && b < 8 ? [
+      { label: hasGeom ? 'Finish the model and solve' : 'Build the corbel from the brief', run: this.aiRun },
+      { label: 'Import IFC from Revit', run: this.openExport },
+      { label: 'Explain what is missing', run: () => this.setState({ tab: 'checks' }) }
+    ] : [
+      { label: 'Deepen the nib to 520 mm and rerun', run: this.aiRun },
+      { label: 'Convergence study at 25 mm', run: this.aiRun },
+      { label: 'Export IFC + calc note', run: this.openExport }
+    ];
+
+    const paletteItems = [
+      ['load.pressure', 'Pressure on a named face — accepts any pressure unit', '⇧P', ORH],
+      ['constraint.fix', 'Hold all translations on a face set', '⇧F', CY],
+      ['mesh.set', 'Global element size, type and order', '⇧M', CY],
+      ['step.static', 'Static step with an NS-EN 1990 combination', '⇧S', CY],
+      ['check.eurocode', 'Run the NS-EN 1992/1993 checks on a Result', '', GR],
+      ['study.convergence', 'Refine three times and extrapolate', '', GR],
+      ['xport.model', 'Write IFC, SAF, STEP, Abaqus .inp or Gmsh .msh', '⇧E', '#8fd0e6'],
+      ['xport.report', 'Calculation note as Markdown or PDF', '', '#8fd0e6'],
+      ['view.camera', 'Camera preset — iso, front, top, fit', '⇧1…4', LOW],
+      ['ai.ask', 'Hand the whole thing to the Assistant', '⇧A', YL]
+    ].map((p, i) => ({ cmd: p[0], desc: p[1], key: p[2], cmdFg: p[3], bg: i === 0 ? '#181b21' : 'transparent',
+      run: () => this.setState({ palette: false, sel: i === 0 ? 'load.bearing' : sel, exportOpen: p[0].indexOf('xport') === 0, ai: p[0] === 'ai.ask' }) }));
+
+    const exportGroups = [
+      { name: 'Model & mesh', rows: [
+        ['.ifc', 'IFC 4.3', 'Structural analysis view — back to Revit, Tekla or the BIM coordinator', 'xport.model("ifc")'],
+        ['.xlsx', 'SAF', 'Structural Analysis Format — FEM-Design, SCIA, Revit round trip', 'xport.model("saf")'],
+        ['.step', 'STEP AP242', 'Geometry only, for the CAD department', 'xport.model("step")'],
+        ['.inp', 'Abaqus / CalculiX input', 'Mesh, sets, materials, steps — run the same model on the cluster', 'xport.model("abaqus")'],
+        ['.msh', 'Gmsh mesh', 'Nodes and elements with the named sets kept', 'xport.mesh("gmsh")']
+      ]},
+      { name: 'Results', rows: [
+        ['.vtu', 'VTK unstructured', 'Fields on the deformed mesh — opens in ParaView', 'xport.result("vtu")'],
+        ['.csv', 'Tables', 'Extremes, reactions, probe paths, frequencies', 'xport.result("csv")'],
+        ['.xlsx', 'Workbook', 'One sheet per table, units in the header row', 'xport.result("xlsx")'],
+        ['.glb', 'glTF deformed shape', 'Contoured mesh for a viewer or a slide', 'xport.result("glb")'],
+        ['.png', 'Viewer screenshot', 'Legend and title burned in, chosen resolution', 'xport.shot({ w: 2400 })']
+      ]},
+      { name: 'Document & model file', rows: [
+        ['.md', 'Calculation note', 'Assumptions, tables, figures, Journal appendix', 'xport.report("md")'],
+        ['.pdf', 'Calculation note', 'Same, paginated for the checker', 'xport.report("pdf")'],
+        ['.ts', 'Script', 'The Journal as runnable TypeScript', 'xport.script()'],
+        ['.femlab', 'Model file', 'Journal + results index · also fits in a share link', 'xport.model("femlab")']
+      ]}
+    ].map((g) => ({ name: g.name, rows: g.rows.map((r) => ({ ext: r[0], name: r[1], note: r[2], cmd: r[3] })) }));
+
+    const examples = [
+      ['Cantilever vs beam theory', 'Steel cantilever, tip load. The first thing to run when you doubt a mesh.', 'tip δ', '−2.34 mm', 'linear-gradient(120deg,#1b2a33,#2a788e)', 'P1 · verify'],
+      ['Plate with a hole (Kirsch)', 'Stress concentration factor 3.0 in an infinite plate.', 'K_t', '3.00', 'linear-gradient(120deg,#2a1f33,#7ad151)', 'P1 · theory'],
+      ['Thick cylinder (Lamé)', 'Internal pressure, radial and hoop stress through the wall.', 'σ_θ,i', '18.6 MPa', 'linear-gradient(120deg,#33231b,#f0824b)', 'P2'],
+      ['RC corbel, strut-and-tie', 'This model. Bearing for a precast beam, checked to §6.5 with NA.', 'strut util.', '1.10', 'linear-gradient(120deg,#20242b,#8b7355)', 'P2 · NS-EN 1992'],
+      ['Flat slab punching', 'Column head, control perimeters, v_Ed vs v_Rd,c.', 'v_Ed/v_Rd', '0.86', 'linear-gradient(120deg,#1b2333,#4675ed)', 'P2 · NS-EN 1992'],
+      ['NAFEMS LE10', 'Thick plate under pressure — the standard benchmark.', 'σ_y at D', '−5.38 MPa', 'linear-gradient(120deg,#231b33,#414487)', 'P3 · benchmark'],
+      ['Cook’s membrane', 'Tapered panel, the classic locking test for elements.', 'tip u_y', '23.96 mm', 'linear-gradient(120deg,#1b3329,#22a884)', 'P3'],
+      ['Wall with opening, modal', 'Shear wall frequencies, six modes, animated.', 'f₁', '4.62 Hz', 'linear-gradient(120deg,#2f2333,#cb2a04)', 'P4 · demo']
+    ].map((e) => ({ title: e[0], body: e[1], refLabel: e[2], refValue: e[3], thumb: e[4], tag: e[5],
+      open: () => this.setState({ examples: false, stage: 'results', tab: 'results' }) }));
+
+    const reportSections = [
+      { name: '1 · Assumptions', text: 'Linear elastic, small strain, uncracked concrete. Reinforcement is smeared, so the peak stress at the re-entrant corner is indicative and the check is made with strut-and-tie. Partial factors from NS-EN 1990 NA Norway.',
+        rows: [['Idealisation', '3D solid, 1st order', 'geo.union'], ['Display units', 'mm · N · MPa', 'model.setUnits'], ['Engine', 'local GPU, WebGPU', 'rev 41']] },
+      { name: '2 · Geometry and material', rows: [['Column', '300 × 400 × 1800 mm', 'body "corbel"'], ['Nib', '300 × 350 × 400 mm', 'a_c = 175 mm'], ['Concrete', 'C30/37 · f_cd = 17.0 MPa', 'tab. 3.1 + NA'], ['Reinforcement', 'B500NC · ρ_s = 1.24 %', 'smeared']] },
+      { name: '3 · Mesh and quality', rows: [['Element', 'Hex 20 (quadratic)', '8 214 elements'], ['Global size', '50 mm', '41 903 nodes'], ['Min scaled Jacobian', '0.62', 'acceptable'], ['Convergence', 'Δu_z = 0.7 % from 50 → 25 mm', 'Richardson']],
+        figure: 'figure 1 — mesh with named faces (viewer screenshot, 2400 px)' },
+      { name: '4 · Loads and combination', rows: [['Bearing pressure', '2.4 MPa → 252.0 kN', 'variable Q'], ['Horizontal restraint', '50.4 kN = 0.2 V_Ed', '§6.5.4 (NA)'], ['Self weight', '6.45 kN', 'permanent G'], ['ULS 6.10b', '1.35·G + 1.50·Q = 386.7 kN', 'NS-EN 1990']] },
+      { name: '5 · Results', rows: [['Peak σ_vM', '18.7 MPa at reentrant_corner', 'mesh sensitive'], ['u_z at bearing', '−1.42 mm', 'a_c/300 = 0.58 mm — ok'], ['Σ reactions', '−386.7 kN', 'balance 0.0000 %'], ['Strut utilisation', '1.10', '§6.5.2 — not ok']],
+        figure: 'figure 2 — σ_vM on the deformed shape, ×120, with legend' },
+      { name: '6 · Conclusion', text: 'The bearing and the tie reinforcement are inside their limits, but the compression strut under the bearing plate is over by 10 %. Deepen the nib to 520 mm or spread the load with a steel bearing plate, then rerun this note.', rows: [] }
+    ].map((r) => Object.assign({ text: null, figure: null, rows: [] }, r));
+
+    const stages = [['start', 'Empty'], ['build', 'From scratch'], ['geometry', 'Geometry'], ['mesh', 'Meshed'], ['solving', 'Solving'],
+      ['results', 'Results'], ['stale', 'Stale'], ['error', 'Error']].map((s) => ({
+      label: s[1], pick: () => s[0] === 'solving' ? this.runSolve() : s[0] === 'build' ? this.startScratch(false)() : this.setState({ stage: s[0], mode: null, iter: 12, built: null, scratch: false, aiBuild: false, extraJournal: [], tab: s[0] === 'error' ? 'console' : s[0] === 'results' ? 'results' : st.tab }),
+      bg: stage === s[0] ? '#22262e' : 'transparent', fg: stage === s[0] ? HI : '#5c626b', border: stage === s[0] ? '#3a4150' : '#1b1e25' }));
+
+    const startCards = [
+      { title: 'Ask the Assistant', body: 'Describe the part in words. It builds the geometry, meshes, solves and checks it — every step lands in the Journal where you can read and change it.', cue: '⇧A · shares this Model with you', cueFg: YL, border: '#3e2f18', pick: this.startScratch(true) },
+      { title: 'Open an example', body: 'Nine worked benchmarks with reference values: corbel, punching, plate with a hole, NAFEMS LE10.', cue: 'examples.open(…)', cueFg: CY, border: '#23262e', pick: () => this.setState({ stage: 'results', built: null, scratch: false, examples: true, tab: 'results' }) },
+      { title: 'Start from geometry', body: 'Boxes, cylinders and extruded polygons with booleans — or import IFC, SAF or STEP from the BIM model.', cue: 'geo.addBox({ … })', cueFg: LOW, border: '#23262e', pick: this.startScratch(false) }
+    ];
+
+    return {
+      tree, fields, tabs, journal, script, extremes, ecChecks, reactions, convBars, checkGroups, logLines,
+      displayModes, viewToggles, colormaps, agentRules, skills, aiMessages, mentionItems, draftTokens,
+      aiSuggestions, paletteItems, exportGroups, examples, reportSections, stages, startCards,
+      camPresets: ['iso', 'front', 'top', 'fit'].map((l) => ({ label: l })),
+      legendTicks: [18.7, 15.0, 11.2, 7.5, 3.7, 0.2].map((v, i) => ({ v: v.toFixed(1), fg: i === 0 ? ORH : MID })),
+      legendGradient: grads[colormap],
+      isStart, isSolving, isStale, isError, showLegend: isResults && !isStart, noGeom: !hasGeom && !isStart,
+      builtAttr: !hasGeom ? 'none' : hasNib ? 'corbel' : 'column', meshedAttr: hasMesh ? 'on' : 'off',
+      applyProp, applyLabel,
+      viewerMode: mode, scale: st.scale, scaleAttr: String(st.scale), colormap,
+      glyphsAttr: !st.glyphs ? 'off' : hasLoad ? 'all' : hasFix ? 'fix' : 'off', clipAttr: st.clip ? 'on' : 'off',
+      playAttr: st.play ? 'on' : 'off', dimAttr: isStale ? 'on' : 'off',
+      playIcon: st.play ? '❚❚' : '▶', playFg: st.play ? ORH : LOW,
+      solveLabel, solveBg, solveFg, solveBorder,
+      solveReason: reason, solveReasonCode: reasonCode, solveReasonFixLabel: reasonFixLabel, solveReasonFix: reasonFix,
+      progressPct: Math.min(100, st.iter * 8 + 4) + '%', solveIter: String(Math.max(1, st.iter)) + '/12',
+      solveRes: (5.4e-3 / Math.max(1, st.iter)).toExponential(1), solveEta: (Math.max(0, 12 - st.iter) * 0.35).toFixed(1) + ' s',
+      unitsMmBg: units === 'mm' ? '#22262e' : 'transparent', unitsMmFg: units === 'mm' ? HI : LOW,
+      unitsMBg: units === 'm' ? '#22262e' : 'transparent', unitsMFg: units === 'm' ? HI : LOW,
+      aiOpen: st.ai || !!this.props.aiDocked, aiBorder: st.ai ? '#56391c' : '#262a33', aiFg: st.ai ? ORH : LOW,
+      aiThinking: st.aiThinking, aiCost: 'this turn: 4 commands · 1 skill · 21 s · $0.038',
+      rulesOpen: st.rulesOpen, rulesCaret: st.rulesOpen ? '▾' : '▸',
+      mentionOpen: st.mentionOpen, mentionQuery: 'bear',
+      composerBorder: st.mentionOpen ? '#2c4a57' : '#262a33',
+      composerPlaceholder: st.tokens.length ? 'goes up to 300 kN — rerun ULS and check §6.5…' : 'Ask, or tell it what to build. @ references any object or file.',
+      pasteHint: st.copied ? '@' + st.copied : null,
+      selChip: '@' + this.selName(), selMeta: sel.indexOf('face') === 0 ? '24 faces picked' : 'selected in the tree',
+      selBorder: '#2c4a57', copyLabel: st.copied ? 'copied' : '⌘C', copyFg: st.copied ? GR : LOW,
+      tabJournal: st.tab === 'journal', tabScript: st.tab === 'script', tabResults: st.tab === 'results' && isResults,
+      tabResultsEmpty: st.tab === 'results' && !isResults, nextLabel: b >= 8 ? 'solve.run("ULS 6.10b")' : reasonFixLabel || 'mesh.set({ size: "25 mm" })',
+      tabChecks: st.tab === 'checks', tabConsole: st.tab === 'console',
+      scriptToggleLabel: st.tab === 'script' ? 'view as Journal' : 'view as Script',
+      scriptToggleFg: st.tab === 'script' ? CY : FAINT,
+      propType, propName, propHint, propCommand,
+      paletteOpen: st.palette, examplesOpen: st.examples, exportOpen: st.exportOpen,
+      paletteQuery: 'pressure on the bearing',
+      solveLine: String(jlines.length + offset - 1),
+      statusRight: rev + ' · ' + (isStale ? 'result stale' : isResults ? 'result r' + (jlines.length + offset - 1) : 'no result') + (hasMesh ? ' · ' + nodes.split(' · ')[1] : ' · not meshed') + ' · engine local GPU',
+      reportOpen: st.report && isResults, reportBlocked: st.report && !isResults, rev,
+      openPalette: this.openPalette, openExamples: this.openExamples, openReport: this.openReport, openExport: this.openExport,
+      closeOverlays: this.closeOverlays, toggleAi: this.toggleAi, toggleRules: this.toggleRules,
+      openMentions: this.openMentions, mentionSelected: this.mentionSelected, pasteSelection: this.pasteSelection,
+      copySelection: this.copySelection, nameByRule: this.nameByRule, askAiAboutError: this.askAiAboutError,
+      solveClick: this.solveClick, runSolve: this.runSolve, cancelSolve: this.cancelSolve, fixError: this.fixError,
+      onScale: this.onScale, commitScale: this.commitScale, trueScale: this.trueScale,
+      togglePlay: this.togglePlay, aiRun: this.aiRun, undoTurn: this.undoTurn, toggleScript: this.toggleScript,
+      setUnitsMm: this.setUnitsMm, setUnitsM: this.setUnitsM
+    };
+  }
+}
+
+</script>
+</body>
+</html>

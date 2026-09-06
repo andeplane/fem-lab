@@ -19,6 +19,8 @@ import { BUILTIN_SKILLS } from './skills';
 export interface AssistantPanelProps {
   registry: Registry;
   store: Store;
+  /** Collapse keeps local conversation state and active tool calls alive. */
+  hidden?: boolean;
   /**
    * Accepted for symmetry with the rest of the shell and unused: the panel reaches the engine
    * through the registry and nothing else, which is what makes a remote host a transport change.
@@ -27,11 +29,27 @@ export interface AssistantPanelProps {
 }
 
 /** What `chat.send`, `chat.insertMention` and `chat.clear` do once this panel is mounted. Wire the
- *  app's `HostContext.chat` to it in one line and those Commands work from a script and the palette. */
+ *  app's `HostContext.chat` to it in one line and those Commands work from a script and the palette.
+ *
+ *  Before the panel is mounted `send` keeps the line in `pending` instead of dropping it, and the
+ *  panel drains it the moment it mounts (issue #40). Without that, "open the drawer, then
+ *  `chat.send`" is a race that both callers lose: the start screen's composer and the error card's
+ *  "Send this error to the Assistant" each toggle the panel and send in the same tick. */
 export const chatBridge = {
-  send: (text: string): void => void text,
+  /** The one line a `chat.send` before the drawer left behind; the panel takes it on mount. */
+  pending: null as string | null,
+  send: (text: string): void => {
+    chatBridge.pending = text;
+  },
   insertMention: (ref: string): void => void ref,
-  clear: (): void => undefined,
+  clear: (): void => {
+    chatBridge.pending = null;
+  },
+};
+
+/** What `chatBridge.send` goes back to when the panel unmounts: buffer again, never a no-op. */
+const buffer = (text: string): void => {
+  chatBridge.pending = text;
 };
 
 type Item =
@@ -149,7 +167,7 @@ function ToolCard({ call }: { call: ToolCall }) {
   );
 }
 
-export function AssistantPanel({ registry, store }: AssistantPanelProps) {
+export function AssistantPanel({ registry, store, hidden = false }: AssistantPanelProps) {
   const ui = useStore(store);
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState('');
@@ -273,14 +291,25 @@ export function AssistantPanel({ registry, store }: AssistantPanelProps) {
     setIndex(await objectIndex(registry).catch(() => []));
   }, [registry]);
 
-  // `chat.send` from a script, the palette or a viewer click reaches the same code the Send button does.
+  // `chat.send` from a script, the palette or a viewer click reaches the same code the Send button
+  // does — including one that arrived before this panel existed, which is what `pending` holds.
   useEffect(() => {
-    chatBridge.send = (text) => void send(text);
+    chatBridge.send = (text) => {
+      store.togglePanel('assistant', true);
+      void send(text);
+    };
     chatBridge.insertMention = insert;
     chatBridge.clear = () => {
+      chatBridge.pending = null;
       messages.current = [];
       setItems([]);
       setTurn(null);
+    };
+    const queued = chatBridge.pending;
+    chatBridge.pending = null;
+    if (queued !== null) void send(queued);
+    return () => {
+      chatBridge.send = buffer;
     };
   });
 
@@ -322,7 +351,7 @@ export function AssistantPanel({ registry, store }: AssistantPanelProps) {
   const rules = folder?.agentsMd?.text.split('\n').filter((l) => l.trim()) ?? [];
 
   return (
-    <aside class="assistant">
+    <aside class="assistant" hidden={hidden}>
       <header>
         <span class="ring">✳</span>
         <span class="title">Assistant</span>

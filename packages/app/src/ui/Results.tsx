@@ -4,7 +4,7 @@
 // solve. Both are views of Queries, and every button on them is one Command.
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useState } from 'preact/hooks';
-import { FIELD_CHOICES, formatNumber } from '../fields';
+import { FIELD_CHOICES, dimensionOf, formatNumber } from '../fields';
 import type { UiState } from '../store';
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
@@ -12,6 +12,7 @@ import { blockers } from './schema';
 
 const num = (v: Valued | undefined): string => (v ? formatNumber(v.value) : '—');
 const at = (p: [Valued, Valued, Valued]): string => p.map((v) => formatNumber(v.value)).join(' ');
+const fieldUnit = (field: string, v: Valued): string => (dimensionOf(field) === 'dimensionless' && v.unit === 'SI' ? '(1)' : v.unit);
 
 /** `balance` is a ratio of forces; the design writes it as a percentage with four decimals. */
 export function balanceLine(r: ResultSummary): { pass: boolean; text: string } {
@@ -66,10 +67,14 @@ function Extremes({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
                 {extremeLabel(e)}
                 <span class="faint">{e.field}</span>
               </td>
-              <td class="mono n">{num(e.min)}</td>
-              <td class="mono n">{num(e.max)}</td>
+              <td class="mono n">
+                {num(e.min)} {fieldUnit(e.field, e.min)}
+              </td>
+              <td class="mono n">
+                {num(e.max)} {fieldUnit(e.field, e.max)}
+              </td>
               <td class="mono loc faint">
-                {at(e.maxAt)} {e.max.unit}
+                {at(e.maxAt)} {e.maxAt[0].unit}
               </td>
               <td>
                 <Cmd dispatch={dispatch} cmd="view.setCamera" class="chip-add" args={goTo(siPoint(e.maxAt, s.lengthFactor))} title="centre the camera on this extreme">

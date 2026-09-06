@@ -12,6 +12,10 @@
   font-size: 12px;
 }
 
+.assistant[hidden] {
+  display: none;
+}
+
 .assistant header {
   flex: none;
   display: flex;
