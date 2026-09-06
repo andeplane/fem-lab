@@ -352,6 +352,10 @@ export class Viewer {
     }
     pos.needsUpdate = true;
     geom.computeVertexNormals();
+    // Raycasting and frustum culling cache these bounds. They must follow the drawn shape;
+    // `this.box` is a separate undeformed copy used for framing and auto exaggeration.
+    geom.computeBoundingBox();
+    geom.computeBoundingSphere();
     this.render();
   }
 
