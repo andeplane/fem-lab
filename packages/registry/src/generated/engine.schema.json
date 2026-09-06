@@ -4404,6 +4404,7 @@
             "type": "string"
           },
           "revision": {
+            "description": "The Journal revision after the Command that produced this Result. It stays fixed while\nlater edits make the Result stale and when undo removes that producing Command.",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
@@ -8435,6 +8436,7 @@
             "type": "string"
           },
           "revision": {
+            "description": "The Journal revision after the Command that produced this Result. It stays fixed while\nlater edits make the Result stale and when undo removes that producing Command.",
             "type": "integer",
             "format": "uint32",
             "minimum": 0

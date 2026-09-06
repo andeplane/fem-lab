@@ -541,16 +541,16 @@ impl Engine {
     }
 
     /// The stored Result of a Step, or `not-found` naming the Steps that have one.
-    pub(crate) fn stored<'e>(&'e self, step: Option<&str>) -> Result<(&'e str, &'e String, &'e StepResult), Error> {
+    pub(crate) fn stored<'e>(&'e self, step: Option<&str>) -> Result<(&'e str, &'e String, u32, &'e StepResult), Error> {
         let record = self.result_record(step, None)?;
-        Ok((&record.step, &record.input_hash, &record.result))
+        Ok((&record.step, &record.input_hash, record.revision, &record.result))
     }
 
     /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
     /// changed coordinates or connectivity; the Result-validity fingerprint covers every
     /// physics and mesh input while deliberately excluding the display name (ADR 0017).
     pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
-        let (name, hash, result) = self.stored(step)?;
+        let (name, hash, _, result) = self.stored(step)?;
         if *hash != crate::hash::result_hash(&self.model) {
             return Err(Error::new(
                 ErrorCode::ResultStale,
@@ -567,7 +567,7 @@ impl Engine {
     /// Step, counting from 1.
     pub fn field_named(&self, step: Option<&str>, name: &str) -> Result<&crate::post::FieldData, Error> {
         if let Some(k) = name.strip_prefix("mode:") {
-            let (step_name, _, res) = self.stored(step)?;
+            let (step_name, _, _, res) = self.stored(step)?;
             let i: usize = k.parse().unwrap_or(0);
             return res.modes.get(i.wrapping_sub(1)).ok_or_else(|| {
                 Error::new(
@@ -584,7 +584,7 @@ impl Engine {
 
     /// One Result field, for a host that wants the raw array.
     pub fn field(&self, step: Option<&str>, field: Field) -> Result<&crate::post::FieldData, Error> {
-        let (name, _, res) = self.stored(step)?;
+        let (name, _, _, res) = self.stored(step)?;
         res.fields.get(&field).ok_or_else(|| {
             Error::new(ErrorCode::NotFound, format!("step '{name}' has no {} field", field_name(field)))
                 .suggest("query.result lists the fields that were computed")
@@ -619,7 +619,7 @@ impl Engine {
             result_id: record.id.clone(),
             step: name.to_string(),
             reaction_quantity: res.reaction_quantity,
-            revision: if id.is_some() { record.revision } else { self.revision() },
+            revision: record.revision,
             stale: *hash != crate::hash::result_hash(&self.model),
             solver: res.solver.solver.to_string(),
             iterations: res.solver.iterations as u32,
