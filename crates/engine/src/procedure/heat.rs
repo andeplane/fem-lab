@@ -6,7 +6,8 @@
 //! "reaction" a Constraint reports is then the heat that flows through it, in watts.
 //!
 //! Transient is the θ-method: `(C/Δt + θK) T_{n+1} = (C/Δt − (1−θ)K) T_n + f`, one
-//! factorisation reused for every step. Prescribed temperatures are scaled by `amplitude(t)`,
+//! factorisation reused for every step. The requested Δt is an upper bound: a uniform increment
+//! is reduced to reach `t_end` exactly. Prescribed temperatures are scaled by `amplitude(t)`,
 //! and because the elimination is linear in the prescribed values, the coupling term is
 //! assembled once at the base values and simply scaled — no re-reduction per step.
 
@@ -19,7 +20,7 @@ use crate::fem::heat::{capacity, conductivity, face_integrals, source, HeatLoad}
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, Per};
-use crate::procedure::{blank, report, vector_field, History, StepResult};
+use crate::procedure::{blank, report, time_grid, vector_field, History, StepResult};
 use crate::solve::{direct::Direct, solve, LinearSolve, SolveInfo, SolveOptions};
 
 /// The assembled steady system and what went into it.
@@ -231,13 +232,7 @@ pub fn transient(
     if let Some(e) = checks::all(p).into_iter().next() {
         return Err(e);
     }
-    if dt <= 0.0 || t_end <= 0.0 {
-        return Err(Error::schema(format!(
-            "a transient Step needs dt > 0 and tEnd > 0, got dt = {dt}, tEnd = {t_end}"
-        ))
-        .at("dt")
-        .suggest("step.add { dt: \"0.5 s\", tEnd: \"32 s\" }"));
-    }
+    let (n_steps, dt) = time_grid(dt, t_end)?;
     report(&mut progress, "assemble", 0.1, "building the conductivity and capacity matrices")?;
     let pat = pattern(p.mesh, 1);
     let (sys, cap) = pool
@@ -266,7 +261,6 @@ pub fn transient(
     for (i, &dof) in red.fixed.iter().enumerate() {
         t[dof as usize] = red.u_fixed[i] * g(0.0);
     }
-    let n_steps = (t_end / dt).round().max(1.0) as usize;
     let every = output_every.max(1);
     let mut history = History { field: Field::Temperature, times: vec![0.0], values: vec![t.clone()] };
     let mut rhs_full = vec![0.0; a.n];
@@ -274,7 +268,7 @@ pub fn transient(
     let mut t_f = vec![0.0; red.free.len()];
     let mut solver = SolveInfo { solver: "cpu-direct", iterations: 0, rel_residual: 0.0, time_ms: 0.0 };
     for step in 1..=n_steps {
-        let time = step as f64 * dt;
+        let time = if step == n_steps { t_end } else { step as f64 * dt };
         b.spmv(&t, &mut rhs_full);
         let scale = g(time);
         for (i, &dof) in red.free.iter().enumerate() {

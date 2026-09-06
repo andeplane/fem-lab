@@ -932,6 +932,8 @@ pub enum Command {
         n_modes: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shift: Option<f64>,
+        /// Maximum heat-transient time increment. A uniform increment no larger than dt is
+        /// chosen to finish exactly at tEnd; the Result reports the increment actually used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt: Option<Q<Time>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -940,6 +942,8 @@ pub enum Command {
         theta: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_every: Option<u32>,
+        /// Maximum fraction of the explicit critical time step (usually 0.9). The increment
+        /// may be reduced uniformly to finish exactly at tEnd.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt_factor: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
