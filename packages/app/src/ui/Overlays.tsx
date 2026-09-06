@@ -56,7 +56,9 @@ export function Palette({ s, dispatch, commands }: { s: UiState; dispatch: Dispa
   const rows = rankCommands(query, commands).slice(0, 60);
   const active = rows[Math.min(cursor, rows.length - 1)];
   if (!s.panels['palette']) return null;
-  const fill = (def: CommandDef): void => void dispatch({ cmd: 'form.open', command: def.name }).then(() => dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })).catch(() => undefined);
+  const fill = (def: CommandDef): void => void dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })
+    .then(() => dispatch({ cmd: 'form.open', command: def.name }))
+    .catch(() => undefined);
   const run = (def: CommandDef): void =>
     void (requiredOf(def).length === 0 ? dispatch({ cmd: def.name }).then(() => dispatch({ cmd: 'panel.toggle', panel: 'palette', open: false })) : Promise.resolve(fill(def))).catch(() => undefined);
   return (

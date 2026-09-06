@@ -94,6 +94,20 @@ describe('the shell', () => {
     expect(document.body.children).toHaveLength(0);
   });
 
+  it('closes the command palette before opening a parameterized Command form', async () => {
+    const { root, commands } = mount({ panels: { palette: true } });
+    const input = root.querySelector<HTMLInputElement>('.palette input')!;
+    input.value = 'load.traction';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await afterEffects();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await waitForGone(() => root.querySelector('.palette'), 'the command palette');
+    expect(commands.slice(-2)).toEqual([
+      { cmd: 'panel.toggle', panel: 'palette', open: false },
+      { cmd: 'form.open', command: 'load.traction' },
+    ]);
+  });
+
   it('names only Commands the registry has on every clickable, in every panel', async () => {
     const seen = new Set<string>();
     for (const tab of ['journal', 'script', 'results', 'checks', 'console'] as const) {
