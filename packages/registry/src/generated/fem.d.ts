@@ -24,8 +24,9 @@ export interface Fem {
     setIdealisation(args: Omit<Extract<Command, { cmd: 'model.setIdealisation' }>, 'cmd'>): Promise<Ack>;
     /**
      * Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
-     * rename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`
-     * already exists in that kind.
+     * rename also renames its auto faces (`<name>.xmin` …). A Set rename preserves every
+     * constraint and mechanical or thermal load target, including heat flux and
+     * convection. Fails with name.taken if `to` already exists in that kind.
      */
     rename(args: Omit<Extract<Command, { cmd: 'model.rename' }>, 'cmd'>): Promise<Ack>;
     /**

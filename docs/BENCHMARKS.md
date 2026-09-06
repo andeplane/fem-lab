@@ -293,6 +293,22 @@ against a *closed form* rather than a printed number:
 Both rows revert to the NAFEMS cases the moment the published data is at hand; the chaining they
 prove is the same either way.
 
+## Thermal Set rename preserves the boundary-value problem (#254)
+
+The registry regression `thermal_set_rename_preserves_the_analytical_flux_and_convection_solution`
+uses a 2 × 1 × 1 m bar with conductivity k = 10 W/(m·K), T(0) = 300 K, and a named end
+Set carrying heat flux q = 100 W/m² and/or convection h = 5 W/(m²·K), T∞ = 340 K.
+The other faces are insulated. Steady one-dimensional conduction gives
+`T(x) = 300 + (q + 40h)x/(10 + 2h)` K. Flux alone and convection alone each give a 10 K/m
+gradient; their combination gives 15 K/m, so the combined end temperature is 330 K.
+
+For linear and quadratic elements at 1, 2 and 4 axial subdivisions, every nodal temperature
+and a center probe agree with the closed form within 1e-9 K, both before and after renaming
+the loaded Set. Loads of the same kinds on another Set retain their own targets. Separate
+lifecycle checks verify that both thermal loads prevent removal, undo/redo restores the exact
+Model and Journal, and exported Journal replay rebuilds memberships and the same analytical
+solution. Removing both dependent loads permits removing the renamed Set.
+
 ## Where the reference values are published
 
 - NAFEMS "The Standard NAFEMS Benchmarks" P18 (1990); FV set in R0015 (1987). Values as

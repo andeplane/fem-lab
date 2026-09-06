@@ -3720,3 +3720,104 @@ fn journal_guard_uses_full_history_even_for_filtered_queries() {
     ok(&mut e, &guarded);
     assert_eq!(e.revision(), 1);
 }
+
+fn thermal_rename_bar(e: &mut Engine, n: u32, order: u32, active: &[&str]) {
+    ok(e, r#"{"cmd":"model.new","name":"thermal-rename"}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"bar","size":["2 m","1 m","1 m"]}"#);
+    ok(e, r#"{"cmd":"material.add","name":"solid","E":"200 GPa","nu":0.25,"k":"10 W/(m*K)"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"solid","bodies":["bar"]}"#);
+    ok(
+        e,
+        &serde_json::json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":n,"ny":1,"nz":1}},"order":order})
+            .to_string(),
+    );
+    ok(e, r#"{"cmd":"geometry.nameFace","name":"hot","of":"bar","where":{"kind":"normal","normal":[1,0,0]}}"#);
+    ok(e, r#"{"cmd":"geometry.nameFace","name":"other","of":"bar","where":{"kind":"normal","normal":[0,1,0]}}"#);
+    ok(e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"300 K"}"#);
+    ok(e, r#"{"cmd":"load.heatFlux","name":"flux","on":"hot","q":"100 W/m^2"}"#);
+    ok(e, r#"{"cmd":"load.convection","name":"film","on":"hot","h":"5 W/(m^2*K)","tInf":"340 K"}"#);
+    // Loads on another Set must keep their own targets, even when they have the same kind.
+    ok(e, r#"{"cmd":"load.heatFlux","name":"otherFlux","on":"other","q":"70 W/m^2"}"#);
+    ok(e, r#"{"cmd":"load.convection","name":"otherFilm","on":"other","h":"3 W/(m^2*K)","tInf":"280 K"}"#);
+    ok(e, &serde_json::json!({"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold"],"loads":active}).to_string());
+}
+
+fn assert_thermal_rename_solution(e: &mut Engine, slope: f64) {
+    let field = e.field(Some("conduct"), Field::Temperature).unwrap().clone();
+    let mesh = &e.mesh().unwrap().mesh;
+    assert_eq!(field.len(), mesh.n_nodes());
+    for (node, components) in field.data.chunks_exact(field.comps).enumerate() {
+        let temperature = components[0];
+        let expected = 300.0 + slope * mesh.node(node as u32)[0];
+        assert!((temperature - expected).abs() < 1e-9, "{temperature} K, expected {expected} K");
+    }
+    let middle = probe_at(e, "conduct", Field::Temperature, None, ["1 m", "0.5 m", "0.5 m"]);
+    assert!((middle - (300.0 + slope)).abs() < 1e-9);
+}
+
+/// k T'(L) = q + h(Tinf-T(L)), T(0)=300 K: T=300+(q+40h)x/(10+2h).
+/// Each load alone gives a 10 K/m gradient; together they give 15 K/m.
+#[test]
+fn thermal_set_rename_preserves_the_analytical_flux_and_convection_solution() {
+    for (active, slope) in [(vec!["flux"], 10.0), (vec!["film"], 10.0), (vec!["flux", "film"], 15.0)] {
+        for order in [1, 2] {
+            for n in [1, 2, 4] {
+                let mut e = engine();
+                thermal_rename_bar(&mut e, n, order, &active);
+                ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+                assert_thermal_rename_solution(&mut e, slope);
+                ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"hot","to":"warm"}"#);
+                ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+                assert_thermal_rename_solution(&mut e, slope);
+                let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+                assert_eq!(model.sets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["warm", "other"]);
+                assert_eq!(
+                    model.loads.iter().map(|l| l.on.as_deref()).collect::<Vec<_>>(),
+                    [Some("warm"), Some("warm"), Some("other"), Some("other")]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn thermal_set_rename_preserves_dependencies_undo_and_exported_replay() {
+    let mut e = engine();
+    thermal_rename_bar(&mut e, 4, 2, &["flux", "film"]);
+    let before = e.export_file();
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"hot","to":"warm"}"#);
+    let renamed = e.export_file();
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model(), &before.model);
+    assert_eq!(e.journal(), &before.journal);
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.model(), &renamed.model);
+    assert_eq!(e.journal(), &renamed.journal);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    assert_thermal_rename_solution(&mut e, 15.0);
+    let source = e.export_file();
+    let mut replay = engine();
+    pollster::block_on(replay.replay(&source.journal.entries, false, true)).unwrap();
+    assert_eq!(replay.model(), &source.model);
+    assert_eq!(replay.journal(), &source.journal);
+    assert_thermal_rename_solution(&mut replay, 15.0);
+    assert_eq!(replay.mesh().unwrap().sets, e.mesh().unwrap().sets);
+    assert_eq!(e.query(Query::Set { name: "hot".into() }).unwrap_err().code, ErrorCode::NotFound);
+    // Both loads block removal, then the surviving convection load still blocks it alone.
+    let removal = r#"{"cmd":"geometry.remove","name":"warm"}"#;
+    let error = err(&mut e, removal);
+    assert_eq!(error.code, ErrorCode::InUse);
+    assert!(error.cause.contains("flux") && error.cause.contains("film"));
+    assert_eq!(e.model(), &source.model);
+    assert_eq!(e.journal(), &source.journal);
+    ok(&mut e, r#"{"cmd":"step.remove","name":"conduct"}"#);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"flux"}"#);
+    let error = err(&mut e, removal);
+    assert_eq!(error.code, ErrorCode::InUse);
+    assert!(error.cause.contains("film"));
+    ok(&mut e, r#"{"cmd":"load.remove","name":"film"}"#);
+    ok(&mut e, removal);
+    assert_eq!(e.query(Query::Set { name: "warm".into() }).unwrap_err().code, ErrorCode::NotFound);
+    let QueryResult::Model(model) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+    assert_eq!(model.loads.iter().map(|l| l.on.as_deref()).collect::<Vec<_>>(), [Some("other"), Some("other")]);
+}

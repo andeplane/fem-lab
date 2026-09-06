@@ -1028,8 +1028,11 @@ impl Engine {
                     }
                 }
                 for l in &mut m.loads {
-                    if let LoadKind::Pressure { on, .. } | LoadKind::Traction { on, .. } | LoadKind::Force { on, .. } =
-                        &mut l.kind
+                    if let LoadKind::Pressure { on, .. }
+                    | LoadKind::Traction { on, .. }
+                    | LoadKind::Force { on, .. }
+                    | LoadKind::Convection { on, .. }
+                    | LoadKind::HeatFlux { on, .. } = &mut l.kind
                     {
                         if on == name {
                             *on = to.into();

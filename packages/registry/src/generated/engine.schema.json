@@ -63,7 +63,7 @@
         ]
       },
       {
-        "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind.",
+        "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). A Set rename preserves every\nconstraint and mechanical or thermal load target, including heat flux and\nconvection. Fails with name.taken if `to` already exists in that kind.",
         "type": "object",
         "properties": {
           "kind": {
@@ -4439,7 +4439,7 @@
             ]
           },
           {
-            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind.",
+            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). A Set rename preserves every\nconstraint and mechanical or thermal load target, including heat flux and\nconvection. Fails with name.taken if `to` already exists in that kind.",
             "type": "object",
             "properties": {
               "kind": {
@@ -9731,7 +9731,7 @@
             ]
           },
           {
-            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind.",
+            "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). A Set rename preserves every\nconstraint and mechanical or thermal load target, including heat flux and\nconvection. Fails with name.taken if `to` already exists in that kind.",
             "type": "object",
             "properties": {
               "kind": {
