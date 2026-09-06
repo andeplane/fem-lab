@@ -128,7 +128,8 @@ pub enum Solver {
 
 /// Result fields. Reaction is support force in N for structural Results and removed heat
 /// power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
-/// display units.
+/// display units. Transient thermal reactions include stored energy and refer to the last
+/// θ-method integration stage, not an endpoint steady-state residual.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
@@ -919,7 +920,9 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit.
+    /// `dtFactor` and `outputEvery` to explicit. Heat Results report net applied power,
+    /// positive removed heat and stored-energy rate; transient powers belong to the last
+    /// θ-method integration stage, while temperature fields belong to its endpoint.
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,

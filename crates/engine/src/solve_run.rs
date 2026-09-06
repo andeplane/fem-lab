@@ -253,7 +253,7 @@ impl Engine {
         result.solver.time_ms = self.host.now_ms() - started;
         let hash = self.model_hash();
         self.results.insert(step.name.clone(), (hash, result));
-        Ok(Output::Solve { summary: self.result_summary(&step.name) })
+        Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)) })
     }
 
     /// `study.converge`: re-mesh at every size, re-solve the Step, and report the trend
@@ -454,16 +454,23 @@ impl Engine {
                 *s += r[c];
             }
         }
-        let residual = sum.iter().map(|x| x * x).sum::<f64>().sqrt();
-        let biggest = res
+        let mut residual = sum.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let mut biggest = res
             .reactions
             .iter()
             .flat_map(|(_, r)| r.iter())
             .chain(applied.iter())
             .fold(f64::MIN_POSITIVE, |acc, x| acc.max(x.abs()));
+        let storage_power = res.scalars.get("storage_power").copied();
+        if let Some(storage) = storage_power {
+            let removed: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
+            residual = (applied[0] - removed - storage).abs();
+            biggest = res.scalars["power_balance_scale"].max(f64::MIN_POSITIVE);
+        }
         ResultSummary {
             step: name.to_string(),
             reaction_quantity: res.reaction_quantity,
+            storage_power: storage_power.map(|p| display(m, p, Power::DIM)),
             revision: self.revision(),
             stale: *hash != self.model_hash(),
             solver: res.solver.solver.to_string(),

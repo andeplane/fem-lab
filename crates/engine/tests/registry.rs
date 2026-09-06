@@ -2213,12 +2213,17 @@ fn thermal_reactions_keep_power_units_in_every_result_view() {
             assert_eq!(original.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
             assert!((original.reactions[0].total[0].value - removed).abs() < 1e-9);
             assert_eq!(original.reactions[0].total[0].unit, "W");
+            assert!((original.applied_total[0].value - removed).abs() < 1e-9);
+            assert!(original.balance < 1e-9);
+            assert_eq!(original.storage_power.as_ref().unwrap().value, 0.0);
             let raw = e.field(Some("heat"), Field::Reaction).unwrap().clone();
             assert!((raw.data.iter().step_by(3).sum::<f64>() - removed).abs() < 1e-9);
             for (force, power, factor) in [("kN", "W", 1.0), ("N", "kW", 0.001)] {
                 ok(&mut e, &format!(r#"{{"cmd":"model.setUnits","units":{{"force":"{force}","power":"{power}"}}}}"#));
                 let r = result_of(&mut e, Some("heat"));
                 assert!(r.stale);
+                assert!(r.balance < 1e-9);
+                assert_eq!(r.storage_power.as_ref().unwrap().unit, power);
                 assert_eq!(r.reaction_quantity, femlab_engine::units::ReactionQuantity::Power);
                 assert!((r.reactions[0].total[0].value - factor * removed).abs() < 1e-9);
                 assert!(r.reactions[0].total.iter().chain(&r.applied_total).all(|v| v.unit == power));
@@ -2253,14 +2258,14 @@ fn thermal_reactions_keep_power_units_in_every_result_view() {
                 assert!((path["values"][0].as_f64().unwrap() - factor * removed / 4.0).abs() < 1e-9);
                 let md = report(&mut e, Some("heat"), Some(vec![ReportSection::Results])).markdown;
                 assert!(md.contains("| Constraint | Power | Unit |"), "{md}");
-                assert!(md.contains("max|Q|"), "{md}");
+                assert!(md.contains("Thermal balance"), "{md}");
                 let output = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu","step":"heat"}"#).output;
                 let output = serde_json::to_value(output).unwrap();
                 assert!(output["text"].as_str().unwrap().contains("Name=\"ReactionPower_W\""));
                 assert_eq!(e.field(Some("heat"), Field::Reaction).unwrap(), &raw);
             }
-            // #208 tracks the separate balance diagnostic sign/net-convection defect. These
-            // tests verify physical removed power, not the currently incorrect balance scalar.
+            // The thermal balance uses net applied minus removed heat; both signs and units
+            // are checked against the independent power value above.
         }
     }
 }
@@ -2299,6 +2304,64 @@ fn the_three_heat_loads_report_themselves_and_hold_a_step_on_their_own() {
     let near = probe_at(&mut e, "conduct", Field::Temperature, None, ["0 mm", "50 mm", "50 mm"]);
     assert!((far - 40.0).abs() < 1e-8, "far face {far}");
     assert!((near - (40.0 + 1000.0 / 45.0)).abs() < 1e-8, "near face {near}");
+}
+
+/// E: source-driven uniform heating has dU/dt = rho*cp*V and no support heat flow.
+#[test]
+fn heat_conservation_reports_net_film_power_and_transient_energy_storage() {
+    for nx in [2, 4] {
+        let mut e = engine();
+        heat_bar(&mut e);
+        ok(
+            &mut e,
+            &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{{"nx":{nx},"ny":1,"nz":1}}}}}}"#),
+        );
+        ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
+        ok(
+            &mut e,
+            r#"{"cmd":"step.add","name":"equilibrium","procedure":"heat-steady","constraints":[],"loads":["film"]}"#,
+        );
+        ok(&mut e, r#"{"cmd":"solve.run","step":"equilibrium"}"#);
+        let equilibrium = result_of(&mut e, Some("equilibrium"));
+        assert!(equilibrium.applied_total[0].value.abs() < 1e-9);
+        assert!(equilibrium.reactions.is_empty());
+        assert!(equilibrium.balance < 1e-9, "{:?}", equilibrium);
+        assert_eq!(equilibrium.storage_power.as_ref().unwrap().value, 0.0);
+        // The assembled-power scale can itself be zero at absolute-zero equilibrium.
+        ok(&mut e, r#"{"cmd":"load.convection","name":"film","on":"bar.xmax","h":"50 W/(m^2 K)","tInf":"0 K"}"#);
+        ok(&mut e, r#"{"cmd":"solve.run","step":"equilibrium"}"#);
+        let zero = result_of(&mut e, Some("equilibrium"));
+        assert_eq!(zero.balance, 0.0);
+        assert_eq!(zero.applied_total[0].value, 0.0);
+
+        ok(&mut e, r#"{"cmd":"model.setUnits","units":{"force":"kN","power":"kW","temperature":"K"}}"#);
+        ok(&mut e, r#"{"cmd":"constraint.temperature","name":"left","on":"bar.xmin","value":"10 K"}"#);
+        ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":"10 K"}"#);
+        // rho=7850, cp=460 from heat_bar; q=rho*cp makes dT/dt exactly 1 K/s.
+        ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"3611000 W/m^3"}"#);
+        for theta in [0.5, 1.0] {
+            ok(
+                &mut e,
+                &format!(
+                    r#"{{"cmd":"step.add","name":"ramp","procedure":"heat-transient","constraints":["left","right"],"loads":["source"],"dt":"1 s","tEnd":"2 s","theta":{theta},"initial":"10 K","outputEvery":2,"amplitude":{{"kind":"table","t":["0 s","2 s"],"value":[1,1.2]}}}}"#
+                ),
+            );
+            ok(&mut e, r#"{"cmd":"solve.run","step":"ramp"}"#);
+            let r = result_of(&mut e, Some("ramp"));
+            let storage = r.storage_power.as_ref().unwrap();
+            assert_eq!(storage.unit, "kW");
+            assert!((storage.value - 36.11).abs() < 1e-8, "{r:?}");
+            assert!((r.applied_total[0].value - 36.11).abs() < 1e-8);
+            assert!(r.reactions.iter().all(|row| row.total[0].value.abs() < 1e-8));
+            assert!(r.balance < 1e-9);
+            assert_eq!(r.history.len(), 2);
+            assert!((r.history[1].min.value - 12.0).abs() < 1e-9);
+            assert!((r.history[1].max.value - 12.0).abs() < 1e-9);
+            let md = report(&mut e, Some("ramp"), Some(vec![ReportSection::Results])).markdown;
+            assert!(md.contains("Storage rate") && md.contains("net applied − removed − storage"), "{md}");
+            assert!(md.contains("36.11") && md.contains("kW"));
+        }
+    }
 }
 
 /// A heat Step with neither a held temperature nor a film is refused with the Command that

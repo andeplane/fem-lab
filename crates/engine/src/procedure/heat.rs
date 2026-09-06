@@ -30,8 +30,10 @@ pub struct HeatSystem {
     /// Convective, flux and source loads.
     pub f: Vec<f64>,
     pub min_det_j: f64,
-    /// Total heat entering through loads, in watts: the balance a Result reports.
+    /// Right-hand-side power Σf in W, before subtracting outgoing convection.
     pub applied: f64,
+    /// Integrated film coefficients ∫hN dA in W/K, for computing outgoing power.
+    pub film: Vec<f64>,
 }
 
 /// `K + H` and `f` for one heat Problem, into a fresh copy of `pat.csr`.
@@ -42,6 +44,7 @@ pub struct HeatSystem {
 pub fn assemble(p: &Problem<'_>, pat: &Pattern) -> Result<HeatSystem, Error> {
     let mut k = pat.csr.clone();
     let mut f = vec![0.0; p.mesh.n_nodes()];
+    let mut film = vec![0.0; p.mesh.n_nodes()];
     let mut min_det_j = f64::INFINITY;
     let mut coords = Vec::new();
     let mut ke = Vec::new();
@@ -69,7 +72,8 @@ pub fn assemble(p: &Problem<'_>, pat: &Pattern) -> Result<HeatSystem, Error> {
             for v in ke.iter_mut() {
                 *v *= h;
             }
-            for v in fe.iter_mut() {
+            for (&node, v) in p.mesh.elem_nodes(face.elem).iter().zip(&mut fe) {
+                film[node as usize] += h * *v;
                 *v *= rhs;
             }
             scatter(pat, p, face.elem, &ke, &fe, &mut k, &mut f);
@@ -110,7 +114,7 @@ pub fn assemble(p: &Problem<'_>, pat: &Pattern) -> Result<HeatSystem, Error> {
         }
     }
     let applied = f.iter().sum();
-    Ok(HeatSystem { k, f, min_det_j, applied })
+    Ok(HeatSystem { k, f, min_det_j, applied, film })
 }
 
 /// `C = ∫ ρ c_p NᵀN dV` for the whole mesh, into a fresh copy of `pat.csr`.
@@ -172,32 +176,44 @@ pub async fn steady(
     let (t_f, solver) = solve(&red.k_ff, &red.f_f, opts, pool, gpu, &mut progress).await?;
     let t = expand(&red, &t_f);
     report(&mut progress, "post", 0.9, "recovering the temperature field")?;
-    Ok(finish(p, &sys, &rc, &red.fixed, &t, solver))
+    Ok(finish(p, &sys, &rc, &t, &t, &vec![0.0; t.len()], solver))
 }
 
 /// The Result of a temperature field: the field itself, the heat each Constraint carries, and
-/// the balance scalars a summary reports.
+/// the balance scalars a summary reports. `evaluated` is the steady temperature or the last
+/// transient θ-stage temperature; `capacity_rate` is C(Tnew−Told)/dt (zero in steady state).
+/// Positive reactions remove heat. Net applied power minus removal equals stored energy rate.
 fn finish(
     p: &Problem<'_>,
     sys: &HeatSystem,
     rc: &ResolvedConstraints,
-    fixed: &[u32],
     t: &[f64],
+    evaluated: &[f64],
+    capacity_rate: &[f64],
     solver: SolveInfo,
 ) -> StepResult {
-    // The flow through a held node is `(K T − f)` there, which is the heat the support removes.
+    // f − K T − C dT/dt on a held DOF is the power removed by its temperature constraint.
     let mut kt = vec![0.0; sys.k.n];
-    sys.k.spmv(t, &mut kt);
+    sys.k.spmv(evaluated, &mut kt);
     let mut flow = vec![0.0; sys.k.n];
-    for &dof in fixed {
-        flow[dof as usize] = -(kt[dof as usize] - sys.f[dof as usize]);
+    for &(dof, _) in &rc.fixed {
+        flow[dof as usize] = sys.f[dof as usize] - kt[dof as usize] - capacity_rate[dof as usize];
     }
     let mut res = blank(solver);
     res.reaction_quantity = crate::units::ReactionQuantity::Power;
     res.fields.insert(Field::Temperature, vector_field(t, 1));
     res.fields.insert(Field::Reaction, vector_field(&flow, 1));
     res.scalars.insert("min_det_j".to_string(), sys.min_det_j);
-    res.scalars.insert("applied_total_x".to_string(), sys.applied);
+    let outgoing: f64 = sys.film.iter().zip(evaluated).map(|(h, t)| h * t).sum();
+    res.scalars.insert("applied_total_x".to_string(), sys.applied - outgoing);
+    res.scalars.insert("storage_power".to_string(), capacity_rate.iter().sum());
+    // Scale the conservation residual by the assembled power terms (a backward-error
+    // denominator), not the net power, which legitimately vanishes at film equilibrium.
+    let matrix_power: f64 =
+        sys.k.vals.iter().zip(&sys.k.col_idx).map(|(k, j)| (k * evaluated[*j as usize]).abs()).sum();
+    let power_scale =
+        matrix_power + sys.f.iter().map(|f| f.abs()).sum::<f64>() + capacity_rate.iter().map(|c| c.abs()).sum::<f64>();
+    res.scalars.insert("power_balance_scale".to_string(), power_scale);
     res.scalars.insert("applied_total_y".to_string(), 0.0);
     res.scalars.insert("applied_total_z".to_string(), 0.0);
     res.scalars.insert("rel_residual".to_string(), res.solver.rel_residual);
@@ -270,6 +286,7 @@ pub fn transient(
     let n_steps = (t_end / dt).round().max(1.0) as usize;
     let every = output_every.max(1);
     let mut history = History { field: Field::Temperature, times: vec![0.0], values: vec![t.clone()] };
+    let mut previous = Vec::new();
     let mut rhs_full = vec![0.0; a.n];
     let mut rhs_f = vec![0.0; red.free.len()];
     let mut t_f = vec![0.0; red.free.len()];
@@ -285,7 +302,7 @@ pub fn transient(
         // iterative solvers, which can run out of iterations.
         solver = factored.solve(&rhs_f, &mut t_f).expect("a factorised solve");
         solver.iterations = step;
-        t = expand(&red, &t_f);
+        previous = std::mem::replace(&mut t, expand(&red, &t_f));
         for (i, &dof) in red.fixed.iter().enumerate() {
             t[dof as usize] = red.u_fixed[i] * scale;
         }
@@ -295,7 +312,11 @@ pub fn transient(
         }
         report(&mut progress, "solve", 0.1 + 0.8 * step as f64 / n_steps as f64, "stepping in time")?;
     }
-    let mut res = finish(p, &sys, &rc, &red.fixed, &t, solver);
+    let evaluated: Vec<f64> = previous.iter().zip(&t).map(|(old, new)| (1.0 - theta) * old + theta * new).collect();
+    let rate: Vec<f64> = previous.iter().zip(&t).map(|(old, new)| (new - old) / dt).collect();
+    let mut capacity_rate = vec![0.0; cap.n];
+    cap.spmv(&rate, &mut capacity_rate);
+    let mut res = finish(p, &sys, &rc, &t, &evaluated, &capacity_rate, solver);
     res.scalars.insert("dt".to_string(), dt);
     res.scalars.insert("steps".to_string(), n_steps as f64);
     res.history = Some(history);

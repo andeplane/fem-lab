@@ -298,8 +298,14 @@ pub struct ResultSummary {
     /// Force for structural Results; power for thermal Results, retained with the solved state.
     pub reaction_quantity: crate::units::ReactionQuantity,
     pub reactions: Vec<ReactionRow>,
-    /// Applied force vector or thermal power in component 0 (remaining components zero).
+    /// Applied force vector or net thermal power (flux/source plus incoming minus outgoing
+    /// convection) in component 0, with remaining thermal components zero.
     pub applied_total: [Valued; 3],
+    /// Thermal stored-energy rate in power display units (zero for steady heat). Transient
+    /// power totals/reactions use the last θ-method integration stage; the temperature field
+    /// itself is at the final time. Positive reactions remove heat: applied − removed = storage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_power: Option<Valued>,
     /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
     /// shape is the Result field named `mode:k`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -307,9 +313,10 @@ pub struct ResultSummary {
     /// One row per output time of a transient Step: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
-    /// |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
-    /// by a prescribed displacement — where both totals are zero — still reports a meaningful
-    /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
+    /// Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
+    /// conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
+    /// Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
+    /// Zero is perfect balance; values above 1e-9 fail the report's conservation check.
     pub balance: f64,
 }
 
@@ -463,7 +470,7 @@ pub enum Output {
         name: String,
     },
     Solve {
-        summary: ResultSummary,
+        summary: Box<ResultSummary>,
     },
     Study {
         report: StudyReport,

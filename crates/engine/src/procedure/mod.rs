@@ -123,7 +123,8 @@ pub struct StepResult {
     /// Per-component extremes of every nodal field, in `Field` order.
     pub extremes: Vec<(Field, Extremum)>,
     /// Total force (N) or removed thermal power (W) per Constraint, in Model order.
-    /// Thermal power occupies component 0; components 1 and 2 are zero.
+    /// Thermal power occupies component 0; components 1 and 2 are zero. Transient powers
+    /// use the last θ-method stage, including the stored-energy rate.
     pub reactions: Vec<(String, [f64; 3])>,
     /// Natural frequencies in Hz, ascending; empty unless the Step was modal.
     pub frequencies: Vec<f64>,

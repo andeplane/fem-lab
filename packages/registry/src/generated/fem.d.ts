@@ -202,7 +202,9 @@ export interface Fem {
      * temperature field and turns it into thermal stress. The remaining fields belong to one
      * procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-     * `dtFactor` and `outputEvery` to explicit.
+     * `dtFactor` and `outputEvery` to explicit. Heat Results report net applied power,
+     * positive removed heat and stored-energy rate; transient powers belong to the last
+     * θ-method integration stage, while temperature fields belong to its endpoint.
      */
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**

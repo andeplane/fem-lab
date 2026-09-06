@@ -309,6 +309,37 @@ power values to `1e-9 W`; positive reaction retains the current removed-heat con
 Result totals/extremes, probes and paths report W independently of force=N/kN and convert
 to kW when the power display unit changes. The raw field stays SI, the VTU array is labelled
 `ReactionPower_W`, and the report/viewer label its scalar as power. Mechanical reactions
-retain force units and their vector components. [Issue #208](https://github.com/andeplane/fem-lab/issues/208)
-separately tracks the existing balance diagnostic sign, net-convection and transient-storage
-defects; the physical reaction checks here do not treat that diagnostic as an oracle.
+retain force units and their vector components. The conservation cases below (#208) also
+verify the corrected signs, net convection and stored-energy rate against physical oracles.
+
+
+### Steady and transient heat conservation (#208)
+
+For all eight element families, two- and four-cell bars with `q_surface=1000 W/m²` and
+`q_volume=500 W/m³` remove `q_surface*A + q_volume*V` at the held end. A second case has
+no held temperature and convects at the opposite end: the film removes all input, net
+applied power is zero, and its face is exactly `T_inf + q_surface/h`. Two overlapping
+films with equal coefficients and different ambient temperatures check additive assembly
+against their weighted effective ambient. With zero flux it
+settles to `T_inf` and still reports a small conservation residual, not a spurious failure
+caused by dividing roundoff by zero net heat flow. Absolute-zero equilibrium separately
+checks a zero assembled-power scale. Power errors stay below `1e-8 W`.
+
+The independent transient field `T(x,t)=(10+4x)(1+t)` on a unit-long `0.1×0.1 m` bar with
+`rho=cp=1` has exactly `dU/dt=0.12 W`. Tests prescribe that field on two meshes for
+`theta=0.5,0.75,1`, with and without an end film. The final-step conduction gradient is
+`4*(2+theta)`; the cold-end storage contribution is the exact basis integral
+`0.01*dx*(30+4*dx)/6`. These give independent cold-end reaction and net-film powers to
+`1e-10 W`. Saving only the initial/final history rows proves that the last internal state,
+not the last saved output, defines the final-step powers. A source-driven uniform ramp
+with free interior DOFs separately checks `dT/dt=q/(rho*cp)=1 K/s`, zero support heat flow
+and `dU/dt=36.11 kW` through the registry, on two meshes and two theta values.
+
+Positive thermal reaction is removed power. The conservation equation is
+`net applied − removed − storage = 0`, with net convection `integral h*(T_inf−T) dA`.
+Transient powers use `T_theta=(1−theta)T_old+theta*T_new` and
+`C*(T_new−T_old)/dt`, matching the discrete integration equation; temperature fields and
+history remain endpoint values. The reported relative residual uses the assembled-power
+(backward-error) scale `sum|Kij*T_theta_j| + sum|f_i| + sum|(C*dT/dt)_i|`. This remains
+meaningful at zero net flow. Tests independently assert absolute physical powers as well
+as this normalized residual, so an oversized denominator cannot stand in for conservation.

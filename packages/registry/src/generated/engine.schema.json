@@ -854,7 +854,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat Results report net applied power,\npositive removed heat and stored-energy rate; transient powers belong to the last\nθ-method integration stage, while temperature fields belong to its endpoint.",
         "type": "object",
         "properties": {
           "name": {
@@ -2469,7 +2469,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
         "type": "string",
         "enum": [
           "displacement",
@@ -3013,7 +3013,7 @@
     ],
     "$defs": {
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
         "type": "string",
         "enum": [
           "displacement",
@@ -4121,13 +4121,24 @@
             }
           },
           "appliedTotal": {
-            "description": "Applied force vector or thermal power in component 0 (remaining components zero).",
+            "description": "Applied force vector or net thermal power (flux/source plus incoming minus outgoing\nconvection) in component 0, with remaining thermal components zero.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
             },
             "minItems": 3,
             "maxItems": 3
+          },
+          "storagePower": {
+            "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "frequencies": {
             "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
@@ -4144,7 +4155,7 @@
             }
           },
           "balance": {
-            "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
+            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           }
@@ -5247,7 +5258,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat Results report net applied power,\npositive removed heat and stored-energy rate; transient powers belong to the last\nθ-method integration stage, while temperature fields belong to its endpoint.",
             "type": "object",
             "properties": {
               "name": {
@@ -6786,7 +6797,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
         "type": "string",
         "enum": [
           "displacement",
@@ -7392,13 +7403,24 @@
             }
           },
           "appliedTotal": {
-            "description": "Applied force vector or thermal power in component 0 (remaining components zero).",
+            "description": "Applied force vector or net thermal power (flux/source plus incoming minus outgoing\nconvection) in component 0, with remaining thermal components zero.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
             },
             "minItems": 3,
             "maxItems": 3
+          },
+          "storagePower": {
+            "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "frequencies": {
             "description": "Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s\nshape is the Result field named `mode:k`.",
@@ -7415,7 +7437,7 @@
             }
           },
           "balance": {
-            "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
+            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           }
@@ -9205,7 +9227,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
         "type": "string",
         "enum": [
           "displacement",
@@ -10554,7 +10576,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit. Heat Results report net applied power,\npositive removed heat and stored-energy rate; transient powers belong to the last\nθ-method integration stage, while temperature fields belong to its endpoint.",
             "type": "object",
             "properties": {
               "name": {
