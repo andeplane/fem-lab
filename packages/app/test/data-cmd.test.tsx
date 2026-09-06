@@ -145,12 +145,13 @@ describe('the shell', () => {
     render(null, root);
   });
 
-  it('keeps the drawer outside the workspace once a Model exists, and reserves its width', async () => {
+  it('keeps the drawer outside the workspace once a Model exists', async () => {
     const { root } = mount({ panels: { assistant: true } });
     for (let i = 0; i < 40 && !root.querySelector('aside.assistant'); i++) await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 5)));
     expect(root.querySelector('aside.assistant')).not.toBeNull();
     expect(root.querySelector('.workspace aside.assistant')).toBeNull();
-    expect(root.querySelector('.under-bar')!.className).toBe('under-bar with-assistant');
+    // A sibling of `.shell`, which is what lets it outlive the flip out of the start screen.
+    expect(root.querySelector('.shell ~ aside.assistant')).not.toBeNull();
   });
 
   // Issue #41: the start screen leads with the assistant composer, then New project, then the

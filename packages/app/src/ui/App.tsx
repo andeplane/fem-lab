@@ -529,7 +529,7 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       {started ? (
         <div class="shell">
           <TopBar s={s} dispatch={dispatch} />
-          <div class={s.panels['assistant'] === true ? 'under-bar with-assistant' : 'under-bar'}>
+          <div class="under-bar">
             <Banner s={s} dispatch={dispatch} />
             <div class="workspace">
               <ModelTree s={s} dispatch={dispatch} />
@@ -551,9 +551,9 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       {registry ? <TutorialPanel registry={registry} store={store} /> : null}
       {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
           opens on the start screen and keeps its conversation when the workspace comes up around
-          it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
-          layout of the design while the top bar stays full-width. Closing it still clears the
-          conversation: that lives in the panel's own refs. */}
+          it. `style.css` reserves its 392 px on `.workspace` when the window is wide enough, so
+          the five-column layout of the design holds and the top bar stays full-width. Closing it
+          still clears the conversation: that lives in the panel's own refs. */}
       {registry && s.panels['assistant'] ? <AssistantPanel registry={registry} store={store} /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}

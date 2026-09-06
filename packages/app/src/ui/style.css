@@ -1998,12 +1998,13 @@ input.model-name:focus {
     margin-right: 392px;
   }
 }
-/* The start screen is not the shell, so it has no `.under-bar` to carry the reservation; the
-   drawer is its next sibling either way (Chromium only, ADR 0014). The column keeps its width
-   and centres in what is left, rather than being squeezed by padding. */
-.start:has(~ .assistant) {
-  width: min(880px, 100% - 416px);
-  margin-right: 416px;
+/* The start screen has no `.workspace` to carry the reservation, and the drawer would otherwise
+   sit over its composer. Wide enough for the 880 px column plus the drawer, it moves aside and
+   centres in what is left; narrower, the drawer simply floats over it. */
+@media (min-width: 1320px) {
+  .start:has(~ .assistant) {
+    margin-right: 416px;
+  }
 }
 
 /* ── narrow desktops ───────────────────────────────────────────────────────────────────── */
