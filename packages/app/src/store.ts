@@ -5,12 +5,12 @@ import type { Capabilities, JournalDump, ModelSummary, ObjectRef, OpenProject, P
 import type { HostCaps } from './capabilities';
 import { projectSkills, type ProjectFolder } from './ai/project';
 import { BUILTIN_SKILLS } from './ai/skills';
-import { TABS, type Tab } from './tabs';
+import { TABS, type Tab } from './ui/tabs';
 import { getAt, setAt } from './ui/schema';
 import type { ColormapName } from './viewer/colormap';
 
 export type ViewMode = 'geometry' | 'mesh' | 'results';
-export { TABS, type Tab } from './tabs';
+export { TABS, type Tab } from './ui/tabs';
 export type ResizablePanel = 'tree' | 'properties' | 'bottom' | 'assistant';
 export type PanelSizes = Record<ResizablePanel, number>;
 export const DEFAULT_PANEL_SIZES: PanelSizes = { tree: 274, properties: 308, bottom: 252, assistant: 392 };
