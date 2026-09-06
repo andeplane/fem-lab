@@ -321,7 +321,9 @@ export interface Fem {
      * checks with a hand calculation where one applies, and the Journal as an appendix. Nothing
      * in it depends on the clock or the machine, so two runs of the same Journal produce
      * byte-identical text. `step` reports one Step instead of every solved one; `include` picks
-     * sections. Formulas are `$$…$$` for KaTeX.
+     * sections. Automatic hand references require a current static Step on an uncut 3D lattice
+     * box with one fully clamped end and one single-component force on the opposite end;
+     * other cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.
      */
     report(args?: Omit<Extract<Query, { query: 'query.report' }>, 'query'>): Promise<ReportText>;
     /**
