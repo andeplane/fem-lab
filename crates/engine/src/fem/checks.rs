@@ -31,23 +31,33 @@ pub fn all(p: &Problem<'_>) -> Vec<Error> {
     out
 }
 
-/// A heat Problem with neither a fixed temperature nor a convection boundary: `(K + H) T = f`
-/// is singular, because adding a constant to `T` changes nothing. This is the heat analogue of
-/// the rigid-body check (plan A §7): "no Dirichlet and no convection".
+/// A heat Problem with no fixed temperature and no boundary that carries heat away in
+/// proportion to the temperature: `(K + H) T = f` is singular, because adding a constant to `T`
+/// changes nothing. This is the heat analogue of the rigid-body check (plan A §7). A radiating
+/// face holds the temperature exactly as a convecting one does — its film is
+/// `sigma eps (T + Tinf)(T^2 + Tinf^2)`, which is a film like any other.
 fn unheld_temperature(p: &Problem<'_>) -> Option<Error> {
     let held = p.constraints.iter().any(|c| c.dofs[0]);
-    let convected = p.heat_loads.iter().any(|l| matches!(l, HeatLoad::Convection { .. }));
-    if held || convected {
+    let filmed = p.heat_loads.iter().any(holds_temperature);
+    if held || filmed {
         return None;
     }
     Some(
         Error::new(
             ErrorCode::ConstraintRigidModes,
-            "the temperature is not held anywhere: the Step has no fixed temperature and no convection boundary",
+            "the temperature is not held anywhere: the Step has no fixed temperature and no convection or radiation boundary",
         )
         .at("constraints")
-        .suggest("constraint.temperature on a Set, or load.convection on a face"),
+        .suggest("constraint.temperature on a Set, or load.convection or load.radiation on a face"),
     )
+}
+
+/// A load whose flux grows with the surface temperature, so it pins the temperature level.
+fn holds_temperature(load: &HeatLoad) -> bool {
+    match load {
+        HeatLoad::Convection { .. } | HeatLoad::Radiation { .. } => true,
+        HeatLoad::Flux { .. } | HeatLoad::Source { .. } => false,
+    }
 }
 
 /// A Body whose blocks have no material: nothing can be integrated over it.
