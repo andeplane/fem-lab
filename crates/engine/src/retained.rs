@@ -79,7 +79,7 @@ impl Engine {
         self.retained.clear();
     }
 
-    pub(crate) fn record(&self, step: Option<&str>, id: Option<&str>) -> Result<&ResultRecord, Error> {
+    pub(crate) fn result_record(&self, step: Option<&str>, id: Option<&str>) -> Result<&ResultRecord, Error> {
         if let Some(id) = id {
             let record = self.retained.iter().find(|record| record.id == id).ok_or_else(|| {
                 Error::new(ErrorCode::NotFound, format!("Result '{id}' is not retained by this Engine"))
@@ -172,7 +172,7 @@ impl Engine {
         if id.is_none() {
             self.current_result(step)?;
         }
-        self.record(step, id)
+        self.result_record(step, id)
     }
 
     pub(crate) fn query_field(

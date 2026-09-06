@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use femlab_geometry::{Shape, Solid};
+use femlab_geometry::{RegionPredicate, Shape, Solid};
 
 use crate::command::{Command, ExportFormat, IdealisationSpec, ObjectKind};
 use crate::error::{Error, ErrorCode, Warning};
@@ -132,19 +132,7 @@ impl Engine {
                 Ok(Ack { seq: self.revision(), revision: self.revision(), hash, warnings: self.warnings(), output })
             }
             Ok(output) => {
-                if matches!(cmd, Command::ModelNew { .. }) {
-                    self.undo.clear();
-                    self.journal = Journal::default();
-                } else {
-                    self.undo.push(before);
-                    if self.undo.len() > UNDO_DEPTH {
-                        self.undo.remove(0);
-                    }
-                }
-                self.redo.clear();
-                let hash = self.model_hash();
-                let entry = self.journal.append(cmd, hash.clone());
-                let seq = entry.seq;
+                let (seq, hash) = self.record(cmd, before);
                 Ok(Ack { seq, revision: self.revision(), hash, warnings: self.warnings(), output })
             }
             Err(e) => {
@@ -153,6 +141,23 @@ impl Engine {
                 Err(e)
             }
         }
+    }
+
+    /// Keep one bounded undo snapshot per recorded Command, including skipped replay work.
+    fn record(&mut self, cmd: Command, before: Model) -> (u32, String) {
+        if matches!(cmd, Command::ModelNew { .. }) {
+            self.undo.clear();
+            self.journal = Journal::default();
+        } else {
+            self.undo.push(before);
+            if self.undo.len() > UNDO_DEPTH {
+                self.undo.remove(0);
+            }
+        }
+        self.redo.clear();
+        let hash = self.model_hash();
+        let seq = self.journal.append(cmd, hash.clone()).seq;
+        (seq, hash)
     }
 
     fn undo(&mut self, steps: u32, expected_journal: Option<&String>) -> Result<Output, Error> {
@@ -228,7 +233,8 @@ impl Engine {
 
     /// Replay entries onto a fresh Model; returns the recomputed hash after each entry and
     /// fails on the first entry whose hash differs from the recorded one when `verify`.
-    /// With `skip_solves`, `solve.run` and `study.converge` are appended unrun.
+    /// With `skip_solves`, numerical work is omitted while every Command still has an undo
+    /// snapshot. A non-restoring study applies its final mesh settings without computing Results.
     pub async fn replay(
         &mut self,
         entries: &[JournalEntry],
@@ -239,7 +245,7 @@ impl Engine {
         self.journal = Journal::default();
         self.undo.clear();
         self.redo.clear();
-        self.solids.clear();
+        self.invalidate_geometry();
         self.clear_results();
         self.studies.clear();
         let mut hashes = Vec::with_capacity(entries.len());
@@ -247,9 +253,21 @@ impl Engine {
         for e in entries {
             let skip = skip_solves && matches!(e.cmd, Command::SolveRun { .. } | Command::StudyConverge { .. });
             let hash = if skip {
-                let hash = self.model_hash();
-                self.journal.append(e.cmd.clone(), hash.clone());
-                hash
+                let before = self.model.clone();
+                if let Command::StudyConverge { sizes, restore: Some(false), .. } = &e.cmd {
+                    let (settings, h) =
+                        self.study_mesh(sizes).map_err(|err| err.at(format!("journal entry {}", e.seq)))?;
+                    self.model.mesh = Some(MeshSettings {
+                        mesher: crate::mesh::scale_mesher(
+                            &settings.mesher,
+                            h[0],
+                            *h.last().expect("at least two sizes"),
+                        ),
+                        ..settings
+                    });
+                }
+                self.mesh = None;
+                self.record(e.cmd.clone(), before).1
             } else {
                 self.dispatch(e.cmd.clone(), &mut nop)
                     .await
@@ -317,6 +335,29 @@ impl Engine {
                 text: "no constraints; a static solve needs supports (constraint.fix)".into(),
                 where_: None,
             });
+        } else if let Some(body) = implicit {
+            // Box regions select geometrically across the mesh; Body regions and faces name
+            // their Body explicitly. A constraint left on another Body is not a support
+            // for the mapped mesher's implicit Body. This is a reference check, not a claim
+            // that the selected DOFs eliminate every rigid mode.
+            let targeted = m.constraints.iter().any(|c| {
+                if let Some(set) = m.sets.iter().find(|s| s.name == c.on) {
+                    match &set.source {
+                        SetSource::Face { of, .. } => of == body,
+                        SetSource::Region { where_: RegionPredicate::Body { name } } => name == body,
+                        SetSource::Region { where_: RegionPredicate::Bbox { .. } } => true,
+                    }
+                } else {
+                    c.on.rsplit_once('.').is_some_and(|(prefix, _)| prefix == body)
+                }
+            });
+            if !targeted {
+                w.push(Warning {
+                    code: "model.unconstrained".into(),
+                    text: format!("no constraints target Body '{body}'; add supports on its Sets with constraint.fix"),
+                    where_: Some(format!("body '{body}'")),
+                });
+            }
         }
         if m.loads.is_empty() && has_geometry {
             w.push(Warning {

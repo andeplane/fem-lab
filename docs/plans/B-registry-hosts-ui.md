@@ -556,7 +556,9 @@ pub struct ModelFile { pub format: String /* "femlab/1" */, pub engine_version: 
   `dispatch` each entry in order (which also rebuilds the undo stack); per-entry `hash_after` is
   recomputed and compared, and the first mismatch is reported with its `seq` (this is how the
   native-vs-wasm CI job localises a divergence). With `skip_solves`, `solve.run`/`study.converge`
-  entries are appended to the Journal unchanged (so `hash_after` still lines up) without running.
+  calculations are omitted while every entry retains its undo snapshot and recomputed hash.
+  A `study.converge` with `restore: false` still applies its final mesh settings, so skipping
+  numerical work preserves the same Model and Journal as normal replay (#145).
 - **Script export** (`Journal::as_script`, exposed as `query.script`): one line per entry,
   `await fem.geometry.addBox({ name: "beam", size: ["1 m", "100 mm", "100 mm"] });` with the `cmd`
   key removed. The formatter walks the `serde_json::Value` (never a regex over text, which a string

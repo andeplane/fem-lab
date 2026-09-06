@@ -744,6 +744,132 @@ fn file_round_trip_replay_and_divergence() {
     assert_eq!(e3.revision(), 10);
 }
 
+/// Compare snapshots with a real replay of each prefix, and inspect exported commands directly.
+fn assert_replay_prefix(e: &mut Engine, entries: &[femlab_engine::JournalEntry]) {
+    let mut normal = engine();
+    pollster::block_on(normal.replay(entries, false, true)).unwrap();
+    assert_eq!(e.model(), normal.model());
+    assert_eq!(e.export_file().model, normal.export_file().model);
+    assert_eq!(e.journal().entries, entries);
+    let QueryResult::Script(script) = e.query(Query::Script {}).unwrap() else { panic!("a script") };
+    let commands: Vec<_> = script.text.lines().filter_map(femlab_engine::journal::parse_line).collect();
+    assert_eq!(commands, entries.iter().map(|entry| entry.cmd.clone()).collect::<Vec<_>>());
+}
+
+#[test]
+fn skipped_replay_keeps_every_undo_and_redo_aligned_with_the_journal() {
+    let mut source = engine();
+    solved_cantilever(&mut source, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    let entries = source.journal().entries.clone();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&entries, true, true)).unwrap();
+    assert_eq!(replayed.query(Query::Result { step: None, result_id: None }).unwrap_err().code, ErrorCode::NotFound);
+    assert_replay_prefix(&mut replayed, &entries);
+    ok(&mut replayed, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(replayed.model().steps.len(), 1, "undoing the skipped solve must keep step.add's Step");
+    assert_replay_prefix(&mut replayed, &entries[..entries.len() - 1]);
+    for end in (1..entries.len() - 1).rev() {
+        ok(&mut replayed, r#"{"cmd":"journal.undo"}"#);
+        assert_replay_prefix(&mut replayed, &entries[..end]);
+    }
+    assert!(!replayed.can_undo(), "model.new is the history boundary");
+    for end in 2..=entries.len() {
+        ok(&mut replayed, r#"{"cmd":"journal.redo"}"#);
+        assert_replay_prefix(&mut replayed, &entries[..end]);
+    }
+    assert!(!replayed.can_redo());
+    assert_eq!(replayed.query(Query::Result { step: None, result_id: None }).unwrap_err().code, ErrorCode::NotFound);
+}
+
+#[test]
+fn skipped_studies_preserve_their_mesh_mutation_and_history() {
+    for restore in [false, true] {
+        let mut source = engine();
+        cantilever(&mut source);
+        ok(&mut source, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+        let original = source.model().clone();
+        study(
+            &mut source,
+            &format!(
+                r#"{{"cmd":"study.converge","step":"static","sizes":["100 mm","50 mm"],"quantity":{TIP_UZ},"restore":{restore}}}"#
+            ),
+        );
+        let entries = source.journal().entries.clone();
+        let mut replayed = engine();
+        pollster::block_on(replayed.replay(&entries, true, true)).unwrap();
+        assert_replay_prefix(&mut replayed, &entries);
+        let expected_elements = if restore { 2 } else { 16 };
+        assert_eq!(replayed.mesh().unwrap().mesh.n_elems(), expected_elements, "halving h doubles each division count");
+        assert_eq!(
+            replayed.query(Query::Result { step: None, result_id: None }).unwrap_err().code,
+            ErrorCode::NotFound
+        );
+        ok(&mut replayed, r#"{"cmd":"journal.undo"}"#);
+        assert_eq!(replayed.model(), &original);
+        assert_replay_prefix(&mut replayed, &entries[..entries.len() - 1]);
+        ok(&mut replayed, r#"{"cmd":"journal.redo"}"#);
+        assert_replay_prefix(&mut replayed, &entries);
+    }
+}
+
+#[test]
+fn skipped_nonrestoring_study_rejects_invalid_mesh_inputs_before_recording() {
+    let mut source = engine();
+    cantilever(&mut source);
+    let before = source.export_file();
+    let mut entries = before.journal.entries.clone();
+    entries.push(femlab_engine::JournalEntry {
+        seq: entries.len() as u32,
+        cmd: serde_json::from_str(
+            r#"{"cmd":"study.converge","step":"static","sizes":["1 m"],
+                "quantity":{"kind":"max","field":"displacement"},"restore":false}"#,
+        )
+        .unwrap(),
+        hash_after: source.model_hash(),
+    });
+    let mut replayed = engine();
+    let error = pollster::block_on(replayed.replay(&entries, true, true)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert_eq!(error.where_.as_deref(), Some("journal entry 9"));
+    assert_eq!(replayed.export_file(), before, "the failed study changes neither Model nor Journal");
+}
+
+#[test]
+fn empty_replay_clears_existing_mesh_and_history() {
+    let mut e = engine();
+    solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert!(e.can_redo());
+    assert!(e.mesh().unwrap().mesh.n_nodes() > 0);
+    pollster::block_on(e.replay(&[], true, true)).unwrap();
+    let mut fresh = engine();
+    assert_eq!(e.export_file(), fresh.export_file());
+    assert!(!e.can_undo() && !e.can_redo());
+    assert_eq!(e.query(Query::Result { step: None, result_id: None }).unwrap_err().code, ErrorCode::NotFound);
+    assert_eq!(e.query(Query::Mesh {}).unwrap_err(), fresh.query(Query::Mesh {}).unwrap_err());
+}
+
+#[test]
+fn skipped_replay_respects_the_bounded_undo_depth() {
+    let mut e = engine();
+    cantilever(&mut e);
+    let model = e.model().clone();
+    let mut journal = e.journal().clone();
+    let solve: Command = serde_json::from_str(r#"{"cmd":"solve.run","step":"static"}"#).unwrap();
+    let depth = femlab_engine::engine::UNDO_DEPTH;
+    for _ in 0..depth + 5 {
+        journal.append(solve.clone(), e.model_hash());
+    }
+    pollster::block_on(e.replay(&journal.entries, true, true)).unwrap();
+    ok(&mut e, &format!(r#"{{"cmd":"journal.undo","steps":{depth}}}"#));
+    assert_eq!(e.model(), &model);
+    assert_eq!(e.journal().entries, journal.entries[..journal.len() - depth]);
+    assert!(!e.can_undo());
+    ok(&mut e, &format!(r#"{{"cmd":"journal.redo","steps":{depth}}}"#));
+    assert_eq!(e.model(), &model);
+    assert_eq!(e.journal(), &journal);
+}
+
 #[test]
 fn convert_query() {
     let mut e = engine();
@@ -4227,6 +4353,41 @@ fn a_convergence_study_scales_every_mesher() {
     );
     assert_eq!(turned.rows[0].dofs, 3 * 3 * 3 * 3, "2 x 2 elements through 2 segments");
     assert_eq!(turned.rows[1].dofs, 3 * 5 * 5 * 5, "and 4 x 4 through 4 segments");
+}
+
+#[test]
+fn mapped_body_warns_until_a_constraint_targets_its_sets() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"supports"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"other","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"other.xmin"}"#);
+    ok(&mut e, COOK);
+    let warnings = e.warnings();
+    let warning = warnings.iter().find(|w| w.code == "model.unconstrained").unwrap();
+    assert_eq!(warning.where_.as_deref(), Some("body 'sheet'"));
+    assert!(warning.text.contains("constraint.fix"));
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"sheet.left"}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+    // An explicitly named face still belongs to its declared Body, not its display name.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"support","of":"other","where":{"kind":"normal","normal":[-1,0,0]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"support"}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+    // A Body region is explicit too: an unrelated Body's Set cannot support the mapped one.
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"region","where":{"kind":"body","name":"other"}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"region"}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+    // Box predicates can select the mapped mesh directly, without naming a Body.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"region","where":{"kind":"bbox","min":["0 m","0 m","0 m"],"max":["0 m","44 m","0 m"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"region"}"#);
+    assert!(!e.warnings().iter().any(|w| w.code == "model.unconstrained"));
+    ok(&mut e, r#"{"cmd":"constraint.remove","name":"hold"}"#);
+    assert!(e.warnings().iter().any(|w| w.code == "model.unconstrained"));
 }
 
 /// The mapped mesher's implicit Body is a Body: it takes a material like any other, appears in

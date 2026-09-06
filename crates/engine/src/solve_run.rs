@@ -398,23 +398,7 @@ impl Engine {
             .step(step_name)
             .ok_or_else(|| Error::not_found("step", step_name, &self.model.names(ObjectKind::Step)))?
             .clone();
-        let settings = self.model.mesh.clone().ok_or_else(|| {
-            Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
-                .suggest("mesh.set { mesher: { kind: \"lattice\", size: \"25 mm\" } }")
-        })?;
-        if sizes.len() < 2 {
-            return Err(
-                Error::schema(format!("a convergence study needs at least two sizes, got {}", sizes.len())).at("sizes")
-            );
-        }
-        let mut h = Vec::with_capacity(sizes.len());
-        for (i, q) in sizes.iter().enumerate() {
-            let s = q.si().map_err(|e| e.at(format!("sizes[{i}]")))?;
-            if !(s.is_finite() && s > 0.0) {
-                return Err(Error::schema(format!("size {s} must be finite and positive")).at(format!("sizes[{i}]")));
-            }
-            h.push(s);
-        }
+        let (settings, h) = self.study_mesh(sizes)?;
         let mut progress = on_progress;
         let mut rows = Vec::with_capacity(h.len());
         let mut values = Vec::with_capacity(h.len());
@@ -472,6 +456,28 @@ impl Engine {
         Ok(Output::Study { report })
     }
 
+    /// Mesh inputs shared by a running study and replay that omits its numerical work.
+    pub(crate) fn study_mesh(&self, sizes: &[Q<Length>]) -> Result<(MeshSettings, Vec<f64>), Error> {
+        let settings = self.model.mesh.clone().ok_or_else(|| {
+            Error::new(ErrorCode::ModelIllPosed, "no mesh settings; call mesh.set")
+                .suggest("mesh.set { mesher: { kind: \"lattice\", size: \"25 mm\" } }")
+        })?;
+        if sizes.len() < 2 {
+            return Err(
+                Error::schema(format!("a convergence study needs at least two sizes, got {}", sizes.len())).at("sizes")
+            );
+        }
+        let mut h = Vec::with_capacity(sizes.len());
+        for (i, q) in sizes.iter().enumerate() {
+            let s = q.si().map_err(|e| e.at(format!("sizes[{i}]")))?;
+            if !(s.is_finite() && s > 0.0) {
+                return Err(Error::schema(format!("size {s} must be finite and positive")).at(format!("sizes[{i}]")));
+            }
+            h.push(s);
+        }
+        Ok((settings, h))
+    }
+
     /// One [`QuantityOfInterest`] read off a Result, in the Model's display units.
     fn quantity_of(&self, res: &StepResult, mesh: &Mesh, q: &QuantityOfInterest) -> Result<(f64, String), Error> {
         let (field, component) = match q {
@@ -514,7 +520,7 @@ impl Engine {
 
     /// The stored Result of a Step, or `not-found` naming the Steps that have one.
     pub(crate) fn stored<'e>(&'e self, step: Option<&str>) -> Result<(&'e str, &'e String, &'e StepResult), Error> {
-        let record = self.record(step, None)?;
+        let record = self.result_record(step, None)?;
         Ok((&record.step, &record.input_hash, &record.result))
     }
 
@@ -569,7 +575,7 @@ impl Engine {
     }
 
     pub(crate) fn selected_summary(&self, step: Option<&str>, id: Option<&str>) -> Result<ResultSummary, Error> {
-        let record = self.record(step, id)?;
+        let record = self.result_record(step, id)?;
         let (name, hash, res) = (&record.step, &record.input_hash, &record.result);
         let m = if id.is_some() { &record.model } else { &self.model };
         let applied = ["x", "y", "z"].map(|a| res.scalars[&format!("applied_total_{a}")]);

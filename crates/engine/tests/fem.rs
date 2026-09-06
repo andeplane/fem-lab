@@ -13,7 +13,7 @@ use femlab_engine::fem::assembly::{
     assemble_stiffness, expand, pattern, reactions, reduce, resolve, Assembled, Csr, Pattern, ResolvedConstraints,
 };
 use femlab_engine::fem::checks;
-use femlab_engine::fem::element::{element_for, Element, ElementCtx, FaceLoad, Iso, Material};
+use femlab_engine::fem::element::{element_for, min_det_j, Element, ElementCtx, FaceLoad, Iso, Material};
 use femlab_engine::fem::heat::HeatLoad;
 use femlab_engine::fem::loads::{assemble_loads, face_set_area, Load, LoadTotals};
 use femlab_engine::fem::material::{
@@ -1089,6 +1089,100 @@ fn one_distorted_element_reproduces_every_constant_strain_state() {
                 }
             }
         }
+    }
+}
+
+/// A1 across SI length scales: constant strain gives the same stress, while its energy
+/// and the heat integral follow the independently known physical volume (or weighted area).
+#[test]
+fn element_patch_and_integrals_are_valid_from_nanometres_to_megametres() {
+    let mat = steel();
+    for kind in ALL_KINDS {
+        let el = element_for(kind);
+        let (original, base, rbar) = simple(kind);
+        let (nn, nd, dim) = (kind.n_nodes(), el.n_dof(), kind.dim());
+        let simplex = kind.n_corners() == dim + 1;
+        let reference = if simplex {
+            if dim == 3 {
+                1.0 / 6.0
+            } else {
+                0.5
+            }
+        } else {
+            2.0f64.powi(dim as i32)
+        };
+        for length in [1e-9f64, 1e-6, 1e-5, 1e-3, 1.0, 1e3, 1e6] {
+            let coords: Vec<f64> = original.iter().map(|x| length * x).collect();
+            let want_det = base / reference * length.powi(dim as i32);
+            let det = min_det_j(kind, &coords).expect("a positively oriented similar element");
+            assert!((det / want_det - 1.0).abs() < 1e-12, "{kind:?} L={length}: det {det} vs {want_det}");
+            // An off-centre point mapped analytically, independent of the Newton inversion.
+            let xi = [0.2, 0.1, if dim == 3 { 0.15 } else { 0.0 }];
+            let point = if simplex { simplex_map(xi) } else { box_map(xi) }.map(|x| length * x);
+            close(&el.inverse_map(&coords, point).expect("an interior point"), &xi, 1e-12);
+            for id in idealisations(kind) {
+                let volume = weighted(&id, base * length.powi(dim as i32), rbar * length);
+                let c = ctx(&coords, &mat, id.clone(), Formulation::Full);
+                let mut heat_k = vec![0.0; nn * nn];
+                femlab_engine::fem::heat::conductivity(kind, &c, &mut heat_k).expect("valid heat element");
+                let temperature: Vec<f64> = coords.iter().step_by(3).copied().collect();
+                let kt = mat_vec(&heat_k, nn, &temperature);
+                let energy: f64 = temperature.iter().zip(kt).map(|(t, q)| t * q).sum();
+                assert!((energy / (mat.k * volume) - 1.0).abs() < 1e-11, "{kind:?} {id:?} L={length}: heat");
+                for form in [Formulation::Full, Formulation::IncompatibleModes] {
+                    let c = ctx(&coords, &mat, id.clone(), form);
+                    let mut k = vec![0.0; nd * nd];
+                    el.stiffness(&c, &mut k).expect("valid stiffness");
+                    let (mut sig, mut eps) = (vec![0.0; el.n_gp() * VOIGT], vec![0.0; el.n_gp() * VOIGT]);
+                    for strain in patch_modes(&id) {
+                        let u = patch_displacement(kind, &id, &coords, &strain);
+                        let stress = expected_stress(&id, &strain);
+                        el.recover(&c, &u, &mut sig, &mut eps).expect("valid recovery");
+                        for gp in 0..el.n_gp() {
+                            close(&eps[gp * VOIGT..(gp + 1) * VOIGT], &strain, 1e-12);
+                            close(&sig[gp * VOIGT..(gp + 1) * VOIGT], &stress, 1e-10);
+                        }
+                        let ku = mat_vec(&k, nd, &u);
+                        let energy: f64 = u.iter().zip(ku).map(|(u, f)| u * f).sum();
+                        let want = volume * strain.iter().zip(stress).map(|(e, s)| e * s).sum::<f64>();
+                        assert!((energy / want - 1.0).abs() < 1e-10, "{kind:?} {id:?} {form:?} L={length}: energy");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn jacobian_rejects_inversion_and_relative_collapse_at_every_length_scale() {
+    let mat = steel();
+    for kind in ALL_KINDS {
+        let el = element_for(kind);
+        let (original, _, _) = simple(kind);
+        for length in [1e-9f64, 1e-5, 1.0, 1e6] {
+            for flatten in [-1.0, 0.0, 1e-16] {
+                let mut coords: Vec<f64> = original.iter().map(|x| length * x).collect();
+                for x in coords.iter_mut().skip(kind.dim() - 1).step_by(3) {
+                    *x *= flatten;
+                }
+                assert!(min_det_j(kind, &coords).is_none(), "{kind:?} L={length}, flatten={flatten}");
+                assert!(el.inverse_map(&coords, [0.0; 3]).is_none());
+                let mut k = vec![0.0; el.n_dof() * el.n_dof()];
+                let id = idealisations(kind).swap_remove(0);
+                let c = ctx(&coords, &mat, id, Formulation::Full);
+                assert_eq!(el.stiffness(&c, &mut k).unwrap_err().code, ErrorCode::MeshInverted);
+            }
+        }
+        assert!(min_det_j(kind, &vec![0.0; kind.n_nodes() * 3]).is_none());
+        // A well-shaped map still cannot return a physical determinant that f64 cannot
+        // represent. These hit the lower and upper numeric limits, not a geometric cutoff.
+        for length in [1e-200, 1e200] {
+            let coords: Vec<f64> = original.iter().map(|x| length * x).collect();
+            assert!(min_det_j(kind, &coords).is_none());
+        }
+        let mut nonfinite = original;
+        nonfinite[0] = f64::NAN;
+        assert!(min_det_j(kind, &nonfinite).is_none());
     }
 }
 

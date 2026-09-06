@@ -51,7 +51,7 @@ impl Engine {
     }
 
     pub(crate) fn query_frames(&self, step: Option<&str>, id: Option<&str>) -> Result<FramesResult, Error> {
-        let record = self.record(step, id)?;
+        let record = self.result_record(step, id)?;
         let history = record.history()?;
         let nodes = record.built.mesh.n_nodes();
         let model = if id.is_some() { &record.model } else { &self.model };

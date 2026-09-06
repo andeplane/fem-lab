@@ -516,7 +516,10 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       </div>
       {stale ? (
         <div class="stale-banner" role="status">
-          <span>Result is stale — Model changed after journal line {s.result!.revision}</span>
+          <span>
+            Result is stale — Model changed after journal line {s.result!.revision}.
+            {s.study ? ' The convergence table reports separate study solves; it does not refresh these stale contours. Re-solve to display the current Model.' : ''}
+          </span>
           <Cmd dispatch={dispatch} cmd="solve.run" class="apply" args={{ step: s.result!.step }}>
             Re-solve
           </Cmd>
