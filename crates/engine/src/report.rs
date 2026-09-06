@@ -607,4 +607,22 @@ mod tests {
             text.contains("Observed convergence rate: not established. Richardson extrapolation: not established mm.")
         );
     }
+
+    /// A known power-law estimate must retain both its dimensionless rate and dimensional limit.
+    #[test]
+    fn a_study_with_a_rate_prints_the_estimate_and_its_unit() {
+        let rows = [(4.0, 33.25), (2.0, 9.25), (1.0, 3.25)]
+            .into_iter()
+            .map(|(size, value)| crate::query::StudyRow {
+                size: Valued { value: size, unit: "mm".into() },
+                dofs: 12,
+                value,
+                time_ms: 0.0,
+            })
+            .collect();
+        let text = study(&StudyReport { rows, observed_rate: Some(2.0), extrapolated: Some(1.25), unit: "mm".into() });
+        assert!(text.contains("| 4 mm | 12 | 33.25 mm |"));
+        assert!(text.contains("Observed convergence rate: 2. Richardson extrapolation: 1.25 mm."));
+        assert!(!text.contains("not established"));
+    }
 }

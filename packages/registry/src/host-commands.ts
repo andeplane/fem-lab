@@ -3,7 +3,7 @@
 // a zod schema, a doc string that is the AI's tool description, and a `run` that makes one call on
 // `HostContext`. Nothing here touches the DOM: the app implements `HostContext`, tests fake it.
 import { z } from 'zod';
-import type { ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
+import type { JournalEntry, ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
 import { FemError } from './error';
 import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
@@ -62,6 +62,8 @@ export interface ProjectInfo {
   skills: string[];
 }
 export interface ScriptResult {
+  /** Successful engine Commands dispatched by this script, for attributable turn diffs. */
+  journalEntries?: JournalEntry[];
   result: unknown;
   console: string[];
   error?: string;
@@ -318,7 +320,7 @@ export const HOST_COMMANDS: HostDef[] = [
     const out = await buildExport(spec as ExportSpec, ctx);
     return deliver(ctx, to, name ?? out.filename, out.mime, out.data);
   }),
-  def('file.shareLink', 'Make a URL that reopens the current Model: the Journal deflated into the URL fragment, so nothing is uploaded anywhere and the link works offline. Returns `{ url }` and copies it to the clipboard; paste it in a message or a report. Refuses with `unsupported` over 32 kB — use file.save and send the file for a big Model.', none, async (_, ctx) => ctx.files.shareLink(await ctx.transport.exportFile())),
+  def('file.shareLink', 'Make a URL that reopens the current Model: the Journal deflated into the URL fragment, so nothing is uploaded anywhere and the link works offline. Returns `{ url }` and copies it to the clipboard; paste it in a message or a report. Links replay validated engine Commands only. Refuses with `unsupported` over 32 kB encoded or 1 MiB uncompressed — use file.save and send the file for a big Model.', none, async (_, ctx) => ctx.files.shareLink(await ctx.transport.exportFile())),
   def('file.autosave', 'Turn the background autosave on or off. When on (the default) the Journal is written to this browser\'s IndexedDB after every Command, so a crash or a closed tab loses nothing; file.restore reopens it. Nothing is uploaded. Turning it off also forgets what is already saved.', z.object({ on: z.boolean() }), ({ on }, ctx) => {
     ctx.files.setAutosave(on);
     return ctx.files.autosave();

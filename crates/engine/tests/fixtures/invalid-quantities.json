@@ -1,0 +1,23 @@
+{
+  "commands": [
+    { "input": { "cmd": "load.force", "name": "bad", "on": "beam.xmax", "total": ["1e999 N", "0 N", "0 N"] }, "code": "schema" },
+    { "input": { "cmd": "load.traction", "name": "bad", "on": "beam.xmax", "total": [{ "value": 1e308, "unit": "kN" }, "0 N", "0 N"] }, "code": "schema" },
+    { "input": { "cmd": "load.temperature", "name": "bad", "bodies": ["beam"], "value": "-1e999 K" }, "code": "schema" },
+    { "input": { "cmd": "load.temperature", "name": "bad", "bodies": ["beam"], "value": "1e308 GK" }, "code": "schema" },
+    { "input": { "cmd": "geometry.addBox", "name": "bad", "size": ["1 Gm^35/m^34", "1 m", "1 m"] }, "code": "unit.unknown" },
+    { "input": { "cmd": "geometry.addBox", "name": "bad", "size": ["1 m^127*m/m^127", "1 m", "1 m"] }, "code": "unit.unknown" },
+    { "input": { "cmd": "model.setUnits", "units": { "stress": "Pa^127" } }, "code": "unit.unknown" },
+    { "input": { "cmd": "model.setUnits", "units": { "length": "1/m^-128" } }, "code": "unit.unknown" },
+    { "input": { "cmd": "model.setUnits", "units": { "length": "m^-128" } }, "code": "unit.dimension" }
+  ],
+  "queries": [
+    { "input": { "query": "query.convert", "quantity": "1e999 N", "to": "N" }, "code": "schema" },
+    { "input": { "query": "query.convert", "quantity": { "value": 1e308, "unit": "kN" }, "to": "N" }, "code": "schema" },
+    { "input": { "query": "query.convert", "quantity": "1e308 N", "to": "mN" }, "code": "schema" },
+    { "input": { "query": "query.convert", "quantity": "1 Pa^127", "to": "Pa" }, "code": "unit.unknown" },
+    { "input": { "query": "query.convert", "quantity": "1 m^-128", "to": "m" }, "code": "unit.dimension" },
+    { "input": { "query": "query.convert", "quantity": "1 m", "to": "1/m^-128" }, "code": "unit.unknown" },
+    { "input": { "query": "query.convert", "quantity": "1 Gm^35", "to": "m^35" }, "code": "unit.unknown" },
+    { "input": { "query": "query.convert", "quantity": "1 m", "to": "nm^20*nm^20" }, "code": "unit.unknown" }
+  ]
+}

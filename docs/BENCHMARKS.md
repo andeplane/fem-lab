@@ -101,6 +101,13 @@ bracketed solve avoid forming overflowing difference products or size powers. Di
 logarithmic, constant and oscillating sequences, invalid triples and unrepresentable
 limits have no estimate; `study.converge` reports its existing unavailable fields.
 
+Quantity boundary regressions check overflow independently of a solve: decimal `1e999` and
+finite `1e308 kN` must be rejected; `Pa^127`, overflowing products and inversion of `m^-128`
+must report structured errors without wrapping dimensions. Representable boundary exponents
+and `Gm^-35 = 1e-315 m^-35` remain valid. A shared native/wasm fixture verifies rejected force,
+temperature, geometry and display-unit Commands preserve the complete saved Model and Journal,
+and conversion Queries never serialize nonfinite numbers as JSON `null`.
+
 ## B. Beams and locking (phase 1–2)
 
 | # | Case | Reference | Tolerance | Proves | Status |

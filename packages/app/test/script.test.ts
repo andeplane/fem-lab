@@ -66,6 +66,19 @@ describe('ScriptHost', () => {
     await run;
   });
 
+  it('reports only acknowledged engine Commands from this script for the Assistant diff', async () => {
+    const command = { cmd: 'geometry.addBox', name: 'script-body', size: ['1 m', '1 m', '1 m'] };
+    const dispatch = vi.fn(async () => ({ seq: 3, revision: 4, hash: 'script-hash' }));
+    const { scripts } = host(dispatch as never);
+    const run = scripts.run('build()');
+    const worker = FakeWorker.last!;
+    await worker.call('dispatch', command);
+    await worker.call('query', { query: 'query.model' });
+    await worker.call('dispatch', { cmd: 'journal.undo' });
+    worker.finish({ result: null, console: [] });
+    await expect(run).resolves.toMatchObject({ journalEntries: [{ seq: 3, hashAfter: 'script-hash', cmd: command }] });
+  });
+
   it('sends a structured failure back over the port rather than hanging the script', async () => {
     const boom = vi.fn(async () => {
       throw Object.assign(new Error('nope'), { code: 'not-found', cause: 'no such Set' });
