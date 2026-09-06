@@ -58,12 +58,17 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const reason = !s.ready ? 'the engine is still loading' : list[0] ? `${list[0].code} ${list[0].text}` : s.lastError ? `${s.lastError.code} ${s.lastError.cause}` : '';
   const mm = s.model?.units.length === 'mm';
   const stage = stageOf(s);
+  const solveText = solveLabel(stage, s);
+  const modelName = s.model?.name ?? 'no model';
+  const engineState = s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…';
   return (
     <header class="topbar">
       <div class="logo">
         <i /> FEM Lab
       </div>
-      <span class="mono model-name">{s.model?.name ?? 'no model'}</span>
+      <span class="mono model-name" title={modelName}>
+        {modelName}
+      </span>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">
         <span>Search commands or ask in plain words</span>
         <span class="key">⌘K</span>
@@ -83,12 +88,12 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="journal.redo" class="tbutton" args={{ steps: 1 }} disabled={!s.journal?.canRedo} title="journal.redo (⇧⌘Z)">
         ↷
       </Cmd>
-      <span class="chip" title={s.notes.join('\n') || 'everything available'}>
+      <span class="chip" title={[engineState, ...s.notes].join('\n')}>
         <span class={s.notes.length > 0 ? 'dot warn' : 'dot'} />
-        {s.hostCaps ? engineChip(s.hostCaps, s.engineCaps) : 'starting…'}
+        <span class="engine-state">{engineState}</span>
       </span>
-      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `solve.run ${step}`}>
-        {solveLabel(stage, s)}
+      <Cmd dispatch={dispatch} cmd="solve.run" class={`solve ${stage}`} args={{ step }} disabled={reason !== '' || step === '' || stage === 'solving'} title={reason || `${solveText} — solve.run ${step}`}>
+        {solveText}
       </Cmd>
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="tbutton" args={{ panel: 'examples' }}>
         Examples
