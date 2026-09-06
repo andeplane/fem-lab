@@ -1,4 +1,15 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test as base, type Page } from '@playwright/test';
+
+const test = base.extend<{ pageErrors: void }>({
+  pageErrors: [async ({ context }, use) => {
+    const errors: string[] = [];
+    const observe = (page: Page) => page.on('pageerror', (error) => errors.push(error.message));
+    context.pages().forEach(observe);
+    context.on('page', observe);
+    await use();
+    expect(errors).toEqual([]);
+  }, { auto: true }],
+});
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });

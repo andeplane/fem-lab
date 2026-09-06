@@ -14,6 +14,7 @@ import {
   MAX_JOURNAL_BYTES,
   applyShared,
   makeAutosave,
+  indexedDbStore,
   memoryStore,
   openShared,
   readShareFragment,
@@ -251,6 +252,47 @@ describe('share link', () => {
   });
 });
 
+describe('IndexedDB autosave transactions', () => {
+  // Drive the browser transaction boundary independently: request success can precede abort.
+  function transactionHarness() {
+    const request = { result: undefined, error: null } as IDBRequest<undefined>;
+    const transaction = { objectStore: () => ({ delete: () => request }), error: null } as unknown as IDBTransaction;
+    const close = vi.fn();
+    const database = { transaction: () => transaction, close } as unknown as IDBDatabase;
+    const open = { result: database, error: null } as IDBOpenDBRequest;
+    const factory = { open: () => open, cmp: () => 0, databases: async () => [], deleteDatabase: () => open } satisfies IDBFactory;
+    const store = indexedDbStore(factory);
+    return { request, transaction, close, open, store };
+  }
+
+  it('waits for clear transaction commit after the delete request succeeds', async () => {
+    const { store, open, request, transaction, close } = transactionHarness();
+    let completed = false;
+    const clearing = store.clear().then(() => { completed = true; });
+    open.onsuccess!.call(open, new Event('success'));
+    await Promise.resolve();
+    request.onsuccess!.call(request, new Event('success'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const completedBeforeCommit = completed;
+    transaction.oncomplete!.call(transaction, new Event('complete'));
+    await clearing;
+    expect(completedBeforeCommit).toBe(false);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an aborted clear even when its delete request already succeeded', async () => {
+    const { store, open, request, transaction, close } = transactionHarness();
+    const clearing = store.clear();
+    open.onsuccess!.call(open, new Event('success'));
+    await Promise.resolve();
+    request.onsuccess!.call(request, new Event('success'));
+    Object.assign(transaction, { error: new DOMException('commit aborted', 'AbortError') });
+    transaction.onabort!.call(transaction, new Event('abort'));
+    await expect(clearing).rejects.toThrow('commit aborted');
+    expect(close).toHaveBeenCalledOnce();
+  });
+});
+
 describe('autosave', () => {
   /** A fake clock: the debounce fires when the test says so, not when the wall clock says so. */
   function fakeTimers() {
@@ -480,6 +522,166 @@ describe('autosave', () => {
     const { registry } = autosaveRegistry(a);
     await expect(registry.query({ query: 'query.autosaveHistory' })).resolves.toMatchObject({ revisions: expect.arrayContaining([expect.objectContaining({ id: shown.id })]) });
     await expect(registry.dispatch({ cmd: 'file.restore', id: shown.id })).resolves.toMatchObject({ name: 'b' });
+  });
+
+  function latch() {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    return { promise, release };
+  }
+
+  function delayedStore(fail = false) {
+    const storage = memoryStore();
+    const entered = latch();
+    const gate = latch();
+    let calls = 0;
+    const write: JournalStore['write'] = vi.fn(async (saved, merge) => {
+      if (++calls === 1) {
+        entered.release();
+        await gate.promise;
+        if (fail) throw new Error('QuotaExceededError');
+      }
+      await storage.write(saved, merge);
+    });
+    return { storage, store: { ...storage, write }, entered, gate };
+  }
+
+  it('serializes overlapping flushes and keeps each advertised id restorable', async () => {
+    const { store, entered, gate } = delayedStore();
+    const a = makeAutosave({ store, ...fakeTimers() });
+    const { registry } = autosaveRegistry(a);
+    a.note('a', journal(1));
+    const firstId = a.history()[0]!.id!;
+    const first = a.flush();
+    await entered.promise;
+    a.note('b', journal(2));
+    const secondId = a.history()[0]!.id!;
+    let completed = false;
+    const second = a.flush().then(() => { completed = true; });
+    const restore = registry.dispatch({ cmd: 'file.restore', id: firstId });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const overtook = completed;
+    const visibleIds = a.history().map((revision) => revision.id);
+    gate.release();
+    await Promise.all([first, second]);
+    expect(overtook).toBe(false);
+    expect(visibleIds).toEqual([secondId, firstId]);
+    await expect(restore).resolves.toMatchObject({ name: 'a' });
+    await expect(registry.dispatch({ cmd: 'file.restore', id: secondId })).resolves.toMatchObject({ name: 'b' });
+  });
+
+  it('clears all earlier writes without resurrecting their revisions', async () => {
+    const { storage, store, entered, gate } = delayedStore();
+    const a = makeAutosave({ store, ...fakeTimers() });
+    a.note('a', journal(1));
+    const first = a.flush();
+    await entered.promise;
+    a.note('b', journal(2));
+    const second = a.flush();
+    let cleared = false;
+    const clearing = a.clear().then(() => { cleared = true; });
+    expect(a.history()).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const clearedEarly = cleared;
+    gate.release();
+    await Promise.all([first, second, clearing]);
+    expect(clearedEarly).toBe(false);
+    expect(await storage.read()).toEqual([]);
+    expect(await a.readAll()).toEqual([]);
+  });
+
+  it.each([false, true])('keeps newest-first order after quota failure with a newer flush queued=%s', async (queueNewer) => {
+    const { storage, store, entered, gate } = delayedStore(true);
+    const onError = vi.fn();
+    const a = makeAutosave({ store, onError, ...fakeTimers() });
+    a.note('a', journal(1));
+    const first = a.flush();
+    await entered.promise;
+    a.note('b', journal(2));
+    const newer = queueNewer ? a.flush() : Promise.resolve();
+    gate.release();
+    await Promise.all([first, newer]);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(a.history().map((revision) => revision.name)).toEqual(['b', 'a']);
+    await a.flush();
+    expect((await storage.read()).map((revision) => revision.name)).toEqual(['b', 'a']);
+    const { registry } = autosaveRegistry(a);
+    await expect(registry.dispatch({ cmd: 'file.restore' })).resolves.toMatchObject({ name: 'b' });
+  });
+
+  it('preserves a new revision after Registry autosave off/on while an older write clears', async () => {
+    const { storage, store, entered, gate } = delayedStore();
+    const a = makeAutosave({ store, ...fakeTimers() });
+    const { registry } = autosaveRegistry(a);
+    a.note('old', journal(1));
+    const first = a.flush();
+    await entered.promise;
+    await registry.dispatch({ cmd: 'file.autosave', on: false });
+    await registry.dispatch({ cmd: 'file.autosave', on: true });
+    a.note('new', journal(2));
+    const shown = a.history()[0]!.id!;
+    const second = a.flush();
+    gate.release();
+    await Promise.all([first, second]);
+    expect((await storage.read()).map((revision) => revision.name)).toEqual(['new']);
+    await expect(registry.dispatch({ cmd: 'file.restore', id: shown })).resolves.toMatchObject({ name: 'new' });
+  });
+
+  it('cancels a queued pre-clear batch and keeps the next generation of notes', async () => {
+    const store = memoryStore();
+    const write = vi.spyOn(store, 'write');
+    const timers = fakeTimers();
+    const a = makeAutosave({ store, ...timers });
+    a.note('old', journal(1));
+    const old = a.flush();
+    const clearing = a.clear();
+    expect(timers.armed()).toBe(false);
+    a.note('new', journal(2));
+    const current = a.flush();
+    await Promise.all([old, clearing, current]);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect((await a.readAll()).map((revision) => revision.name)).toEqual(['new']);
+  });
+
+  it('coalesces backpressure into one bounded pending batch', async () => {
+    const { storage, store, entered, gate } = delayedStore();
+    const a = makeAutosave({ store, ...fakeTimers() });
+    a.note('old', journal(1));
+    const pending = [a.flush()];
+    await entered.promise;
+    for (let i = 1; i <= 100; i++) {
+      a.note(`new-${i}`, journal(i + 1));
+      pending.push(a.flush());
+    }
+    expect(a.history()).toHaveLength(20);
+    gate.release();
+    await Promise.all(pending);
+    expect(store.write).toHaveBeenCalledTimes(2);
+    const saved = await storage.read();
+    expect(saved.map((revision) => revision.name)).toEqual(Array.from({ length: 20 }, (_, i) => `new-${100 - i}`));
+    expect(new Set(saved.map((revision) => revision.id)).size).toBe(20);
+  });
+
+  it('recovers after a rejected read without poisoning the storage queue', async () => {
+    const store = memoryStore();
+    vi.spyOn(store, 'read').mockRejectedValueOnce(new Error('temporary read failure'));
+    const a = makeAutosave({ store, ...fakeTimers() });
+    await expect(a.readAll()).rejects.toThrow('temporary read failure');
+    a.note('retry', journal(1));
+    await a.flush();
+    await expect(a.read()).resolves.toMatchObject({ name: 'retry' });
+  });
+
+  it('reports a failed clear and still permits later storage operations', async () => {
+    const store = memoryStore();
+    vi.spyOn(store, 'clear').mockRejectedValueOnce(new Error('temporary clear failure'));
+    const onError = vi.fn();
+    const a = makeAutosave({ store, onError, ...fakeTimers() });
+    await a.clear();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'temporary clear failure' }));
+    a.note('later', journal(1));
+    await a.flush();
+    await expect(a.read()).resolves.toMatchObject({ name: 'later' });
   });
 
   it('migrates a pre-versioning single record and uses the injected clock', async () => {

@@ -225,12 +225,6 @@ const DB_NAME = 'femlab';
 const STORE = 'autosave';
 const KEY = 'last';
 
-const done = <T>(req: IDBRequest<T>): Promise<T> =>
-  new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error('IndexedDB request failed'));
-  });
-
 function storedList(value: unknown): Saved[] {
   if (value === null || value === undefined) return [];
   // Version 1 stored one Saved object at `last`; accept it as the newest revision.
@@ -254,7 +248,16 @@ export function indexedDbStore(factory: IDBFactory): JournalStore {
   const tx = async <T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> => {
     const db = await open();
     try {
-      return await done(run(db.transaction(STORE, mode).objectStore(STORE)));
+      const transaction = db.transaction(STORE, mode);
+      return await new Promise<T>((resolve, reject) => {
+        let value: T;
+        const request = run(transaction.objectStore(STORE));
+        request.onsuccess = () => { value = request.result; };
+        request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed'));
+        transaction.oncomplete = () => resolve(value);
+        transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB transaction failed'));
+        transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction aborted'));
+      });
     } finally {
       db.close();
     }
@@ -327,7 +330,7 @@ export interface Autosave {
   note(name: string, journal: JournalEntry[]): void;
   setEnabled(on: boolean): void;
   enabled(): boolean;
-  /** The pending write, awaited — for tests and for `beforeunload`. */
+  /** Queue unsaved revisions and await earlier storage operations, including an in-flight write. */
   flush(): Promise<void>;
   /** The newest saved revision, or null when there is no autosave. */
   read(): Promise<Saved | null>;
@@ -373,15 +376,19 @@ export function makeAutosave({
 }: AutosaveOptions): Autosave {
   let on = initiallyOn;
   let timer: unknown = null;
-  let pending: Saved[] = [];
+  // Keep snapshots visible until committed; queued writes never own the only copy of an id.
+  let unwritten: Saved[] = [];
+  const active = new Set<Saved>();
+  // At most one writer waits behind the active operation, regardless of note/flush bursts.
+  let queuedGeneration: number | null = null;
   let revisions: Saved[] = [];
-  let hydrated: Promise<void> | null = null;
+  let generation = 0;
   let nextId = 0;
   const instanceId = autosaveInstanceId++;
   let writing: Promise<void> = Promise.resolve();
 
   const normalize = (saved: Saved[]): Saved[] =>
-    storedList(saved).map((entry) => ({ ...entry, id: entry.id ?? `legacy-${entry.at}` }));
+    storedList(saved).map((entry) => entry.id === undefined ? { ...entry, id: `legacy-${entry.at}` } : entry);
   const same = (a: Saved, b: Saved): boolean => a.name === b.name && JSON.stringify(a.cmds) === JSON.stringify(b.cmds);
   const merge = (current: Saved[], incoming: Saved[]): Saved[] => {
     let merged = normalize(current);
@@ -392,40 +399,52 @@ export function makeAutosave({
     }
     return merged.slice(0, MAX_AUTOSAVES);
   };
-  const load = (): Promise<void> => {
-    if (hydrated) return hydrated;
-    hydrated = store.read().then((saved) => {
-      revisions = normalize(saved);
-    });
-    return hydrated;
+  // Reads, writes and clears share one queue. A rejected read must not poison later writes.
+  const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = writing.then(operation);
+    writing = result.then(() => undefined, () => undefined);
+    return result;
   };
-
-  const visible = (): Saved[] => {
-    const seen = new Set<string>();
-    return [...pending, ...revisions].filter((revision) => {
-      const key = revision.id ?? `legacy-${revision.at}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }).slice(0, MAX_AUTOSAVES);
-  };
+  const visible = (): Saved[] => merge(revisions, unwritten);
 
   const write = (): void => {
-    const saved = pending;
     timer = null;
-    pending = [];
-    if (saved.length === 0) return;
-    writing = load().then(async () => {
-      // Read immediately before writing for simple stores, and merge again inside stores that
-      // support an atomic write callback so two open tabs cannot overwrite each other's history.
-      const latest = normalize(await store.read());
-      const mergePending = (current: Saved[]) => merge(current, saved);
-      revisions = merge(latest, saved);
-      await store.write(revisions, mergePending);
-    }).catch((e: unknown) => {
-      // Keep an uncommitted revision visible and retryable after a quota or IndexedDB failure.
-      pending = [...saved, ...pending].slice(0, MAX_AUTOSAVES);
-      onError?.(e);
+    if (queuedGeneration === generation || !unwritten.some((revision) => !active.has(revision))) return;
+    const epoch = generation;
+    queuedGeneration = epoch;
+    void enqueue(async () => {
+      let saved: Saved[] = [];
+      try {
+        if (epoch !== generation) return;
+        queuedGeneration = null;
+        // Coalesce work queued behind a slow write, including any older quota-failed batch.
+        // Taking the entire unsaved list preserves note order when a newer flush was queued
+        // before the older write failed. Later notes remain visible while this batch commits.
+        saved = unwritten.slice();
+        if (saved.length === 0) return;
+        for (const revision of saved) active.add(revision);
+        const latest = normalize(await store.read());
+        let committed = merge(latest, saved);
+        await store.write(committed, (current) => (committed = merge(current, saved)));
+        if (epoch === generation) {
+          revisions = committed;
+          unwritten = unwritten.filter((revision) => !saved.includes(revision));
+        }
+      } catch (error) {
+        // Uncommitted snapshots retain their ids and newest-first order for a later retry.
+        onError?.(error);
+      } finally {
+        active.clear();
+      }
+    });
+  };
+
+  const readAll = (): Promise<Saved[]> => {
+    const epoch = generation;
+    return enqueue(async () => {
+      const saved = await store.read();
+      if (epoch === generation) revisions = normalize(saved);
+      return visible();
     });
   };
 
@@ -434,9 +453,9 @@ export function makeAutosave({
       if (!on) return;
       const at = now();
       const candidate = { id: id?.() ?? globalThis.crypto?.randomUUID?.() ?? `${at}-${instanceId}-${nextId++}`, name, at, cmds: journal.map((e) => e.cmd) };
-      const current = [...pending, ...revisions].find((revision) => same(revision, candidate));
+      const current = visible().find((revision) => same(revision, candidate));
       const revision = current ? { ...candidate, id: current.id } : candidate;
-      pending = [revision, ...pending.filter((saved) => saved.id !== revision.id)].slice(0, MAX_AUTOSAVES);
+      unwritten = merge(unwritten, [revision]);
       if (timer === null) timer = setTimer(write, delayMs);
     },
     setEnabled(next) {
@@ -444,36 +463,37 @@ export function makeAutosave({
       if (on) return;
       if (timer !== null) clearTimer(timer);
       timer = null;
-      pending = [];
+      unwritten = [];
     },
     enabled: () => on,
     async flush() {
       if (timer !== null) {
         clearTimer(timer);
         write();
-      } else if (pending.length > 0) {
+      } else if (unwritten.length > 0) {
         write();
       }
       await writing;
     },
-    read: async () => {
-      const all = await (async () => { await load(); await writing; return store.read(); })();
-      revisions = normalize(all);
-      return visible()[0] ?? null;
-    },
-    readAll: async () => {
-      await load();
-      await writing;
-      const all = await store.read();
-      revisions = normalize(all);
-      return visible();
-    },
+    read: async () => (await readAll())[0] ?? null,
+    readAll,
     history: () => visible(),
-    clear: async () => {
-      await writing;
-      pending = [];
+    clear: () => {
+      // Clear only the revisions known when requested. Notes after a quick off/on toggle
+      // belong after this storage barrier and must survive completion of the older clear.
+      if (timer !== null) clearTimer(timer);
+      timer = null;
+      unwritten = [];
       revisions = [];
-      await store.clear();
+      generation++;
+      queuedGeneration = null;
+      return enqueue(async () => {
+        try {
+          await store.clear();
+        } catch (error) {
+          onError?.(error);
+        }
+      });
     },
   };
 }
