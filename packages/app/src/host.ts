@@ -286,10 +286,11 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
     },
     {
       name: 'file.compare',
-      description: 'Compare the current Journal with a saved femlab/1 file without opening it or changing the current Model. Returns ordered added and removed Command entries; the imported file is never replayed.',
+      description: 'Select a saved femlab/1 file as the Journal comparison baseline without opening it or changing the current Model. Returns ordered added and removed Command entries; the imported file is never replayed. The imported baseline remains selected until the next successful explicit save/open.',
       schema: z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) })]),
       tool: true,
       run: async (input) => {
+        const current = store.beginJournalComparison();
         const how = input as { json?: string; picker?: true };
         const text = how.json ?? await new Promise<string>((resolve, reject) => {
           const picker = document.createElement('input');
@@ -314,7 +315,7 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
         }
         const importedJournal = file.journal as Journal;
         const diff = (await transport.query({ query: 'query.journalDiff', base: importedJournal })) as JournalDiff;
-        store.set({ journalComparison: diff, comparisonSource: 'imported', comparisonBaseline: importedJournal.entries });
+        if (current()) store.set({ journalComparison: diff, comparisonSource: 'imported', comparisonBaseline: structuredClone(importedJournal.entries) });
         return diff;
       },
     },
@@ -325,15 +326,9 @@ export function appHostCommands(store: Store, transport: WorkerTransport, viewer
 export function appHostQueries(store: Store): HostDef[] {
   return [{
     name: 'query.journalComparison',
-    description: 'Compare the current Journal with the last successful explicit save/open baseline. Returns ordered `added` and `removed` Journal entries, or `null` before an explicit baseline exists. Use file.compare to inspect an imported file without opening it.',
+    description: 'Compare the current Journal with the selected imported file, or with the last successful explicit save/open when no imported comparison is selected. Returns ordered added and removed entries, or null when no baseline exists or a newer request/state supersedes this query. file.compare selects an imported baseline; a successful explicit save/open resets it to the saved baseline. Autosave does not select a baseline.',
     schema: z.object({}),
     tool: true,
-    run: async () => {
-      if (store.state.comparisonSource === 'imported' && store.state.comparisonBaseline) {
-        const diff = await store.queryJournalDiff({ entries: store.state.comparisonBaseline });
-        if (diff) store.set({ journalComparison: diff });
-      }
-      return store.state.journalComparison;
-    },
+    run: () => store.refreshJournalComparison(),
   }];
 }

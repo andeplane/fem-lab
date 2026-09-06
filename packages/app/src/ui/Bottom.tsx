@@ -16,7 +16,6 @@ const argText = (cmd: Record<string, unknown>): string => {
 };
 
 const clock = (at: number | undefined): string => (at === undefined ? '' : new Date(at).toTimeString().slice(0, 8));
-const entryKey = (entry: JournalEntry): string => JSON.stringify([entry.cmd, entry.hashAfter]);
 
 /** The last `solve.*` in the Journal: everything after it edited the Model that made a Result. */
 export function solveBoundary(entries: JournalEntry[]): number {
@@ -53,11 +52,10 @@ function JournalRow({ s, dispatch, entry, className = '', removed = false }: { s
 
 function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const entries = s.journal?.entries ?? [];
-  const added = new Set(s.journalComparison?.added.map(entryKey));
   return (
     <div class="rows">
       {s.journalComparison ? <div class="section-label comparison-label">{s.comparisonSource === 'imported' ? 'Compared file' : 'Since last explicit save/open'}</div> : null}
-      {entries.map((e) => <JournalRow key={e.seq} s={s} dispatch={dispatch} entry={e} className={added.has(entryKey(e)) ? 'comparison-added' : ''} />)}
+      {entries.map((e, index) => <JournalRow key={index} s={s} dispatch={dispatch} entry={e} className={s.journalComparison && index >= s.journalComparison.sharedEntries ? 'comparison-added' : ''} />)}
       {s.journalComparison && s.journalComparison.removed.length > 0 ? (
         <>
           <div class="section-label comparison-removed-label">Removed from comparison baseline</div>

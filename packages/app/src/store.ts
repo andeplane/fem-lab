@@ -231,6 +231,7 @@ export class Store {
    * it so "do it for me" behaves exactly like a click on the real control (issue #37, #12).
    */
   dispatch: ((cmd: { cmd: string } & Record<string, unknown>) => Promise<unknown>) | null = null;
+  private comparisonRequest = 0;
   private journalDiffQuery: ((base: Journal) => Promise<JournalDiff>) | null = null;
   private listeners = new Set<() => void>();
 
@@ -242,6 +243,11 @@ export class Store {
   }
 
   set(patch: Partial<UiState>): void {
+    // A comparison belongs to the complete current Journal; do not draw an old tail while
+    // refresh is waiting for the next query reply.
+    if (patch.journal && patch.journal !== this.state.journal && !('journalComparison' in patch)) {
+      patch = { ...patch, journalComparison: null };
+    }
     this.state = { ...this.state, ...patch };
     for (const fn of this.listeners) fn();
   }
@@ -250,8 +256,29 @@ export class Store {
     this.journalDiffQuery = query;
   }
 
-  queryJournalDiff(base: Journal): Promise<JournalDiff> | null {
-    return this.journalDiffQuery?.(base) ?? null;
+  /** A reply may draw only while its request, current Journal and baseline selection still match. */
+  beginJournalComparison(): () => boolean {
+    const request = ++this.comparisonRequest;
+    const { journal, savedBaseline, comparisonBaseline, comparisonSource } = this.state;
+    return () => request === this.comparisonRequest && journal === this.state.journal
+      && savedBaseline === this.state.savedBaseline && comparisonBaseline === this.state.comparisonBaseline
+      && comparisonSource === this.state.comparisonSource;
+  }
+
+  async refreshJournalComparison(): Promise<JournalDiff | null> {
+    const source = this.state.comparisonSource === 'imported' ? 'imported' : 'saved';
+    const entries = source === 'imported' ? this.state.comparisonBaseline : this.state.savedBaseline;
+    const current = this.beginJournalComparison();
+    if (!entries || !this.journalDiffQuery) return null;
+    try {
+      const diff = await this.journalDiffQuery({ entries });
+      if (!current()) return null;
+      this.set({ journalComparison: diff, comparisonSource: source });
+      return diff;
+    } catch (error) {
+      if (!current()) return null;
+      throw error;
+    }
   }
 
   /**
@@ -290,7 +317,7 @@ export class Store {
   markSaved(journal: { entries: JournalDump['entries'] }): void {
     this.set({
       savedJournal: journalIdentity(journal.entries),
-      savedBaseline: journal.entries.map((entry) => ({ ...entry })),
+      savedBaseline: structuredClone(journal.entries),
       journalComparison: null,
       comparisonSource: null,
       comparisonBaseline: null,

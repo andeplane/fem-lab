@@ -71,16 +71,7 @@ async function boot(): Promise<void> {
     const script = ((await transport.query({ query: 'query.script' })) as { text: string }).text;
     const objects = ((await transport.query({ query: 'query.objects' })) as { objects: never[] }).objects;
     store.set({ model, journal, script, objects, revision: (model as { revision: number }).revision });
-    const baseline = store.state.savedBaseline;
-    if (baseline) {
-      const comparison = await transport.query({ query: 'query.journalDiff', base: { entries: baseline } });
-      store.set({ journalComparison: comparison as never, comparisonSource: 'saved' });
-    } else if (store.state.comparisonSource === 'imported' && store.state.comparisonBaseline) {
-      const comparison = await transport.query({ query: 'query.journalDiff', base: { entries: store.state.comparisonBaseline } });
-      store.set({ journalComparison: comparison as never, comparisonSource: 'imported' });
-    } else if (store.state.comparisonSource === 'imported') {
-      store.set({ journalComparison: null, comparisonSource: null });
-    }
+    await store.refreshJournalComparison();
     viewer.current?.setSurface(await transport.surface());
     await results.refresh();
     noteAutosave(store.state.model?.name ?? 'untitled', store.state.journal?.entries ?? []);
