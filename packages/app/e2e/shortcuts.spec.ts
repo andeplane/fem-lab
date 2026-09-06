@@ -44,13 +44,14 @@ test.describe('@cpu global editing shortcuts', () => {
     await page.getByRole('button', { name: 'edit this script' }).click();
     const editor = page.getByRole('textbox', { name: 'TypeScript editor' });
     await expect(editor).toBeVisible();
-    const editorOriginal = await editor.innerText();
+    const editorOriginal = await page.evaluate(async () => (await window.fem.query.script()).text);
     await editor.focus();
     await page.keyboard.press('End');
     await page.keyboard.type('x');
     await press('Z');
-    expect(await editor.innerText()).toBe(editorOriginal);
-    await editor.selectText();
+    // CodeMirror owns its document selection; rendered innerText adds layout newlines.
+    // Native select-all/copy must recover the exact Journal source, including its final newline.
+    await press('A');
     await press('C');
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(editorOriginal);
     expect(await journalState(page)).toEqual(beforeText);
