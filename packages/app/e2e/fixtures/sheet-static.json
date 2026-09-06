@@ -1,0 +1,33 @@
+[
+  { "cmd": "model.new", "name": "sheet-static" },
+  { "cmd": "model.setIdealisation", "idealisation": { "kind": "planeStress", "thickness": "10 mm" } },
+  {
+    "cmd": "geometry.add",
+    "name": "plate",
+    "shape": {
+      "kind": "sheet",
+      "sketch": {
+        "outer": [
+          { "kind": "line", "to": ["5 m", "7 m"], "tag": "left" },
+          { "kind": "line", "to": ["5 m", "11 m"], "tag": "bottom" },
+          { "kind": "line", "to": ["-1 m", "11 m"], "tag": "right" },
+          { "kind": "line", "to": ["-1 m", "7 m"], "tag": "top" }
+        ],
+        "holes": [
+          [
+            { "kind": "line", "to": ["3.5 m", "8 m"], "tag": "hole" },
+            { "kind": "line", "to": ["3.5 m", "10 m"], "tag": "hole" },
+            { "kind": "line", "to": ["0.5 m", "10 m"], "tag": "hole" },
+            { "kind": "line", "to": ["0.5 m", "8 m"], "tag": "hole" }
+          ]
+        ]
+      }
+    }
+  },
+  { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3 },
+  { "cmd": "material.assign", "material": "steel", "bodies": ["plate"] },
+  { "cmd": "mesh.set", "mesher": { "kind": "free", "of": "plate", "size": "0.5 m" }, "order": 1 },
+  { "cmd": "constraint.fix", "name": "root", "on": "plate.left" },
+  { "cmd": "load.traction", "name": "tip", "on": "plate.right", "total": ["0 N", "-1 kN", "0 N"] },
+  { "cmd": "step.add", "name": "static", "procedure": "static", "constraints": ["root"], "loads": ["tip"] }
+]

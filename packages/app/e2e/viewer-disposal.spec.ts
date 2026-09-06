@@ -38,6 +38,7 @@ test.describe('@cpu viewer resource lifecycle', () => {
         dispose(): void;
         mesh: { geometry: { constructor: { prototype: { dispose: () => void } } } } | null;
         edges: { geometry: object; material: object } | null;
+        outlines: { geometry: object; material: object } | null;
         grid: { geometry: object; material: object } | null;
         triad: { geometry: object; material: object } | null;
         material: object;
@@ -51,6 +52,9 @@ test.describe('@cpu viewer resource lifecycle', () => {
         faceNames: ['body.a', 'body.b'],
         bodyNames: ['body'],
         source: 'geometry' as const,
+        edges: new Uint32Array([0, 1, 1, 3, 3, 2, 2, 0]),
+        edgeFace: new Uint32Array([0, 0, 1, 1]),
+        edgeBody: new Uint32Array([0, 0, 0, 0]),
       };
 
       viewer.setSurface(surface);
@@ -63,7 +67,7 @@ test.describe('@cpu viewer resource lifecycle', () => {
         (resource as { addEventListener(type: string, listener: () => void): void }).addEventListener('dispose', () => events.push(resource));
       };
       const watchOwned = (): void => {
-        for (const object of [viewer.mesh, viewer.edges, viewer.grid, viewer.triad]) {
+        for (const object of [viewer.mesh, viewer.edges, viewer.outlines, viewer.grid, viewer.triad]) {
           if (!object) continue;
           watch(object.geometry);
           const material = (object as { material?: object }).material;
