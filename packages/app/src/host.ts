@@ -4,6 +4,7 @@
 import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
 import { storeKey } from './ai/key-storage';
+import { makeProjectHost, type ProjectAccess } from './project-host';
 import type { HostCaps } from './capabilities';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
@@ -27,9 +28,6 @@ export interface ViewerRef {
   previewTransient?: (input: TransientInput) => Promise<void>;
 }
 
-const soon = (what: string, suggestion: string) => (): never => {
-  throw new FemError('unsupported', `${what} is not built yet`, what, suggestion);
-};
 
 async function fetchExample(name: string): Promise<string> {
   const res = await fetch(`${import.meta.env.BASE_URL}examples/${name}.json`);
@@ -126,7 +124,7 @@ export function forkProject(): void {
   projects?.fork();
 }
 
-export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, save: Autosave = autosave): HostContext {
+export function makeHostContext(store: Store, transport: EngineTransport, viewer: ViewerRef, host: HostCaps, scripts?: ScriptHost, results?: ResultsView, save: Autosave = autosave, projectAccess?: ProjectAccess): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
@@ -329,23 +327,7 @@ export function makeHostContext(store: Store, transport: EngineTransport, viewer
       list: () => own.list(),
       current: () => own.current(),
     },
-    folder: {
-      // The Assistant picker supplies the folder skill source; full folder I/O is #13.
-      open: soon('the folder on disk', 'use file.open and file.save for now'),
-      close: () => store.setFolder(null),
-      refresh: async () => {
-        const folder = store.state.folder;
-        if (!folder) throw new FemError('file.not-found', 'no folder is open', 'folder', 'open a project folder in the Assistant');
-        await folder.refresh();
-        // Closing/replacing a folder while this read is in flight must not restore the old one.
-        if (store.state.folder === folder) store.setFolder(folder);
-      },
-
-      info: () => null,
-      readText: soon('the folder on disk', 'use file.open for now'),
-      writeText: soon('the folder on disk', 'use file.save for now'),
-      writeBytes: soon('the folder on disk', 'use file.save for now'),
-    },
+    folder: makeProjectHost(store, projectAccess),
     examples: { fetch: fetchExample },
     ai: {
       setKey: (key, provider: AiProvider) => {

@@ -6,14 +6,14 @@
 // The handles are described here rather than taken from lib.dom, because lib.dom types neither the
 // async iteration nor the permission methods, and because a structural type is what lets the tests
 // hand in a 40-line in-memory fake.
-import { assertInside, mergeSkills, parseSkill, type FolderInfo, type Skill } from '@femlab/registry';
+import { FemError, MAX_MODEL_FILE_BYTES, assertInside, mergeSkills, parseSkill, type FolderInfo, type Skill } from '@femlab/registry';
 import { HANDLES, tx } from '../db';
 
 export interface FileHandle {
   kind: 'file';
   name: string;
   getFile(): Promise<{ size: number; lastModified: number; text(): Promise<string> }>;
-  createWritable(): Promise<{ write(data: string | Uint8Array): Promise<void>; close(): Promise<void> }>;
+  createWritable(): Promise<{ write(data: string | Uint8Array): Promise<void>; close(): Promise<void>; abort(): Promise<void> }>;
 }
 export interface DirHandle {
   kind: 'directory';
@@ -42,6 +42,10 @@ export function kindOf(path: string): FileKind {
   if (/\.(ts|js)$/.test(path)) return 'script';
   if (/\.(md|pdf|vtu|csv|xlsx|inp|msh|stl|step|png)$/.test(path)) return 'export';
   return 'other';
+}
+
+function checkFileSize(size: number, path: string, maxBytes: number): void {
+  if (size > maxBytes) throw new FemError('unsupported', `'${path}' exceeds the ${maxBytes} byte read limit`, path, 'read a smaller file');
 }
 
 async function walk(dir: DirHandle, prefix: string, depth: number, out: ProjectFile[]): Promise<void> {
@@ -84,7 +88,7 @@ export class ProjectFolder {
     return this.handle.name;
   }
 
-  /** Re-list and re-read after files changed outside the app; `project.refresh` calls this. */
+  /** Re-list and re-read after files changed outside the app; `folder.refresh` calls this. */
   refresh(): Promise<void> {
     // Polling and explicit refresh share a queue, so an older read cannot overwrite a newer one.
     const next = this.refreshing.then(() => this.readFolder());
@@ -116,6 +120,7 @@ export class ProjectFolder {
       if (!files.some((f) => f.path === file)) continue;
       const handle = await this.fileHandle([file]);
       const blob = await handle.getFile();
+      checkFileSize(blob.size, file, MAX_MODEL_FILE_BYTES);
       return { file, text: await blob.text(), at: blob.lastModified };
     }
     return null;
@@ -136,8 +141,10 @@ export class ProjectFolder {
     return dir.getFileHandle(segments.at(-1)!, { create });
   }
 
-  async readText(path: string): Promise<string> {
-    return (await (await this.fileHandle(assertInside(path))).getFile()).text();
+  async readText(path: string, maxBytes = MAX_MODEL_FILE_BYTES): Promise<string> {
+    const blob = await (await this.fileHandle(assertInside(path))).getFile();
+    checkFileSize(blob.size, path, maxBytes);
+    return blob.text();
   }
 
   async writeText(path: string, text: string): Promise<void> {
@@ -150,8 +157,14 @@ export class ProjectFolder {
 
   private async write(path: string, data: string | Uint8Array): Promise<void> {
     const writable = await (await this.fileHandle(assertInside(path), true)).createWritable();
-    await writable.write(data);
-    await writable.close();
+    try {
+      await writable.write(data);
+      await writable.close();
+    } catch (error) {
+      // Release the file lock and discard staged data; an abort error must not hide the cause.
+      await writable.abort().catch(() => undefined);
+      throw error;
+    }
     await this.refresh();
   }
 }
@@ -202,18 +215,24 @@ export function watchAgents(folder: ProjectFolder, onChange: () => void, everyMs
 // an `autosave` store: whichever ran first won, and the other's transaction raised NotFoundError.
 
 const KEY = 'folder';
+const NAME_KEY = 'folder-name';
 
 /** `FileSystemDirectoryHandle` is structured-cloneable, so a reload can offer "reopen <name>". */
 export async function rememberHandle(handle: DirHandle, factory: IDBFactory = indexedDB): Promise<void> {
-  await tx(factory, HANDLES, 'readwrite', (s) => s.put(handle, KEY));
+  await tx(factory, HANDLES, 'readwrite', (s) => { s.put(handle, KEY); return s.put(handle.name, NAME_KEY); });
 }
 
 export async function recallHandle(factory: IDBFactory = indexedDB): Promise<DirHandle | null> {
   return (await tx<DirHandle | undefined>(factory, HANDLES, 'readonly', (s) => s.get(KEY))) ?? null;
 }
 
+export async function recentFolder(factory: IDBFactory = indexedDB): Promise<{ name: string } | null> {
+  const name = await tx<string | undefined>(factory, HANDLES, 'readonly', (s) => s.get(NAME_KEY));
+  return name === undefined ? null : { name };
+}
+
 export async function forgetHandle(factory: IDBFactory = indexedDB): Promise<void> {
-  await tx(factory, HANDLES, 'readwrite', (s) => s.delete(KEY));
+  await tx(factory, HANDLES, 'readwrite', (s) => { s.delete(KEY); return s.delete(NAME_KEY); });
 }
 
 /** Chromium only, and only from a click: `showDirectoryPicker` is a user-gesture API (ADR 0014). */
@@ -223,7 +242,7 @@ export interface PickerWindow {
 
 export async function pickFolder(win: PickerWindow = window as PickerWindow): Promise<DirHandle> {
   if (!win.showDirectoryPicker) {
-    throw new Error('this browser has no directory picker; FEM Lab needs Chromium for the project folder');
+    throw new FemError('unsupported', 'this browser has no directory picker; FEM Lab needs Chromium for the project folder', 'folder.open', 'open FEM Lab in Chromium');
   }
   return win.showDirectoryPicker({ mode: 'readwrite' });
 }

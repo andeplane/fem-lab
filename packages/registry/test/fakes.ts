@@ -125,6 +125,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       close: vi.fn(),
       refresh: vi.fn(async () => undefined),
       info: vi.fn(() => (folderOpen ? FOLDER : null)),
+      recent: vi.fn(async () => ({ name: FOLDER.name })),
       readText: vi.fn(async (path: string) => (path === 'big.txt' ? 'x'.repeat(2 * 1024 * 1024 + 1) : path.endsWith('.json') ? JSON.stringify(MODEL_FILE) : `content of ${path}`)),
       writeText: vi.fn(async () => undefined),
       writeBytes: vi.fn(async () => undefined),

@@ -220,7 +220,7 @@ describe('Registry', () => {
     const { registry, host, transport } = make(true);
     await registry.dispatch({ cmd: 'file.open', json: JSON.stringify(MODEL_FILE) });
     await registry.dispatch({ cmd: 'file.open', path: './models/beam.json' });
-    expect(host.folder.readText).toHaveBeenCalledWith('models/beam.json');
+    expect(host.folder.readText).toHaveBeenCalledWith('models/beam.json', 16 * 1024 * 1024);
     await expect(registry.dispatch({ cmd: 'file.open', json: 'not json' })).rejects.toMatchObject({ code: 'schema', where: 'json' });
     await expect(registry.dispatch({ cmd: 'file.open', path: '../secret.json' })).rejects.toMatchObject({ code: 'file.scope' });
     await registry.dispatch({ cmd: 'file.open', picker: true });
@@ -302,6 +302,19 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'file.write', path: 'a\\b.md', text: 'x' });
     expect(host.folder.writeText).toHaveBeenCalledWith('a/b.md', 'x');
     await expect(registry.dispatch({ cmd: 'file.write', path: '../b.md', text: 'x' })).rejects.toMatchObject({ code: 'file.scope' });
+  });
+
+  it('preserves opaque folder handles and exposes remembered-folder metadata', async () => {
+    const { registry, host } = make();
+    class Handle { kind = 'directory'; getName() { return 'bridge'; } }
+    const handle = new Handle();
+    await registry.dispatch({ cmd: 'folder.open', handle });
+    expect(vi.mocked(host.folder.open).mock.calls[0]![0]).toEqual({ handle });
+    expect((vi.mocked(host.folder.open).mock.calls[0]![0] as { handle: unknown }).handle).toBe(handle);
+    await registry.dispatch({ cmd: 'folder.open', reopen: true });
+    expect(host.folder.open).toHaveBeenLastCalledWith({ reopen: true });
+    await expect(registry.dispatch({ cmd: 'folder.open' })).rejects.toMatchObject({ code: 'schema' });
+    await expect(registry.query({ query: 'query.folderRecent' })).resolves.toEqual({ name: FOLDER.name });
   });
 
   it('folder.*, solve.cancel and ai.* call straight through', async () => {

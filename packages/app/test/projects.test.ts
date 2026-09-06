@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelFile } from '@femlab/registry';
 import { DB_NAME, HANDLES, JOURNALS, PROJECTS, REVISIONS, openDb, tx, type ProjectMeta } from '../src/db';
 import { indexedDbProjects, makeProjects, memoryProjects, type ProjectStore, type ProjectsOptions } from '../src/projects';
-import { forgetHandle, recallHandle, rememberHandle, type DirHandle } from '../src/ai/project';
+import { forgetHandle, recallHandle, recentFolder, rememberHandle, type DirHandle } from '../src/ai/project';
 import { indexedDbStore, type ShareCommand } from '../src/share';
 
 const CMDS: ShareCommand[] = [
@@ -63,11 +63,13 @@ describe('the femlab database', () => {
     const handle = { kind: 'directory', name: 'corbel' } as unknown as DirHandle;
     await rememberHandle(handle, factory);
     expect(await recallHandle(factory)).toMatchObject({ name: 'corbel' });
+    expect(await recentFolder(factory)).toEqual({ name: 'corbel' });
     // …and the projects store is still there and still usable, which is the half that used to fail
     await indexedDbProjects(factory).writeJournal({ id: 'a', name: 'a', at: 1, createdAt: 1, commands: 2, hash: null, thumbnail: null }, CMDS);
     expect(await indexedDbProjects(factory).journal('a')).toEqual(CMDS);
     await forgetHandle(factory);
     expect(await recallHandle(factory)).toBeNull();
+    expect(await recentFolder(factory)).toBeNull();
   });
 
   it('migrates the one autosave slot of a version-1 database into a project, once', async () => {
