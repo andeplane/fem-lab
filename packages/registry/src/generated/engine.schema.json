@@ -2870,7 +2870,7 @@
         "x-returns": "PathResult"
       },
       {
-        "description": "Cost before solving: DOF, matrix non-zero bounds and mandatory assembly memory lower\nbound. Counting uses at most 16 MiB scratch after meshing. Feasibility is false above\na fixed 1.5 GiB planning budget, otherwise unknown: solver fill/workspace are excluded.\nUse before large solves; this query does not promise that a solve fits the current host.",
+        "description": "Cost before solving: DOF, matrix non-zero bounds, exact retained-frame schedule and\ncounted peak memory. Counting uses at most 16 MiB scratch after meshing. Feasibility is\nfalse above a fixed 1.5 GiB planning budget, otherwise unknown because solver fill,\nallocator overhead and host serialization are excluded.\nUse before large solves; this query does not promise that a solve fits the current host.",
         "type": "object",
         "properties": {
           "step": {
@@ -4347,10 +4347,50 @@
             "minimum": 0
           },
           "bytes": {
-            "description": "Mandatory assembly storage lower bound in bytes, including element slots and two CSRs.\nExcludes mesh/model, element buffers, reduction, solver storage/fill and time history.",
+            "description": "Estimated peak of the counted solve and frame-read phases. It includes mandatory\nassembly storage, retained primary values, a conservative transient f64 working-vector\nallowance and known native/browser frame-response storage. It is incomplete because\nsolver fill, JSON and allocator overhead are not known before solving.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "assemblyBytes": {
+            "description": "Mandatory assembly storage before transient-specific values are added.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "retainedFrames": {
+            "description": "Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "retainedBytes": {
+            "description": "Logical f64 bytes for retained times and unpadded primary values.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transientWorkBytes": {
+            "description": "Conservative full-field allowance for procedure working f64 vectors live with History.\nFree-DOF vectors are charged at the full nodal length.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "transportStagingBytes": {
+            "description": "One normalized three-component f64 frame owned by a native Query result.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "wasmTransportStagingBytes": {
+            "description": "Known lower bound for the WASM/Worker frame route while two normalized three-component\nnumeric payloads coexist. JSON strings and JavaScript array/object overhead are additional.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "wasmTransportStagingComplete": {
+            "description": "False while the generic JSON route has value- and runtime-dependent allocation overhead.",
+            "type": "boolean"
           },
           "budgetBytes": {
             "description": "Fixed 1.5 GiB planning budget; not measured free memory on the current host.",
@@ -4359,7 +4399,7 @@
             "minimum": 0
           },
           "feasible": {
-            "description": "False if mandatory storage exceeds the planning budget; null means feasibility is\nunknown. Fitting a lower bound does not establish that assembly or factorisation fits.",
+            "description": "False if the counted conservative estimate exceeds the planning budget; null means\nfeasibility is unknown. Fitting it does not establish that assembly or factorisation fits.",
             "type": [
               "boolean",
               "null"
@@ -4374,6 +4414,13 @@
           "nnz",
           "nnzLower",
           "bytes",
+          "assemblyBytes",
+          "retainedFrames",
+          "retainedBytes",
+          "transientWorkBytes",
+          "transportStagingBytes",
+          "wasmTransportStagingBytes",
+          "wasmTransportStagingComplete",
           "budgetBytes",
           "note"
         ]
@@ -8049,6 +8096,7 @@
           "constraint.rigid-modes",
           "solve.not-positive-definite",
           "solve.stalled",
+          "solve.too-large",
           "gpu.shader",
           "gpu.too-large",
           "explicit.unstable"
