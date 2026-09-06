@@ -729,9 +729,6 @@ fn inverse_map_status_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Inve
         for (i, ri) in r.iter_mut().enumerate().take(dim) {
             *ri = x[i] - (0..nn).map(|a| sh[a] * coords[3 * a + i]).sum::<f64>();
         }
-        if r.iter().take(dim).any(|value| !value.is_finite()) {
-            return InverseMap::Failed;
-        }
         if r.iter().take(dim).all(|value| value.abs() <= residual_tolerance) {
             return if in_reference(kind, xi, 1e-8) { InverseMap::Inside(xi) } else { InverseMap::Outside };
         }

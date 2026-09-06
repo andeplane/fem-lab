@@ -334,6 +334,12 @@ fn difference_field_rejects_ambiguous_layout_dimensions_geometry_and_missing_ope
             "left.field",
         ),
         (
+            json!({"resultId":static_id,"field":"displacement"}),
+            json!({"resultId":static_id,"field":"temperature"}),
+            ErrorCode::NotFound,
+            "right.field",
+        ),
+        (
             json!({"resultId":static_id,"field":"stressUnaveraged"}),
             json!({"resultId":static_id,"field":"stressUnaveraged"}),
             ErrorCode::Unsupported,
@@ -350,6 +356,12 @@ fn difference_field_rejects_ambiguous_layout_dimensions_geometry_and_missing_ope
             json!({"resultId":modal_id,"field":"mode:1"}),
             ErrorCode::Schema,
             "right.component",
+        ),
+        (
+            json!({"resultId":static_id,"field":"displacement"}),
+            json!({"resultId":modal_id,"field":"mode:1","component":0}),
+            ErrorCode::Schema,
+            "left.component",
         ),
         (
             json!({"resultId":static_id,"field":"displacement"}),

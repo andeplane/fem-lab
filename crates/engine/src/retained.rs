@@ -454,8 +454,39 @@ mod tests {
     #[test]
     fn difference_overflow_is_a_structured_error_instead_of_a_null_inside_value() {
         assert_eq!(finite_difference(3.0, 1.0, 0, 0).unwrap(), 2.0);
-        let error = finite_difference(f64::MAX, -f64::MAX, 2, 1).expect_err("finite operands can overflow");
-        assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::Unsupported, Some("values[2][1]")));
+        let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0; 3]);
+        let built = BuiltMesh { mesh: mesh.clone(), body_of_block: vec!["body".into()], sets: Default::default() };
+        let mut engine = Engine::new(None, Box::new(crate::engine::NoClock), 1);
+        for (step, value) in [("left", f64::MAX), ("right", -f64::MAX)] {
+            let mut result = crate::procedure::blank(crate::solve::SolveInfo {
+                solver: "test",
+                iterations: 0,
+                rel_residual: 0.0,
+                time_ms: 0.0,
+            });
+            result.fields.insert(
+                crate::command::Field::Temperature,
+                crate::post::FieldData::new(crate::post::Per::Node, 1, vec![value; mesh.n_nodes()]),
+            );
+            engine.mesh = Some(built.clone());
+            engine.retain_result(step.into(), result);
+        }
+        let error = engine
+            .query_difference(
+                &crate::query::DifferenceOperand {
+                    result_id: "result-1".into(),
+                    field: "temperature".into(),
+                    component: None,
+                },
+                &crate::query::DifferenceOperand {
+                    result_id: "result-2".into(),
+                    field: "temperature".into(),
+                    component: None,
+                },
+                crate::query::DifferenceOnto::Left,
+            )
+            .expect_err("finite retained operands can overflow");
+        assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::Unsupported, Some("values[0][0]")));
         assert!(error.cause.contains("nonfinite"));
         assert!(error.suggestion.is_some());
     }

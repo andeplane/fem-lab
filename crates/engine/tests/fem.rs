@@ -1519,6 +1519,18 @@ fn a_curved_quadratic_probe_is_not_rejected_by_its_nodal_box() {
         Ok(None),
         "the curved control hull proves a far point outside"
     );
+    assert_eq!(
+        probe_checked(&mesh, &field, [f64::NAN, 0.0, 0.0]),
+        Err(0),
+        "a nonfinite requested point reaches the locator and remains a numerical failure"
+    );
+    let mut nonfinite_mesh = mesh.clone();
+    nonfinite_mesh.coords[0] = f64::NAN;
+    assert_eq!(
+        probe_checked(&nonfinite_mesh, &field, inside),
+        Err(0),
+        "nonfinite retained coordinates cannot be classified as outside coverage"
+    );
 
     for kind in [ElementKind::Quad8, ElementKind::Hex20, ElementKind::Tri6, ElementKind::Tet10] {
         let mesh = Structured { kind, n: [1, 1, 1] }.box_([1.0; 3]);
