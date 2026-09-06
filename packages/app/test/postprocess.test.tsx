@@ -13,6 +13,7 @@ import { App } from '../src/ui/App';
 import type { Dispatch } from '../src/ui/cmd';
 import { Frequencies, History, LineChart, axisTicks, extremeLabel } from '../src/ui/Results';
 import { resultItems } from '../src/ui/Tree';
+import type { Viewer } from '../src/viewer/viewer';
 
 const v = (value: number, unit: string) => ({ value, unit });
 
@@ -304,16 +305,27 @@ describe('the deformation bar', () => {
 
   it('rolls a rejected phase preview back to the acknowledged state', async () => {
     const { root, store } = mount({ result: modal, fieldKey: 'mode:2', phase: 0.25 });
-    const viewer = { current: { animate: vi.fn(), setPhase: vi.fn() } };
+    const viewer = { current: {
+      animate: vi.fn<Viewer['animate']>(),
+      setPhase: vi.fn<Viewer['setPhase']>(),
+      setSelection: vi.fn<Viewer['setSelection']>(),
+    } satisfies Pick<Viewer, 'animate' | 'setPhase' | 'setSelection'> };
     const dispatch = vi.fn(async () => { throw new Error('rejected'); });
-    render(<App store={store} dispatch={dispatch} viewer={viewer as never} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
-    const phase = root.querySelector<HTMLInputElement>('input.phase')!;
-    phase.value = '80';
-    phase.dispatchEvent(new Event('input', { bubbles: true }));
-    phase.dispatchEvent(new Event('change', { bubbles: true }));
-    await vi.waitFor(() => expect(store.state.phase).toBe(0.25));
-    expect(store.state.playing).toBe(false);
-    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, 0.25);
+    try {
+      await act(async () => {
+        render(<App store={store} dispatch={dispatch} viewer={viewer as never} query={async () => ({ value: 1, unit: 'Pa' })} />, root);
+      });
+      expect(viewer.current.setSelection).toHaveBeenLastCalledWith(store.state.selection);
+      const phase = root.querySelector<HTMLInputElement>('input.phase')!;
+      phase.value = '80';
+      phase.dispatchEvent(new Event('input', { bubbles: true }));
+      phase.dispatchEvent(new Event('change', { bubbles: true }));
+      await vi.waitFor(() => expect(store.state.phase).toBe(0.25));
+      expect(store.state.playing).toBe(false);
+      expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, 0.25);
+    } finally {
+      act(() => render(null, root));
+    }
   });
 
   it('offers explicit WebM resolutions and a registry-callable cancel while recording', () => {

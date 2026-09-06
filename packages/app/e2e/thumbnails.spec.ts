@@ -35,6 +35,8 @@ test('@thumbnails render every example through the viewer', async ({ page }) => 
       await window.fem.dispatch({ cmd: 'view.toggle', layer: 'axes', on: false });
       const canvas = document.querySelector<HTMLCanvasElement>('.viewer canvas')!;
       Object.assign(canvas.style, { width: '320px', height: '180px' });
+      // The viewer observes its parent layout box; changing only canvas CSS needs an explicit resize.
+      window.dispatchEvent(new Event('resize'));
       for (const overlay of document.querySelectorAll<HTMLElement>('.viewer > :not(canvas)')) overlay.style.display = 'none';
     }, commands);
     await page.waitForFunction(() => {
