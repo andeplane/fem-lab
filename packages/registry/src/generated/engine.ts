@@ -486,6 +486,21 @@ export type Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -550,6 +565,16 @@ export type Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -1726,6 +1751,12 @@ export type Sweep =
       kind: "revolve";
     };
 /**
+ * An omitted optional material property that a successful solve read as its resolved zero.
+ * The value is kept in SI with the Result, so later unit, name and material edits cannot
+ * rewrite the assumption under an already-computed answer.
+ */
+export type AssumedMaterialProperty = "rho" | "alpha";
+/**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  */
 export type ModelFile_Command =
@@ -2211,6 +2242,21 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -2275,6 +2321,16 @@ export type ModelFile_Command =
               }
           )
         | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
+       * Default 50.
+       */
+      nonlinearMaxIterations?: number | null;
       cmd: "step.add";
     }
   | {
@@ -2862,6 +2918,12 @@ export type Load1 =
     }
   | {
       on: string;
+      emissivity: number;
+      t_inf: number;
+      kind: "radiation";
+    }
+  | {
+      on: string;
       q: number;
       kind: "heatFlux";
     }
@@ -3370,6 +3432,11 @@ export interface ResultSummary {
    */
   appliedTotal: [Valued, Valued, Valued];
   /**
+   * Optional material properties the successful procedure actually read as zero because the
+   * Material omitted them. Empty when every solver-used property was explicit.
+   */
+  assumptions?: ResultAssumption[];
+  /**
    * Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
    * shape is the Result field named `mode:k`.
    */
@@ -3411,6 +3478,21 @@ export interface ReactionRow {
    * @maxItems 3
    */
   total: [Valued, Valued, Valued];
+}
+/**
+ * One solver-used material assumption captured at solve time.
+ */
+export interface ResultAssumption {
+  step: string;
+  body: string;
+  material: string;
+  property: AssumedMaterialProperty;
+  value: Valued;
+  /**
+   * The Material provenance at solve time; null when the Material named none.
+   */
+  source?: string | null;
+  cause: string;
 }
 /**
  * One time of a transient Step's history: the extremes of the field at that instant.
@@ -3853,6 +3935,7 @@ export interface EngineError {
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
     | "solve.stalled"
+    | "solve.diverged"
     | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
@@ -4009,6 +4092,8 @@ export interface Step {
   dtFactor?: number | null;
   amplitude?: Amplitude | null;
   initial?: number | null;
+  nonlinearTolerance?: number | null;
+  nonlinearMaxIterations?: number | null;
 }
 /**
  * A Plugin used by the Model (phase P).
