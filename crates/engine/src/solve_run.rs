@@ -219,7 +219,19 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
         })
     };
     Ok(match step.procedure {
-        Procedure::Static => procedure::Step::Static { solver: opts },
+        Procedure::Static => {
+            // A static Step needs no clock, so unlike a transient one it defaults rather than
+            // refusing: one second of nominal time, covered in a single increment. An
+            // amplitude table written in step fraction therefore works unchanged.
+            let t_end = step.t_end.unwrap_or(1.0);
+            procedure::Step::Static {
+                solver: opts,
+                dt: step.dt.unwrap_or(t_end),
+                t_end,
+                amplitude: step.amplitude.as_ref().map(amplitude),
+                output_every: step.output_every.unwrap_or(1) as usize,
+            }
+        }
         Procedure::Modal => {
             procedure::Step::Modal { n_modes: step.n_modes.unwrap_or(6) as usize, shift: step.shift, solver: opts }
         }
@@ -255,7 +267,16 @@ pub(crate) fn planned_cost(
     step: &procedure::Step,
 ) -> Result<PlannedCost, Error> {
     let mut estimate = match step {
-        procedure::Step::Static { solver } | procedure::Step::Modal { solver, .. } => {
+        // An amplituded static Step retains a displacement history like any transient, so it
+        // is budgeted like one: `f`, `f_thermal`, `u`, `u_th`, `u_L` and the frame being built
+        // are the full-field vectors alive while it retains.
+        procedure::Step::Static { solver, dt, t_end, amplitude: Some(_), output_every } => {
+            let (steps, _) = procedure::time_grid(*dt, *t_end)?;
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 6)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "static")) });
+        }
+        procedure::Step::Static { solver, .. } | procedure::Step::Modal { solver, .. } => {
             crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
         }
         procedure::Step::HeatSteady { solver } => crate::solve::cost_estimate(mesh, 1, solver.solver),
@@ -353,7 +374,12 @@ impl Engine {
                 &step,
                 prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)),
             )?;
-            if matches!(&proc_step, procedure::Step::HeatTransient { .. } | procedure::Step::Explicit { .. }) {
+            if matches!(
+                &proc_step,
+                procedure::Step::HeatTransient { .. }
+                    | procedure::Step::Explicit { .. }
+                    | procedure::Step::Static { amplitude: Some(_), .. }
+            ) {
                 planned_cost(p.mesh, Some(&p), &proc_step)?.enforce(&step.name)?;
             }
             procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?

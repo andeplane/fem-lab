@@ -227,9 +227,15 @@ export interface Fem {
      * temperature field and turns it into thermal stress. The remaining fields belong to one
      * procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-     * `dtFactor` and `outputEvery` to explicit. Heat-steady requires a finite positive material
-     * conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
-     * `theta` must lie in [0, 1].
+     * `dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
+     * `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+     * prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
+     * defaulting to the whole of it, so a table written in step fraction works unchanged) and
+     * keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
+     * scaled, so its thermal strain is present in full at every increment. Without an
+     * `amplitude` a static Step is the single solve it has always been and retains nothing.
+     * Heat-steady requires a finite positive material conductivity `k`; heat-transient also
+     * requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
      */
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**
