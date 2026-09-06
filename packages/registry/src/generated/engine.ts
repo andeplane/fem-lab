@@ -3495,6 +3495,12 @@ export interface Model {
   loads?: Load[];
   steps?: Step[];
   mesh?: MeshSettings | null;
+  /**
+   * The material of the mesher's implicit Body. The mapped mesher *is* its own geometry, so
+   * there is no [`Body`] record to carry the assignment; `material.assign` names that Body
+   * like any other and the name lands here.
+   */
+  mesherMaterial?: string | null;
   plugins?: PluginRecord[];
 }
 /**

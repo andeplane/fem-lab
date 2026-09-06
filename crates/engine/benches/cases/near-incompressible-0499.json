@@ -1,0 +1,187 @@
+{
+  "name": "near-incompressible-0499",
+  "reference": "Benchmark C3. C2's Lame cylinder regenerated at nu = 0.499, where the bulk modulus runs away from the shear modulus and a fully integrated linear element locks. Same geometry and pressure as lame-plane-strain-quad8, 8 x 16 quad8, plane strain; the closed form is u_r(a) = (1+nu)/E (A(1-2nu)a + B/a) = 5.998998e-5 m and the mesh gives 5.995078e-5 m (0.065 %). The locking is shown by the elements that are not here: at this mesh a fully integrated quad4 reaches only 96 %, 91 % and 50 % of u_r(a) at nu = 0.49, 0.499 and 0.4999, while quad4 with Wilson-Taylor incompatible modes stays inside 2 % at all three (tests/registry.rs asserts both). No B-bar formulation was needed. The hoop stress is the honest casualty: it is 116.29 MPa against the exact 100 MPa, because sigma_theta carries the hydrostatic part and lambda multiplies a volumetric strain that is going to zero, so the small error in eps_kk is amplified by the bulk modulus. It is recorded, not gated: displacement converges long before pressure does.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "near-incompressible"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStrain"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.499
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "tube",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0.1 m",
+                "0 m"
+              ],
+              [
+                "0.2 m",
+                "0 m"
+              ],
+              [
+                "0 m",
+                "0.2 m"
+              ],
+              [
+                "0 m",
+                "0.1 m"
+              ]
+            ],
+            "edges": [
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 m",
+                  "0 m"
+                ],
+                "ccw": true
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "arc",
+                "center": [
+                  "0 m",
+                  "0 m"
+                ],
+                "ccw": false
+              }
+            ],
+            "n": [
+              8,
+              16
+            ],
+            "tags": [
+              "ymin",
+              "outer",
+              "xmin",
+              "inner"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "tube"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symy",
+      "on": "tube.ymin",
+      "normal": "y"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symx",
+      "on": "tube.xmin",
+      "normal": "x"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "inside",
+      "on": "tube.inner",
+      "value": "60 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "symx",
+        "symy"
+      ],
+      "loads": [
+        "inside"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "0.1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.000059989980000000005,
+      "tol": 0.02,
+      "rel": true,
+      "note": "u_r(a) closed form at nu = 0.499"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 1,
+        "at": [
+          "0.1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 116.2903973921371,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_theta(a) recorded: the exact value is 100 MPa at every nu"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "A7: reactions balance the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

@@ -255,6 +255,17 @@ impl Engine {
     pub fn warnings(&self) -> Vec<Warning> {
         let m = &self.model;
         let mut w = Vec::new();
+        // The mapped mesher's implicit Body is geometry too: it answers "is there anything to
+        // analyse yet", and it needs a material like any other Body.
+        let implicit = m.implicit_body();
+        let has_geometry = !m.bodies.is_empty() || implicit.is_some();
+        if let Some(body) = implicit.filter(|_| m.mesher_material.is_none()) {
+            w.push(Warning {
+                code: "model.no-material".into(),
+                text: format!("Body '{body}' has no material; assign one with material.assign"),
+                where_: Some(format!("body '{body}'")),
+            });
+        }
         for b in &m.bodies {
             if b.material.is_none() {
                 w.push(Warning {
@@ -276,28 +287,28 @@ impl Engine {
                 });
             }
         }
-        if m.bodies.is_empty() {
+        if !has_geometry {
             w.push(Warning {
                 code: "model.empty".into(),
                 text: "no geometry yet; add a body with geometry.addBox or geometry.add".into(),
                 where_: None,
             });
         }
-        if m.constraints.is_empty() && !m.bodies.is_empty() {
+        if m.constraints.is_empty() && has_geometry {
             w.push(Warning {
                 code: "model.unconstrained".into(),
                 text: "no constraints; a static solve needs supports (constraint.fix)".into(),
                 where_: None,
             });
         }
-        if m.loads.is_empty() && !m.bodies.is_empty() {
+        if m.loads.is_empty() && has_geometry {
             w.push(Warning {
                 code: "model.unloaded".into(),
                 text: "no loads yet (load.pressure, load.traction, load.gravity …)".into(),
                 where_: None,
             });
         }
-        if m.steps.is_empty() && !m.bodies.is_empty() {
+        if m.steps.is_empty() && has_geometry {
             w.push(Warning {
                 code: "model.no-step".into(),
                 text: "no analysis step; add one with step.add".into(),
@@ -469,10 +480,19 @@ impl Engine {
                 self.model
                     .material(material)
                     .ok_or_else(|| Error::not_found("material", material, &self.model.names(ObjectKind::Material)))?;
+                // The mapped mesher is its own geometry, so its Body has no record to hold the
+                // assignment; it is named here like any other and kept on the Model.
+                let implicit = self.model.implicit_body().map(str::to_string);
                 for b in bodies {
-                    self.model
-                        .body(b)
-                        .ok_or_else(|| Error::not_found("body", b, &self.model.names(ObjectKind::Body)))?;
+                    if implicit.as_deref() == Some(b.as_str()) {
+                        continue;
+                    }
+                    let mut known = self.model.names(ObjectKind::Body);
+                    known.extend(implicit.as_deref());
+                    self.model.body(b).ok_or_else(|| Error::not_found("body", b, &known))?;
+                }
+                if implicit.is_some_and(|b| bodies.contains(&b)) {
+                    self.model.mesher_material = Some(material.clone());
                 }
                 for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
                     b.material = Some(material.clone());
@@ -483,13 +503,16 @@ impl Engine {
                 self.model
                     .material(name)
                     .ok_or_else(|| Error::not_found("material", name, &self.model.names(ObjectKind::Material)))?;
-                let users: Vec<&str> = self
+                let mut users: Vec<&str> = self
                     .model
                     .bodies
                     .iter()
                     .filter(|b| b.material.as_deref() == Some(name))
                     .map(|b| b.name.as_str())
                     .collect();
+                if self.model.mesher_material.as_deref() == Some(name) {
+                    users.extend(self.model.implicit_body());
+                }
                 if !users.is_empty() {
                     return Err(in_use("material", name, &users, "bodies"));
                 }
@@ -724,7 +747,9 @@ impl Engine {
             Command::SolveRun { step, solver, tolerance, max_iterations } => {
                 self.solve_run(step, *solver, *tolerance, *max_iterations, on_progress).await
             }
-            Command::StudyConverge { .. } => Err(Error::unsupported("study.converge")),
+            Command::StudyConverge { step, sizes, quantity, restore } => {
+                self.study_converge(step, sizes, quantity, *restore, on_progress).await
+            }
             Command::PluginLoad { .. } => Err(Error::unsupported("plugin.load (phase P)")),
             Command::JournalUndo { steps } => self.undo(steps.unwrap_or(1)),
             Command::JournalRedo { steps } => self.redo(steps.unwrap_or(1)),

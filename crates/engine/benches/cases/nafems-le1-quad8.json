@@ -1,0 +1,177 @@
+{
+  "name": "nafems-le1-quad8",
+  "reference": "Benchmark C5. NAFEMS LE1 elliptic membrane: the quarter of an elliptic annulus with inner semi-axes (2, 1) m and outer (3.25, 2.75) m, thickness 0.1 m, plane stress, E = 210 GPa, nu = 0.3, u_x = 0 on x = 0 and u_y = 0 on y = 0, and a 10 MPa outward pressure on the outer ellipse. The target is the direct stress sigma_yy at D = (2, 0), the inner edge on the x axis, = 92.7 MPa, sampled by query.probe of the averaged nodal field. This row is 24 x 24 quad8, giving 92.5824 MPa (0.13 %). The mesh sequence n = 6, 12, 24 is in tests/registry.rs; quad8 gives 92.161, 92.537, 92.582, error non-increasing.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "nafems-le1"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "0.1 m"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "plate",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "2 m",
+                "0 m"
+              ],
+              [
+                "3.25 m",
+                "0 m"
+              ],
+              [
+                "0 m",
+                "2.75 m"
+              ],
+              [
+                "0 m",
+                "1 m"
+              ]
+            ],
+            "edges": [
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "ellipse",
+                "center": [
+                  "0 m",
+                  "0 m"
+                ],
+                "semiAxes": [
+                  "3.25 m",
+                  "2.75 m"
+                ]
+              },
+              {
+                "kind": "line"
+              },
+              {
+                "kind": "ellipse",
+                "center": [
+                  "0 m",
+                  "0 m"
+                ],
+                "semiAxes": [
+                  "2 m",
+                  "1 m"
+                ]
+              }
+            ],
+            "n": [
+              24,
+              24
+            ],
+            "tags": [
+              "y0",
+              "outer",
+              "x0",
+              "inner"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symx",
+      "on": "plate.x0",
+      "normal": "x"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symy",
+      "on": "plate.y0",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "outward",
+      "on": "plate.outer",
+      "value": "-10 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "symx",
+        "symy"
+      ],
+      "loads": [
+        "outward"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 1,
+        "at": [
+          "2 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 92.7,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_yy(D) = 92.7 MPa within 2 %"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "A7: reactions balance the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

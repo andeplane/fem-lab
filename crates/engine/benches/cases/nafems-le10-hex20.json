@@ -1,0 +1,184 @@
+{
+  "name": "nafems-le10-hex20",
+  "reference": "Benchmark D1. NAFEMS LE10 thick plate: LE1's elliptic annulus extruded 0.6 m, E = 210 GPa, nu = 0.3, u_x = 0 on the x = 0 face, u_y = 0 on the y = 0 face, the outer elliptic face held, and 1 MPa of pressure on the top. The target is sigma_yy at D = (2, 0, top surface) = -5.38 MPa. One deviation: LE10 supports the outer face vertically along its mid-plane line only, and no Set predicate in the registry can name a line where a box cannot (the mid-plane box catches the whole mid-surface, which suppresses the bending entirely and gives -0.72 MPa). This model holds u_z on the whole outer face instead, which is the same support once u_x = u_y = 0 has already clamped it in plane. Four layers through the thickness matter more than the in-plane mesh does: at n = 12 two layers give -5.576 MPa and four give -5.348 MPa. This row is 12 x 12 x 4 hex20, giving -5.3477 MPa, 0.6 % from -5.38.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "nafems-le10"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "sweep",
+        "base": {
+          "kind": "mapped",
+          "body": "plate",
+          "blocks": [
+            {
+              "corners": [
+                [
+                  "2 m",
+                  "0 m"
+                ],
+                [
+                  "3.25 m",
+                  "0 m"
+                ],
+                [
+                  "0 m",
+                  "2.75 m"
+                ],
+                [
+                  "0 m",
+                  "1 m"
+                ]
+              ],
+              "edges": [
+                {
+                  "kind": "line"
+                },
+                {
+                  "kind": "ellipse",
+                  "center": [
+                    "0 m",
+                    "0 m"
+                  ],
+                  "semiAxes": [
+                    "3.25 m",
+                    "2.75 m"
+                  ]
+                },
+                {
+                  "kind": "line"
+                },
+                {
+                  "kind": "ellipse",
+                  "center": [
+                    "0 m",
+                    "0 m"
+                  ],
+                  "semiAxes": [
+                    "2 m",
+                    "1 m"
+                  ]
+                }
+              ],
+              "n": [
+                12,
+                12
+              ],
+              "tags": [
+                "y0",
+                "outer",
+                "x0",
+                "inner"
+              ]
+            }
+          ]
+        },
+        "sweep": {
+          "kind": "extrude",
+          "layers": 4,
+          "height": "0.6 m"
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "plate"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symx",
+      "on": "plate.x0",
+      "normal": "x"
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "symy",
+      "on": "plate.y0",
+      "normal": "y"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "rim",
+      "on": "plate.outer"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "top",
+      "on": "plate.top",
+      "value": "1 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "symx",
+        "symy",
+        "rim"
+      ],
+      "loads": [
+        "top"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 1,
+        "at": [
+          "2 m",
+          "0 m",
+          "0.6 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -5.38,
+      "tol": 0.02,
+      "rel": true,
+      "note": "sigma_yy(D) = -5.38 MPa within 2 %"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "A7: reactions balance the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

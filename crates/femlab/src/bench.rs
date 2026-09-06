@@ -128,21 +128,68 @@ pub fn load_cases(dir: &Path, filter: Option<&str>) -> Result<Vec<Case>, String>
     Ok(cases)
 }
 
+/// The check a status row reports: the first with a numeric expectation, which every case
+/// leads with — the closed form, the NAFEMS value or the recorded number it is gated on.
+fn headline(r: &CaseResult) -> Option<&CheckResult> {
+    r.checks.iter().find(|c| c.expect.as_f64().is_some())
+}
+
+/// A number for a table: six significant-ish digits, scientific outside a readable range,
+/// with the trailing zeros trimmed so the table does not churn on them.
+fn num(v: f64) -> String {
+    if v != 0.0 && (v.abs() < 1e-3 || v.abs() >= 1e6) {
+        return format!("{v:.4e}");
+    }
+    let s = format!("{v:.6}");
+    let t = s.trim_end_matches('0').trim_end_matches('.');
+    t.to_string()
+}
+
+/// The Benchmark status table: one row per case with what it measured, what it is measured
+/// against and how far apart they are. It is what `--update-docs` writes into BENCHMARKS.md,
+/// so it carries no timings — those are in `--json`, and they would churn the file.
 pub fn markdown(results: &[CaseResult]) -> String {
-    let mut s = String::from("| Benchmark | Checks | Status | Time |\n|---|---|---|---|\n");
+    let mut s =
+        String::from("| Benchmark | Status | Checks | Measured | Reference | Error |\n|---|---|---|---|---|---|\n");
     for r in results {
         let passed = r.checks.iter().filter(|c| c.pass).count();
         let status = if r.pass { "green" } else { "FAILED" };
-        s += &format!("| {} | {}/{} | {} | {:.0} ms |\n", r.name, passed, r.checks.len(), status, r.time_ms);
+        let (got, want, err) = match headline(r) {
+            Some(c) => {
+                let g = c.got.as_f64().unwrap_or(f64::NAN);
+                let e = c.expect.as_f64().unwrap_or(f64::NAN);
+                (num(g), num(e), format!("{:.2} %", 100.0 * (g - e).abs() / e.abs().max(f64::MIN_POSITIVE)))
+            }
+            None => ("-".to_string(), "-".to_string(), "-".to_string()),
+        };
+        s += &format!("| {} | {} | {}/{} | {} | {} | {} |\n", r.name, status, passed, r.checks.len(), got, want, err);
     }
     s
 }
 
+/// The markers `--update-docs` rewrites between.
+const DOC_START: &str = "<!-- bench:start -->";
+const DOC_END: &str = "<!-- bench:end -->";
+
+/// Replace the marked block of a Markdown file with `table`, so BENCHMARKS.md's status is
+/// regenerated from a real run rather than edited by hand.
+pub fn update_docs(path: &Path, table: &str) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let (from, to) = match (text.find(DOC_START), text.find(DOC_END)) {
+        (Some(a), Some(b)) if a + DOC_START.len() <= b => (a + DOC_START.len(), b),
+        _ => return Err(format!("{} has no '{DOC_START}' … '{DOC_END}' block to update", path.display())),
+    };
+    let out = format!("{}\n\n{table}\n{}", &text[..from], &text[to..]);
+    std::fs::write(path, out).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn bench(
     cases_dir: Option<&Path>,
     filter: Option<&str>,
     json: bool,
     md: bool,
+    docs: Option<&Path>,
     threads: Option<usize>,
     cpu: bool,
 ) -> i32 {
@@ -155,6 +202,13 @@ pub fn bench(
         }
     };
     let results: Vec<CaseResult> = cases.iter().map(|c| run_case(c, threads, cpu)).collect();
+    if let Some(path) = docs {
+        if let Err(e) = update_docs(path, &markdown(&results)) {
+            eprintln!("{e}");
+            return 1;
+        }
+        println!("updated {}", path.display());
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&results).unwrap_or_default());
     } else if md {
