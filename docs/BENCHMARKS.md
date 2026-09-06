@@ -258,6 +258,16 @@ match the same continuum solution in Celsius. The existing NAFEMS T3 check remai
 
 ## F. Dynamics and explicit (phase 2, 6)
 
+Retained playback (#246) exercises the real Chromium WASM/Worker path using E3 uniform
+heating `T=t` and F2b rigid free fall `uy=-g*t²/2`. Distinct retained times update temperature
+contours and scientific probes, or displacement contours and the drawn geometry from the
+same field. Probe time and displayed Model units remain explicit. Browser checks cover
+overlapping selections, pause/resume, speed, endpoint stop, stale-Result invalidation, and
+Escape/pointer-cancel versus one committed scrub Command; all leave the engine Journal
+unchanged. Deterministic injected-clock checks use an irregular retained grid and verify
+elapsed physical time across pauses/rate changes. Delayed frame, legacy animation and solve
+hydration replies cannot overwrite a newer selection; modal phase controls remain covered.
+
 | # | Case | Reference | Tolerance | Proves | Status |
 |---|---|---|---|---|---|
 | F1 | Linear momentum conservation, free body, 2000 explicit steps | Δp = 0, energy drift = 0 | 1e-6 | explicit integrator symmetry (Blast Wall's test) | engine test |

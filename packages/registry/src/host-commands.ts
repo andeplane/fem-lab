@@ -30,7 +30,15 @@ export const DeformScale = z.union([z.number(), z.literal('auto'), z.literal('tr
 export const ClipPlane = z.object({ normal: vec3, offset: z.number() });
 export const Layer = z.enum(['mesh', 'edges', 'loads', 'constraints', 'sets', 'legend', 'axes', 'grid']);
 export const Theme = z.enum(['dark', 'light']);
-export const Animation = z.object({ step: z.string(), mode: int.optional(), playing: z.boolean(), speed: z.number().optional(), frame: int.optional() });
+export const Animation = z.object({ step: z.string(), mode: int.positive().optional(), playing: z.boolean(), speed: z.number().positive().optional(), frame: int.min(0).max(100).optional() });
+const TimeQuantity = z.union([z.string(), z.object({ value: z.number(), unit: z.string() })]);
+export const TransientPlayback = z.object({
+  step: z.string(), playing: z.boolean(), speed: z.number().positive().optional(),
+  sample: z.union([
+    z.object({ kind: z.literal('frame'), index: int.nonnegative() }),
+    z.object({ kind: z.literal('time'), time: TimeQuantity, sampling: z.enum(['exact', 'nearest']) }),
+  ]).optional(),
+});
 export const SelectionInput = z.object({
   bodies: z.array(z.string()).optional(),
   faces: z.array(z.string()).optional(),
@@ -38,7 +46,7 @@ export const SelectionInput = z.object({
   mode: z.enum(['replace', 'add', 'remove']).optional(),
 });
 export const PickTarget = z.enum(['face', 'body', 'off']);
-export const ScreenshotOptions = z.object({ width: int.optional(), height: int.optional(), legend: z.boolean().optional(), title: z.string().optional() });
+export const ScreenshotOptions = z.object({ width: int.positive().optional(), height: int.positive().optional(), legend: z.boolean().optional(), title: z.string().optional() });
 export const CopyWhat = z.union([
   z.object({ kind: z.literal('selection') }),
   z.object({ kind: z.literal('mention'), ref: z.string() }),
@@ -91,7 +99,8 @@ export interface HostContext {
     toggle(layer: z.output<typeof Layer>, on?: boolean): void;
     setVisible(bodies: string[], on: boolean): void;
     setTheme(t: z.output<typeof Theme>): void;
-    animate(a: z.output<typeof Animation>): void;
+    animate(a: z.output<typeof Animation>): void | Promise<void>;
+    playTransient(a: z.output<typeof TransientPlayback>): void | Promise<void>;
     camera(): z.output<typeof CameraState>;
     screenshot(o: z.output<typeof ScreenshotOptions>): Promise<{ png: string }>;
   };
@@ -252,7 +261,13 @@ async function buildExport(spec: ExportSpec, ctx: HostContext): Promise<Built> {
     return { filename: `${name}.femlab.json`, mime: 'application/json', data: JSON.stringify(await ctx.transport.exportFile(), null, 2) };
   }
   if (spec.format === 'png') {
-    const { png } = await ctx.view.screenshot({ legend: spec['legend'] !== false });
+    const options = ScreenshotOptions.parse({
+      legend: spec['legend'] !== false,
+      ...(spec['width'] === undefined ? {} : { width: spec['width'] }),
+      ...(spec['height'] === undefined ? {} : { height: spec['height'] }),
+      ...(spec['title'] === undefined ? {} : { title: spec['title'] }),
+    });
+    const { png } = await ctx.view.screenshot(options);
     return { filename: `${name}.png`, mime: 'image/png', data: dataUrlBytes(png) };
   }
   if (spec.format === 'csv') {
@@ -274,14 +289,15 @@ export const HOST_COMMANDS: HostDef[] = [
   def('view.setCamera', 'Place the camera explicitly: `position` and `target` in metres in viewer space, optional `up`. Use `view.preset` for the standard views; this is for a reproducible screenshot angle.', CameraState, (c, ctx) => ctx.view.setCamera(c)),
   def('view.preset', 'Jump to a standard view (iso, front, back, left, right, top, bottom) framed on the mesh bounding box; the same as the view buttons and keys.', z.object({ view: ViewPreset }), ({ view }, ctx) => ctx.view.preset(view)),
   def('view.setProjection', 'Switch between perspective and orthographic projection. Orthographic is the right choice for dimensioned screenshots and for comparing deformed shapes.', z.object({ projection: Projection }), ({ projection }, ctx) => ctx.view.setProjection(projection)),
-  def('view.showField', 'Show a result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off.', FieldChoice, (f, ctx) => ctx.view.showField(f)),
+  def('view.showField', 'Show a browser-supported result field as a contour on the mesh (`field`, optional `component` and `step`; default the last solved Step), or `{ field: null }` to turn contours off. Unsupported fields or components return a structured `unsupported` error; choose a field and component from the Results picker.', FieldChoice, (f, ctx) => ctx.view.showField(f)),
   def('view.setLegend', 'Set the contour legend: colormap (viridis or rainbow), number of discrete bands (null for continuous) and the value range as `[min, max]` or `"auto"`.', LegendSpec, (l, ctx) => ctx.view.setLegend(l)),
   def('view.setDeformScale', 'Scale the displayed deformed shape: a number, `"auto"` (a visible exaggeration) or `"true"` (scale 1, the real displacement). Only the display changes; results do not.', z.object({ scale: DeformScale }), ({ scale }, ctx) => ctx.view.setDeformScale(scale)),
   def('view.setClip', 'Cut the view with a section plane `{ normal, offset }` in metres to look inside a body, or `{ plane: null }` to remove the cut. Contours are drawn on the cut surface too.', z.object({ plane: ClipPlane.nullable() }), ({ plane }, ctx) => ctx.view.setClip(plane)),
   def('view.toggle', 'Show or hide an overlay layer: mesh, edges, loads, constraints, sets, legend, axes or grid. Omit `on` to flip the current state.', z.object({ layer: Layer, on: z.boolean().optional() }), ({ layer, on }, ctx) => ctx.view.toggle(layer, on)),
   def('view.setVisible', 'Show or hide the named bodies in the viewer (the tree\'s eye icon). Hidden bodies stay in the Model and in every solve; only the display changes.', z.object({ bodies: z.array(z.string()), on: z.boolean() }), ({ bodies, on }, ctx) => ctx.view.setVisible(bodies, on)),
   def('view.setTheme', 'Switch the app between the dark and light theme. The choice is remembered in this browser and affects screenshots.', z.object({ theme: Theme }), ({ theme }, ctx) => ctx.view.setTheme(theme)),
-  def('view.animate', 'Play, pause or scrub an animation of a Step: a mode shape (`mode`) or a transient history, with `speed` and an explicit `frame`. Available once dynamics land; the row exists so the control has a Command.', Animation, (a, ctx) => ctx.view.animate(a)),
+  def('view.animate', 'Play, pause or scrub the displacement amplitude of a solved Step. mode selects a one-based modal shape; speed is positive cycles per second. frame is phase from 0 to 100 percent of a sinusoidal cycle, including while paused. Use view.playTransient for retained physical-time fields. No Model or Journal change.', Animation, (a, ctx) => ctx.view.animate(a)),
+  def('view.playTransient', 'Play, pause or select actual retained fields of a solved transient Step. speed is positive simulated seconds per wall second. sample selects a zero-based retained frame or a unit-bearing time resolved by the engine with exact/nearest sampling. Playback holds stored fields until the next retained time, stops at the endpoint, and synchronizes temperature or displacement contours, deformation, legend and probes. Historical derived fields are unavailable. Display only; no Model or Journal change.', TransientPlayback, (a, ctx) => ctx.view.playTransient(a)),
   def('selection.set', 'Select bodies, faces (named face Sets) and Sets by name, never by id. `mode` is replace (default), add or remove, like shift-click; the selection drives `view.fit` and `@selection` in the chat.', SelectionInput, (s, ctx) => ctx.selection.set(s)),
   def('selection.clear', 'Clear the current selection of bodies, faces and Sets, the same as clicking empty space in the viewer or pressing Escape.', none, (_, ctx) => ctx.selection.clear()),
   def('selection.setPickTarget', 'Arm the next viewer click to pick a face, a body, or nothing (`off`). The Properties form uses it for its "pick in viewer" buttons.', z.object({ target: PickTarget }), ({ target }, ctx) => ctx.selection.setPickTarget(target)),
@@ -342,7 +358,7 @@ export const HOST_COMMANDS: HostDef[] = [
 ];
 
 export const HOST_QUERIES: HostDef[] = [
-  def('query.screenshot', 'Render the current view to a PNG (base64) at the given size, optionally with the legend and a title. Use it to see what the person sees or to put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
+  def('query.screenshot', 'Render the current view to a PNG (base64) at the given positive integer pixel width and height, optionally with the legend and a title. A single dimension preserves the current aspect ratio; when neither is supplied, uses the current drawing-buffer size. Restores the interactive view after capture. Use it to see what the person sees or put an image in a report.', ScreenshotOptions, (o, ctx) => ctx.view.screenshot(o)),
   def('query.view', 'The current camera: position, target and up in metres. Save it with the model or hand it back to view.setCamera to reproduce a screenshot.', none, (_, ctx) => ctx.view.camera()),
   def('query.capabilities', 'What this engine and browser can do: GPU and adapter, thread count, engine and schema versions, WebGPU and cross-origin isolation, and whether the engine runs locally or on a remote server.', none, async (_, ctx) => ({
     ...((await ctx.transport.query({ query: 'query.capabilities' })) as object),

@@ -66,6 +66,7 @@ export function fakeHost(transport = fakeTransport(), projectOpen = false): Host
       setVisible: vi.fn(),
       setTheme: vi.fn(),
       animate: vi.fn(),
+      playTransient: vi.fn(),
       camera: vi.fn(() => ({ position: [1, 2, 3] as [number, number, number], target: [0, 0, 0] as [number, number, number] })),
       screenshot: vi.fn(async () => ({ png: 'data:image/png;base64,QUJD' })),
     },

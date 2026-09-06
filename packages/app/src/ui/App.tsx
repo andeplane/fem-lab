@@ -13,6 +13,7 @@ import { solveLabel, stageOf, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
+import { TransientControls } from './Transient';
 import { ExportModal } from './Export';
 import { Examples, Palette, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
@@ -230,7 +231,7 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
         <span class="legend-field mono">{choiceOf(s.fieldKey).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
         <span class="legend-sub mono">
-          {s.result?.step} · deformed ×{formatNumber(s.deformScale)}
+          {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{s.transient?.catalogue.field === 'temperature' ? '' : ` · deformed ×${formatNumber(s.deformScale)}`}
         </span>
       </div>
       <div class="legend-body">
@@ -252,7 +253,8 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
             class="field-chip mono"
             args={showFieldArgs(c)}
             pressed={s.fieldKey === c.key}
-            title={`view.showField ${showFieldArgs(c).field}`}
+            disabled={s.transient !== null && (c.field !== s.transient.catalogue.field || Boolean(c.derived))}
+            title={s.transient && c.field !== s.transient.catalogue.field ? "This field is not retained at historical times" : `view.showField ${showFieldArgs(c).field}`}
           >
             {c.label}
           </Cmd>
@@ -278,10 +280,30 @@ function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 /**
  * The deformation bar: play / pause, the phase scrub, the scale slider, true scale and the
  * screenshot. ▶ sweeps the drawn shape through `A·sin(2πt)`, which is what a mode shape means;
- * a transient Result keeps only its final field, so the sweep there is the amplitude rather
- * than a replay of the history, and the bar's own title says so.
+ * transient Results use the separate retained-frame controls with physical time.
  */
 function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; dispatch: Dispatch; viewer: ViewerRef }) {
+  const phaseStart = useRef<{ phase: number; playing: boolean } | null>(null);
+  const phaseEpoch = useRef(0);
+  const step = s.result?.step ?? '';
+  const mode = choiceOf(s.fieldKey).mode;
+  const target = `${step}\u0000${String(mode)}`;
+  const phaseTarget = useRef(target);
+  // A Command may change the shown Step/mode while a native range gesture still owns the
+  // pointer. Its eventual pointerup belongs to the old target and must not pause the new one.
+  if (phaseTarget.current !== target) {
+    phaseTarget.current = target;
+    phaseStart.current = null;
+    phaseEpoch.current++;
+  }
+  const cancelPhase = (): void => {
+    const start = phaseStart.current;
+    if (!start) return;
+    phaseStart.current = null;
+    phaseEpoch.current++;
+    store.set(start);
+    viewer.current?.animate(start.playing, store.state.animationSpeed, start.phase);
+  };
   const previewStart = useRef<number | null>(null);
   const preview = (scale: number): void => {
     previewStart.current ??= store.state.deformScale;
@@ -296,46 +318,60 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
     store.set({ deformScale: scale });
     viewer.current?.previewDeformScale(scale);
   };
-  const step = s.result?.step ?? '';
-  const mode = choiceOf(s.fieldKey).mode;
-  const sweeps = mode !== undefined || (s.result?.history?.length ?? 0) > 0;
+  const physical = mode === undefined && (s.result?.history?.length ?? 0) > 0;
+  const sweeps = mode !== undefined;
   const what = mode === undefined ? 'the deformed shape (the Result keeps one field, so the sweep is the amplitude)' : `mode ${mode}`;
   return (
     <div class="deform-bar">
-      <Cmd
+      {physical ? <TransientControls s={s} store={store} dispatch={dispatch} viewer={viewer} /> : <Cmd
         dispatch={dispatch}
         cmd="view.animate"
         class="tbutton"
         args={{ step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }}
         pressed={s.playing}
         title={s.playing ? 'pause' : `sweep ${what}`}
-        onRun={() => {
-          store.set({ playing: !s.playing });
-          void dispatch({ cmd: 'view.animate', step, playing: !s.playing, ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
-        }}
       >
         {s.playing ? '❚❚' : '▶'}
-      </Cmd>
+      </Cmd>}
       {sweeps ? (
         <input
           type="range"
           class="phase"
           min="0"
           max="100"
-          step="2"
+          step="1"
           aria-label="animation phase"
           data-cmd="view.animate"
           value={String(Math.round(s.phase * 100))}
           onInput={(e) => {
             const turns = Number((e.target as HTMLInputElement).value) / 100;
-            // The Command carries the frame so a script and the AI can scrub too; the local
-            // call is what makes it visible until the host forwards `frame` to the viewer.
+            if (!phaseStart.current) {
+              phaseStart.current = { phase: store.state.phase, playing: store.state.playing };
+              phaseEpoch.current++;
+            }
             store.set({ phase: turns, playing: false });
             viewer.current?.setPhase(turns);
-            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => undefined);
           }}
+          onChange={(e) => {
+            const start = phaseStart.current;
+            if (!start) return;
+            const turns = Number((e.target as HTMLInputElement).value) / 100;
+            phaseStart.current = null;
+            if (turns === start.phase && !start.playing) return;
+            const epoch = phaseEpoch.current;
+            void dispatch({ cmd: 'view.animate', step, playing: false, frame: Math.round(turns * 100), ...(mode === undefined ? {} : { mode }) }).catch(() => {
+              // A later gesture or target change owns the viewer now. Only roll back while this
+              // rejected preview is still the state on screen.
+              if (phaseEpoch.current !== epoch || phaseTarget.current !== target || store.state.phase !== turns || store.state.playing) return;
+              store.set(start);
+              viewer.current?.animate(start.playing, store.state.animationSpeed, start.phase);
+            });
+          }}
+          onPointerCancel={cancelPhase}
+          onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelPhase(); } }}
         />
       ) : null}
+      {s.transient?.catalogue.field === 'temperature' ? null : <>
       <span class="faint">deformation</span>
       <input
         type="range"
@@ -355,7 +391,7 @@ function DeformBar({ s, store, dispatch, viewer }: { s: UiState; store: Store; d
       <span class="mono">×{formatNumber(s.deformScale)}</span>
       <Cmd dispatch={dispatch} cmd="view.setDeformScale" class="tbutton" args={{ scale: 'true' }} title="draw the real displacement">
         true scale
-      </Cmd>
+      </Cmd></>}
       <Cmd dispatch={dispatch} cmd="file.export" class="tbutton" args={{ spec: { format: 'png' } }} title="the viewer as a PNG, legend burned in">
         screenshot
       </Cmd>
@@ -367,6 +403,7 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
   const canvas = useRef<HTMLCanvasElement>(null);
   const [probe, setProbe] = useState('');
   const [broken, setBroken] = useState('');
+  useEffect(() => { setProbe(''); }, [s.transient?.generation, s.transient?.frame.index]);
   const results = s.viewMode === 'results' && s.result !== null;
   useEffect(() => {
     const el = canvas.current;
@@ -389,7 +426,8 @@ function ViewerPane({ s, store, dispatch, viewer }: { s: UiState; store: Store; 
       viewer.current = v;
       viewer.onReady?.();
       v.onPick((p) => {
-        setProbe(probeLine(p));
+        const frame = store.state.transient?.frame;
+        setProbe(`${probeLine(p)}${p && frame ? ` · ${formatNumber(frame.time.value)} ${frame.time.unit}` : ''}`);
         if (p?.face) void dispatch({ cmd: 'selection.set', faces: [p.face], ...(p.body ? { bodies: [p.body] } : {}) }).catch(() => undefined);
       });
       addEventListener('resize', onResize);
