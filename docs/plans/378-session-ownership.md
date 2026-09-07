@@ -1,11 +1,11 @@
 # Session ownership and transactional replacement
 
-Status: proposed architecture and migration plan, not implementation.
+Status: approved for implementation by the user; migration in progress, isolation not yet implemented.
 Design work: [#378](https://github.com/andeplane/fem-lab/issues/378).
 Decision proposal: [ADR0020](../adr/0020-session-owned-execution.md).
 Inspected baseline: `6ad6adc`; containment reviewed at PR #377 commits `a77830d` and `aeb885f`.
 The initiating user report is #376. This document covers the design issue #378; implementation
-steps below must receive their own issues before work begins. Implementation proceeds through separately scoped issues after design review.
+steps below are tracked in #380–#385.
 
 ## Evidence and the boundary that failed
 
@@ -265,22 +265,22 @@ access and CI registry enumeration; runtime tests deliberately forge stale/forei
 Create bounded implementation issues for these steps after design review. Split a step further
 if implementation would take more than a day; this design issue is not a multi-week coding claim.
 
-1. **Contract and test harness.** Define Rust/schema execution envelopes, stamp semantics,
+1. **Contract and test harness ([#380](https://github.com/andeplane/fem-lab/issues/380)).** Define Rust/schema execution envelopes, stamp semantics,
    structured errors, registry policy union and deterministic ownership reference model. Generate
    TS types; establish negative tests. No runtime safety claim while compatibility routes exist.
-2. **Rust ownership boundary.** Introduce SessionOwner, fresh identities, atomic admission/version
+2. **Rust ownership boundary ([#381](https://github.com/andeplane/fem-lab/issues/381)).** Introduce SessionOwner, fresh identities, atomic admission/version
    checks, coherent snapshot construction and operation cancellation/outcomes. Move raw mutators
    behind the owner and migrate native/wasm entry points and their tests. Preserve Journal bytes.
-3. **Transactional replacement.** Candidate preparation/validation and single activation commit,
+3. **Transactional replacement ([#382](https://github.com/andeplane/fem-lab/issues/382)).** Candidate preparation/validation and single activation commit,
    resource-failure cleanup, explicit model.new initiating-run transition. Integrate #341's input
    consistency contract without duplicating its owner. Test failures at every transition edge.
-4. **Browser state and persistence.** Bound session facade, ActiveProjectSession subtree, stamped
+4. **Browser state and persistence ([#383](https://github.com/andeplane/fem-lab/issues/383)).** Bound session facade, ActiveProjectSession subtree, stamped
    reply reducers, immutable SaveJobs, per-project generations/tombstones and coherent refresh.
    Remove ambient current lookups and manual reset/serialization lists only when parity passes.
-5. **All producers and hosts.** Bind Script/Assistant/tutorial/MCP run lifetimes and control traffic;
+5. **All producers and hosts ([#384](https://github.com/andeplane/fem-lab/issues/384)).** Bind Script/Assistant/tutorial/MCP run lifetimes and control traffic;
    enforce inherited context, explicit reacquisition and scope-aware recovery. Migrate Python when
    introduced and prohibit tokenless remote defaults. Test nested calls and delayed callbacks.
-6. **Enforcement audit and rollout.** Enumerate every mutation/read/publication/storage entry point,
+6. **Enforcement audit and rollout ([#385](https://github.com/andeplane/fem-lab/issues/385)).** Enumerate every mutation/read/publication/storage entry point,
    run adversarial schedules through all available hosts, and delete transitional raw adapters.
    Only then mark ADR0020 implemented. Keep limitations about explicit reacquisition and process
    failures in the public contract; do not claim that arbitrary bugs become impossible.

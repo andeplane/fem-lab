@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted for implementation
 date: 2026-09-07
 ---
 
@@ -7,7 +7,7 @@ date: 2026-09-07
 
 Design issue: [#378](https://github.com/andeplane/fem-lab/issues/378).
 Implementation and verification plan: [session ownership](../plans/378-session-ownership.md).
-This proposal is not an implemented guarantee. PR [#377](https://github.com/andeplane/fem-lab/pull/377)
+The user approved implementation on 2026-09-07. This decision is not yet an implemented guarantee. PR [#377](https://github.com/andeplane/fem-lab/pull/377)
 is immediate containment for the interleaving reproduced in #376.
 
 ## Problem
