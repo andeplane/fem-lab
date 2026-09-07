@@ -891,6 +891,11 @@ pub enum Command {
     /// a Body name distinct from explicit geometry. Keeping that name preserves its material;
     /// changing/removing it requires no remaining Body references and clears its material.
     /// Use model.rename to change an implicit Body name while preserving its references.
+    /// `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+    /// (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+    /// geometry: the selected mesher still determines the boundary approximation. `formulation`
+    /// has no effect when `simplices` is true, because simplex elements have no incompatible
+    /// modes.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     MeshSet {
         mesher: MesherSpec,
@@ -898,6 +903,8 @@ pub enum Command {
         order: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         formulation: Option<Formulation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplices: Option<bool>,
     },
 
     /// Write the current Mesh out as text the host saves; the Mesh is built first if it is

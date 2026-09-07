@@ -4942,6 +4942,98 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
     }
 }
 
+/// A factorization is only a candidate: verify the full original operator independently.
+#[test]
+fn a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer() {
+    use femlab_engine::solve::direct::Direct;
+    use femlab_engine::solve::LinearSolve;
+    // faer reads the CSR upper triangle as CSC lower: it solves [[2,1],[1,2]],
+    // giving (2/3,-1/3). The actual nonsymmetric K below requires (1/2,0), and
+    // its residual at faer's candidate is exactly (0,-2/3). Never report success.
+    let k = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![2.0, 1.0, 0.0, 2.0] };
+    let mut factor = Direct::factor(&k).unwrap();
+    for tolerance in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0, f64::MAX] {
+        let mut x = [7.0, 8.0];
+        let error = factor.solve_with_tolerance(&[1.0, 0.0], &mut x, tolerance).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert_eq!(error.where_.as_deref(), Some("tolerance"));
+        assert_eq!(x, [7.0, 8.0]);
+    }
+    let error = factor.solve(&[1.0, 0.0], &mut [0.0; 2]).unwrap_err();
+    assert_eq!(error.code, ErrorCode::SolveStalled);
+    assert_eq!(error.where_.as_deref(), Some("solve"));
+    assert!(error.cause.contains("relative residual"));
+    assert!(error.suggestion.unwrap().contains("solve.run"));
+    // This SPD scalar system has exact x=1e500, beyond f64. Its factor is valid;
+    // arithmetic overflow while solving must still be a structured error.
+    let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![1e-200] };
+    let error = Direct::factor(&k).unwrap().solve(&[1e300], &mut [0.0]).unwrap_err();
+    assert_eq!(error.code, ErrorCode::SolveStalled);
+    // The exact solution of 3x=b remains representable across changes of force units.
+    let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![3.0] };
+    let mut factor = Direct::factor(&k).unwrap();
+    for b in [1e-300, 1.0, 1e300] {
+        let mut x = [0.0];
+        let info = factor.solve(&[b], &mut x).unwrap();
+        assert!((x[0] / b - 1.0 / 3.0).abs() < 1e-15);
+        assert!(info.rel_residual < 1e-14);
+    }
+}
+
+/// The discrete Dirichlet harmonic problem has exact x_i=(i+1)/(n+1): a linear
+/// profile with zero second difference and unit value at the far boundary.
+fn direct_harmonic_profile(threads: usize) {
+    use femlab_engine::solve::direct::Direct;
+    use femlab_engine::solve::LinearSolve;
+    let ambient = faer::get_global_parallelism();
+    for n in [65, 129, 257] {
+        let mut k = Csr { n, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
+        for i in 0..n {
+            if i > 0 {
+                k.col_idx.push((i - 1) as u32);
+                k.vals.push(-1.0);
+            }
+            k.col_idx.push(i as u32);
+            k.vals.push(2.0);
+            if i + 1 < n {
+                k.col_idx.push((i + 1) as u32);
+                k.vals.push(-1.0);
+            }
+            k.row_ptr.push(k.vals.len() as u32);
+        }
+        // The owning factor outlives the temporary pool and scratch used to construct it.
+        let mut direct = Pool::new(threads).install(|| Direct::factor(&k)).unwrap();
+        assert_eq!(faer::get_global_parallelism(), ambient);
+        for boundary in [1.0, -3.0] {
+            let mut rhs = vec![0.0; n];
+            rhs[n - 1] = boundary;
+            let mut answer = vec![0.0; n];
+            let info = direct.solve(&rhs, &mut answer).unwrap();
+            assert!(info.rel_residual < 1e-12);
+            for (i, value) in answer.iter().enumerate() {
+                let exact = boundary * (i + 1) as f64 / (n + 1) as f64;
+                assert!((value - exact).abs() < 1e-11, "threads{threads}, n{n}, node{i}: {value} vs {exact}");
+            }
+            assert_eq!(faer::get_global_parallelism(), ambient);
+        }
+    }
+}
+
+#[test]
+fn direct_factors_own_their_storage_and_never_change_process_parallelism() {
+    for threads in [1, 4] {
+        direct_harmonic_profile(threads);
+    }
+    // Independent Engines/Direct users may solve concurrently with different pool sizes.
+    let barrier = std::sync::Barrier::new(2);
+    Pool::new(2).install(|| {
+        femlab_engine::par::map_collect(2, |index| {
+            barrier.wait();
+            direct_harmonic_profile([1, 4][index]);
+        })
+    });
+}
+
 // ------------------------------------------------------- simplex mass regression (#131)
 const SIMPLEX_KINDS: [ElementKind; 4] = [ElementKind::Tri3, ElementKind::Tri6, ElementKind::Tet4, ElementKind::Tet10];
 type BaryPoly = Vec<(f64, [i32; 4])>;
@@ -6318,95 +6410,6 @@ fn a_radiation_step_that_runs_out_of_passes_is_solve_diverged() {
     let transient_error = run_step(&p, &transient).expect_err("one pass cannot converge an increment either");
     assert_eq!(transient_error.code, ErrorCode::SolveDiverged);
     assert_eq!(transient_error.where_.as_deref(), Some("heat-transient increment 1"));
-}
-
-#[test]
-fn a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer() {
-    use femlab_engine::solve::direct::Direct;
-    use femlab_engine::solve::LinearSolve;
-    // faer reads the CSR upper triangle as CSC lower: it solves [[2,1],[1,2]],
-    // giving (2/3,-1/3). The actual nonsymmetric K below requires (1/2,0), and
-    // its residual at faer's candidate is exactly (0,-2/3). Never report success.
-    let k = Csr { n: 2, row_ptr: vec![0, 2, 4], col_idx: vec![0, 1, 0, 1], vals: vec![2.0, 1.0, 0.0, 2.0] };
-    let mut factor = Direct::factor(&k).unwrap();
-    for tolerance in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0, f64::MAX] {
-        let mut x = [7.0, 8.0];
-        let error = factor.solve_with_tolerance(&[1.0, 0.0], &mut x, tolerance).unwrap_err();
-        assert_eq!(error.code, ErrorCode::Schema);
-        assert_eq!(error.where_.as_deref(), Some("tolerance"));
-        assert_eq!(x, [7.0, 8.0]);
-    }
-    let error = factor.solve(&[1.0, 0.0], &mut [0.0; 2]).unwrap_err();
-    assert_eq!(error.code, ErrorCode::SolveStalled);
-    assert_eq!(error.where_.as_deref(), Some("solve"));
-    assert!(error.cause.contains("relative residual"));
-    assert!(error.suggestion.unwrap().contains("solve.run"));
-    // This SPD scalar system has exact x=1e500, beyond f64. Its factor is valid;
-    // arithmetic overflow while solving must still be a structured error.
-    let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![1e-200] };
-    let error = Direct::factor(&k).unwrap().solve(&[1e300], &mut [0.0]).unwrap_err();
-    assert_eq!(error.code, ErrorCode::SolveStalled);
-    // The exact solution of 3x=b remains representable across changes of force units.
-    let k = Csr { n: 1, row_ptr: vec![0, 1], col_idx: vec![0], vals: vec![3.0] };
-    let mut factor = Direct::factor(&k).unwrap();
-    for b in [1e-300, 1.0, 1e300] {
-        let mut x = [0.0];
-        let info = factor.solve(&[b], &mut x).unwrap();
-        assert!((x[0] / b - 1.0 / 3.0).abs() < 1e-15);
-        assert!(info.rel_residual < 1e-14);
-    }
-}
-
-fn direct_harmonic_profile(threads: usize) {
-    use femlab_engine::solve::direct::Direct;
-    use femlab_engine::solve::LinearSolve;
-    let ambient = faer::get_global_parallelism();
-    for n in [65, 129, 257] {
-        let mut k = Csr { n, row_ptr: vec![0], col_idx: Vec::new(), vals: Vec::new() };
-        for i in 0..n {
-            if i > 0 {
-                k.col_idx.push((i - 1) as u32);
-                k.vals.push(-1.0);
-            }
-            k.col_idx.push(i as u32);
-            k.vals.push(2.0);
-            if i + 1 < n {
-                k.col_idx.push((i + 1) as u32);
-                k.vals.push(-1.0);
-            }
-            k.row_ptr.push(k.vals.len() as u32);
-        }
-        // The owning factor outlives the temporary pool and scratch used to construct it.
-        let mut direct = Pool::new(threads).install(|| Direct::factor(&k)).unwrap();
-        assert_eq!(faer::get_global_parallelism(), ambient);
-        for boundary in [1.0, -3.0] {
-            let mut rhs = vec![0.0; n];
-            rhs[n - 1] = boundary;
-            let mut answer = vec![0.0; n];
-            let info = direct.solve(&rhs, &mut answer).unwrap();
-            assert!(info.rel_residual < 1e-12);
-            for (i, value) in answer.iter().enumerate() {
-                let exact = boundary * (i + 1) as f64 / (n + 1) as f64;
-                assert!((value - exact).abs() < 1e-11, "threads{threads}, n{n}, node{i}: {value} vs {exact}");
-            }
-            assert_eq!(faer::get_global_parallelism(), ambient);
-        }
-    }
-}
-
-#[test]
-fn direct_factors_own_their_storage_and_never_change_process_parallelism() {
-    for threads in [1, 4] {
-        direct_harmonic_profile(threads);
-    }
-    // Independent Engines/Direct users may solve concurrently with different pool sizes.
-    let barrier = std::sync::Barrier::new(2);
-    Pool::new(2).install(|| {
-        femlab_engine::par::map_collect(2, |index| {
-            barrier.wait();
-            direct_harmonic_profile([1, 4][index]);
-        })
-    });
 }
 
 // ---------------------------------------------------------------- STL reading (#350)
