@@ -1,0 +1,64 @@
+{
+  "name": "couple-distributed-cantilever",
+  "reference": "Benchmark F5: a load introduction. The cantilever of Benchmark B1 -- 1 m x 100 mm x 100 mm of steel, 25 mm lattice, hex8 with incompatible modes -- is loaded through a lumped point at the tip instead of a traction on the tip face. geometry.addMass puts a node at the tip centroid, constraint.couple attaches it to beam.xmax as a distributed coupling, and the whole 1 kN is applied at that one node with load.force. The oracle is the traction model beside it: a distributed coupling spreads a force at the point over the face in the weights a_i / A with a_i = the face's own lumped areas, and the consistent nodal force of a uniform traction of the same total is t a_i = (F / A) a_i, so the two assembled load vectors are the same numbers. Case cantilever-hex8-im measures -0.19011253665073974 mm at the tip with the traction, and this model reproduces it to 1e-10 relative -- only the rounding of (a_i / A) F against (F / A) a_i differs. The coupling adds no stiffness anywhere (the point's row of K is empty), so the beam is exactly as flexible as before, and the clamp carries the whole 1 kN.",
+  "journal": [
+    { "cmd": "model.new", "name": "couple-distributed" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "stress": "MPa", "force": "kN" } },
+    { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "100 mm", "100 mm"] },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] },
+    { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "25 mm" }, "order": 1 },
+    { "cmd": "geometry.addMass", "name": "lug", "at": ["1 m", "50 mm", "50 mm"], "mass": "1 kg" },
+    { "cmd": "constraint.fix", "name": "clamp", "on": "beam.xmin" },
+    { "cmd": "constraint.couple", "name": "intro", "point": "lug", "on": "beam.xmax", "kind": "distributed" },
+    { "cmd": "load.force", "name": "load", "on": "lug", "total": ["0 N", "0 N", "-1 kN"] },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": ["clamp", "intro"],
+      "loads": ["load"]
+    },
+    { "cmd": "solve.run", "step": "static" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 2, "at": ["1 m", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": -0.19011253665073974,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "the tip deflection cantilever-hex8-im measures with the same total applied as a traction, in mm: a distributed coupling introduces exactly that load and stiffens nothing"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "the clamp carries the applied force; the coupling's internal force is not a reaction"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/reactions/0/total/2/value",
+      "expect": 1.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the resultant: the whole 1 kN reaches the clamp"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/reactions/0/total/0/value",
+      "expect": 0.0,
+      "tol": 1e-10,
+      "note": "and nothing along x"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/reactions/0/total/1/value",
+      "expect": 0.0,
+      "tol": 1e-10,
+      "note": "or along y"
+    },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false }
+  ]
+}

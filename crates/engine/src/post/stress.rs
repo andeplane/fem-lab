@@ -198,6 +198,11 @@ pub fn average_at_nodes(p: &Problem<'_>, elem_node: &FieldData) -> FieldData {
     let material = |e: u32| p.material_of_block[mesh.block_of(e).0];
     let data = par::map_collect(mesh.n_nodes(), |node| {
         let elems = adj.of(node);
+        // A point mass is a node no element touches: it has no stress, and no first element
+        // whose material would decide what to average.
+        if elems.is_empty() {
+            return vec![0.0; comps];
+        }
         let keep = material(elems[0]);
         let mut sum = vec![0.0; comps];
         let mut count = 0.0;

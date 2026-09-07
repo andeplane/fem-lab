@@ -1,0 +1,45 @@
+{
+  "name": "tip-mass-cantilever-modal",
+  "reference": "Benchmark F6: Rayleigh's tip-mass cantilever, f1 = (1 / 2 pi) sqrt(3 E I / (L^3 (m + 0.24 m_beam))). A steel beam L = 1 m, 40 x 40 mm, E = 210 GPa, rho = 7850 kg/m^3 carries a 500 kg lumped mass at its free end, added with geometry.addMass and attached to beam.xmax by a distributed constraint.couple -- which adds no stiffness, so the beam's 3 E I / L^3 = 134400 N/m is untouched and the mass rides the face's mean displacement. The beam's own mass is 12.56 kg, so the point mass is 40 times it and the 0.24 in Rayleigh's formula (its exact Euler-Bernoulli value is 33/140 = 0.2357) moves the answer by 5e-5: the reference is an oracle, not a fit. m_eff = 503.0144 kg, omega = 16.34654 rad/s, f1 = 2.601925 Hz. The gate is 1 %, which covers the Timoshenko shear correction the 3D solid has and Euler-Bernoulli does not (-0.06 %) and the hex20 discretisation. The square section makes the bending pair degenerate, so modes 1 and 2 are the same frequency in the two planes.",
+  "journal": [
+    { "cmd": "model.new", "name": "tip-mass-modal" },
+    { "cmd": "model.setUnits", "units": { "length": "mm" } },
+    { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "40 mm", "40 mm"] },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] },
+    { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": { "nx": 20, "ny": 2, "nz": 2 } }, "order": 2 },
+    { "cmd": "geometry.addMass", "name": "tipMass", "at": ["1 m", "20 mm", "20 mm"], "mass": "500 kg" },
+    { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" },
+    { "cmd": "constraint.couple", "name": "attach", "point": "tipMass", "on": "beam.xmax", "kind": "distributed" },
+    {
+      "cmd": "step.add",
+      "name": "modes",
+      "procedure": "modal",
+      "constraints": ["root", "attach"],
+      "loads": [],
+      "output": ["displacement"],
+      "nModes": 4
+    },
+    { "cmd": "solve.run", "step": "modes" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.result" },
+      "path": "/frequencies/0/value",
+      "expect": 2.601925,
+      "tol": 0.01,
+      "rel": true,
+      "note": "Rayleigh's tip-mass cantilever, with the point mass 40 times the beam's own"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/frequencies/1/value",
+      "expect": 2.601925,
+      "tol": 0.01,
+      "rel": true,
+      "note": "its twin in the other plane: a square section"
+    },
+    { "query": { "query": "query.result" }, "path": "/frequencies/0/unit", "expect": "Hz" },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false }
+  ]
+}

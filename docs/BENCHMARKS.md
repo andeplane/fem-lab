@@ -54,6 +54,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cantilever-model | green | 11/11 | 1.0000e7 | 1.0000e7 | 0.00 % |
 | cook-membrane-plane-strain-quad8 | green | 3/3 | 21.50184 | 21.5262 | 0.11 % |
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
+| couple-distributed-cantilever | green | 6/6 | -0.190113 | -0.190113 | 0.00 % |
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
 | imported-mesh-prism | green | 6/6 | 6.24289 | 6.24289 | 0.00 % |
@@ -72,6 +73,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | nafems-le1-quad8 | green | 3/3 | 92.582436 | 92.7 | 0.13 % |
 | le10-full-face-hex20 | green | 3/3 | -5.234137 | -5.25 | 0.30 % |
 | le10-full-face-hex8 | green | 3/3 | -5.400396 | -5.400396 | 0.00 % |
+| nafems-le10-tet10 | green | 3/3 | -5.163953 | -5.25 | 1.64 % |
 | nafems-t3-transient | green | 4/4 | 36.792975 | 36.6 | 0.53 % |
 | nafems-t4-conduction | green | 2/2 | 18.254191 | 18.3 | 0.25 % |
 | near-incompressible-049 | green | 4/4 | 5.9894e-5 | 5.9898e-5 | 0.01 % |
@@ -82,6 +84,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 | tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
 | tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
+| tip-mass-cantilever-modal | green | 4/4 | 2.609294 | 2.601925 | 0.28 % |
 
 <!-- bench:end -->
 
@@ -498,6 +501,10 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
 | F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+| F5 | A 1 kN point force introduced into the B1 cantilever's tip face by a `distributed` `constraint.couple` | the traction model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm for the same total applied as a traction | 1e-10 rel on the deflection, 1e-8 rel on the reaction resultant | a distributed coupling introduces a load and stiffens nothing (#67) | green |
+| F5b | The same coupling with the point 500 mm *outside* the beam | Σ reactions = the applied force, and Σ r × R = −(x̄ × F) with x̄ the *face* centroid, not the point | 1e-10 rel | translation-only couplings transmit no moment: the offset changes nothing | engine test |
+| F5c | A `rigid` coupling on the same face | every node of the face takes one displacement; the tip is stiffer than F5b's and the reaction resultant is still exact | 1e-12 on the kinematics, 1e-9 rel on the resultant | `rigid` holds its face flat | engine test |
+| F6 | Rayleigh's tip-mass cantilever: a 500 kg `geometry.addMass` on a 1 m × 40 × 40 mm steel beam, coupled `distributed` to the tip | f₁ = (1/2π)√(3EI/(L³(m + 0.24 m_beam))) = 2.601925 Hz | 1 % | a point mass reaches the mass matrix, and only the mass matrix (#67) | green |
 
 The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
 the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
@@ -523,6 +530,46 @@ adds the tie term back (`mpc::master_forces`), which is what makes both the per-
 reaction and the global `balance` right when a tie reaches a support. Without it the global sum
 is wrong too, so F4's `balance` check alone would not have caught it — F4d compares the
 per-constraint reactions of a tied assembly against the single Body it stands for.
+
+F5 and F6 are the point mass and the coupling of #67. A `distributed` coupling weights its face
+by the lumped areas `a_i = ∫ N_i dS` the heat kernel's face integral already produces, and
+eliminates the point onto `u_p = Σ (a_i / A) u_i`. Two consequences make F5 an equivalence rather
+than an approximation. `TᵀKT` adds no stiffness at all — the point's row of `K` is empty, because
+no element touches its node — so the beam is exactly as flexible as it was. And `Tᵀf` sends a
+force `F` at the point to `(a_i / A) F` on node `i`, which is the same number as the consistent
+nodal force `t a_i = (F / A) a_i` of a uniform traction of that total. So F5's oracle is the
+traction case beside it, gated at 1e-10 relative, and only the rounding of the two products
+differs.
+
+F5b is the sharp form of "the coupling transmits no moment". The point sits 500 mm past the end
+of the beam, and the reaction moment about the fixed face is still `−(x̄ × F)` for `x̄` the tip
+*face*'s area centroid: moving the point changes the weights not at all, so the offset delivers
+no moment. It is an engine test rather than an installed case because `query.result` reports
+reaction resultants and not reaction moments; the installed F5 checks the resultant and the
+deflection, which is what a Journal can see.
+
+**`rigid` does not carry the applied moment, and cannot.** It restricts the model to the subspace
+`u = T v` in which every node of the face has one displacement, and a rigid rotation moves those
+nodes differently — so the subspace holds no rotation, and the constraint quietly supplies
+whatever moment holding the face flat takes. The resultant is still exact (F5c). A coupling that
+carried a moment would need a rotational DOF at the reference point, which the engine's nodes do
+not have; `constraint.couple`'s doc string says so, and `distributed` — which adds no stiffness
+and whose reactions carry the applied load *and* its moment — is the one to reach for.
+
+F6 sizes the tip mass at 40 times the beam's own (500 kg against 12.56 kg) on purpose. Rayleigh's
+`0.24` is a rounding of the exact Euler–Bernoulli `33/140 = 0.2357`, so the coefficient itself is
+an approximation; at this ratio it moves the answer by 5e-5, and the 1 % gate is then measuring
+the mass matrix rather than absorbing the formula's own error. The measured 2.609294 Hz is 0.28 %
+above the reference, which is the Timoshenko shear correction (−0.06 %) and the hex20
+discretisation of a 3D solid against a beam theory.
+
+**One inseparable fix travelled with F6.** A dominant lumped mass makes `M` nearly rank-one on the
+face it is coupled to, so `A⁻¹ M X` came back with numerically parallel columns and `X̄ᵀ M X̄` was
+singular — subspace iteration aborted on any tip-mass model asking for more than two modes, which
+is every default `step.add{modal}`. `procedure::modal::orthonormalise` now sweeps the iterated
+block with modified Gram–Schmidt before the projection. It changes the basis of the subspace and
+never the subspace, so the Ritz values are the same numbers: `cantilever-modal` measures
+42.037014 Hz before and after, to nine digits.
 
 **NAFEMS R0081 CGS-1** is not claimed here. TUTORIAL-COVERAGE row 55 lists CGS-1…CGS-10 under
 contact, gapping and sliding; nobody on this change has read the publication, and a benchmark

@@ -31,6 +31,7 @@ async function mount(input: Record<string, unknown>) {
   const engine = new wasm.Engine(1);
   for (const command of [
     { cmd: 'geometry.addBox', name: 'base', size: ['1 m', '1 m', '1 m'] },
+    { cmd: 'geometry.addMass', name: 'ref', at: ['2 m', '0 m', '0 m'], mass: '1 kg' },
     { cmd: 'step.add', name: 'prior', procedure: 'heat-steady', constraints: [], loads: [] }, input,
   ]) await engine.dispatch(JSON.stringify(command));
   const transport = {

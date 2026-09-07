@@ -114,11 +114,27 @@ fn assemble(p: &Problem<'_>, f: &mut [f64], mass: Option<&[f64]>) -> Result<Load
                         totals[i % dpn] += value;
                     }
                 }
-                None => body_load(p, *g, f, &mut totals)?,
+                None => {
+                    body_load(p, *g, f, &mut totals)?;
+                    point_load(p, *g, f, &mut totals);
+                }
             },
         }
     }
     Ok(LoadTotals { force: totals })
+}
+
+/// `m g` at every point mass. A lumped mass has no volume to integrate, so gravity reaches it
+/// as a nodal force at its own node, and travels on into the structure through whatever
+/// `constraint.couple` attached it to.
+fn point_load(p: &Problem<'_>, g: [f64; 3], f: &mut [f64], totals: &mut [f64; 3]) {
+    let dpn = p.dofs_per_node();
+    for pm in &p.points {
+        for c in 0..dpn {
+            f[pm.node as usize * dpn + c] += pm.mass * g[c];
+            totals[c] += pm.mass * g[c];
+        }
+    }
 }
 
 /// Consistent nodal forces of a pressure or traction over a face Set, face by face in the
