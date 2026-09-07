@@ -447,6 +447,44 @@ fn upsert_edits_in_place_and_reports_replaced() {
 }
 
 #[test]
+fn body_upsert_validates_existing_cuts_before_committing() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"transactional resize"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["2 m","1 m","1 m"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.subtractBox","name":"notch","from":"beam","size":["1.5 m","1 m","1 m"],"at":["0 m","0 m","0 m"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"0.5 m"}}"#);
+    let cached_surface = e.geometry_surface().unwrap();
+    let cached_mesh = e.mesh().unwrap().clone();
+    let before = e.export_file();
+    let model_query = e.query(Query::Model {}).unwrap();
+
+    let error = err(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert!(error.cause.contains("empty"), "{error:?}");
+    assert_eq!(e.export_file(), before);
+    assert_eq!(e.geometry_surface().unwrap(), cached_surface);
+    assert_eq!(e.mesh().unwrap(), &cached_mesh);
+    assert_eq!(e.query(Query::Model {}).unwrap(), model_query);
+
+    let error =
+        err(&mut e, r#"{"cmd":"geometry.addLine","name":"beam","points":[["0 m","0 m","0 m"],["2 m","0 m","0 m"]]}"#);
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert!(error.cause.contains("cannot combine 1D line members"), "{error:?}");
+    assert_eq!(e.export_file(), before);
+    assert_eq!(e.geometry_surface().unwrap(), cached_surface);
+    assert_eq!(e.mesh().unwrap(), &cached_mesh);
+
+    let ack = ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["3 m","1 m","1 m"]}"#);
+    assert_eq!(ack.output, Output::Replaced { kind: ObjectKind::Body, name: "beam".into() });
+    assert_eq!(e.revision(), before.journal.entries.len() as u32 + 1);
+    let QueryResult::Model(resized) = e.query(Query::Model {}).unwrap() else { panic!("query.model") };
+    assert!((resized.bodies[0].measure.value - 1.5).abs() < 1e-12);
+}
+
+#[test]
 fn undo_redo_and_journal_boundaries() {
     let mut e = engine();
     cantilever(&mut e);
@@ -4314,6 +4352,7 @@ fn every_procedure_runs_the_well_posedness_checks_first() {
         (r#""heat-transient","dt":"1 s","tEnd":"2 s""#, "transient"),
         (r#""explicit","tEnd":"1 ms""#, "explicit"),
         (r#""static-nonlinear","increments":2"#, "nlgeom"),
+        (r#""implicit","dt":"1 ms","tEnd":"1 ms""#, "implicit"),
     ];
     for (procedure, name) in cases {
         let mut e = engine();
@@ -5810,16 +5849,19 @@ fn convergence_studies_use_explicit_dynamics_for_a_falling_block() {
     ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
     ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
     ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"block"}}"#);
+    // Thrown downwards at 1 m/s: the study resolves the initial velocity on every mesh it builds.
     ok(
         &mut e,
-        r#"{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"1 ms","dtFactor":0.8}"#,
+        r#"{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"1 ms","dtFactor":0.8,
+            "initialVelocity":[{"on":"whole","value":["0 m/s","0 m/s","-1 m/s"]}]}"#,
     );
     let r = study(
         &mut e,
         r#"{"cmd":"study.converge","step":"fall","sizes":["0.1 m","0.05 m","0.025 m"],
         "quantity":{"kind":"probe","field":"displacement","component":2,"at":["0.05 m","0.05 m","0.05 m"]},"restore":false}"#,
     );
-    let expected = -0.5 * 9.81 * 1e-6;
+    let expected = -1e-3 - 0.5 * 9.81 * 1e-6;
     for row in &r.rows {
         assert!((row.value - expected).abs() < 0.01 * expected.abs(), "{row:?}");
     }
@@ -8855,4 +8897,151 @@ fn the_cost_of_a_nonlinear_step_counts_the_curve_it_will_retain() {
     assert_eq!(nl.retained_bytes, 6 * (nodes * 3 + 1) * 8);
     assert!(nl.bytes > lin.bytes);
     assert_eq!(nl.feasible, None);
+}
+
+// ------------------------------------------- implicit dynamics and initial velocity (#72, #348)
+
+fn thrown_block(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"thrown"}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"block","size":["0.1 m","0.1 m","0.1 m"]}"#);
+    ok(e, r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"block"}}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+}
+
+/// Benchmark F2c in Command form: an implicit Step thrown with an initial velocity falls as
+/// `u = v₀ t + g t²/2`, its definition round-trips every new field, and its cost plan counts
+/// the frames it retains.
+#[test]
+fn an_implicit_step_is_defined_costed_and_run_through_the_registry() {
+    let mut e = engine();
+    thrown_block(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"fall","procedure":"implicit","constraints":[],"loads":["g"],"output":["displacement"],
+            "dt":"1 ms","tEnd":"5 ms","alpha":-0.05,"rayleighAlpha":"0 Hz","rayleighBeta":"0 s","outputEvery":2,
+            "initialVelocity":[{"on":"whole","value":["0.3 m/s","-0.2 m/s","100 mm/s"]}]}"#,
+    );
+    let QueryResult::Definition(def) =
+        e.query(Query::Definition { kind: ObjectKind::Step, name: "fall".into() }).unwrap()
+    else {
+        panic!("a definition")
+    };
+    let Command::StepAdd { alpha, rayleigh_alpha, rayleigh_beta, initial_velocity, .. } = &def.command else {
+        panic!("a step.add")
+    };
+    assert_eq!(*alpha, Some(-0.05));
+    assert_eq!(rayleigh_alpha.as_ref().map(|q| q.si().unwrap()), Some(0.0));
+    assert_eq!(rayleigh_beta.as_ref().map(|q| q.si().unwrap()), Some(0.0));
+    let velocity = initial_velocity.as_ref().expect("the initial velocity survives");
+    assert_eq!(velocity.len(), 1);
+    assert_eq!(velocity[0].on, "whole");
+    assert_eq!(velocity[0].value.iter().map(|q| q.si().unwrap()).collect::<Vec<_>>(), [0.3, -0.2, 0.1]);
+    let QueryResult::Cost(cost) = e.query(Query::Cost { step: "fall".into() }).unwrap() else { panic!() };
+    assert_eq!(cost.retained_frames, 4, "initial, steps 2 and 4, and the final fifth");
+    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+    let t = 5e-3;
+    let want = [0.3 * t, -0.2 * t, 0.1 * t - 0.5 * 9.81 * t * t];
+    for (c, want) in want.iter().enumerate() {
+        let got = probe_at(&mut e, "fall", Field::Displacement, Some(c as u8), ["50 mm", "50 mm", "50 mm"]);
+        assert!((got - want).abs() <= 1e-12, "component {c}: {got} vs {want}");
+    }
+    let summary = result_of(&mut e, Some("fall"));
+    assert_eq!((summary.solver.as_str(), summary.iterations, summary.history.len()), ("cpu-direct", 5, 4));
+    // A free body has nothing to react against, and its d'Alembert total `f − M a` is round-off
+    // of the 76.5 N it weighs.
+    assert!(summary.reactions.is_empty());
+    for v in &summary.applied_total {
+        assert!(v.value.abs() <= 1e-6 && v.unit == "N", "{v:?}");
+    }
+}
+
+/// The initial-velocity list is validated like every other Command input: units per component,
+/// Sets that exist, and no node told to move two ways at once.
+#[test]
+fn initial_velocity_entries_are_checked_for_units_sets_and_agreement() {
+    let mut e = engine();
+    thrown_block(&mut e);
+    let step = |velocity: &str| {
+        format!(
+            r#"{{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"0.1 ms",
+                "initialVelocity":{velocity}}}"#
+        )
+    };
+    let bad = err(&mut e, &step(r#"[{"on":"whole","value":["1 m/s","0 m/s","3 m"]}]"#));
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::UnitDimension, Some("initialVelocity[0].value[2]")));
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"fall","procedure":"implicit","constraints":[],"loads":["g"],"dt":"1 ms","tEnd":"5 ms","rayleighAlpha":"1 s"}"#,
+    );
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::UnitDimension, Some("rayleighAlpha")));
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"fall","procedure":"implicit","constraints":[],"loads":["g"],"dt":"1 ms","tEnd":"5 ms","rayleighBeta":"1 Hz"}"#,
+    );
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::UnitDimension, Some("rayleighBeta")));
+    // A Set that resolves to nothing is `set.empty` at solve time, like a Constraint's.
+    ok(&mut e, &step(r#"[{"on":"nowhere","value":["1 m/s","0 m/s","0 m/s"]}]"#));
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#).code, ErrorCode::SetEmpty);
+    // Two entries that overlap on the loaded face: the same velocity is fine, a different one is not.
+    ok(
+        &mut e,
+        &step(
+            r#"[{"on":"whole","value":["1 m/s","0 m/s","0 m/s"]},{"on":"block.xmax","value":["1 m/s","0 m/s","0 m/s"]}]"#,
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+    ok(
+        &mut e,
+        &step(
+            r#"[{"on":"whole","value":["1 m/s","0 m/s","0 m/s"]},{"on":"block.xmax","value":["2 m/s","0 m/s","0 m/s"]}]"#,
+        ),
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("initialVelocity[1]")));
+    assert!(bad.cause.contains("'whole'") && bad.cause.contains("'block.xmax'"), "{}", bad.cause);
+    assert!(bad.suggestion.as_deref().is_some_and(|s| s.contains("initialVelocity")));
+    // An empty list is starting from rest.
+    ok(&mut e, &step("[]"));
+    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+    let uz = probe_at(&mut e, "fall", Field::Displacement, Some(2), ["50 mm", "50 mm", "50 mm"]);
+    assert!((uz + 0.5 * 9.81 * 1e-8).abs() <= 1e-12, "{uz}");
+    // An implicit Step without a clock is a schema error naming the field when it runs.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"still","procedure":"implicit","constraints":[],"loads":["g"],"tEnd":"5 ms"}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"still"}"#);
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("dt")));
+    let bad = e.query(Query::Cost { step: "still".into() }).expect_err("no clock, no plan");
+    assert_eq!(bad.where_.as_deref(), Some("dt"));
+    // ... and without an end, or with a zero dt, the same way the heat transient is refused.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"still","procedure":"implicit","constraints":[],"loads":["g"],"dt":"1 ms"}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"still"}"#);
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("tEnd")));
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"still","procedure":"implicit","constraints":[],"loads":["g"],"dt":"0 s","tEnd":"5 ms"}"#,
+    );
+    let bad = e.query(Query::Cost { step: "still".into() }).expect_err("the grid is invalid");
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("dt")));
+    // A convergence study resolves the velocity on every mesh it builds, and refuses the same
+    // disagreement the plain solve does.
+    ok(
+        &mut e,
+        &step(
+            r#"[{"on":"whole","value":["1 m/s","0 m/s","0 m/s"]},{"on":"block.xmax","value":["2 m/s","0 m/s","0 m/s"]}]"#,
+        ),
+    );
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"fall","sizes":["0.1 m","0.05 m"],
+        "quantity":{"kind":"probe","field":"displacement","component":2,"at":["0.05 m","0.05 m","0.05 m"]},"restore":false}"#,
+    );
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("initialVelocity[1]")));
 }

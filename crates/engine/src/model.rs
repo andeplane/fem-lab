@@ -309,6 +309,14 @@ pub enum Amplitude {
     Table { t: Vec<f64>, value: Vec<f64> },
 }
 
+/// A uniform initial velocity on a Set of nodes, SI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialVelocity {
+    pub on: String,
+    pub value: [f64; 3],
+}
+
 /// A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
 /// `after` names the Step whose Result this one continues (plan B §2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -347,6 +355,14 @@ pub struct Step {
     pub nonlinear_tolerance: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonlinear_max_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rayleigh_alpha: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rayleigh_beta: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_velocity: Option<Vec<InitialVelocity>>,
 }
 
 /// Mesher settings, SI.
@@ -673,6 +689,10 @@ mod tests {
             max_cutbacks: None,
             nonlinear_tolerance: None,
             nonlinear_max_iterations: None,
+            alpha: None,
+            rayleigh_alpha: None,
+            rayleigh_beta: None,
+            initial_velocity: None,
         });
         m.sets.push(NamedSet {
             name: "top".into(),

@@ -244,6 +244,14 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 initial: x.initial.map(|v| Q::new(v, "K")),
                 nonlinear_tolerance: x.nonlinear_tolerance,
                 nonlinear_max_iterations: x.nonlinear_max_iterations,
+                alpha: x.alpha,
+                rayleigh_alpha: x.rayleigh_alpha.map(|v| Q::new(v, "Hz")),
+                rayleigh_beta: x.rayleigh_beta.map(|v| Q::new(v, "s")),
+                initial_velocity: x.initial_velocity.as_ref().map(|list| {
+                    list.iter()
+                        .map(|iv| InitialVelocitySpec { on: iv.on.clone(), value: iv.value.map(|v| Q::new(v, "m/s")) })
+                        .collect()
+                }),
                 amplitude: x.amplitude.as_ref().map(|a| match a {
                     Amplitude::Sine { amplitude, period } => {
                         AmplitudeSpec::Sine { amplitude: *amplitude, period: Q::new(*period, "s") }
