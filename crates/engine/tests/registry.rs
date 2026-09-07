@@ -7258,7 +7258,11 @@ fn a_static_nonlinear_step_reaches_the_elastica_and_keeps_its_load_deflection_cu
         r#"{"cmd":"step.add","name":"large","procedure":"static-nonlinear","constraints":["root"],"loads":["tip"],
             "increments":5,"maxCutbacks":3,"nonlinearTolerance":1e-8,"nonlinearMaxIterations":12}"#,
     );
-    ok(&mut e, r#"{"cmd":"solve.run","step":"linear"}"#);
+    // A 1:200 cantilever meshed with 10:1 elements is conditioned well past the direct solve's
+    // default acceptance, so the *linear* comparison Step asks for the accuracy it can have.
+    // The nonlinear Step needs no such thing: its corrections are inexact on purpose and its
+    // own residual criterion, not the linear solver's, decides when it has converged.
+    ok(&mut e, r#"{"cmd":"solve.run","step":"linear","tolerance":1e-6}"#);
     let linear = tip_component(&mut e, 2);
     ok(&mut e, r#"{"cmd":"solve.run","step":"large"}"#);
     let (across, along) = (tip_component(&mut e, 2), tip_component(&mut e, 0));
