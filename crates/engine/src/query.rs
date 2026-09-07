@@ -58,30 +58,58 @@ pub enum Query {
     #[serde(rename = "query.result", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ResultSummary"))]
     Result {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
     },
 
-    /// Catalogue of retained transient primary-field frames (default: last solved Step).
+    /// Catalogue of the eight most recent successful solve instances, oldest first. Reads do
+    /// not extend retention. Evicted ids are unavailable; Model import/new clears records.
+    #[serde(rename = "query.results")]
+    #[schemars(extend("x-returns" = "RetainedResults"))]
+    Results {},
+
+    /// A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
+    /// Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
+    /// omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
+    #[serde(rename = "query.field", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "ResultField"))]
+    Field {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
+        field: String,
+    },
+
+    /// Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).
     /// Index 0 is the initial state; indices count retained frames, not integration steps.
     /// Metadata remains available for stale Results. No nodal values are copied by this Query.
     #[serde(rename = "query.frames", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "FramesResult"))]
     Frames {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
     },
 
-    /// One retained transient primary field. Supply exactly one of zero-based retained index
+    /// One retained primary field from a heat-transient, explicit or amplitude-driven static Step. Supply exactly one of zero-based retained index
     /// or sample (retained index / physical time with exact or nearest selection). Time
     /// selection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation
     /// policy as sampled probe/path. Values are SI,
     /// component-fastest, with three components per node, matching final FieldData: a 2D
     /// displacement has zero z; temperature occupies x with zero y/z. Defaults to the retained
-    /// primary field. Derived fields were not retained and are refused. Refuses result.stale.
+    /// primary field. Derived fields were not retained and are refused. Omitted resultId refuses result.stale.
     #[serde(rename = "query.frame", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "FrameResult"))]
     Frame {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,10 +123,13 @@ pub enum Query {
     /// A field value interpolated at a point (default: the last solved Step). Component
     /// indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
-    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
+    /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.probe", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ProbeResult"))]
     Probe {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
         field: Field,
@@ -111,10 +142,13 @@ pub enum Query {
 
     /// A field sampled at `n` points along the line from `from` to `to`, for a line plot.
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
-    /// Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
+    /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.path", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "PathResult"))]
     Path {
+        /// Omit for the current per-Step selection; an explicit id uses its solved context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         step: Option<String>,
         field: Field,
@@ -478,6 +512,8 @@ pub struct ResultAssumption {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultSummary {
+    /// Opaque identity scoped to the Engine instance that produced this solve.
+    pub result_id: String,
     pub step: String,
     /// The Journal revision after the Command that produced this Result. It stays fixed while
     /// later edits make the Result stale and when undo removes that producing Command.
@@ -507,7 +543,7 @@ pub struct ResultSummary {
     /// shape is the Result field named `mode:k`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frequencies: Vec<Valued>,
-    /// One row per output time of a transient Step: when, and the range the field covered.
+    /// One row per retained output time: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
     /// Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
@@ -521,7 +557,7 @@ pub struct ResultSummary {
     pub warnings: Vec<Warning>,
 }
 
-/// One time of a transient Step's history: the extremes of the field at that instant.
+/// One retained output time in a Step's history: the extremes of the field at that instant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRow {
@@ -570,6 +606,8 @@ pub struct FrameStamp {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedFrame {
+    /// Opaque identity scoped to the Engine instance that produced this solve.
+    pub result_id: String,
     pub step: String,
     pub model_hash: String,
     pub frame: FrameStamp,
@@ -579,6 +617,8 @@ pub struct ResolvedFrame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FramesResult {
+    /// Opaque identity scoped to the Engine instance that produced this solve.
+    pub result_id: String,
     pub step: String,
     pub model_hash: String,
     pub stale: bool,
@@ -644,6 +684,10 @@ pub struct CostEstimate {
     pub bytes: u64,
     /// Mandatory assembly storage before transient-specific values are added.
     pub assembly_bytes: u64,
+    /// Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.
+    pub resident_result_bytes: u64,
+    /// Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.
+    pub result_mesh_bytes: u64,
     /// Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
     pub retained_frames: u64,
     /// Logical f64 bytes for retained times and unpadded primary values.
@@ -754,6 +798,8 @@ pub enum QueryResult {
     Mesh(MeshSummary),
     Set(SetInfo),
     Result(ResultSummary),
+    Results(RetainedResults),
+    Field(ResultField),
     Frames(FramesResult),
     Frame(FrameResult),
     Probe(ProbeResult),
@@ -891,4 +937,47 @@ mod tests {
         let stub = variants.iter().find(|v| v["properties"]["cmd"]["const"] == "plugin.load").unwrap();
         assert_eq!(stub["x-status"], "stub");
     }
+}
+
+/// One immutable solve instance. Byte counts describe payloads, not allocator or peak memory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedResult {
+    pub id: String,
+    pub step: String,
+    pub solved_revision: u32,
+    pub model_name: String,
+    pub model_hash: String,
+    pub input_hash: String,
+    pub stale: bool,
+    pub nodes: usize,
+    pub elements: usize,
+    /// f64 arrays in final fields, modes, frequencies and retained History.
+    pub field_bytes: u64,
+    /// Numeric coordinates, connectivity and resolved geometry Sets; excludes container overhead.
+    pub mesh_bytes: u64,
+    /// Serialized solved Model metadata size, not its in-memory allocation size.
+    pub model_json_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RetainedResults {
+    pub limit: usize,
+    pub records: Vec<RetainedResult>,
+}
+
+/// Final scientific values are f64 SI in component-fastest entity order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultField {
+    pub result_id: String,
+    pub step: String,
+    pub field: String,
+    pub components: usize,
+    pub per: String,
+    pub entity_count: usize,
+    pub node_count: usize,
+    pub unit: String,
+    pub values: Vec<f64>,
 }

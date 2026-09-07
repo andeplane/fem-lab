@@ -403,6 +403,15 @@ pub(crate) fn planned_cost(
 }
 
 impl PlannedCost {
+    pub(crate) fn with_records(mut self, resident: u64, mesh: u64) -> Self {
+        self.estimate.resident_result_bytes = resident;
+        self.estimate.result_mesh_bytes = mesh;
+        self.estimate.bytes = self.estimate.bytes.saturating_add(resident).saturating_add(mesh);
+        self.estimate.feasible = if self.estimate.bytes > self.estimate.budget_bytes { Some(false) } else { None };
+        self.estimate.note.push_str(&format!(" Existing retained Result numeric payload: {resident} bytes; new Result Mesh snapshot: {mesh} bytes; these remain resident through preparation. Model/allocator overhead is additional. Total counted peak: {} bytes.", self.estimate.bytes));
+        self
+    }
+
     fn enforce(&self, step: &str) -> Result<(), Error> {
         let (steps, every, procedure) = self.transient.expect("solve_run calls this only for transient Steps");
         crate::solve::enforce_transient_budget(&self.estimate, step, procedure, steps, every)
@@ -450,12 +459,12 @@ impl Engine {
         let prev = match &step.after {
             Some(name) => {
                 let current_hash = crate::hash::result_hash(&self.model);
-                let (hash, _, result) = self.results.get(name).ok_or_else(|| {
+                let record = self.results.get(name).ok_or_else(|| {
                     Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
                         .at(format!("step '{}'", step.name))
                         .suggest(format!("solve.run on step '{name}' first"))
                 })?;
-                if hash.validity != current_hash {
+                if record.input_hash != current_hash {
                     return Err(Error::new(
                         ErrorCode::ResultStale,
                         format!("step '{name}' has a Result that does not match the current Model state"),
@@ -463,7 +472,7 @@ impl Engine {
                     .at(format!("step '{}'", step.name))
                     .suggest(format!("solve.run on step '{name}' again")));
                 }
-                Some(result.clone())
+                Some(std::sync::Arc::clone(record))
             }
             None => None,
         };
@@ -475,7 +484,7 @@ impl Engine {
                 &self.model,
                 built,
                 &step,
-                prev.as_ref().and_then(|r| r.fields.get(&Field::Temperature)),
+                prev.as_ref().and_then(|r| r.result.fields.get(&Field::Temperature)),
             )?;
             if matches!(
                 &proc_step,
@@ -483,18 +492,25 @@ impl Engine {
                     | procedure::Step::Explicit { .. }
                     | procedure::Step::Static { amplitude: Some(_), .. }
             ) {
-                planned_cost(p.mesh, Some(&p), &proc_step)?.enforce(&step.name)?;
+                planned_cost(p.mesh, Some(&p), &proc_step)?
+                    .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
+                    .enforce(&step.name)?;
             }
             let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
-            let mut result =
-                procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?;
+            let mut result = procedure::run(
+                &p,
+                &proc_step,
+                &self.pool,
+                self.gpu.as_ref(),
+                prev.as_ref().map(|record| &record.result),
+                on_progress,
+            )
+            .await?;
             result.assumptions = assumptions;
             result
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        let hash =
-            crate::engine::ResultHashes { model: self.model_hash(), validity: crate::hash::result_hash(&self.model) };
-        self.results.insert(step.name.clone(), (hash, self.revision(), result));
+        self.retain_result(step.name.clone(), result);
         Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)) })
     }
 
@@ -588,11 +604,7 @@ impl Engine {
         let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
-            let hash = crate::engine::ResultHashes {
-                model: self.model_hash(),
-                validity: crate::hash::result_hash(&self.model),
-            };
-            self.results.insert(step.name, (hash, self.revision(), last.expect("at least two sizes ran")));
+            self.retain_result(step.name, last.expect("at least two sizes ran"));
         } else {
             self.model.mesh = Some(settings);
             self.mesh = None;
@@ -675,18 +687,9 @@ impl Engine {
     pub(crate) fn stored<'e>(
         &'e self,
         step: Option<&str>,
-    ) -> Result<(&'e str, &'e crate::engine::ResultHashes, u32, &'e StepResult), Error> {
-        let name: &'e str = match step {
-            Some(n) => self.results.get_key_value(n).map(|(k, _)| k.as_str()).unwrap_or(""),
-            None => self
-                .last_solved()
-                .ok_or_else(|| Error::new(ErrorCode::NotFound, "no Step has been solved yet").suggest("solve.run"))?,
-        };
-        let known: Vec<&str> = self.results.keys().map(String::as_str).collect();
-        let (hash, revision, res) = self.results.get(name).ok_or_else(|| {
-            Error::not_found("result", step.unwrap_or(name), &known).suggest("solve.run on that Step first")
-        })?;
-        Ok((name, hash, *revision, res))
+    ) -> Result<(&'e str, &'e String, u32, &'e StepResult), Error> {
+        let record = self.result_record(step, None)?;
+        Ok((&record.step, &record.input_hash, record.revision, &record.result))
     }
 
     /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
@@ -694,7 +697,7 @@ impl Engine {
     /// physics and mesh input while deliberately excluding the display name (ADR 0017).
     pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
         let (name, hash, _, result) = self.stored(step)?;
-        if hash.validity != crate::hash::result_hash(&self.model) {
+        if *hash != crate::hash::result_hash(&self.model) {
             return Err(Error::new(
                 ErrorCode::ResultStale,
                 format!("step '{name}' has a Result that does not match the current Model state"),
@@ -737,8 +740,13 @@ impl Engine {
     /// `query.result`: what the Step produced, in the Model's display units. The Step must
     /// have a Result: every caller has just stored one or resolved it through [`Engine::stored`].
     pub(crate) fn result_summary(&self, step: &str) -> ResultSummary {
-        let (name, hash, revision, res) = self.stored(Some(step)).expect("the caller resolved this Step");
-        let m = &self.model;
+        self.selected_summary(Some(step), None).expect("the caller resolved this Step")
+    }
+
+    pub(crate) fn selected_summary(&self, step: Option<&str>, id: Option<&str>) -> Result<ResultSummary, Error> {
+        let record = self.result_record(step, id)?;
+        let (name, hash, res) = (&record.step, &record.input_hash, &record.result);
+        let m = if id.is_some() { &record.model } else { &self.model };
         let applied = ["x", "y", "z"].map(|a| res.scalars[&format!("applied_total_{a}")]);
         let mut sum = applied;
         for (_, r) in &res.reactions {
@@ -759,12 +767,13 @@ impl Engine {
             residual = (applied[0] - removed - storage).abs();
             biggest = res.scalars["power_balance_scale"].max(f64::MIN_POSITIVE);
         }
-        ResultSummary {
+        Ok(ResultSummary {
+            result_id: record.id.clone(),
             step: name.to_string(),
             reaction_quantity: res.reaction_quantity,
             storage_power: storage_power.map(|p| display(m, p, Power::DIM)),
-            revision: revision + 1,
-            stale: hash.validity != crate::hash::result_hash(&self.model),
+            revision: record.revision,
+            stale: *hash != crate::hash::result_hash(&self.model),
             solver: res.solver.solver.to_string(),
             iterations: res.solver.iterations as u32,
             residual: res.solver.rel_residual,
@@ -795,7 +804,7 @@ impl Engine {
                 .collect(),
             balance: residual / biggest,
             warnings: res.warnings.clone(),
-        }
+        })
     }
 }
 
