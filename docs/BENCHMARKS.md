@@ -59,6 +59,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | explicit-free-fall-thrown | green | 4/4 | 0.3 | 0.3 | 0.00 % |
 | explicit-sdof-step | green | 4/4 | 0.001002 | 0.001 | 0.20 % |
 | explicit-wave-bar | green | 4/4 | 1.001437 | 1 | 0.14 % |
+| harmonic-cantilever-sweep | green | 7/7 | 42 | 41.9107 | 0.21 % |
+| harmonic-sdof-magnification | green | 29/29 | 3.5731e-6 | 3.5731e-6 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
 | implicit-bar-wave | green | 2/2 | 0.006665 | 0.006667 | 0.03 % |
 | implicit-cantilever-step | green | 4/4 | -0.590169 | -0.610712 | 3.36 % |
@@ -583,6 +585,10 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F12b | The same coupling with the point 500 mm *outside* the beam | Σ reactions = the applied force, and Σ r × R = −(x̄ × F) with x̄ the *face* centroid, not the point | 1e-10 rel | translation-only couplings transmit no moment: the offset changes nothing | engine test |
 | F12c | A `rigid` coupling on the same face | every node of the face takes one displacement; the tip is stiffer than F5b's and the reaction resultant is still exact | 1e-12 on the kinematics, 1e-9 rel on the resultant | `rigid` holds its face flat | engine test |
 | F13 | Rayleigh's tip-mass cantilever: a 500 kg `geometry.addMass` on a 1 m × 40 × 40 mm steel beam, coupled `distributed` to the tip | f₁ = (1/2π)√(3EI/(L³(m + 0.24 m_beam))) = 2.601925 Hz | 1 % | a point mass reaches the mass matrix, and only the mass matrix (#67) | green |
+| F14 | Damped harmonic magnification of one degree of freedom, r = f/f_n from 0.1 to 3.0, ζ = 0.02, 0.05 and 0.2 | `\|u\|/u_static = 1/√((1−r²)² + (2ζr)²)` and `phase = atan2(2ζr, 1−r²)` — exact for one degree of freedom, so mode superposition is exact too | 1e-8 on magnitude and phase | harmonic response by mode superposition (ADR 0020) | green + engine test |
+| F15 | Harmonic sweep on B1's cantilever, ζ = 0.02, 30–55 Hz at 0.5 Hz | the peak row sits on B4's Euler–Bernoulli f₁ = 41.91 Hz; its phase is the quadrature π/2 a resonance produces; its amplitude is the static tip deflection amplified by 1/(2ζ) | 1 % in frequency, 5 % in phase, 4 % in amplitude | the sweep finds the real resonance of a real structure | green |
+| F16 | NAFEMS R0016 case 5H, forced harmonic response of the simply-supported thin plate | the published peak displacement and stress table | — | | **resolve** — needs the published table |
+| F17 | NAFEMS R0016 case 5R, random response of the same plate | the published RMS table | — | | **resolve** — needs the published table |
 
 The cavity-face regression for #407 builds a 200 × 30 × 200 mm slab with a
 10 mm-high box cut and a separate matching core. At both 10 and 5 mm lattice sizes,
@@ -719,6 +725,33 @@ monitor is an energy balance — for a linear undamped system the energy in the 
 exceed the work the loads have done, so `E > 1e3 · max(E₀, |W|)` is the test — which is what
 lets a Step that starts from rest under a load be watched at all.
 
+**F14 is gated at roundoff on purpose.** A single degree of freedom is the one case where mode
+superposition is not an approximation: the modal basis is complete, so `u(ω)` is the closed form
+evaluated in floating point and nothing else. A tolerance of 1 % there would pass a wrong sign in
+the complex denominator, a phase convention off by π, or a modal participation scaled by the
+wrong normalisation. `harmonic-sdof-magnification` is one hex8 clamped at `xmin` and guided at
+`xmax`, so the only free displacements are the four axial ones on the loaded face; the symmetry
+of that square face makes their uniform combination its own mode, and a uniform axial traction
+excites nothing else. The case pins `u_static` from the *static* procedure and `f_n` from the
+*modal* one with their own checks, so the closed form it gates against is anchored on two
+independent code paths rather than on the one under test. The same curve runs as an engine test
+at every one of the thirty swept ratios and all three damping ratios.
+
+**F15's amplitude gate is 4 %, not 3 %, and the reason is physics rather than slack.** The
+identity `peak = u_static / (2ζ)` is exact for a single mode. A real cantilever's static tip
+deflection also contains the flexibility of every higher mode, and those are not amplified at the
+first resonance, so a converged sweep lands a little below the identity — 2.97 % below on this
+mesh. Gating at 3 % would leave no room for a legitimate solver change. The row that the peak
+occupies is identified three ways, not one: its frequency is Euler–Bernoulli's within 0.21 %, its
+phase is 1.526 rad against π/2, and its amplitude is 73.52 mm against the 75.77 mm the
+amplification identity predicts.
+
+**F16 and F17 are not claimed.** NAFEMS R0016, *Selected Benchmarks for Forced Vibration*, is the
+right published set for both harmonic and random response and covers them on one plate. Nobody on
+this change has read the publication, and BENCHMARKS' own rule forbids hard-coding a remembered
+number, so the rows say **resolve** and the harmonic PR is gated on F14 and F15, which are closed
+forms.
+
 F1/F2b also regress uniform gravity with the same HRZ inertia used by explicit dynamics (#278).
 Every retained nodal displacement equals `v₀ t + g t²/2` within `1e-10 tEnd` m for all eight
 structural element families, every applicable idealisation (axial translation for axisymmetry),
@@ -795,6 +828,7 @@ payload caches on every Solve Ack even when that hash is unchanged.
 | # | Case | Reference | Tolerance | Proves | Status |
 |---|---|---|---|---|---|
 | J1 | Regular 32-gon prism as an ASCII STL, imported by `geometry.import` | V = (n/2) R² sin(2π/n) h = 6.2428903045 mm³, mass 4.9006688890e-5 kg, bbox 1 mm × 2 mm | 1e-12 rel | a tessellated import is welded into a solid whose volume, mass and extent are exactly the polyhedron's; patches are named; a plane rule resolves on its lattice mesh | green |
+| J2 | Imported cube, transformed 32-gon cylinder and sphere patch summaries | cube: six 1 m² planes with 12 triangles total; cylinder: two planes and one radius-2 circular side after rotation, scale and translation; sphere: bounding-box fallback | 1e-9 abs | patch area, first-moment centroid and area-weighted normal have independent geometric oracles; every suggested predicate is accepted unchanged and resolves on three lattice sizes | green |
 
 J1's oracle owes nothing to the importer: a regular n-gon of circumradius R has area
 (n/2) R² sin(2π/n), so the prism of height h holds (n/2) R² sin(2π/n) h and its side is n
@@ -802,6 +836,13 @@ chords of 2R sin(π/n) by h. The mesh *is* the polyhedron, so these are matched 
 relative rather than approached, and `unitLength: "1 mm"` is what turns the file's unitless
 1 and 2 into millimetres — an STL records no units, so getting that wrong is the one way an
 import silently gives a body a thousand times the mass it should have.
+
+J2 separates measurement from classification. Triangle cross products and first moments give
+the patch area, centroid and mean normal independently of the fitter. A rigidly transformed,
+uniformly scaled cylinder must retain its analytic radius and transformed axis; its two caps
+remain planes. The side predicate's tolerance spans the polygon chord because face predicates
+act on mesh-face centroids, and all returned values are sent unchanged through
+`geometry.nameFace` before resolving non-empty Sets at 3, 5 and 7 cells per bounding-box axis.
 
 The rest of the import is checked in the two crates' test binaries rather than as Benchmark
 rows, because their oracles are the geometry itself:

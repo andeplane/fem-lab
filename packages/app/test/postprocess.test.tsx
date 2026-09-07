@@ -11,7 +11,7 @@ import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnit
 import { Store, initialState, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
 import type { Dispatch } from '../src/ui/cmd';
-import { Frequencies, History, LineChart, axisTicks, extremeLabel } from '../src/ui/Results';
+import { Frequencies, History, LineChart, Sweep, axisTicks, extremeLabel } from '../src/ui/Results';
 import { resultItems } from '../src/ui/Tree';
 
 const v = (value: number, unit: string) => ({ value, unit });
@@ -39,6 +39,16 @@ const transient = {
     { time: v(0, 's'), min: v(20, 'degC'), max: v(20, 'degC') },
     { time: v(10, 's'), min: v(20, 'degC'), max: v(48, 'degC') },
     { time: v(20, 's'), min: v(21, 'degC'), max: v(63, 'degC') },
+  ],
+} as unknown as ResultSummary;
+
+const harmonic = {
+  ...RESULT,
+  step: 'sweep',
+  sweep: [
+    { frequency: v(10, 'Hz'), amplitude: v(0.2, 'mm'), phase: v(0.01, 'rad') },
+    { frequency: v(20, 'Hz'), amplitude: v(1.8, 'mm'), phase: v(1.5, 'rad') },
+    { frequency: v(30, 'Hz'), amplitude: v(0.3, 'mm'), phase: v(3.1, 'rad') },
   ],
 } as unknown as ResultSummary;
 
@@ -180,6 +190,24 @@ describe('the history and the frequencies', () => {
     expect(root.textContent).toContain('History · heat');
     expect(root.querySelectorAll('polyline')).toHaveLength(2);
     expect(root.textContent).toContain('max (degC) against t (s)');
+  });
+
+  it('draws nothing for a Step that swept no frequencies', () => {
+    const root = document.createElement('div');
+    render(<Sweep s={state({ result: RESULT })} />, root);
+    expect(root.textContent).toBe('');
+    render(<Sweep s={state({ result: { ...RESULT, sweep: [] } as ResultSummary })} />, root);
+    expect(root.textContent).toBe('');
+  });
+
+  it('plots a harmonic Step\'s amplitude and phase against frequency', () => {
+    const root = document.createElement('div');
+    render(<Sweep s={state({ result: harmonic })} />, root);
+    expect(root.textContent).toContain('Frequency response · sweep');
+    expect(root.querySelectorAll('polyline')).toHaveLength(2);
+    expect(root.textContent).toContain('amplitude (mm) against f (Hz)');
+    expect(root.textContent).toContain('phase (rad) against f (Hz)');
+    for (const line of root.querySelectorAll('polyline')) expect(line.getAttribute('points')!.split(' ')).toHaveLength(3);
   });
 
   it('lists a modal Step\'s frequencies with their periods and one Command each', () => {
