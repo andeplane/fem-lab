@@ -10,6 +10,7 @@ import modalAnalysis from '../../tutorials/modal-analysis.json';
 import plateWithHole from '../../tutorials/plate-with-hole.json';
 import pressureVessel from '../../tutorials/pressure-vessel.json';
 import readAResult from '../../tutorials/read-a-result.json';
+import solveCostAndSolvers from '../../tutorials/solve-cost-and-solvers.json';
 import symmetryAnd2d from '../../tutorials/symmetry-and-2d.json';
 import thermalBar from '../../tutorials/thermal-bar.json';
 import transientHeat from '../../tutorials/transient-heat.json';
@@ -30,6 +31,7 @@ export const TUTORIALS: Tutorial[] = [
   journalAsProgram,
   pressureVessel,
   compositeBlockShear,
+  solveCostAndSolvers,
 ] as Tutorial[];
 
 export function tutorialById(id: string): Tutorial | undefined {

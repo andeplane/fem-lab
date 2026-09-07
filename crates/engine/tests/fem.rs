@@ -3154,11 +3154,12 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
             control: NonlinearControl::default(),
         },
         Step::Explicit { t_end: 1.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 },
+        implicit_step(1.0, 2.0, 0.0, (0.0, 0.0), None, 1),
     ]
     .iter()
     .map(Step::name)
     .collect();
-    assert_eq!(names, ["static", "static-nonlinear", "modal", "heat-steady", "heat-transient", "explicit"]);
+    assert_eq!(names, ["static", "static-nonlinear", "modal", "heat-steady", "heat-transient", "explicit", "implicit"]);
 }
 
 /// The checks pass but the material does not: a law given the wrong number of properties
@@ -5721,6 +5722,7 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
         (&hot, transient),
         (&solid, Step::Modal { n_modes: 2, shift: Some(-1.0), solver: SolveOptions::default() }),
         (&solid, Step::Explicit { t_end: 1e-5, dt_factor: 0.9, initial_velocity: None, output_every: 1 }),
+        (&solid, implicit_step(1e-5, 1e-5, 0.0, (0.0, 0.0), None, 1)),
     ];
     for (p, step) in steps {
         for at in 0..3 {
@@ -9722,6 +9724,72 @@ fn an_amplitude_drives_the_load_factor_of_a_nonlinear_step() {
     assert!(history.values[2].iter().any(|x| x.abs() > 1e-6), "and it went somewhere in between");
 }
 
+// -------------------------------------- implicit dynamics (Benchmarks F2c, F3, F3b, F3c)
+
+/// The P-wave modulus `E(1−ν)/((1+ν)(1−2ν))`: what a hex8 held flat at both ends stretches with.
+fn p_wave_modulus() -> f64 {
+    YOUNG * (1.0 - POISSON) / ((1.0 + POISSON) * (1.0 - 2.0 * POISSON))
+}
+
+/// Benchmark F3's single degree of freedom: one hex8 cube, `xmin` clamped, `xmax` held flat in
+/// y and z under a uniform axial traction. The four free DOFs are the axial displacements of the
+/// loaded face, which symmetry moves as one, so the finite-element system *is* the scalar
+/// `m* ẍ + k* x = P` with the closed-form `k* = M A / L` (uniaxial strain, `M` the P-wave
+/// modulus) and `m* = ρ A L / 3` (the consistent mass of a linear ramp).
+fn axial_sdof<'a>(
+    mesh: &'a Mesh,
+    sets: &'a BTreeMap<String, ResolvedSet>,
+    bodies: &'a [String],
+    traction: f64,
+) -> Problem<'a> {
+    let held = vec![fix("root", "xmin", [true, true, true], 0.0), fix("guide", "xmax", [false, true, true], 0.0)];
+    let mut p = problem(mesh, sets, bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [traction, 0.0, 0.0] }];
+    p
+}
+
+fn implicit_step(
+    dt: f64,
+    t_end: f64,
+    alpha: f64,
+    rayleigh: (f64, f64),
+    initial_velocity: Option<Vec<f64>>,
+    output_every: usize,
+) -> Step {
+    Step::Implicit {
+        dt,
+        t_end,
+        alpha,
+        rayleigh_alpha: rayleigh.0,
+        rayleigh_beta: rayleigh.1,
+        initial_velocity,
+        output_every,
+        amplitude: None,
+    }
+}
+
+/// The scalar HHT-α method written straight from its equation of motion under a constant load,
+/// solving for the acceleration:
+/// `[m + (1+α)γΔt c + (1+α)βΔt² k] a₁ = f − (1+α)(c ṽ + k ũ) + α(c v₀ + k u₀)`.
+/// It shares no algebra with the engine's effective-stiffness form.
+#[allow(clippy::too_many_arguments)]
+fn scalar_hht(m: f64, k: f64, c: f64, f: f64, alpha: f64, dt: f64, steps: usize, v0: f64) -> Vec<(f64, f64)> {
+    let (beta, gamma) = ((1.0 - alpha).powi(2) / 4.0, 0.5 - alpha);
+    let (mut u, mut v) = (0.0, v0);
+    let mut a = (f - c * v) / m;
+    let mut out = vec![(u, v)];
+    for _ in 0..steps {
+        let ut = u + dt * v + dt * dt * (0.5 - beta) * a;
+        let vt = v + dt * (1.0 - gamma) * a;
+        let lhs = m + (1.0 + alpha) * gamma * dt * c + (1.0 + alpha) * beta * dt * dt * k;
+        a = (f - (1.0 + alpha) * (c * vt + k * ut) + alpha * (c * v + k * u)) / lhs;
+        u = ut + beta * dt * dt * a;
+        v = vt + gamma * dt * a;
+        out.push((u, v));
+    }
+    out
+}
+
 // ------------------------------------------------------------- invariant suite (#397)
 //
 // Every property here holds for a correct linear finite-element solver whatever the answer,
@@ -9795,6 +9863,493 @@ fn rotate_mesh(m: &Mesh, r: &[[f64; 3]; 3]) -> Mesh {
         out.coords[3 * n..3 * n + 3].copy_from_slice(&rot_vec(r, m.node(n as u32)));
     }
     out
+}
+
+/// Newmark's displacement difference equation (Hughes, *The Finite Element Method*, §9.1) for
+/// `m ü + c u̇ + k u = f` at `β = ¼`, `γ = ½`, from rest, started by one acceleration-form step:
+/// `A u₁ + B u₀ + C u₋₁ = β f₁ + (½+γ−2β) f₀ + (½−γ+β) f₋₁` with
+/// `A = m/Δt² + γc/Δt + βk`, `B = −2m/Δt² + (1−2γ)c/Δt + (½+γ−2β)k`,
+/// `C = m/Δt² − (1−γ)c/Δt + (½−γ+β)k`. A constant load's three weights sum to one, and
+/// `A + B + C = k`, so in the increments `d = u₁ − u₀` the same equation reads
+/// `A d₁ = f − k u₀ + C d₀` — the form evaluated here, because it does not cancel two
+/// `m/Δt²`-sized terms against each other at every step.
+fn three_term_newmark(m: f64, k: f64, c: f64, f: f64, dt: f64, steps: usize) -> Vec<f64> {
+    let (beta, gamma) = (0.25, 0.5);
+    let a = m / (dt * dt) + gamma * c / dt + beta * k;
+    let cc = m / (dt * dt) - (1.0 - gamma) * c / dt + (0.5 - gamma + beta) * k;
+    let mut u = vec![0.0, scalar_hht(m, k, c, f, 0.0, dt, 1, 0.0)[1].0];
+    let mut d = u[1];
+    for n in 1..steps {
+        d = (f - k * u[n] + cc * d) / a;
+        u.push(u[n] + d);
+    }
+    u
+}
+
+/// Benchmark F3: the closed-form damped step response at 1 %, and the hand-written scalar
+/// recurrences at 1e-12 — the second is what tells a correct integrator from a nearly
+/// correct one, and the reactions carry the inertia the supports really feel.
+#[test]
+fn a_single_degree_of_freedom_under_a_step_load_matches_the_closed_form_and_the_scalar_recurrences() {
+    let (side, traction) = (0.1, 1e7);
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([side; 3]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = axial_sdof(&mesh, &sets, &bodies, traction);
+    let area = side * side;
+    let (k, m, f) = (p_wave_modulus() * area / side, DENSITY * area * side / 3.0, traction * area);
+    let omega = (k / m).sqrt();
+    let period = 2.0 * PI / omega;
+    let u_static = f / k;
+    let tip: Vec<usize> = (0..mesh.n_nodes()).filter(|&n| mesh.node(n as u32)[0] > 0.5 * side).collect();
+    assert_eq!(tip.len(), 4);
+    // The common axial displacement of the loaded face, with every other DOF exactly still. The
+    // four DOFs agree to round-off: the antisymmetric modes of the face are excited only by the
+    // factorisation's own rounding, which the scalar oracle cannot see.
+    let face = |frame: &[f64]| -> f64 {
+        let x = tip.iter().map(|&node| frame[node * 3]).sum::<f64>() / 4.0;
+        for (dof, &value) in frame.iter().enumerate() {
+            if tip.contains(&(dof / 3)) && dof % 3 == 0 {
+                assert!((value - x).abs() <= 1e-11 * u_static, "dof {dof}: {value} vs {x}");
+            } else {
+                assert_eq!(value, 0.0, "dof {dof} is held");
+            }
+        }
+        x
+    };
+    for zeta in [0.0, 0.05] {
+        // Half the damping ratio from each Rayleigh term: ζ = αR/(2ω) + βR·ω/2.
+        let rayleigh = (zeta * omega, zeta / omega);
+        let c = rayleigh.0 * m + rayleigh.1 * k;
+        let res = run_step(&p, &implicit_step(period / 200.0, 5.0 * period, 0.0, rayleigh, None, 1)).expect("solves");
+        let (dt, steps) = (res.scalars["dt"], res.scalars["steps"] as usize);
+        assert!(dt <= period / 200.0 && steps >= 1000);
+        let h = res.history.as_ref().expect("a history");
+        assert_eq!((h.field, h.times.len()), (Field::Displacement, steps + 1));
+        assert_eq!(*h.times.last().unwrap(), 5.0 * period);
+        let omega_d = omega * (1.0 - zeta * zeta).sqrt();
+        let exact = |t: f64| {
+            u_static
+                * (1.0
+                    - libm::exp(-zeta * omega * t)
+                        * (libm::cos(omega_d * t) + zeta * omega / omega_d * libm::sin(omega_d * t)))
+        };
+        let recurrence = three_term_newmark(m, k, c, f, dt, steps);
+        let mut worst = 0.0f64;
+        for (n, (&t, frame)) in h.times.iter().zip(&h.values).enumerate() {
+            let x = face(frame);
+            worst = worst.max((x - exact(t)).abs());
+            assert!((x - recurrence[n]).abs() <= 1e-12 * u_static, "ζ = {zeta}, step {n}: {x} vs {}", recurrence[n]);
+        }
+        assert!(worst <= 0.01 * u_static, "ζ = {zeta}: worst {worst} against u_static {u_static}");
+        assert!(worst > 1e-6 * u_static, "the discretisation error is measurable, not a coincidence");
+        // Reactions include the inertia and the damping: on the root the mass coupling of the
+        // ramp is `ρAL/6 = m*/2`, the stiffness coupling `−k*`, so
+        // `R = −k x + (m/2) a + (αR m/2 − βR k) v`, and the d'Alembert applied total closes it.
+        let (u_end, v_end) = scalar_hht(m, k, c, f, 0.0, dt, steps, 0.0)[steps];
+        let a_end = (f - c * v_end - k * u_end) / m;
+        let want = -k * u_end + 0.5 * m * a_end + (0.5 * rayleigh.0 * m - rayleigh.1 * k) * v_end;
+        let root = reaction_of(&res, "root");
+        assert!((root[0] - want).abs() <= 1e-9 * f, "ζ = {zeta}: root reaction {} vs {want}", root[0]);
+        assert!(reaction_of(&res, "guide").iter().all(|r| r.abs() <= 1e-9 * f), "the guide carries nothing");
+        let closing = res.scalars["applied_total_x"] + root[0];
+        assert!(closing.abs() <= 1e-9 * f, "ζ = {zeta}: balance {closing}");
+        assert!((res.scalars["load_total_x"] - f).abs() <= 1e-9 * f);
+        assert!(res.fields.contains_key(&Field::VonMises) && res.fields.contains_key(&Field::Reaction));
+        assert_eq!(res.solver.solver, "cpu-direct");
+        assert_eq!(res.solver.iterations, steps);
+    }
+    // HHT-α = −0.05 at ζ = 0.05, against the acceleration-form scalar method: this pins the
+    // `α v₀` and `α K u₀` carry-over terms that a plain Newmark step does not have.
+    let rayleigh = (0.05 * omega, 0.05 / omega);
+    let c = rayleigh.0 * m + rayleigh.1 * k;
+    let res = run_step(&p, &implicit_step(period / 20.0, 3.0 * period, -0.05, rayleigh, None, 1)).expect("solves");
+    let (dt, steps) = (res.scalars["dt"], res.scalars["steps"] as usize);
+    let oracle = scalar_hht(m, k, c, f, -0.05, dt, steps, 0.0);
+    for (n, frame) in res.history.as_ref().unwrap().values.iter().enumerate() {
+        let x = face(frame);
+        assert!((x - oracle[n].0).abs() <= 1e-12 * u_static, "step {n}: {x} vs {}", oracle[n].0);
+    }
+    assert_eq!((res.scalars["alpha"], res.scalars["beta"], res.scalars["gamma"]), (-0.05, 1.05f64 * 1.05 / 4.0, 0.55));
+}
+
+/// Benchmark F3, energy: `½vᵀMv + ½uᵀKu` is conserved by average acceleration to round-off,
+/// `E − fᵀu` under a step load likewise, and HHT at α = −0.05 dissipates it. The velocity at
+/// each retained frame is the one Newmark's own relations imply for the retained displacements.
+#[test]
+fn average_acceleration_conserves_the_discrete_energy_and_hht_dissipates_it() {
+    let side = 0.1;
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([side; 3]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let area = side * side;
+    let (k, m) = (p_wave_modulus() * area / side, DENSITY * area * side / 3.0);
+    let period = 2.0 * PI / (k / m).sqrt();
+    let tip = (0..mesh.n_nodes()).find(|&n| mesh.node(n as u32)[0] > 0.5 * side).unwrap();
+    let v0 = 2.0;
+    let kick = Some(vec![v0; mesh.n_nodes() * 3]);
+    let e0 = 0.5 * m * v0 * v0;
+    // Free vibration from an initial velocity, ten periods at twenty steps per period.
+    let free = axial_sdof(&mesh, &sets, &bodies, 0.0);
+    for alpha in [0.0, -0.05] {
+        let res = run_step(&free, &implicit_step(period / 20.0, 10.0 * period, alpha, (0.0, 0.0), kick.clone(), 1))
+            .expect("solves");
+        let (dt, steps) = (res.scalars["dt"], res.scalars["steps"] as usize);
+        assert!((res.scalars["energy_initial"] - e0).abs() <= 1e-12 * e0, "{}", res.scalars["energy_initial"]);
+        let (beta, gamma) = ((1.0 - alpha).powi(2) / 4.0, 0.5 - alpha);
+        let u: Vec<f64> = res.history.as_ref().unwrap().values.iter().map(|frame| frame[tip * 3]).collect();
+        let (mut v, mut a) = (v0, 0.0);
+        let mut energy = vec![e0];
+        for n in 0..steps {
+            let ut = u[n] + dt * v + dt * dt * (0.5 - beta) * a;
+            let vt = v + dt * (1.0 - gamma) * a;
+            a = (u[n + 1] - ut) / (beta * dt * dt);
+            v = vt + gamma * dt * a;
+            energy.push(0.5 * m * v * v + 0.5 * k * u[n + 1] * u[n + 1]);
+        }
+        let e_end = res.scalars["energy_final"];
+        assert!((e_end - energy[steps]).abs() <= 1e-12 * e0, "α = {alpha}: {e_end} vs {}", energy[steps]);
+        if alpha == 0.0 {
+            for (n, e) in energy.iter().enumerate() {
+                assert!((e - e0).abs() <= 1e-12 * e0, "step {n}: {e} vs {e0}");
+            }
+        } else {
+            // Sampled once per period, so the within-period exchange of the α-method's own
+            // energy norm does not hide the monotone loss.
+            let per_period = steps / 10;
+            let samples: Vec<f64> = (0..=10).map(|i| energy[i * per_period]).collect();
+            for pair in samples.windows(2) {
+                assert!(pair[1] < pair[0], "HHT must lose energy every period: {samples:?}");
+            }
+            assert!(e_end < 0.99 * e0 && e_end > 0.9 * e0, "α = −0.05 at T/20 loses a few percent: {e_end} of {e0}");
+        }
+    }
+    // A step load: `E − f·u` is the conserved quantity at α = 0.
+    let traction = 1e7;
+    let loaded = axial_sdof(&mesh, &sets, &bodies, traction);
+    let res =
+        run_step(&loaded, &implicit_step(period / 20.0, 10.0 * period, 0.0, (0.0, 0.0), None, 1)).expect("solves");
+    let f = traction * area;
+    let u_end = res.fields[&Field::Displacement].data[tip * 3];
+    let drift = res.scalars["energy_final"] - f * u_end - res.scalars["energy_initial"];
+    assert!(drift.abs() <= 1e-12 * f * f / k, "{drift} against {}", f * f / k);
+}
+
+/// Benchmark F3b: the B4 cantilever under a step tip load rings at its first mode with twice
+/// the static deflection, and HHT damps the mesh modes without moving that period.
+#[test]
+fn a_cantilever_under_a_step_tip_load_rings_at_its_first_mode_with_twice_the_static_deflection() {
+    let (length, side) = (1.0, 0.05);
+    let mesh = Structured { kind: ElementKind::Hex20, n: [20, 2, 2] }.box_([length, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let held = vec![fix("root", "xmin", [true, true, true], 0.0)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+    let (force, area) = (100.0, side * side);
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -force / area] }];
+    let inertia = side.powi(4) / 12.0;
+    // B4's Euler–Bernoulli first mode and B1's Timoshenko static deflection.
+    let f1 = 1.8751040687f64.powi(2) / (2.0 * PI) * (YOUNG * inertia / (DENSITY * area * length.powi(4))).sqrt();
+    let period = 1.0 / f1;
+    let shear = YOUNG / (2.0 * (1.0 + POISSON));
+    let delta = force * length.powi(3) / (3.0 * YOUNG * inertia) + force * length / (5.0 / 6.0 * shear * area);
+    let tip = (0..mesh.n_nodes())
+        .find(|&n| {
+            let x = mesh.node(n as u32);
+            (x[0] - length).abs() < 1e-9 && (x[1] - 0.5 * side).abs() < 1e-9 && (x[2] - 0.5 * side).abs() < 1e-9
+        })
+        .expect("a node at the tip centre");
+    let mut periods = Vec::new();
+    let mut ringing = Vec::new();
+    let mut energies = Vec::new();
+    for alpha in [0.0, -0.05] {
+        let res =
+            run_step(&p, &implicit_step(period / 100.0, 2.0 * period, alpha, (0.0, 0.0), None, 1)).expect("solves");
+        let h = res.history.as_ref().unwrap();
+        let w: Vec<f64> = h.values.iter().map(|u| u[tip * 3 + 2]).collect();
+        let peak = w.iter().copied().fold(0.0, f64::min);
+        assert!((peak + 2.0 * delta).abs() <= 0.05 * 2.0 * delta, "α = {alpha}: peak {peak} vs {}", -2.0 * delta);
+        // The period from two successive upward crossings of the static level.
+        let crossings: Vec<f64> = (1..w.len())
+            .filter(|&i| w[i - 1] < -delta && w[i] >= -delta)
+            .map(|i| h.times[i - 1] + (-delta - w[i - 1]) / (w[i] - w[i - 1]) * (h.times[i] - h.times[i - 1]))
+            .collect();
+        assert!(crossings.len() >= 2, "α = {alpha}: {crossings:?}");
+        let measured = crossings[1] - crossings[0];
+        assert!((measured - period).abs() <= 0.03 * period, "α = {alpha}: period {measured} vs {period}");
+        periods.push(measured);
+        // At the end of two periods the first mode is nearly back at rest, so what energy is
+        // left is the mesh modes': average acceleration conserves `E − fᵀu` to round-off and
+        // keeps every one of them ringing (the second difference of the tip history is its
+        // acceleration), HHT dissipates a good part of it.
+        let dt = res.scalars["dt"];
+        ringing.push(
+            (1..w.len() - 1).map(|i| ((w[i + 1] - 2.0 * w[i] + w[i - 1]) / (dt * dt)).powi(2)).sum::<f64>().sqrt(),
+        );
+        let mut f = vec![0.0; p.n_dofs()];
+        assemble_loads(&p, &mut f).unwrap();
+        let work: f64 = f.iter().zip(&res.fields[&Field::Displacement].data).map(|(f, u)| f * u).sum();
+        let e_end = res.scalars["energy_final"];
+        let total = e_end - work - res.scalars["energy_initial"];
+        if alpha == 0.0 {
+            let scale = 2.0 * force * delta;
+            assert!(total.abs() <= 1e-9 * scale, "average acceleration conserves E − fᵀu: {total} of {scale}");
+        } else {
+            assert!(total < -0.05 * e_end, "HHT dissipates: {total} of {e_end}");
+        }
+        energies.push(e_end);
+        let closing: f64 = (0..3)
+            .map(|c| res.scalars[&format!("applied_total_{}", ["x", "y", "z"][c])] + reaction_of(&res, "root")[c])
+            .map(f64::abs)
+            .sum();
+        assert!(closing <= 1e-8 * force, "α = {alpha}: balance {closing}");
+    }
+    assert!((periods[1] - periods[0]).abs() <= 0.01 * periods[0], "{periods:?}");
+    assert!(energies[1] < 0.85 * energies[0], "HHT must damp the high modes: {energies:?}");
+    assert!(ringing[1] < 0.95 * ringing[0], "and their acceleration with them: {ringing:?}");
+}
+
+/// Benchmark F3c: a fixed–free bar suddenly loaded at its end, against the independent Fourier
+/// series of the wave solution on three refinements, and second-order convergence in Δt.
+#[test]
+fn a_suddenly_loaded_bar_matches_the_wave_series_and_converges_at_second_order_in_time() {
+    let (length, side, traction) = (1.0, 0.05, 1e6);
+    let c = (YOUNG / DENSITY).sqrt();
+    let period = 4.0 * length / c;
+    let t_end = 0.35 * period;
+    let static_tip = traction * length / YOUNG;
+    let series = |t: f64| {
+        let sum: f64 = (1..200_000u64)
+            .step_by(2)
+            .map(|n| libm::cos(n as f64 * PI * c * t / (2.0 * length)) / (n * n) as f64)
+            .sum();
+        static_tip * (1.0 - 8.0 / (PI * PI) * sum)
+    };
+    let bar = |nx: usize| Structured { kind: ElementKind::Hex8, n: [nx, 1, 1] }.box_([length, side, side]);
+    let tip_of = |mesh: &Mesh, res: &StepResult| {
+        probe(mesh, &res.fields[&Field::Displacement], [length, 0.5 * side, 0.5 * side]).expect("inside").1[0]
+    };
+    let bodies = one_body();
+    let mut errors = Vec::new();
+    for (nx, per_period) in [(10, 100.0), (20, 200.0), (40, 400.0)] {
+        let mesh = bar(nx);
+        let sets = sets_of(&mesh);
+        let held = vec![fix("root", "xmin", [true, true, true], 0.0)];
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+        // ν = 0: the solid is the one-dimensional bar exactly.
+        p.materials[0].props = vec![YOUNG, 0.0];
+        p.loads = vec![Load::Traction { faces: "xmax".into(), t: [traction, 0.0, 0.0] }];
+        let res = run_step(&p, &implicit_step(period / per_period, t_end, 0.0, (0.0, 0.0), None, 1_000_000)).unwrap();
+        let err = (tip_of(&mesh, &res) - series(t_end)).abs() / static_tip;
+        assert!(err <= 0.02, "nx = {nx}: {err}");
+        errors.push(err);
+    }
+    assert!(errors[1] < errors[0] && errors[2] < errors[1], "{errors:?}");
+
+    // Δt refinement on the coarsest mesh against a reference 64× finer than the finest step.
+    let mesh = bar(10);
+    let sets = sets_of(&mesh);
+    let held = vec![fix("root", "xmin", [true, true, true], 0.0)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.materials[0].props = vec![YOUNG, 0.0];
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [traction, 0.0, 0.0] }];
+    let run = |per_period: f64| {
+        let res = run_step(&p, &implicit_step(period / per_period, t_end, 0.0, (0.0, 0.0), None, 1_000_000)).unwrap();
+        (res.scalars["dt"], tip_of(&mesh, &res))
+    };
+    let (_, reference) = run(25_600.0);
+    let (mut h, mut e) = (Vec::new(), Vec::new());
+    for per_period in [400.0, 800.0, 1600.0] {
+        let (dt, tip) = run(per_period);
+        h.push(dt);
+        e.push((tip - reference).abs());
+    }
+    let rate = observed_rate(&h, &e);
+    assert!(rate > 1.9 && rate < 2.3, "observed rate {rate} from {e:?}");
+}
+
+/// Benchmark F2c through the implicit procedure: rigid free fall from an initial velocity is
+/// `u = v₀ t + g t²/2` exactly, because the α-method is exact for a constant acceleration.
+#[test]
+fn implicit_free_fall_from_an_initial_velocity_is_exact() {
+    let velocity = [0.3, -0.2, 0.1];
+    let gravity = [0.0, 0.0, -9.81];
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.loads = vec![Load::Gravity { g: gravity }];
+    let t_end = 1e-2;
+    let kick = Some(velocity.repeat(mesh.n_nodes()));
+    let res = run_step(&p, &implicit_step(1e-3, t_end, -0.05, (0.0, 0.0), kick, 3)).expect("a free body integrates");
+    let h = res.history.as_ref().unwrap();
+    assert_eq!(h.times.len(), 5);
+    assert_eq!(*h.times.last().unwrap(), t_end);
+    for (&time, values) in h.times.iter().zip(&h.values) {
+        for (i, displacement) in values.iter().enumerate() {
+            let c = i % 3;
+            let want = velocity[c] * time + 0.5 * gravity[c] * time * time;
+            assert!((displacement - want).abs() <= 1e-10 * t_end, "u = {displacement} vs {want} at {time}");
+        }
+    }
+    // Nothing holds it, so nothing reacts, and the d'Alembert total is zero.
+    assert!(res.reactions.is_empty());
+    for axis in ["x", "y", "z"] {
+        assert!(res.scalars[&format!("applied_total_{axis}")].abs() <= 1e-9 * res.scalars["load_total_z"].abs());
+    }
+}
+
+/// A prescribed displacement is applied at `t = 0` and held: the free DOFs oscillate about the
+/// static answer while the held ones never move, and a thermal load enters through `f_thermal`.
+#[test]
+fn a_prescribed_displacement_is_held_still_through_an_implicit_step() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let pull = 1e-4;
+    let held = vec![fix("root", "xmin", [true, true, true], 0.0), fix("pull", "xmax", [true, false, false], pull)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.temperature = Some((vec![20.0; mesh.n_nodes()], 0.0));
+    let c = (YOUNG / DENSITY).sqrt();
+    let res = run_step(&p, &implicit_step(0.05 / c, 4.0 / c, 0.0, (0.0, 0.0), None, 1)).expect("solves");
+    let h = res.history.as_ref().unwrap();
+    let mid: Vec<usize> = (0..mesh.n_nodes()).filter(|&n| (mesh.node(n as u32)[0] - 0.5).abs() < 1e-9).collect();
+    let fixed = resolve(&p).unwrap().fixed;
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for frame in &h.values {
+        for &(dof, value) in &fixed {
+            assert_eq!(frame[dof as usize], value);
+        }
+        let x = frame[mid[0] * 3];
+        lo = lo.min(x);
+        hi = hi.max(x);
+    }
+    // The middle of the bar overshoots and undershoots the static half-pull (plus the free
+    // thermal expansion, which the clamped root turns into a wave of its own).
+    assert!(lo < 0.5 * pull && hi > 0.5 * pull, "{lo} .. {hi} around {}", 0.5 * pull);
+    let root = reaction_of(&res, "root");
+    assert!(root[0].is_finite() && root[0] != 0.0);
+}
+
+/// Every refusal an implicit Step can make is a structured error naming its field.
+#[test]
+fn implicit_dynamics_refuses_what_it_cannot_integrate() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let root = || vec![fix("root", "xmin", [true, true, true], 0.0)];
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root());
+    let (dt, t_end) = (1e-5, 3e-5);
+    let cases: [(Step, ErrorCode, &str); 4] = [
+        (implicit_step(dt, t_end, 0.5, (0.0, 0.0), None, 1), ErrorCode::Schema, "alpha"),
+        (implicit_step(dt, t_end, 0.0, (-1.0, 0.0), None, 1), ErrorCode::Schema, "rayleighAlpha"),
+        (implicit_step(dt, t_end, 0.0, (0.0, f64::NAN), None, 1), ErrorCode::Schema, "rayleighBeta"),
+        (implicit_step(0.0, t_end, 0.0, (0.0, 0.0), None, 1), ErrorCode::Schema, "dt"),
+    ];
+    for (step, code, field) in cases {
+        let e = run_step(&p, &step).expect_err(field);
+        assert_eq!((e.code, e.where_.as_deref()), (code, Some(field)), "{}", e.cause);
+    }
+    // A moving prescribed displacement is base motion, which the constant coupling cannot carry.
+    let mut moving = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0), fix("pull", "xmax", [true, false, false], 1e-4)],
+    );
+    let mut ramped = implicit_step(dt, t_end, 0.0, (0.0, 0.0), None, 1);
+    let Step::Implicit { amplitude, .. } = &mut ramped else { panic!() };
+    *amplitude = Some(procedure::Amplitude::Sine { amplitude: 1.0, period: 1e-3 });
+    let e = run_step(&moving, &ramped).expect_err("an amplitude on a prescribed displacement");
+    assert_eq!((e.code, e.where_.as_deref()), (ErrorCode::Unsupported, Some("amplitude")));
+    // The same amplitude over a zero-valued support is fine, and scales the loads.
+    moving.constraints = root();
+    moving.loads = vec![Load::Traction { faces: "xmax".into(), t: [1e6, 0.0, 0.0] }];
+    let res = run_step(&moving, &ramped).expect("an amplitude on the loads");
+    assert!((res.scalars["load_total_x"] - 0.01 * 1e6 * libm::sin(2.0 * PI * t_end / 1e-3)).abs() <= 1e-6);
+    // A NaN in the load table after t = 0 poisons the first solve, never the history.
+    let Step::Implicit { amplitude, .. } = &mut ramped else { panic!() };
+    *amplitude = Some(procedure::Amplitude::Table { t: vec![0.0, 1.0], value: vec![1.0, f64::NAN] });
+    let e = run_step(&moving, &ramped).expect_err("a NaN load");
+    assert_eq!(e.code, ErrorCode::SolveStalled);
+    // A NaN initial velocity poisons the initial-acceleration solve.
+    let kick = implicit_step(dt, t_end, 0.0, (0.0, 0.0), Some(vec![f64::NAN; mesh.n_nodes() * 3]), 1);
+    assert_eq!(run_step(&p, &kick).expect_err("a NaN velocity").code, ErrorCode::SolveStalled);
+    // A tie.
+    let two = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let two_sets = sets_of(&two);
+    let names = two_bodies();
+    let mut tied = problem(&two, &two_sets, &names, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    tied.couplings = vec![bond(1e-9)];
+    let e = run_step(&tied, &implicit_step(dt, t_end, 0.0, (0.0, 0.0), None, 1)).expect_err("a tie");
+    assert_eq!((e.code, e.where_.as_deref()), (ErrorCode::Unsupported, Some("step.procedure")));
+    assert!(e.cause.contains("'weld' ties two parts"), "{}", e.cause);
+    // Every DOF held.
+    let clamped = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("all", "all", [true, true, true], 0.0)],
+    );
+    let e = run_step(&clamped, &implicit_step(dt, t_end, 0.0, (0.0, 0.0), None, 1)).expect_err("nothing free");
+    assert_eq!((e.code, e.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("constraints")));
+    // No density: the effective stiffness still factorises, the mass does not.
+    let mut massless = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root());
+    massless.materials[0].rho = 0.0;
+    let e = run_step(&massless, &implicit_step(dt, t_end, 0.0, (0.0, 0.0), None, 1)).expect_err("no mass");
+    assert_eq!((e.code, e.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("materials")));
+    assert!(e.cause.contains("singular"), "{}", e.cause);
+    // A negative modulus makes `K_eff` indefinite once the increment is long enough for the
+    // stiffness to outweigh the mass.
+    let mut soft = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root());
+    soft.materials[0].props = vec![-YOUNG, POISSON];
+    let e = run_step(&soft, &implicit_step(1.0, 1.0, 0.0, (0.0, 0.0), None, 1)).expect_err("indefinite");
+    assert_eq!(e.code, ErrorCode::SolveNotPositiveDefinite);
+    // A law the checks cannot see fails inside the assembly.
+    soft.materials[0].props = vec![YOUNG];
+    let e = run_step(&soft, &implicit_step(dt, t_end, 0.0, (0.0, 0.0), None, 1)).expect_err("one prop");
+    assert_eq!(e.code, ErrorCode::MaterialProps);
+    // A Body without a material is caught by the well-posedness checks first.
+    let mut bare = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root());
+    bare.material_of_block = vec![None];
+    let e = run_step(&bare, &implicit_step(dt, t_end, 0.0, (0.0, 0.0), None, 1)).expect_err("no material");
+    assert_eq!(e.code, ErrorCode::ModelNoMaterial);
+}
+
+/// The implicit Result is bit-identical at one and many threads: fields, scalars, reactions
+/// and every retained frame.
+#[test]
+fn an_implicit_step_is_bit_identical_at_one_and_many_threads() {
+    let many = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(2);
+    let mesh = Structured { kind: ElementKind::Hex8, n: [8, 2, 2] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let held = vec![fix("root", "xmin", [true, true, true], 0.0)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::IncompatibleModes, held);
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let step = implicit_step(2e-4, 2e-3, -0.05, (10.0, 1e-5), None, 2);
+    let run = |threads: usize| {
+        pollster::block_on(procedure::run(&p, &step, &Pool::new(threads), None, None, &mut nop)).expect("solves")
+    };
+    let (one, par) = (run(1), run(many));
+    assert_eq!(one.fields.keys().collect::<Vec<_>>(), par.fields.keys().collect::<Vec<_>>());
+    for (name, a) in &one.fields {
+        let differing = a.data.iter().zip(&par.fields[name].data).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+        assert_eq!(differing, 0, "{name:?}: {differing} values differ at {many} threads");
+    }
+    for (k, v) in &one.scalars {
+        assert_eq!(v.to_bits(), par.scalars[k].to_bits(), "scalar {k}");
+    }
+    assert_eq!(one.reactions, par.reactions);
+    let (a, b) = (one.history.as_ref().unwrap(), par.history.as_ref().unwrap());
+    assert_eq!(a.times, b.times);
+    for (i, (x, y)) in a.values.iter().zip(&b.values).enumerate() {
+        assert!(x.iter().zip(y).all(|(x, y)| x.to_bits() == y.to_bits()), "frame {i}");
+    }
 }
 
 /// A nodal vector field of `dpn` components rotated by `r` (a 2D field lies in the xy plane).

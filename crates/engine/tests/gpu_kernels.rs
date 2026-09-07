@@ -53,6 +53,8 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
         sets: &sets,
         body_of_block: &bodies,
         material_of_block: vec![Some(0); mesh.blocks.len()],
+        section_of_block: vec![None; mesh.blocks.len()],
+        sections: Vec::new(),
         materials: vec![Material {
             law: builtin_law("linear-elastic").expect("built in"),
             props: vec![210e9, 0.3],
@@ -468,6 +470,8 @@ fn tied_cantilever() -> (Csr, Vec<f64>) {
         sets: &sets,
         body_of_block: &bodies,
         material_of_block: vec![Some(0); mesh.blocks.len()],
+        section_of_block: vec![None; mesh.blocks.len()],
+        sections: Vec::new(),
         materials: vec![Material {
             law: builtin_law("linear-elastic").expect("built in"),
             props: vec![210e9, 0.3],
