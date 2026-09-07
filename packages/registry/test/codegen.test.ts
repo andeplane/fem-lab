@@ -34,7 +34,7 @@ describe('codegen', () => {
     const merged = mergeSchema(schema) as { $defs: Record<string, unknown>; required: string[] };
     expect(merged.required).toEqual(['commands', 'queries', 'queryResult', 'ack', 'error', 'modelFile']);
     for (const t of ['Command', 'Query', 'QueryResult', 'Ack', 'EngineError', 'ModelFile', 'Quantity', 'ModelSummary']) expect(merged.$defs).toHaveProperty(t);
-    expect(Object.keys(merged.$defs).filter((k) => /^[A-Z]\w+_[A-Z]/.test(k)).sort()).toEqual(['ModelFile_Command', 'ModelFile_FacePredicate', 'ModelFile_RegionPredicate']);
+    expect(Object.keys(merged.$defs).filter((k) => /^[A-Z]\w+_[A-Z]/.test(k)).sort()).toEqual(['ModelFile_Command', 'ModelFile_FacePredicate', 'ModelFile_Orientation', 'ModelFile_Orthotropic', 'ModelFile_RegionPredicate']);
     expect(merged.$defs['JournalEntry']).toMatchObject({ properties: { cmd: { $ref: '#/$defs/ModelFile_Command' } } });
     expect(Object.keys(merged.$defs).filter((k) => k === 'Error')).toEqual([]);
     // a table's own $defs entry named like the table's type is a real collision

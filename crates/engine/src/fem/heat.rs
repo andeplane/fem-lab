@@ -127,20 +127,25 @@ fn kinematics(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Result<Kin, 
     Ok(kin)
 }
 
-/// `∫ k ∇Nᵀ ∇N dV` into `out` (`n_nodes × n_nodes`, row-major); returns the smallest
+/// `∫ ∇Nᵀ K ∇N dV` into `out` (`n_nodes × n_nodes`, row-major); returns the smallest
 /// Gauss-point `det J`, which the well-posedness report carries just as the stiffness does.
+///
+/// `K = Rᵀ diag(k1, k2, k3) R` is the conductivity in global coordinates, formed once per
+/// element; an isotropic material makes it `k I` and the sum collapses to `k ∇N_a · ∇N_b`.
 pub fn conductivity(kind: ElementKind, c: &ElementCtx<'_>, out: &mut [f64]) -> Result<f64, Error> {
     let kin = kinematics(kind, c, rule_of(kind))?;
     let nn = kin.n_nodes;
     let dim = kind.dim();
+    let k = c.material.conductivity_tensor();
     out.fill(0.0);
     for gp in 0..kin.n_gp {
-        let wk = kin.w[gp] * c.material.k;
+        let w = kin.w[gp];
         for a in 0..nn {
             let ga = kin.g[gp * nn + a];
             for b in 0..nn {
                 let gb = kin.g[gp * nn + b];
-                out[a * nn + b] += wk * (0..dim).map(|i| ga[i] * gb[i]).sum::<f64>();
+                let q: f64 = (0..dim).map(|i| ga[i] * (0..dim).map(|j| k[i][j] * gb[j]).sum::<f64>()).sum();
+                out[a * nn + b] += w * q;
             }
         }
     }
