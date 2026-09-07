@@ -463,7 +463,7 @@ case actually gates, via reaction balance and Result freshness.
 at r = 0.15 m (mid-wall), not the inner surface r = a: the free tet mesher warps a node onto the
 analytic surface only where a background-lattice edge actually crosses it, so a point exactly at
 r = a can fall just outside a coarser mesh (`Error::NotFound`, "the point is outside the mesh") —
-a direct consequence of the chamfering ADR 0020 documents, not a solver bug. At mid-wall,
+a direct consequence of the chamfering ADR 0021 documents, not a solver bug. At mid-wall,
 tet10 gives σθθ = 40.08 MPa, σrr = −19.98 MPa, u_r = 3.881e-5 m at h = 0.02 m (28 %, 28 %, 9 %
 against the closed form's 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m) and 48.24 MPa, −13.18 MPa,
 3.703e-5 m at h = 0.012 m (13 %, 15 %, 13 %, five minutes to solve) — real convergence, but an

@@ -19,7 +19,7 @@
 //!
 //! A sharp CSG edge falling between two lattice crossings is **chamfered by up to one element
 //! size**: the mesher learns the surface only where a lattice edge crosses it. Prismatic
-//! geometry belongs in the mapped or sweep mesher, which are exact. ADR 0020 has the reasoning.
+//! geometry belongs in the mapped or sweep mesher, which are exact. ADR 0021 has the reasoning.
 //!
 //! ponytail: one single-threaded sweep. The sign pass and the cut pass are embarrassingly
 //! parallel — route them through `crates/engine/src/par.rs` if a profile ever shows them.
