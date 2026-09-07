@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('@cpu public example.open and gallery alias replay the same Journal and preserve dirty failures', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   const dirty = page.getByRole('img', { name: 'Unsaved changes' });
   const name = page.getByRole('textbox', { name: 'Model name', exact: true });
   const original = await page.evaluate(async () => {
@@ -37,9 +37,10 @@ test('@cpu public example.open and gallery alias replay the same Journal and pre
     catch (error) { return String(error); }
   });
   expect(error).not.toBeNull();
-  await expect(name).toHaveValue('partial example');
-  await expect(dirty).toBeVisible();
-  await expect(page.locator('.theory-panel')).toHaveCount(0);
+  await expect(name).toHaveValue('cantilever');
+  await expect(dirty).toBeHidden();
+  expect((await page.evaluate(() => window.fem.query.journal())).entries).toEqual(expected.journal.entries);
+  await expect(page.locator('.theory-panel')).toBeVisible();
   await page.unroute('**/examples/cantilever.json');
   await page.evaluate(() => window.fem.dispatch({ cmd: 'example.open', name: 'cantilever' }));
   await expect(dirty).toBeHidden();

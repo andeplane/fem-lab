@@ -232,9 +232,13 @@ impl SessionEngine {
         serde_json::to_string(&reply).map_err(schema_err)
     }
 
-    pub fn surface(&mut self, context_json: String) -> Result<JsValue, JsValue> {
+    pub fn surface(&mut self, context_json: String, result_id: Option<String>) -> Result<JsValue, JsValue> {
         let context = serde_json::from_str(&context_json).map_err(schema_err)?;
-        let (stamp, view) = self.inner.render_view(&context).map_err(|e| throw(&e))?;
+        let (stamp, view) = match result_id {
+            Some(id) => self.inner.render_result(&context, &id),
+            None => self.inner.render_view(&context),
+        }
+        .map_err(|e| throw(&e))?;
         let out = render_surface(view)?;
         js_sys::Reflect::set(
             &out,

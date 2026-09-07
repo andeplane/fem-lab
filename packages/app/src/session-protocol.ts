@@ -13,7 +13,8 @@ export type SessionRequest = { id: number } & (
   | { op: 'cancelRun' | 'forkRun'; context: ExecutionContext }
   | { op: 'query'; context: ExecutionContext; query: Query }
   | { op: 'dispatch'; context: ExecutionContext; expectedVersion: StateVersion; command: Command }
-  | { op: 'snapshot' | 'surface'; context: ExecutionContext }
+  | { op: 'snapshot'; context: ExecutionContext }
+  | { op: 'surface'; context: ExecutionContext; resultId?: string }
   | { op: 'gpuSelfTest'; context: ExecutionContext; n: number }
   | { op: 'reserve'; context: ExecutionContext; expectedVersion: StateVersion }
   | { op: 'abandon' | 'retire'; ticket: string }

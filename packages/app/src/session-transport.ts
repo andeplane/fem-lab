@@ -158,11 +158,11 @@ export class SessionTransport implements EngineTransport {
       return value as unknown as QueryResult;
     });
   }
-  surface(): Promise<AppSurface> {
-    return this.ordered(async () => this.accept(await this.channel.request({ op: 'surface', context: this.context() })) as AppSurface);
+  surface(resultId?: string): Promise<AppSurface> {
+    return this.ordered(async () => this.accept(await this.channel.request({ op: 'surface', context: this.context(), ...(resultId === undefined ? {} : { resultId }) })) as AppSurface);
   }
-  async field(step: string, field: Field, component?: number): Promise<FieldData> {
-    const result = await this.query({ query: 'query.field', step, field }) as ResultField;
+  async field(step: string, field: Field, component?: number, resultId?: string): Promise<FieldData> {
+    const result = await this.query({ query: 'query.field', step, field, ...(resultId === undefined ? {} : { resultId }) }) as ResultField;
     const values = new Float32Array(component === undefined ? result.values : result.values.filter((_, index) => index % result.components === component));
     let min = values[0] ?? 0; let max = min;
     for (const value of values) { min = Math.min(min, value); max = Math.max(max, value); }

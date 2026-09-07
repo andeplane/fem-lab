@@ -11,10 +11,10 @@ export function useStore(store: Store): UiState {
   const [, redraw] = useReducer((revision: number) => revision + 1, 0);
   const snapshot = store.state;
   useLayoutEffect(() => {
-    const unsubscribe = store.subscribe(redraw);
+    const unsubscribe = store.subscribe(() => redraw(undefined));
     // Catch a publication between render and subscription. A different Store is read on
     // its very first render; no state value from the previous activation is retained.
-    if (store.state !== snapshot) redraw();
+    if (store.state !== snapshot) redraw(undefined);
     return unsubscribe;
   }, [store]);
   return snapshot;

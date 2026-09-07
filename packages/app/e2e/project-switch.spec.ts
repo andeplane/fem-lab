@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('@cpu overlapping project open and new leave only the new empty project', async ({ page }) => {
+test('@cpu overlapping replacements stay atomic and the next new project starts empty', async ({ page }) => {
   await page.goto('./');
   await page.waitForFunction(() => typeof window.fem !== 'undefined');
   const result = await page.evaluate(async () => {
@@ -8,18 +8,27 @@ test('@cpu overlapping project open and new leave only the new empty project', a
     await window.fem.geometry.addBox({ name: 'brick_shaft', size: ['1 m', '1 m', '1 m'] });
     await window.fem.geometry.remove({ name: 'brick_shaft' });
     const saved = await window.fem.dispatch({ cmd: 'project.save' }) as { id: string };
+    const previous = await window.fem.query.journal();
     const opening = window.fem.registry.dispatch({ cmd: 'project.open', id: saved.id });
     const deleting = window.fem.dispatch({ cmd: 'project.delete', id: saved.id });
     const creating = window.fem.dispatch({ cmd: 'project.new', name: 'empty-after-shaft' });
     const outcomes = await Promise.allSettled([opening, deleting, creating]);
+    const interim = await window.fem.query.journal();
+    // Conflicting requests are rejected, never rebound. A subsequent explicit activation
+    // is admitted only after all three original requests have settled.
+    await window.fem.dispatch({ cmd: 'project.new', name: 'empty-after-shaft' });
     return {
-      outcomes: outcomes.map((outcome) => outcome.status),
+      previous, interim,
+      outcomes: outcomes.map((outcome) => outcome.status === 'fulfilled' ? 'fulfilled' : (outcome.reason as { code: string }).code),
       model: await window.fem.query.model(),
       journal: await window.fem.query.journal(),
       project: await window.fem.registry.query({ query: 'query.project' }),
     };
   });
-  expect(result.outcomes).toEqual(['fulfilled', 'fulfilled', 'fulfilled']);
+  expect(result.outcomes).toContain('fulfilled');
+  for (const outcome of result.outcomes) expect(['fulfilled', 'session.conflict', 'session.expired', 'session.transitioning', 'not-found']).toContain(outcome);
+  expect([result.previous.entries.map(entry => entry.cmd), [{ cmd: 'model.new', name: 'empty-after-shaft' }]])
+    .toContainEqual(result.interim.entries.map(entry => entry.cmd));
   expect(result.model).toMatchObject({ name: 'empty-after-shaft', bodies: [] });
   expect(result.journal.entries.map((entry) => entry.cmd)).toEqual([{ cmd: 'model.new', name: 'empty-after-shaft' }]);
   expect(result.project).toMatchObject({ name: 'empty-after-shaft' });

@@ -2,7 +2,6 @@ import { expect, test, type Page } from '@playwright/test';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 async function canvasIsSized(page: Page): Promise<void> {
@@ -131,12 +130,12 @@ test.describe('@cpu panel resizing', () => {
         expect(Math.round(propertiesPanel.width)).toBe(240);
         // A click without movement must not turn a clamped preferred width into a Command.
         await page.evaluate(() => {
-          const registry = window.fem.registry;
-          const original = registry.dispatch.bind(registry);
+          const registry = Object.getPrototypeOf(window.fem.registry) as typeof window.fem.registry;
+          const original = registry.dispatch;
           (window as unknown as { resizeCalls: unknown[] }).resizeCalls = [];
-          registry.dispatch = async command => {
+          registry.dispatch = async function (command) {
             if (command.cmd === 'panel.resize') (window as unknown as { resizeCalls: unknown[] }).resizeCalls.push(command);
-            return original(command);
+            return original.call(this, command);
           };
         });
         await treeHandle.click();

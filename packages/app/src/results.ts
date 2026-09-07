@@ -183,7 +183,7 @@ export class ResultsView {
     if (epoch !== this.displayEpoch) return;
     const fieldKey = available(this.store.state.fieldKey, result, yieldStress !== null);
     this.store.set({ yieldStress, ...(fieldKey === this.store.state.fieldKey ? {} : { fieldKey }) });
-    const key = `${result.step}|${fieldKey}|${String(this.store.state.clamp)}|${this.store.state.journal?.revision ?? 0}`;
+    const key = `${result.resultId}|${result.step}|${fieldKey}|${String(this.store.state.clamp)}|${this.store.state.journal?.revision ?? 0}`;
     if (!force && key === this.loadedFor) return;
     this.loadedFor = key;
     await this.load(result);
@@ -212,16 +212,19 @@ export class ResultsView {
       return;
     }
     const choice = choiceOf(this.store.state.fieldKey);
-    const scalar = await this.transport.field(result.step, choice.field as never, choice.component ?? undefined);
+    const surface = await this.transport.surface(result.resultId);
+    const scalar = await this.transport.field(result.step, choice.field as never, choice.component ?? undefined, result.resultId);
     const { values, range, unit } = await this.contour(choice, scalar.values);
 
     // A mode shape is its own deformation; every other field rides on the Step's displacement,
     // which a heat Step does not have — there the mesh simply stays where it is.
     const moves = choice.mode !== undefined || result.extremes.some((e) => e.field === 'displacement');
-    const displacement = !moves ? null : choice.mode === undefined ? (await this.transport.field(result.step, 'displacement')).values : scalar.values;
+    const displacement = !moves ? null : choice.mode === undefined ? (await this.transport.field(result.step, 'displacement', undefined, result.resultId)).values : scalar.values;
     const lengthFactor = (await this.conversion('displacement')).scale;
     if (epoch !== this.displayEpoch) return;
     this.displacement = displacement;
+    v.setSurface({ ...surface, source: 'mesh' });
+    v.setDim(result.stale);
     v.setField(values, range);
     this.store.set({ legend: { min: range[0], max: range[1], unit }, lengthFactor });
     // A mode's amplitude is arbitrary, so it opens at a visible one rather than at ×1.

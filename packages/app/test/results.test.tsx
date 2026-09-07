@@ -246,13 +246,14 @@ describe('the Export dialog', () => {
 
 /** A viewer stub: the four calls `ResultsView` makes, recorded. */
 function fakeViewer() {
-  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), animate: vi.fn(), autoScale: vi.fn(() => 120) };
+  return { hasSurface: true, setSurface: vi.fn(), setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), animate: vi.fn(), autoScale: vi.fn(() => 120) };
 }
 
 function harness(result: ResultSummary | null = RESULT) {
   const store = new Store({ ...initialState, model: MODEL });
   const viewer = { current: fakeViewer() };
   const transport = {
+    surface: vi.fn(async () => ({})),
     query: vi.fn(async (q: { query: string; quantity?: { value: number } }) => {
       if (q.query === 'query.convert') return { value: q.quantity!.value * 1000, unit: 'mm' };
       if (result) return result;
@@ -280,7 +281,7 @@ describe('ResultsView', () => {
     const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
     await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
     expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
-    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined);
+    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined, RESULT.resultId);
     expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 0.5, 0.75);
     expect(store.state).toMatchObject({ playing: false, phase: 0.75, animationSpeed: 0.5, fieldKey: 'mode:2', viewMode: 'results' });
     await results.animate({ step: 'modes', mode: 2, playing: true, speed: 2 });
@@ -303,7 +304,7 @@ describe('ResultsView', () => {
     });
 
     const play = results.animate({ step: 'modes', mode: 1, playing: true });
-    await vi.waitFor(() => expect(transport.field).toHaveBeenCalledWith('modes', 'mode:1', undefined));
+    await vi.waitFor(() => expect(transport.field).toHaveBeenCalledWith('modes', 'mode:1', undefined, RESULT.resultId));
     await results.animate({ step: 'modes', mode: 1, playing: false });
     finishLoad();
     await play;

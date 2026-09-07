@@ -123,9 +123,9 @@ export function makeHostContext(
   captureEnvironment: AnimationCaptureEnvironment = browserAnimationCaptureEnvironment(),
   _refresh: () => Promise<void> = async () => undefined,
   session: SessionHostServices = unboundSession,
+  capture: AnimationCapture = new AnimationCapture(captureEnvironment),
 ): HostContext {
   const own = session.projects;
-  const capture = new AnimationCapture(captureEnvironment);
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
     return viewer.current;

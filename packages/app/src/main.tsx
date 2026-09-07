@@ -18,6 +18,7 @@ import { ResultsView } from './results';
 import { ScriptHost } from './script-host';
 import { readShareFragment } from './share';
 import { Store } from './store';
+import { AnimationCapture, browserAnimationCaptureEnvironment } from './animation-capture';
 import { App } from './ui/App';
 import { SessionWorkspace } from './session-workspace';
 import { SessionTransport, sameSession } from './session-transport';
@@ -39,6 +40,7 @@ const expired = (): FemError => new FemError('session.expired', 'this action bel
 
 class Bundle {
   readonly store = new Store();
+  readonly capture = new AnimationCapture(browserAnimationCaptureEnvironment());
   readonly viewer: ViewerRef = { current: null };
   readonly validation = new ScriptHost(() => new Worker(new URL('./script.worker.ts', import.meta.url), { type: 'module' }), async () => undefined, async () => undefined,
     browserScriptValidator(() => new Worker(new URL('./script-validation.worker.ts', import.meta.url), { type: 'module' })));
@@ -54,7 +56,7 @@ class Bundle {
   private saving: Promise<unknown> = Promise.resolve();
   private refreshing: Promise<void> = Promise.resolve();
   private autosave = localStorage.getItem('femlab.autosave') !== 'off';
-  private version = '0';
+  private version: string | null = null;
   disposed = false;
   constructor(readonly transport: SessionTransport) {
     this.store.setJournalDiffQuery(async base => await transport.query({ query: 'query.journalDiff', base }) as JournalDiff);
@@ -67,21 +69,23 @@ class Bundle {
     const capabilities = await this.transport.query({ query: 'query.capabilities' }) as Capabilities;
     this.store.set({ hostCaps: host, engineCaps: capabilities, ready: true, notes: capabilityNotes(host, capabilities) });
     this.publishSnapshot(snapshot);
+    if (snapshot.results.records.length) this.store.set({ viewMode: 'results', tab: 'results' });
     if (source) {
       const target = source.project ?? { meta: nextMeta(snapshot.model.name), expected: null };
       this.binding = await repository.claim(target.meta, snapshot, target.expected);
       this.savedMeta = target.meta;
-      this.store.markOpened(snapshot.file.journal);
+      if (source.kind !== 'commands' || source.commands.length !== 1 || source.commands[0]?.cmd !== 'model.new') this.store.markOpened(snapshot.file.journal);
     }
     if (source?.benchmark) this.store.set({ benchmark: { ...source.benchmark, ...benchmarkProvenance(snapshot.model, snapshot.journal, snapshot.model.revision) } });
     await this.primeProjects();
   }
-  private publishSnapshot(snapshot: DocumentSnapshot): void {
+  private publishSnapshot(snapshot: DocumentSnapshot): boolean {
     if (this.disposed) throw expired();
     if (!sameSession(snapshot.stamp.session, this.transport.stamp.session)) throw expired();
-    if (BigInt(snapshot.stamp.stateVersion) < BigInt(this.version)) return;
+    if (this.version !== null && BigInt(snapshot.stamp.stateVersion) <= BigInt(this.version)) return false;
     this.version = snapshot.stamp.stateVersion;
     this.store.set({ model: snapshot.model, journal: snapshot.journal, script: snapshot.script, objects: snapshot.objects.objects, revision: snapshot.model.revision });
+    return true;
   }
   refresh(): Promise<void> {
     const result = this.refreshing.then(() => this.refreshSnapshot());
@@ -91,11 +95,11 @@ class Bundle {
   private async refreshSnapshot(): Promise<void> {
     if (this.disposed) throw expired();
     const snapshot = await this.transport.snapshot();
-    this.publishSnapshot(snapshot);
-    await this.store.refreshJournalComparison();
+    if (this.publishSnapshot(snapshot)) await this.store.refreshJournalComparison();
     const surface = await this.transport.surface();
     if (this.disposed) throw expired();
     this.viewer.current?.setSurface(surface);
+    this.viewer.current?.setMode(this.store.state.viewMode);
     await this.results.refresh();
     if (this.disposed) throw expired();
     if (snapshot.file.journal.entries.length && !this.projectDeleted) {
@@ -179,6 +183,7 @@ class Bundle {
   fail(error: unknown): void { if (!this.disposed) this.store.fail(error); }
   dispose(): void {
     this.disposed = true;
+    this.capture.cancel();
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.results.invalidateTransient();
     this.validation.stop();
@@ -227,7 +232,7 @@ class Producer {
     const ctx = makeHostContext(bundle.store, transport, bundle.viewer, host, bundle.validation, bundle.results, undefined, undefined, undefined, () => bundle.refresh(), {
       projects: bundle.projectApi(transport), active: () => transport.assertActive(),
       replay: async (commands, benchmark) => { await transport.replaceWith({ kind: 'commands', commands: commands as Command[], ...(benchmark ? { benchmark } : {}) }); },
-    });
+    }, bundle.capture);
     ctx.chat.send = async text => {
       const child = new Producer(bundle, await transport.fork());
       try {
@@ -257,17 +262,21 @@ class Producer {
     const before = this.bundle; const native = this.native; const transport = this.transport;
     const definition = native.describe(command.cmd);
     if (before.disposed) throw expired();
-    if (definition.provider === 'host' && definition.execution !== 'control') await transport.assertActive();
+    if (definition.provider === 'host' && !['control', 'sessionView'].includes(definition.execution)) await transport.assertActive();
     before.store.set({ lastError: null });
     const long = command.cmd === 'solve.run' || command.cmd === 'study.converge';
     if (long) before.store.set({ solving: String(command['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     transport.onProgress(progress => { if (!before.disposed) before.store.set({ progress: { phase: progress.phase, fraction: progress.fraction ?? 0 } }); });
     let publication = before;
     try {
+      const versionBefore = transport.stamp.stateVersion;
+      const who = before.store.state.source;
       const ack = await native.dispatch(command);
       publication = this.bundle;
       const current = this.bundle;
-      if (definition.execution === 'modelWrite' || definition.execution === 'replacement') {
+      if (definition.execution === 'replacement' || (definition.execution === 'modelWrite' && transport.stamp.stateVersion !== versionBefore)) {
+        const seq = (ack as { seq?: number } | undefined)?.seq;
+        if (typeof seq === 'number' && seq >= 0) current.store.set({ journalWho: { ...current.store.state.journalWho, [seq]: { who, at: Date.now() } } });
         current.results.invalidateTransient();
         await current.refresh();
         await current.results.onAck(ack);
@@ -285,22 +294,45 @@ class Producer {
   }
 }
 
+let displayed: Bundle | undefined;
 const workspace = new SessionWorkspace<Bundle>({
   spawn: () => new Worker(new URL('./session.worker.ts', import.meta.url), { type: 'module' }),
   epoch: () => crypto.randomUUID(), engine: engineOptions,
   build: async (transport, snapshot, source) => { const bundle = new Bundle(await transport.fork()); try { await bundle.initialize(snapshot, source); } catch (error) { try { await bundle.abandon(); } finally { bundle.dispose(); } throw error; } bundles.set(transport.channel, bundle); return bundle; },
   publish: ({ resources: bundle }) => {
+    if (displayed && !bundle.store.state.result && bundle.store.state.viewMode !== 'results') bundle.store.set({ tab: displayed.store.state.tab });
+    if (displayed) for (const [panel, open] of Object.entries(displayed.store.state.panels)) {
+      if (panel === 'assistant' || panel.startsWith('assistant.') || panel === 'tutorial' || panel.startsWith('skill:')) bundle.store.togglePanel(panel, open);
+    }
+    displayed = bundle;
     const ui = new Producer(bundle, bundle.uiTransport);
     const dispatch: Registry['dispatch'] = async command => {
-      if (ui.registry.describe(command.cmd).execution === 'control') return ui.registry.dispatch(command);
+      if (['control', 'sessionView'].includes(ui.registry.describe(command.cmd).execution)) return ui.registry.dispatch(command);
       const producer = new Producer(bundle, await bundle.transport.fork());
       try { return await producer.registry.dispatch(command); }
       finally { await producer.transport.release().catch(() => undefined); }
     };
     // A console handle has its own producer. A UI activation never advances a retained one.
-    const consoleProducer = new Producer(bundle, bundle.consoleTransport);
-    const proxy = makeFemProxy(command => consoleProducer.registry.dispatch(command), query => consoleProducer.registry.query(query));
-    window.fem = new Proxy({} as Window['fem'], { get: (_target, key) => key === 'registry' ? consoleProducer.registry : key === 'dispatch' ? consoleProducer.registry.dispatch : key === 'gpuSelfTest' ? (n: number) => consoleProducer.transport.gpuSelfTest(n) : Reflect.get(proxy, key) });
+    let consoleProducer = new Producer(bundle, bundle.consoleTransport);
+    // A top-level console call is a new admission, just like a click. Its session is captured
+    // before the fork; a retained facade follows only a replacement it initiated itself.
+    const consoleDispatch: Registry['dispatch'] = async command => {
+      const owner = consoleProducer;
+      const operation = new Producer(owner.bundle, await owner.transport.fork());
+      try {
+        const ack = await operation.registry.dispatch(command);
+        if (operation.bundle !== owner.bundle) consoleProducer = operation;
+        return ack;
+      } finally { if (operation !== consoleProducer) await operation.transport.release().catch(() => undefined); }
+    };
+    const consoleRegistry = new Proxy(consoleProducer.registry, { get: (_target, key) => {
+      if (key === 'dispatch') return consoleDispatch;
+      const target = consoleProducer.registry;
+      const value = Reflect.get(target, key);
+      return typeof value === 'function' ? value.bind(target) : value;
+    } });
+    const proxy = makeFemProxy(consoleDispatch, query => consoleProducer.registry.query(query));
+    window.fem = new Proxy({} as Window['fem'], { get: (_target, key) => key === 'registry' ? consoleRegistry : key === 'dispatch' ? consoleDispatch : key === 'gpuSelfTest' ? (n: number) => consoleProducer.transport.gpuSelfTest(n) : Reflect.get(proxy, key) });
     bundle.store.dispatch = dispatch;
     if (!root.querySelector('.shell, .start-layout, .start')) root.textContent = '';
     render(<App sessionKey={bundle.transport.stamp.session.backendEpoch} store={bundle.store} dispatch={dispatch} query={query => ui.registry.query(query)} viewer={bundle.viewer} commands={ui.registry.list().commands} registry={ui.registry} />, root);
