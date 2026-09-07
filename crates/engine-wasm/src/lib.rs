@@ -475,8 +475,8 @@ impl SessionEngine {
 /// A replacement builder has exactly one state; failed preparation cannot leave a committable
 /// partial engine. Hosts must still abandon the owner's ticket in their failure/cancel cleanup.
 enum CandidateState {
-    Building(femlab_engine::replacement::Candidate),
-    Ready(femlab_engine::replacement::PreparedCandidate),
+    Building(Box<femlab_engine::replacement::Candidate>),
+    Ready(Box<femlab_engine::replacement::PreparedCandidate>),
     Consumed,
 }
 
@@ -487,7 +487,7 @@ pub struct PreparedEngine {
 impl PreparedEngine {
     fn take_building(&mut self) -> Result<femlab_engine::replacement::Candidate, JsValue> {
         match std::mem::replace(&mut self.state, CandidateState::Consumed) {
-            CandidateState::Building(candidate) => Ok(candidate),
+            CandidateState::Building(candidate) => Ok(*candidate),
             _ => Err(throw(&femlab_engine::Error::schema("candidate is no longer being prepared"))),
         }
     }
@@ -499,14 +499,14 @@ impl PreparedEngine {
         let ticket = serde_json::from_str(&ticket_json).map_err(schema_err)?;
         let (gpu, threads) = session_device(opts).await?;
         let candidate = femlab_engine::replacement::Candidate::new(ticket, gpu, Box::new(JsHost), threads);
-        Ok(Self { state: CandidateState::Building(candidate) })
+        Ok(Self { state: CandidateState::Building(Box::new(candidate)) })
     }
 
     pub async fn commands(&mut self, commands_json: String) -> Result<(), JsValue> {
         let candidate = self.take_building()?;
         let commands = serde_json::from_str(&commands_json).map_err(schema_err)?;
         let prepared = candidate.commands(commands, &mut |_| true).await.map_err(|e| throw(&e))?;
-        self.state = CandidateState::Building(prepared);
+        self.state = CandidateState::Building(Box::new(prepared));
         Ok(())
     }
 
@@ -514,7 +514,7 @@ impl PreparedEngine {
         let candidate = self.take_building()?;
         let entries = serde_json::from_str(&entries_json).map_err(schema_err)?;
         let prepared = candidate.journal(entries, skip_solves).await.map_err(|e| throw(&e))?;
-        self.state = CandidateState::Building(prepared);
+        self.state = CandidateState::Building(Box::new(prepared));
         Ok(())
     }
 
@@ -522,14 +522,14 @@ impl PreparedEngine {
         let candidate = self.take_building()?;
         let file = serde_json::from_str(&file_json).map_err(schema_err)?;
         let prepared = candidate.file(file).await.map_err(|e| throw(&e))?;
-        self.state = CandidateState::Building(prepared);
+        self.state = CandidateState::Building(Box::new(prepared));
         Ok(())
     }
 
     pub fn finish(&mut self) -> Result<String, JsValue> {
         let ready = self.take_building()?.finish().map_err(|e| throw(&e))?;
         let json = serde_json::to_string(ready.snapshot()).map_err(schema_err)?;
-        self.state = CandidateState::Ready(ready);
+        self.state = CandidateState::Ready(Box::new(ready));
         Ok(json)
     }
 }
@@ -553,7 +553,7 @@ impl SessionEngine {
         let CandidateState::Ready(prepared) = candidate.state else {
             return Err(throw(&femlab_engine::Error::schema("candidate has not finished validation")));
         };
-        let snapshot = self.inner.commit_replacement(prepared).map_err(|e| throw(&e))?;
+        let snapshot = self.inner.commit_replacement(*prepared).map_err(|e| throw(&e))?;
         serde_json::to_string(&snapshot).map_err(schema_err)
     }
 }
