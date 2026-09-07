@@ -321,9 +321,12 @@ impl Newton<'_> {
             let internal = norm_inf(&a.f_int);
             // The residual is measured on the *reduced* system: what a tie carries at a slave
             // DOF is a constraint force, not an out-of-balance, exactly as a support reaction
-            // at a fixed DOF is not one.
-            let (kt, rt) = mpc::transform(&a.k, &r, self.mpc);
-            let red = assembly::reduce(&kt, &rt, self.rc_zero, &self.mpc.slaves);
+            // at a fixed DOF is not one. `transform` copies the whole operator, and a Newton
+            // Step would pay for that once per iteration rather than once per Step, so a Model
+            // with no ties goes straight to `reduce`.
+            let tied = (!self.mpc.is_empty()).then(|| mpc::transform(&a.k, &r, self.mpc));
+            let (kt, rt) = tied.as_ref().map_or((&a.k, r.as_slice()), |(k, f)| (k, f.as_slice()));
+            let red = assembly::reduce(kt, rt, self.rc_zero, &self.mpc.slaves);
             residual = norm_inf(&red.f_f);
             *scale = scale.max(external).max(internal);
             let increment: Vec<f64> = u.iter().zip(u_conv).map(|(a, b)| a - b).collect();
