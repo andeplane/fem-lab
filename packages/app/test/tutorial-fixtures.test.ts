@@ -32,9 +32,9 @@ describe('tutorials/*.json', () => {
   const files = readdirSync(tutorialsDir).filter((f) => f.endsWith('.json'));
 
   it('bundles the four built-ins the PLAN promises plus one per procedure', () => {
-    expect(files.length).toBeGreaterThanOrEqual(9);
+    expect(files.length).toBeGreaterThanOrEqual(11);
     expect(TUTORIALS.map((t) => t.id).sort()).toEqual(
-      ['cantilever', 'free-free-modal', 'heat-conduction', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'transient-heat'].sort(),
+      ['cantilever', 'free-free-modal', 'heat-conduction', 'journal-as-program', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'transient-heat'].sort(),
     );
     // every file in the folder is registered: adding one and forgetting the import fails here
     expect(files.map((f) => path.basename(f, '.json')).sort()).toEqual(TUTORIALS.map((t) => t.id).sort());
