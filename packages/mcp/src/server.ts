@@ -138,7 +138,7 @@ export function createRegistry(deps: ServerDeps): Registry {
   // The public registry can describe tools without a lease. Every invocation must acquire
   // one, and nested script calls use the private registry bound to that same request.
   const unavailable = (): never => { throw new FemError('session.expired', 'no request lease'); };
-  const registry = scopedRegistry({ ...deps, engine: { dispatch: unavailable, query: unavailable, modelFile: unavailable, release: async () => undefined } });
+  const registry = scopedRegistry({ ...deps, engine: { dispatch: unavailable, query: unavailable, modelFile: unavailable, release: unavailable } });
   const request = async <T>(run: (scoped: Registry) => Promise<T>): Promise<T> => {
     const engine = await deps.engine.acquire();
     try { return await run(scopedRegistry({ ...deps, engine })); }

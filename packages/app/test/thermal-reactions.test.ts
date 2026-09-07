@@ -22,6 +22,7 @@ describe('thermal reaction units through the actual wasm engine', () => {
       { cmd: 'solve.run', step: 'heat' },
     ];
     for (const cmd of commands) await e.dispatch(JSON.stringify(cmd), undefined);
+    const resultId = (JSON.parse(e.query(JSON.stringify({ query: 'query.result', step: 'heat' }))) as ResultSummary).resultId;
     const raw = e.field('heat', 'reaction', 0);
     expect([...raw].reduce((sum, v) => sum + v, 0)).toBeCloseTo(10, 7); // q*A = 10 W
     for (const units of [{ force: 'kN', power: 'W' }, { force: 'N', power: 'kW' }]) {
@@ -37,7 +38,10 @@ describe('thermal reaction units through the actual wasm engine', () => {
       const converted = JSON.parse(e.query(JSON.stringify({ query: 'query.convert', quantity: { value: 10, unit: from }, to }))) as { value: number };
       expect(r.reactions[0]!.total[0].unit).toBe(to);
       expect(r.reactions[0]!.total[0].value).toBeCloseTo(converted.value, 9);
-      expect([...e.field('heat', 'reaction', 0)]).toEqual([...raw]);
+      // Unit changes conservatively stale the current-result fingerprint; select the
+      // retained Result explicitly to compare its immutable SI field.
+      const retained = JSON.parse(e.query(JSON.stringify({ query: 'query.field', resultId, field: 'reaction' }))) as { values: number[]; components: number };
+      expect([...Float32Array.from(retained.values.filter((_, index) => index % retained.components === 0))]).toEqual([...raw]);
     }
     e.free();
   });

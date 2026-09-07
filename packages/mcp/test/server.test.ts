@@ -279,3 +279,10 @@ describe('start-up', () => {
     expect(toolList(registry).length).toBeGreaterThan(30);
   });
 });
+
+
+it('refuses executing a described export handler outside request admission', async () => {
+  const registry = createRegistry({ engine: fakeEngine() });
+  await expect(registry.describe('export.file').run!({ format: 'journal', path: 'model.json' }))
+    .rejects.toMatchObject({ code: 'session.expired' });
+});

@@ -41,6 +41,11 @@ export function batchModule(wasm) {
       this.lease.stamp = reply.stamp;
       return JSON.stringify(reply.value);
     }
+    query_transfer(json) {
+      const reply = this.owner.query_transfer(JSON.stringify({ context: JSON.parse(this.context()), query: JSON.parse(json) }));
+      this.lease.stamp = reply.stamp;
+      return reply.value;
+    }
     async replay_hashes(json, skip, verify) {
       const snapshot = await this.replace(candidate => candidate.journal(json, skip, verify));
       return JSON.stringify(snapshot.journal.entries.map(entry => entry.hashAfter));

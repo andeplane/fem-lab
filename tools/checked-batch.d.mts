@@ -2,6 +2,7 @@ import type * as Wasm from '../packages/app/src/generated/wasm/femlab_engine_was
 export interface BatchEngine {
   dispatch(json: string, progress?: (value: unknown) => void): Promise<string>;
   query(json: string): string;
+  query_transfer(json: string): Record<string, unknown>;
   replay_hashes(json: string, skip: boolean, verify: boolean): Promise<string>;
   import_file(json: string): Promise<void>;
   export_file(): string;
