@@ -10,14 +10,15 @@ use femlab_engine::fem::assembly::{assemble_stiffness, pattern, reduce, resolve,
 use femlab_engine::fem::element::Material;
 use femlab_engine::fem::loads::{assemble_loads, Load};
 use femlab_engine::fem::material::builtin_law;
-use femlab_engine::fem::problem::{Constraint, Problem};
+use femlab_engine::fem::mpc;
+use femlab_engine::fem::problem::{Constraint, Coupling, Problem};
 use femlab_engine::gpu::cg::CgContext;
 use femlab_engine::gpu::{Gpu, MAX_WORKGROUPS, WORKGROUP};
 use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
 use femlab_engine::solve::{solve, SolveOptions};
 use femlab_engine::{Engine, ErrorCode, NoClock, Progress, Query, QueryResult, ResolvedSet, SetKind};
-use femlab_geometry::mesh::ElementKind;
+use femlab_geometry::mesh::{ElementBlock, ElementKind, Face};
 use femlab_geometry::{Mesh, Structured};
 
 fn gpu() -> Gpu {
@@ -68,6 +69,7 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
             dofs: [true, true, true],
             value: 0.0,
         }],
+        couplings: Vec::new(),
         loads: vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }],
         temperature: None,
         heat: false,
@@ -78,7 +80,7 @@ fn cantilever(n: [usize; 3]) -> (Csr, Vec<f64>) {
     let mut f = a.f_thermal.clone();
     assemble_loads(&p, &mut f).expect("a traction on a real face");
     let rc = resolve(&p).expect("no conflict");
-    let red = reduce(&a.k, &f, &rc);
+    let red = reduce(&a.k, &f, &rc, &[]);
     (red.k_ff, red.f_f)
 }
 
@@ -423,4 +425,102 @@ fn requesting_a_backend_nobody_has_is_an_error() {
     let e = pollster::block_on(Gpu::request_with(Gpu::default_backends(), wgpu::Features::all())).unwrap_err();
     assert_eq!(e.code, ErrorCode::Unsupported);
     assert!(e.cause.contains("device request failed"));
+}
+
+/// The reduced system of the same cantilever cut in two at mid-span and tied back together.
+///
+/// This is what proves the GPU needs no change for a bonded contact: `mpc::transform` runs
+/// *before* `assembly::reduce`, so what reaches a solver is still a plain `k_ff`. A later change
+/// that moved the GPU up to the un-reduced operator would fail here rather than silently.
+fn tied_cantilever() -> (Csr, Vec<f64>) {
+    let half: Mesh = Structured { kind: ElementKind::Hex8, n: [4, 2, 2] }.box_([0.5, 0.1, 0.1]);
+    let node_offset = half.n_nodes() as u32;
+    let elem_offset = half.n_elems() as u32;
+    let mut mesh = half.clone();
+    let moved: Vec<f64> = half.coords.iter().enumerate().map(|(i, x)| if i % 3 == 0 { x + 0.5 } else { *x }).collect();
+    mesh.coords.extend(moved);
+    for blk in &half.blocks {
+        mesh.blocks.push(ElementBlock {
+            kind: blk.kind,
+            conn: blk.conn.iter().map(|n| n + node_offset).collect(),
+            first_elem: blk.first_elem + elem_offset,
+        });
+    }
+    mesh.face_sets = half
+        .face_sets
+        .iter()
+        .map(|(name, faces)| (format!("a.{name}"), faces.clone()))
+        .chain(half.face_sets.iter().map(|(name, faces)| {
+            let shifted = faces.iter().map(|f| Face { elem: f.elem + elem_offset, local: f.local }).collect();
+            (format!("b.{name}"), shifted)
+        }))
+        .collect();
+    let mut sets = BTreeMap::new();
+    for (name, faces) in &mesh.face_sets {
+        let mut nodes: Vec<u32> = faces.iter().flat_map(|&f| mesh.face_nodes(f)).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        sets.insert(name.clone(), ResolvedSet { kind: SetKind::Face, faces: faces.clone(), nodes, elems: Vec::new() });
+    }
+    let bodies = vec!["a".to_string(), "b".to_string()];
+    let p = Problem {
+        mesh: &mesh,
+        sets: &sets,
+        body_of_block: &bodies,
+        material_of_block: vec![Some(0); mesh.blocks.len()],
+        materials: vec![Material {
+            law: builtin_law("linear-elastic").expect("built in"),
+            props: vec![210e9, 0.3],
+            rho: 7800.0,
+            alpha: 0.0,
+            k: 0.0,
+            cp: 0.0,
+        }],
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::IncompatibleModes,
+        constraints: vec![Constraint {
+            name: "root".into(),
+            nodes: "a.xmin".into(),
+            dofs: [true, true, true],
+            value: 0.0,
+        }],
+        couplings: vec![Coupling::Bonded {
+            name: "weld".into(),
+            master: "a.xmax".into(),
+            slave: "b.xmin".into(),
+            tol: 1e-9,
+        }],
+        loads: vec![Load::Traction { faces: "b.xmax".into(), t: [0.0, 0.0, -1e5] }],
+        temperature: None,
+        heat: false,
+        heat_loads: Vec::new(),
+    };
+    let pat = pattern(&mesh, 3);
+    let a = assemble_stiffness(&p, &pat).expect("steel on a box assembles");
+    let mut f = a.f_thermal.clone();
+    assemble_loads(&p, &mut f).expect("a traction on a real face");
+    let rc = resolve(&p).expect("no conflict");
+    let m = mpc::build(&p).expect("matched faces pair");
+    let (kt, ft) = mpc::transform(&a.k, &f, &m);
+    let red = reduce(&kt, &ft, &rc, &m.slaves);
+    (red.k_ff, red.f_f)
+}
+
+/// A bonded contact reaches the GPU as an ordinary reduced system, and the f32 CG inside the
+/// f64 refinement loop lands on the answer the direct solver gives.
+#[test]
+fn a_tied_assembly_solves_on_the_gpu_and_matches_the_direct_solver() {
+    let g = gpu();
+    let (k, f) = tied_cantilever();
+    let pool = Pool::new(2);
+    let direct = SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() };
+    let (want, _) = pollster::block_on(solve(&k, &f, &direct, &pool, None, &mut nop)).expect("direct");
+    let opts = SolveOptions { solver: Solver::GpuPcg, ..SolveOptions::default() };
+    let (got, info) = pollster::block_on(solve(&k, &f, &opts, &pool, Some(&g), &mut nop)).expect("gpu-pcg");
+    assert_eq!(info.solver, "gpu-pcg");
+    let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let diff: Vec<f64> = got.iter().zip(&want).map(|(a, b)| a - b).collect();
+    assert!(norm(&diff) <= 1e-8 * norm(&want), "‖u_gpu − u_direct‖ = {:e}, ‖u‖ = {:e}", norm(&diff), norm(&want));
+    // The slave rows left the free set before the solver saw the matrix: no empty row reaches it.
+    assert!((0..k.n).all(|r| k.row_ptr[r] < k.row_ptr[r + 1]), "every reduced row has entries");
 }

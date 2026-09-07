@@ -23,6 +23,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::{assemble_stiffness, pattern, reduce, resolve, Csr, Pattern};
 use crate::fem::checks;
 use crate::fem::element::element_for;
+use crate::fem::mpc;
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, Per};
@@ -97,9 +98,14 @@ pub fn run(
     let (a, m) =
         pool.install(|| assemble_stiffness(p, &pat).and_then(|a| assemble_mass(p, &pat, false).map(|m| (a, m))))?;
     let rc = resolve(p).expect("the checks resolved the constraints");
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
     let zeros = vec![0.0; a.k.n];
-    let red_k = reduce(&a.k, &zeros, &rc);
-    let red_m = reduce(&m, &zeros, &rc);
+    // Both operators take the same `T`, so the eigenproblem stays the generalised symmetric
+    // one the subspace iteration wants.
+    let (kt, _) = pool.install(|| mpc::transform(&a.k, &zeros, &mpc));
+    let (mt, _) = pool.install(|| mpc::transform(&m, &zeros, &mpc));
+    let red_k = reduce(&kt, &zeros, &rc, &mpc.slaves);
+    let red_m = reduce(&mt, &zeros, &rc, &mpc.slaves);
     let n = red_k.k_ff.n;
     if n == 0 {
         return Err(Error::new(
@@ -122,8 +128,10 @@ pub fn run(
         for (i, &dof) in red_k.free.iter().enumerate() {
             full[dof as usize] = shape[i];
         }
+        mpc::recover(&mpc, &mut full);
         res.modes.push(vector_field(&full, dpn));
     }
+    res.warnings = mpc.warnings;
     res.fields.insert(Field::Displacement, res.modes[0].clone());
     res.scalars.insert("min_det_j".to_string(), a.min_det_j);
     for axis in ["x", "y", "z"] {
