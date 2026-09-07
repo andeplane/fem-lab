@@ -3,6 +3,7 @@
 // there is no fetch and no build step, unlike the Examples gallery's Journals.
 import cantilever from '../../tutorials/cantilever.json';
 import heatConduction from '../../tutorials/heat-conduction.json';
+import journalAsProgram from '../../tutorials/journal-as-program.json';
 import meshConvergence from '../../tutorials/mesh-convergence.json';
 import modalAnalysis from '../../tutorials/modal-analysis.json';
 import plateWithHole from '../../tutorials/plate-with-hole.json';
@@ -14,7 +15,7 @@ import transientHeat from '../../tutorials/transient-heat.json';
 import type { Tutorial } from './types';
 
 // Roughly in the order someone would work through them: build a model, read it, then the
-// procedures, then the two that are about method rather than physics.
+// procedures, then the ones that are about method rather than physics.
 export const TUTORIALS: Tutorial[] = [
   cantilever,
   plateWithHole,
@@ -25,6 +26,7 @@ export const TUTORIALS: Tutorial[] = [
   transientHeat,
   meshConvergence,
   symmetryAnd2d,
+  journalAsProgram,
   thermalStressChaining,
 ] as Tutorial[];
 
