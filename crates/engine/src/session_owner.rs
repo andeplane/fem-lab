@@ -160,11 +160,10 @@ impl SessionOwner {
         self.inner.render_view().map(|view| (stamp, view))
     }
 
-    pub async fn gpu_self_test(&mut self, context: &ExecutionContext, n: u32) -> Result<f64, Error> {
+    /// Admission stays in the owner; GPU diagnostic implementation lives with the device.
+    pub(crate) fn diagnostic_gpu(&mut self, context: &ExecutionContext) -> Result<&mut Gpu, Error> {
         self.check_context(context)?;
-        let gpu = self.inner.gpu_mut().ok_or_else(|| Error::unsupported("gpu (no adapter)"))?;
-        let a: Vec<f32> = (1..=n).map(|i| i as f32).collect();
-        gpu.dot(&a, &vec![1.0; n as usize]).await.map(|v| v as f64)
+        self.inner.gpu_mut().ok_or_else(|| Error::unsupported("gpu (no adapter)"))
     }
 
     /// Reserve one replacement against the captured active stamp. Old reads remain available.
