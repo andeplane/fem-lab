@@ -84,7 +84,6 @@ async function boot(): Promise<void> {
     const objects = ((await transport.query({ query: 'query.objects' })) as { objects: never[] }).objects;
     store.set({ model, journal, script, objects, revision: (model as { revision: number }).revision });
     await store.refreshJournalComparison();
-    viewer.current?.setSurface(await transport.surface());
     await results.refresh();
     // Where a project comes from: with none open and a non-empty Journal this creates one named
     // after the Model, and otherwise it debounces a write into the one that is open (issue #41).
