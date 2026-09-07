@@ -93,6 +93,9 @@ impl Engine {
             Query::Field { step, result_id, field } => {
                 self.query_field(step.as_deref(), result_id.as_deref(), &field).map(QueryResult::Field)
             }
+            Query::Difference { left, right, onto } => {
+                self.query_difference(&left, &right, onto).map(QueryResult::Difference)
+            }
             Query::Frames { step, result_id } => {
                 self.query_frames(step.as_deref(), result_id.as_deref()).map(QueryResult::Frames)
             }

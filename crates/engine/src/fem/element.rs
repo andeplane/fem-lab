@@ -62,6 +62,15 @@ pub enum FaceLoad {
     Traction([f64; 3]),
 }
 
+/// Outcome of isoparametric point location. `Outside` is a converged reference coordinate
+/// outside the element; `Failed` means the map could not be inverted numerically.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InverseMap {
+    Inside([f64; 3]),
+    Outside,
+    Failed,
+}
+
 /// One element formulation. Every matrix is row-major and every vector is node-major
 /// (`dim * node + component`).
 pub trait Element: Send + Sync {
@@ -86,9 +95,14 @@ pub trait Element: Send + Sync {
     /// Parametric coordinates of Gauss point `i`, for extrapolation and probes.
     fn gp_xi(&self, i: usize) -> [f64; 3];
     fn shape_at(&self, xi: [f64; 3], n: &mut [f64]);
-    /// Newton inversion of the isoparametric map, at most 20 iterations; `None` when `x` is
-    /// outside the element (tolerance 1e-8 in reference coordinates) or the map is degenerate.
+    /// Newton inversion of the isoparametric map.
     fn inverse_map(&self, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]>;
+    /// Rich point-location status. Existing implementations that only provide `inverse_map`
+    /// conservatively classify a missing reference point as a failure; implementations must
+    /// override this method before they can report positive outside coverage.
+    fn inverse_map_status(&self, coords: &[f64], x: [f64; 3]) -> InverseMap {
+        self.inverse_map(coords, x).map_or(InverseMap::Failed, InverseMap::Inside)
+    }
     /// `√λ_max` of `M_lumped⁻¹ K_e`: the element bound on the global `ω_max` for `Δt_crit`.
     fn omega_max(&self, c: &ElementCtx<'_>) -> Result<f64, Error>;
 }
@@ -701,28 +715,66 @@ pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
     Some(min)
 }
 
-fn inverse_map_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]> {
+fn inverse_map_status_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> InverseMap {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
+    let mut scaled_span = 0.0f64;
+    let mut magnitude = 0.0f64;
+    for k in 0..dim {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for point in coords.chunks_exact(3) {
+            lo = lo.min(point[k]);
+            hi = hi.max(point[k]);
+        }
+        if !(lo.is_finite() && hi.is_finite() && x[k].is_finite()) {
+            return InverseMap::Failed;
+        }
+        // Scale before subtracting: finite opposite-sign extrema can make `hi - lo`
+        // overflow even though the physical-coordinate tolerance remains representable.
+        scaled_span = scaled_span.max(1e-12 * hi - 1e-12 * lo);
+        magnitude = magnitude.max(lo.abs()).max(hi.abs()).max(x[k].abs());
+    }
+    // The relative term follows the physical element size; the epsilon term covers subtraction
+    // when a small element is far from the origin. Both are physical-coordinate tolerances.
+    let residual_tolerance = scaled_span + 64.0 * f64::EPSILON * magnitude;
     let mut xi = centre_xi(kind);
     let mut sh = vec![0.0; nn];
     let mut dn = vec![[0.0; 3]; nn];
-    for _ in 0..20 {
+    for iteration in 0..=20 {
         shape_of(kind, xi, &mut sh);
         dshape_of(kind, xi, &mut dn);
-        let (inv, _) = jac_inv(dim, coords, &dn)?;
+        let Some((inv, _)) = jac_inv(dim, coords, &dn) else {
+            return InverseMap::Failed;
+        };
         let mut r = [0.0; 3];
         for (i, ri) in r.iter_mut().enumerate().take(dim) {
             *ri = x[i] - (0..nn).map(|a| sh[a] * coords[3 * a + i]).sum::<f64>();
         }
-        for k in 0..dim {
-            xi[k] += (0..dim).map(|i| inv[k][i] * r[i]).sum::<f64>();
+        if r.iter().take(dim).all(|value| value.abs() <= residual_tolerance) {
+            return if in_reference(kind, xi, 1e-8) { InverseMap::Inside(xi) } else { InverseMap::Outside };
+        }
+        if iteration < 20 {
+            let mut delta = [0.0; 3];
+            for k in 0..dim {
+                delta[k] = (0..dim).map(|i| inv[k][i] * r[i]).sum::<f64>();
+            }
+            // A bounded step keeps Newton inside the locally valid neighbourhood of a curved
+            // quadratic map. Linear maps retain their exact one-step inversion, including far
+            // outside points.
+            let trust = if kind.n_nodes() > kind.n_corners() {
+                let largest = delta.iter().take(dim).fold(0.0f64, |value, component| value.max(component.abs()));
+                (0.5 / largest).min(1.0)
+            } else {
+                1.0
+            };
+            for k in 0..dim {
+                xi[k] += trust * delta[k];
+            }
+            if xi.iter().take(dim).any(|value| !value.is_finite()) {
+                return InverseMap::Failed;
+            }
         }
     }
-    if in_reference(kind, xi, 1e-8) {
-        Some(xi)
-    } else {
-        None
-    }
+    InverseMap::Failed
 }
 
 fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
@@ -791,7 +843,13 @@ impl<R: RefElement> Element for Iso<R> {
         shape_of(R::KIND, xi, n)
     }
     fn inverse_map(&self, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]> {
-        inverse_map_of(R::KIND, coords, x)
+        match inverse_map_status_of(R::KIND, coords, x) {
+            InverseMap::Inside(xi) => Some(xi),
+            InverseMap::Outside | InverseMap::Failed => None,
+        }
+    }
+    fn inverse_map_status(&self, coords: &[f64], x: [f64; 3]) -> InverseMap {
+        inverse_map_status_of(R::KIND, coords, x)
     }
     fn omega_max(&self, c: &ElementCtx<'_>) -> Result<f64, Error> {
         omega_max_of(R::KIND, c)

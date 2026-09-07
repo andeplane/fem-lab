@@ -2718,6 +2718,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.convert](#queries-query-convert)
 - [query.cost](#queries-query-cost)
 - [query.definition](#queries-query-definition)
+- [query.difference](#queries-query-difference)
 - [query.field](#queries-query-field)
 - [query.frame](#queries-query-frame)
 - [query.frames](#queries-query-frames)
@@ -2796,6 +2797,24 @@ Returns: `ObjectDefinition`.
 | kind | yes | <code>{"$ref":"#/$defs/ObjectKind"}</code> |  |
 | name | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.definition"}</code> |  |
+
+<a id="queries-query-difference"></a>
+
+### query.difference
+
+Subtract two explicitly retained nodal fields as `left - right` on either Result's
+Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
+null values; nonfinite arithmetic is a structured error. No current Result, display
+conversion, or node-number pairing is implied.
+
+Returns: `DifferenceField`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| left | yes | <code>{"$ref":"#/$defs/DifferenceOperand"}</code> |  |
+| right | yes | <code>{"$ref":"#/$defs/DifferenceOperand"}</code> |  |
+| onto | yes | <code>{"$ref":"#/$defs/DifferenceOnto"}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.difference"}</code> |  |
 
 <a id="queries-query-field"></a>
 
@@ -4625,6 +4644,55 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "string",
       "const": "base64"
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>DifferenceOnto</summary>
+
+```json
+{
+  "description": "The retained Result whose Mesh receives the difference values.",
+  "type": "string",
+  "enum": [
+    "left",
+    "right"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>DifferenceOperand</summary>
+
+```json
+{
+  "description": "One explicit retained field used by `query.difference`.",
+  "type": "object",
+  "properties": {
+    "resultId": {
+      "type": "string"
+    },
+    "field": {
+      "type": "string"
+    },
+    "component": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255
+    }
+  },
+  "required": [
+    "resultId",
+    "field"
   ]
 }
 ```

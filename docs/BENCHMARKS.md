@@ -931,7 +931,45 @@ mesh forces the bounded fallback; its known graph count lies within the returned
 the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
 1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
 These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.
+### Retained Result difference fields (#281)
 
+`difference_fields_project_closed_form_temperature_between_unequal_linear_and_quadratic_meshes`
+uses the E1 Fourier bar with the same 900 W/m² boundary flux on two independently retained
+meshes. The left Result has two linear elements and `k = 45 W/(m K)`, hence
+`T_left = 273.15 + 20x` K. The right Result has four quadratic elements and
+`k = 90 W/(m K)`, hence `T_right = 273.15 + 10x` K. Projection in either direction must
+therefore give the closed form
+
+```text
+T_left - T_right = 10x K
+```
+
+at every comparison node within 1e-8 K. Reversing the operands gives `-10x` K, comparing a
+Result with itself gives exact zero, and the two stored zero components remain exactly zero.
+The live Model changes temperature display units from Celsius to kelvin between solves; the
+difference remains the retained f64 SI delta in K without an absolute-temperature offset.
+A third quadratic Result uses `k = 45 W/(m K)` and raises the cold boundary from 0 °C to 10 °C,
+so its field minus the first linear Result is the nonzero constant `10 K` at every target node.
+
+This is an exact polynomial-reproduction benchmark rather than an asymptotic convergence
+study. Degree-one and degree-two isoparametric elements both reproduce constants and affine
+fields exactly: partition of unity conserves the constant component, and linear completeness
+reproduces `10x` on both the 2/4-element pair and every refinement of it up to floating-point
+roundoff. The interpolation error is already zero to the stated tolerance, so an observed
+log-error convergence rate is undefined and would not be a meaningful gate.
+
+Coverage cases translate one bar by 0.5 m and compute the analytically known intersection in
+both directions: nodes outside the other physical domain are the exact sorted set selected by
+`x < 0.5 m` or `x > 1 m`, every component at those nodes is null, and every covered value is
+the closed-form `10 K`. Moving an order-two bar to start at 2 m gives zero overlap, zero inside
+nodes, and an all-null field; it must not turn ordinary distance into a locator error. A plane-stress square
+with the exact hole `(0.3, 0.7) × (0.3, 0.7) m²` independently checks that full-sheet nodes
+strictly inside that open square are the outside set when projected onto the holed quadratic
+mesh. These cases verify no extrapolation or zero filling across missing material. A positively
+oriented curved Quad8 additionally places an interior edge point beyond every nodal x bound;
+Bernstein control-hull rejection must retain that point while positively rejecting a distant
+point. Structured failures separately cover incompatible dimensions, layouts, components,
+singular/nonconvergent maps, and finite operands whose subtraction overflows f64.
 ### Transient retention and peak phases (#244)
 
 For `S` integration steps and normalized stride `E = max(outputEvery, 1)`, the retained-frame

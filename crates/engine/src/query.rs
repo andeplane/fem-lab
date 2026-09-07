@@ -84,6 +84,14 @@ pub enum Query {
         field: String,
     },
 
+    /// Subtract two explicitly retained nodal fields as `left - right` on either Result's
+    /// Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
+    /// null values; nonfinite arithmetic is a structured error. No current Result, display
+    /// conversion, or node-number pairing is implied.
+    #[serde(rename = "query.difference", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "DifferenceField"))]
+    Difference { left: DifferenceOperand, right: DifferenceOperand, onto: DifferenceOnto },
+
     /// Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).
     /// Index 0 is the initial state; indices count retained frames, not integration steps.
     /// Metadata remains available for stale Results. No nodal values are copied by this Query.
@@ -793,6 +801,7 @@ pub enum QueryResult {
     Result(ResultSummary),
     Results(RetainedResults),
     Field(ResultField),
+    Difference(DifferenceField),
     Frames(FramesResult),
     Frame(FrameResult),
     Probe(ProbeResult),
@@ -973,4 +982,59 @@ pub struct ResultField {
     pub node_count: usize,
     pub unit: String,
     pub values: Vec<f64>,
+}
+
+/// One explicit retained field used by `query.difference`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferenceOperand {
+    pub result_id: String,
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<u8>,
+}
+
+/// The retained Result whose Mesh receives the difference values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DifferenceOnto {
+    Left,
+    Right,
+}
+
+/// The resolved identity and layout of one difference operand.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedDifferenceOperand {
+    pub result_id: String,
+    pub step: String,
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<u8>,
+    pub source_components: usize,
+}
+
+/// Nodewise coverage of the selected comparison Mesh by the other Mesh.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferenceCoverage {
+    pub inside_nodes: usize,
+    pub total_nodes: usize,
+    pub outside_nodes: Vec<u32>,
+}
+
+/// `query.difference` response. Values are retained f64 SI, component-fastest by target node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferenceField {
+    pub left: ResolvedDifferenceOperand,
+    pub right: ResolvedDifferenceOperand,
+    pub comparison_result_id: String,
+    pub components: usize,
+    pub node_count: usize,
+    pub unit: String,
+    pub values: Vec<Option<f64>>,
+    pub interpolated: bool,
+    pub coverage: DifferenceCoverage,
+    pub warnings: Vec<Warning>,
 }

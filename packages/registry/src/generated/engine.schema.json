@@ -3062,6 +3062,32 @@
         "x-returns": "ResultField"
       },
       {
+        "description": "Subtract two explicitly retained nodal fields as `left - right` on either Result's\nMesh. Unequal meshes use finite-element interpolation and report uncovered nodes as\nnull values; nonfinite arithmetic is a structured error. No current Result, display\nconversion, or node-number pairing is implied.",
+        "type": "object",
+        "properties": {
+          "left": {
+            "$ref": "#/$defs/DifferenceOperand"
+          },
+          "right": {
+            "$ref": "#/$defs/DifferenceOperand"
+          },
+          "onto": {
+            "$ref": "#/$defs/DifferenceOnto"
+          },
+          "query": {
+            "type": "string",
+            "const": "query.difference"
+          }
+        },
+        "required": [
+          "query",
+          "left",
+          "right",
+          "onto"
+        ],
+        "x-returns": "DifferenceField"
+      },
+      {
         "description": "Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).\nIndex 0 is the initial state; indices count retained frames, not integration steps.\nMetadata remains available for stale Results. No nodal values are copied by this Query.",
         "type": "object",
         "properties": {
@@ -3468,6 +3494,39 @@
           "constraint",
           "load",
           "step"
+        ]
+      },
+      "DifferenceOperand": {
+        "description": "One explicit retained field used by `query.difference`.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "component": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "required": [
+          "resultId",
+          "field"
+        ]
+      },
+      "DifferenceOnto": {
+        "description": "The retained Result whose Mesh receives the difference values.",
+        "type": "string",
+        "enum": [
+          "left",
+          "right"
         ]
       },
       "FrameSample": {
@@ -6536,6 +6595,9 @@
       },
       {
         "$ref": "#/$defs/ResultField"
+      },
+      {
+        "$ref": "#/$defs/DifferenceField"
       },
       {
         "$ref": "#/$defs/FramesResult"
@@ -10788,6 +10850,132 @@
           "nodeCount",
           "unit",
           "values"
+        ]
+      },
+      "DifferenceField": {
+        "description": "`query.difference` response. Values are retained f64 SI, component-fastest by target node.",
+        "type": "object",
+        "properties": {
+          "left": {
+            "$ref": "#/$defs/ResolvedDifferenceOperand"
+          },
+          "right": {
+            "$ref": "#/$defs/ResolvedDifferenceOperand"
+          },
+          "comparisonResultId": {
+            "type": "string"
+          },
+          "components": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
+          "interpolated": {
+            "type": "boolean"
+          },
+          "coverage": {
+            "$ref": "#/$defs/DifferenceCoverage"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Warning"
+            }
+          }
+        },
+        "required": [
+          "left",
+          "right",
+          "comparisonResultId",
+          "components",
+          "nodeCount",
+          "unit",
+          "values",
+          "interpolated",
+          "coverage",
+          "warnings"
+        ]
+      },
+      "ResolvedDifferenceOperand": {
+        "description": "The resolved identity and layout of one difference operand.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "component": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "sourceComponents": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "resultId",
+          "step",
+          "field",
+          "sourceComponents"
+        ]
+      },
+      "DifferenceCoverage": {
+        "description": "Nodewise coverage of the selected comparison Mesh by the other Mesh.",
+        "type": "object",
+        "properties": {
+          "insideNodes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "totalNodes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "outsideNodes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "insideNodes",
+          "totalNodes",
+          "outsideNodes"
         ]
       },
       "FramesResult": {
