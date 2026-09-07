@@ -75,6 +75,9 @@ fn corner_dets(kind: ElementKind, x: &[[f64; 3]]) -> Vec<f64> {
         (8, _) => HEX_CORNER_AXES.iter().map(|a| det3(edge(a[0]), edge(a[1]), edge(a[2]))).collect(),
         (4, 3) => vec![det3(sub(x[1], x[0]), sub(x[2], x[0]), sub(x[3], x[0]))],
         (4, _) => QUAD_CORNER_AXES.iter().map(|a| det2(edge(a[0]), edge(a[1]))).collect(),
+        // A two-node line member is affine and never inverted: its only "Jacobian" is its
+        // half-length, so the ratio of a straight member is 1 whatever its direction.
+        (2, _) => vec![norm(sub(x[1], x[0]))],
         _ => vec![det2(sub(x[1], x[0]), sub(x[2], x[0]))],
     }
 }
@@ -91,6 +94,10 @@ fn min_corner_angle(kind: ElementKind, x: &[[f64; 3]]) -> f64 {
     let mut min = 180.0f64;
     for poly in &corners {
         let n = poly.len();
+        // A line member is a segment, not a polygon: it has no corner to measure an angle at.
+        if n < 3 {
+            continue;
+        }
         for (i, &c) in poly.iter().enumerate() {
             let prev = x[poly[(i + n - 1) % n]];
             let next = x[poly[(i + 1) % n]];

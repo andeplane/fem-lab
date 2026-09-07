@@ -24,6 +24,10 @@ const G2: f64 = 0.577_350_269_189_625_8;
 /// √(3/5), the outer 3-point Gauss–Legendre abscissa.
 const G3: f64 = 0.774_596_669_241_483_4;
 
+/// 1-point Gauss–Legendre on `[-1, 1]` (degree 1): the truss's rule. A member is straight and
+/// prismatic, so one point at its midpoint integrates its constant strain exactly.
+pub const LINE_1: Rule = Rule { points: &[[0.0, 0.0, 0.0]], weights: &[2.0] };
+
 /// 2-point Gauss–Legendre on `[-1, 1]` (degree 3): the line2 face parent.
 pub const LINE_2: Rule = Rule { points: &[[-G2, 0.0, 0.0], [G2, 0.0, 0.0]], weights: &[1.0, 1.0] };
 
@@ -182,7 +186,7 @@ fn copy_rule(r: &'static Rule) -> Rule {
 }
 
 /// The stiffness/recovery quadrature rule: hex8 2×2×2, hex20 3×3×3, tet4 1, tet10 4,
-/// quad4 2×2, quad8 3×3, tri3 1, tri6 3.
+/// quad4 2×2, quad8 3×3, tri3 1, tri6 3, truss2 1.
 pub fn rule_of(kind: ElementKind) -> Rule {
     copy_rule(match kind {
         ElementKind::Hex8 => &HEX_2X2X2,
@@ -193,6 +197,7 @@ pub fn rule_of(kind: ElementKind) -> Rule {
         ElementKind::Quad8 => &QUAD_3X3,
         ElementKind::Tri3 => &TRI_1,
         ElementKind::Tri6 => &TRI_3,
+        ElementKind::Truss2 => &LINE_1,
     })
 }
 
@@ -223,6 +228,7 @@ pub fn shape_of(kind: ElementKind, xi: [f64; 3], n: &mut [f64]) {
         ElementKind::Tet10 => simplex_shape(3, 4, kind.edges(), xi, n),
         ElementKind::Tri3 => simplex_shape(2, 3, &[], xi, n),
         ElementKind::Tri6 => simplex_shape(2, 3, kind.edges(), xi, n),
+        ElementKind::Truss2 => tensor_shape(1, &LINE_CORNERS, xi, n),
     }
 }
 
@@ -238,6 +244,7 @@ pub fn dshape_of(kind: ElementKind, xi: [f64; 3], dn: &mut [[f64; 3]]) {
         ElementKind::Tet10 => simplex_dshape(3, 4, kind.edges(), xi, dn),
         ElementKind::Tri3 => simplex_dshape(2, 3, &[], xi, dn),
         ElementKind::Tri6 => simplex_dshape(2, 3, kind.edges(), xi, dn),
+        ElementKind::Truss2 => tensor_dshape(1, &LINE_CORNERS, xi, dn),
     }
 }
 
@@ -248,6 +255,7 @@ fn corners_of(kind: ElementKind) -> &'static [[f64; 3]] {
         ElementKind::Tet4 | ElementKind::Tet10 => &TET_CORNERS,
         ElementKind::Quad4 | ElementKind::Quad8 => &QUAD_CORNERS,
         ElementKind::Tri3 | ElementKind::Tri6 => &TRI_CORNERS,
+        ElementKind::Truss2 => &LINE_CORNERS,
     }
 }
 
@@ -281,7 +289,7 @@ pub fn centre_xi(kind: ElementKind) -> [f64; 3] {
 pub fn in_reference(kind: ElementKind, xi: [f64; 3], tol: f64) -> bool {
     let dim = kind.dim();
     match kind {
-        ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8 => {
+        ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Truss2 => {
             (0..dim).all(|k| xi[k].abs() <= 1.0 + tol)
         }
         _ => (0..dim).all(|k| xi[k] >= -tol) && (0..dim).map(|k| xi[k]).sum::<f64>() <= 1.0 + tol,
