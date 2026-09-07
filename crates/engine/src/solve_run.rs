@@ -338,6 +338,18 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
                 output_every: step.output_every.unwrap_or(1) as usize,
             }
         }
+        Procedure::StaticNonlinear => procedure::Step::StaticNonlinear(procedure::nonlinear::Options {
+            increments: step.increments.unwrap_or(10) as usize,
+            converge: procedure::nonlinear::Converge {
+                tolerance: step.nonlinear_tolerance.unwrap_or(1e-8),
+                max_newton: step.nonlinear_max_iterations.unwrap_or(20) as usize,
+            },
+            max_cutbacks: step.max_cutbacks.unwrap_or(5) as usize,
+            // Pseudo-time, not physical time: one second of it is the whole load history.
+            t_end: step.t_end.unwrap_or(1.0),
+            amplitude: step.amplitude.as_ref().map(amplitude),
+            solver: opts,
+        }),
         Procedure::Modal => {
             procedure::Step::Modal { n_modes: step.n_modes.unwrap_or(6) as usize, shift: step.shift, solver: opts }
         }
@@ -444,6 +456,15 @@ pub(crate) fn planned_cost(
         }
         procedure::Step::Static { solver, .. } | procedure::Step::Modal { solver, .. } => {
             crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
+        }
+        // A nonlinear Step keeps one displacement field per converged increment — the
+        // load–deflection curve — so its retained history is counted exactly as a transient's.
+        // It is reported rather than enforced: `outputEvery`, which the budget error suggests,
+        // is not a control this procedure has.
+        procedure::Step::StaticNonlinear(o) => {
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, o.solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, o.increments, 1, 5)
+                .map(|estimate| PlannedCost { estimate, transient: None });
         }
         procedure::Step::HeatSteady { solver, .. } => crate::solve::cost_estimate(mesh, 1, solver.solver),
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {

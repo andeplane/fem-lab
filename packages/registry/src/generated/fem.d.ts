@@ -318,7 +318,8 @@ export interface Fem {
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
      * `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
      * `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
-     * implicit, and `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well. An
+     * implicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and
+     * `increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An
      * implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
      * (default 0, Newmark average acceleration: second order, unconditionally stable and
      * energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
@@ -334,10 +335,13 @@ export interface Fem {
      * keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
      * scaled, so its thermal strain is present in full at every increment. Without an
      * `amplitude` a static Step is the single solve it has always been and retains nothing.
+     * A static-nonlinear Step always steps, over `increments` equal pieces of the same
+     * pseudo-time, and keeps every converged one.
      * Heat-steady requires a finite positive material conductivity `k`; heat-transient also
      * requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
      * `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
-     * on its own answer — today a radiation load — and are ignored by a Step that is linear.
+     * on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
+     * Step that is linear.
      * Heat Results report net applied power, positive removed heat and stored-energy rate;
      * transient powers belong to the last θ-method integration stage (radiation uses weighted
      * endpoint fluxes), while temperature fields belong to its endpoint.

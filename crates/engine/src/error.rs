@@ -85,6 +85,8 @@ pub enum ErrorCode {
     GpuTooLarge,
     #[serde(rename = "explicit.unstable")]
     ExplicitUnstable,
+    #[serde(rename = "newton.diverged")]
+    NewtonDiverged,
 }
 
 impl std::fmt::Display for ErrorCode {

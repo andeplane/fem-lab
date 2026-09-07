@@ -97,6 +97,16 @@ impl ObjectKind {
 pub enum Procedure {
     /// Linear static equilibrium.
     Static,
+    /// Static equilibrium with geometric nonlinearity: large displacement and large rotation,
+    /// solved by Newton–Raphson over `increments` load increments. The strain measure is
+    /// Green–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so
+    /// the linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**
+    /// stress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.
+    /// Solid and plane-strain idealisations only. Incompatible modes are switched off, so
+    /// hex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not
+    /// follow the deformation (a pressure keeps its reference direction and area) and a
+    /// temperature field is applied in full rather than ramped with the load factor.
+    StaticNonlinear,
     /// Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.
     Modal,
     /// Steady heat conduction with convection, flux and source boundaries; needs `k`.
@@ -772,6 +782,9 @@ fn many(shapes: &[ShapeSpec], where_: &str) -> Result<Vec<Shape>, Error> {
 /// Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "cmd")]
+// `step.add` carries every procedure's optional fields and is the one wide variant; Commands
+// are parsed, journaled and applied once each, never stored by the million.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Start a new, empty Model and Journal with this name. Discards the current Model, its
     /// Results and the undo history; it is the first entry of every Journal, so call it once
@@ -1166,7 +1179,8 @@ pub enum Command {
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
     /// `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
     /// `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
-    /// implicit, and `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well. An
+    /// implicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and
+    /// `increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An
     /// implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
     /// (default 0, Newmark average acceleration: second order, unconditionally stable and
     /// energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
@@ -1182,14 +1196,16 @@ pub enum Command {
     /// keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
     /// scaled, so its thermal strain is present in full at every increment. Without an
     /// `amplitude` a static Step is the single solve it has always been and retains nothing.
+    /// A static-nonlinear Step always steps, over `increments` equal pieces of the same
+    /// pseudo-time, and keeps every converged one.
     /// Heat-steady requires a finite positive material conductivity `k`; heat-transient also
     /// requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
     /// `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
-    /// on its own answer — today a radiation load — and are ignored by a Step that is linear.
+    /// on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
+    /// Step that is linear.
     /// Heat Results report net applied power, positive removed heat and stored-energy rate;
     /// transient powers belong to the last θ-method integration stage (radiation uses weighted
     /// endpoint fluxes), while temperature fields belong to its endpoint.
-
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -1242,10 +1258,26 @@ pub enum Command {
         initial_velocity: Option<Vec<InitialVelocitySpec>>,
         /// Convergence tolerance for a Step that must iterate: the relative sup-norm change of
         /// the solution between two passes. Default 1e-6.
+        /// Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
+        /// (default 10). More increments cost proportionally more but start each Newton solve
+        /// closer to equilibrium, which is what makes a stiffening or buckling model converge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        increments: Option<u32>,
+        /// Halvings a static-nonlinear Step may use when an increment does not converge
+        /// (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_cutbacks: Option<u32>,
+        /// Convergence tolerance for a Step that must iterate, relative in both cases: the
+        /// sup-norm change of the solution between two passes for a radiating heat Step
+        /// (default 1e-6), and the residual force and the displacement correction of one Newton
+        /// increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
+        /// tolerance, which is `solve.run`'s.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nonlinear_tolerance: Option<f64>,
-        /// Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
-        /// Default 50.
+        /// Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
+        /// heat Step (default 50); for static-nonlinear it is what makes an increment cut back
+        /// and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
+        /// five iterations from a good starting point).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nonlinear_max_iterations: Option<u32>,
     },

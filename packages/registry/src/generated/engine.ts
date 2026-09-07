@@ -706,11 +706,29 @@ export type Command =
       /**
        * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
        * the solution between two passes. Default 1e-6.
+       * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
+       * (default 10). More increments cost proportionally more but start each Newton solve
+       * closer to equilibrium, which is what makes a stiffening or buckling model converge.
+       */
+      increments?: number | null;
+      /**
+       * Halvings a static-nonlinear Step may use when an increment does not converge
+       * (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
+       */
+      maxCutbacks?: number | null;
+      /**
+       * Convergence tolerance for a Step that must iterate, relative in both cases: the
+       * sup-norm change of the solution between two passes for a radiating heat Step
+       * (default 1e-6), and the residual force and the displacement correction of one Newton
+       * increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
+       * tolerance, which is `solve.run`'s.
        */
       nonlinearTolerance?: number | null;
       /**
-       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
-       * Default 50.
+       * Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
+       * heat Step (default 50); for static-nonlinear it is what makes an increment cut back
+       * and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
+       * five iterations from a good starting point).
        */
       nonlinearMaxIterations?: number | null;
       cmd: "step.add";
@@ -1686,7 +1704,8 @@ export type ContactKind = "bonded";
 /**
  * Analysis procedures.
  */
-export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit" | "implicit";
+export type Procedure =
+  "static" | "static-nonlinear" | "modal" | "heat-steady" | "heat-transient" | "explicit" | "implicit";
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
@@ -2751,11 +2770,29 @@ export type ModelFile_Command =
       /**
        * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
        * the solution between two passes. Default 1e-6.
+       * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
+       * (default 10). More increments cost proportionally more but start each Newton solve
+       * closer to equilibrium, which is what makes a stiffening or buckling model converge.
+       */
+      increments?: number | null;
+      /**
+       * Halvings a static-nonlinear Step may use when an increment does not converge
+       * (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
+       */
+      maxCutbacks?: number | null;
+      /**
+       * Convergence tolerance for a Step that must iterate, relative in both cases: the
+       * sup-norm change of the solution between two passes for a radiating heat Step
+       * (default 1e-6), and the residual force and the displacement correction of one Newton
+       * increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
+       * tolerance, which is `solve.run`'s.
        */
       nonlinearTolerance?: number | null;
       /**
-       * Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
-       * Default 50.
+       * Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
+       * heat Step (default 50); for static-nonlinear it is what makes an increment cut back
+       * and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
+       * five iterations from a good starting point).
        */
       nonlinearMaxIterations?: number | null;
       cmd: "step.add";
@@ -4721,7 +4758,8 @@ export interface EngineError {
     | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"
-    | "explicit.unstable";
+    | "explicit.unstable"
+    | "newton.diverged";
   /**
    * One line a student understands.
    */
@@ -4927,6 +4965,8 @@ export interface Step {
   dtFactor?: number | null;
   amplitude?: Amplitude | null;
   initial?: number | null;
+  increments?: number | null;
+  maxCutbacks?: number | null;
   nonlinearTolerance?: number | null;
   nonlinearMaxIterations?: number | null;
   alpha?: number | null;

@@ -135,8 +135,8 @@ pub fn right_hand_side(s: &Scheme, m: &Csr, k: &Csr, f: &[f64], scale: f64, st: 
             ap * (s.rayleigh_beta * st.v_tilde[i] + st.u_tilde[i]) - s.alpha * (s.rayleigh_beta * st.v[i] + st.u[i]);
     }
     k.spmv(&st.x, &mut st.a);
-    for i in 0..st.r.len() {
-        st.r[i] = scale * f[i] - st.r[i] - st.a[i];
+    for ((r, a), fi) in st.r.iter_mut().zip(&st.a).zip(f) {
+        *r = scale * fi - *r - *a;
     }
 }
 

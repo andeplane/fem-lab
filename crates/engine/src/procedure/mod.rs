@@ -1,15 +1,17 @@
 //! Procedures: what a Step *does*. One `run` for every one of them (plan A §6).
 //!
-//! `Step::Static` is the linear static procedure ([`static_`]); [`modal`] finds natural
-//! frequencies by subspace iteration, [`heat`] solves steady and transient conduction,
-//! [`explicit`] integrates the equations of motion by central differences and [`implicit`] by
-//! the HHT-α method. Each one takes the same resolved [`Problem`] and answers the same
-//! [`StepResult`], so `solve.run` and every host read one shape whatever the physics.
+//! `Step::Static` is the linear static procedure ([`static_`]); [`nonlinear`] is its
+//! finite-deformation counterpart; [`modal`] finds natural frequencies by subspace iteration,
+//! [`heat`] solves steady and transient conduction, [`explicit`] integrates the equations of
+//! motion by central differences and [`implicit`] by the HHT-α method. Each one takes the same
+//! resolved [`Problem`] and answers the same [`StepResult`], so `solve.run` and every host read
+//! one shape whatever the physics.
 
 pub mod explicit;
 pub mod heat;
 pub mod implicit;
 pub mod modal;
+pub mod nonlinear;
 pub mod static_;
 
 use std::collections::BTreeMap;
@@ -152,6 +154,9 @@ pub enum Step {
     /// `output_every`-th increment is retained. Without one the other three fields mean
     /// nothing and the Step is the single solve it has always been.
     Static { solver: SolveOptions, dt: f64, t_end: f64, amplitude: Option<Amplitude>, output_every: usize },
+    /// Static equilibrium with geometric nonlinearity: total Lagrangian, Newton–Raphson,
+    /// load stepping ([`nonlinear`]).
+    StaticNonlinear(nonlinear::Options),
     /// Natural frequencies and mode shapes by subspace iteration (plan A §6).
     Modal { n_modes: usize, shift: Option<f64>, solver: SolveOptions },
     /// Steady conduction with convection, flux and radiation boundaries: `(K + H) T = f`,
@@ -205,6 +210,7 @@ impl Step {
     pub fn name(&self) -> &'static str {
         match self {
             Step::Static { .. } => "static",
+            Step::StaticNonlinear(..) => "static-nonlinear",
             Step::Modal { .. } => "modal",
             Step::HeatSteady { .. } => "heat-steady",
             Step::HeatTransient { .. } => "heat-transient",
@@ -318,6 +324,7 @@ pub async fn run(
         Step::Static { solver, dt, t_end, amplitude, output_every } => {
             static_::run(p, solver, *dt, *t_end, amplitude.as_ref(), *output_every, pool, gpu, progress).await
         }
+        Step::StaticNonlinear(options) => nonlinear::run(p, options, pool, gpu, progress).await,
         Step::Modal { n_modes, shift, solver } => modal::run(p, *n_modes, *shift, solver, pool, progress),
         Step::HeatSteady { solver, control } => heat::steady(p, solver, control, pool, gpu, progress).await,
         Step::HeatTransient { dt, t_end, theta, initial, output_every, amplitude, solver, control } => heat::transient(

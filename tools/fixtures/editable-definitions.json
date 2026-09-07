@@ -837,6 +837,34 @@
     "command": {
       "cmd": "step.add",
       "name": "editable",
+      "procedure": "static-nonlinear",
+      "constraints": [],
+      "loads": [],
+      "increments": 8,
+      "maxCutbacks": 3,
+      "nonlinearTolerance": 1e-09,
+      "nonlinearMaxIterations": 12,
+      "tEnd": "1 s",
+      "amplitude": {
+        "kind": "table",
+        "t": [
+          "0 s",
+          "0.5 s",
+          "1 s"
+        ],
+        "value": [
+          0,
+          1,
+          0
+        ]
+      }
+    }
+  },
+  {
+    "kind": "step",
+    "command": {
+      "cmd": "step.add",
+      "name": "editable",
       "procedure": "implicit",
       "constraints": [],
       "loads": [],
