@@ -11,7 +11,7 @@ use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
 use crate::model::{
     Body, Constraint, ConstraintKind, Cut, Idealisation, Load, LoadKind, Material, MeshSettings, Model, NamedSet,
-    SetSource, Step,
+    PointMass, SetSource, Step,
 };
 use crate::par::Pool;
 use crate::query::{Ack, Output};
@@ -595,6 +595,31 @@ impl Engine {
                 let set = NamedSet { name: name.clone(), source: SetSource::Region { where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
             }
+            Command::GeometryAddMass { name, at, mass } => {
+                check_name(name)?;
+                let kg = mass.si().map_err(|e| e.at("mass"))?;
+                if !(kg > 0.0 && kg.is_finite()) {
+                    return Err(Error::schema(format!("a point mass must be positive, got {kg} kg")).at("mass"));
+                }
+                let mut point = [0.0; 3];
+                for (k, q) in at.iter().enumerate() {
+                    point[k] = q.si().map_err(|e| e.at(format!("at[{k}]")))?;
+                }
+                // A point owns a Set of its own name, so it may not shadow one that exists.
+                if self.model.point(name).is_none()
+                    && (self.model.knows_set(name) || self.model.set_prefixes().contains(name))
+                {
+                    return Err(Error::new(
+                        ErrorCode::NameTaken,
+                        format!("'{name}' already names a Set or a Body, and a point mass owns a Set of its name"),
+                    )
+                    .at("name")
+                    .suggest("geometry.addMass with another name"));
+                }
+                self.invalidate_geometry();
+                let pm = PointMass { name: name.clone(), at: point, mass: kg };
+                Ok(upsert(&mut self.model.points, pm, |p| &p.name, ObjectKind::Set))
+            }
             Command::GeometryRemove { name } => self.geometry_remove(name),
             Command::MaterialAdd { name, e, nu, rho, alpha, k, cp, yield_, source } => {
                 check_name(name)?;
@@ -795,6 +820,22 @@ impl Engine {
                     name: name.clone(),
                     on: slave.clone(),
                     kind: ConstraintKind::Bonded { master: master.clone(), tol: t },
+                };
+                Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
+            }
+            Command::ConstraintCouple { name, point, on, kind } => {
+                check_name(name)?;
+                if self.model.point(point).is_none() {
+                    let known: Vec<&str> = self.model.points.iter().map(|p| p.name.as_str()).collect();
+                    return Err(Error::not_found("point mass", point, &known)
+                        .at("point")
+                        .suggest("geometry.addMass at the point you want to couple"));
+                }
+                self.check_set(on).map_err(|e| e.at("on"))?;
+                let c = Constraint {
+                    name: name.clone(),
+                    on: on.clone(),
+                    kind: ConstraintKind::Couple { point: point.clone(), coupling: *kind },
                 };
                 Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
             }
@@ -1224,14 +1265,18 @@ impl Engine {
             self.invalidate_geometry();
             return Ok(Output::None);
         }
+        if m.points.iter().any(|p| p.name == name) {
+            let users = set_users(m, name);
+            if !users.is_empty() {
+                let u: Vec<&str> = users.iter().map(String::as_str).collect();
+                return Err(in_use("point mass", name, &u, "objects"));
+            }
+            self.model.points.retain(|p| p.name != name);
+            self.invalidate_geometry();
+            return Ok(Output::None);
+        }
         if m.sets.iter().any(|s| s.name == name) {
-            let users: Vec<String> = m
-                .constraints
-                .iter()
-                .filter(|c| c.sets().contains(&name))
-                .map(|c| format!("constraint '{}'", c.name))
-                .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
-                .collect();
+            let users = set_users(m, name);
             if !users.is_empty() {
                 let u: Vec<&str> = users.iter().map(String::as_str).collect();
                 return Err(in_use("set", name, &u, "objects"));
@@ -1242,7 +1287,8 @@ impl Engine {
         let mut known: Vec<&str> = m.names(ObjectKind::Body);
         known.extend(m.cuts.iter().map(|c| c.name.as_str()));
         known.extend(m.names(ObjectKind::Set));
-        Err(Error::not_found("body, cut or set", name, &known))
+        known.extend(m.points.iter().map(|p| p.name.as_str()));
+        Err(Error::not_found("body, cut, set or point mass", name, &known))
     }
 
     fn check_set(&self, set: &str) -> Result<(), Error> {
@@ -1546,6 +1592,17 @@ fn check_name(name: &str) -> Result<(), Error> {
         .at("name"));
     }
     Ok(())
+}
+
+/// The Constraints and Loads that name a Set by that exact name. A point mass owns a Set of its
+/// own name, so removing either asks the same question and both ask it here.
+fn set_users(m: &Model, name: &str) -> Vec<String> {
+    m.constraints
+        .iter()
+        .filter(|c| c.sets().contains(&name))
+        .map(|c| format!("constraint '{}'", c.name))
+        .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
+        .collect()
 }
 
 fn in_use(kind: &str, name: &str, users: &[&str], what: &str) -> Error {
