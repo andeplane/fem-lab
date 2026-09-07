@@ -2,7 +2,7 @@
 //!
 //! This is the seam between the registry and the numerics. Everything above it speaks names,
 //! Sets and `Quantity`; everything below it speaks SI `f64` on a Mesh (plan A §6, plan B §2.1).
-//! Results are kept per Step with the Model hash they were solved at, so an edit does not throw
+//! Results are kept per Step with their Result-validity fingerprint (ADR 0017), so an edit does not throw
 //! them away — it makes them *stale*, which `query.result` says out loud.
 
 use femlab_geometry::Mesh;
@@ -441,13 +441,13 @@ impl Engine {
         // node count, which a field-length check cannot distinguish from a compatible Result.
         let prev = match &step.after {
             Some(name) => {
-                let current_hash = self.model_hash();
+                let current_hash = crate::hash::result_hash(&self.model);
                 let (hash, _, result) = self.results.get(name).ok_or_else(|| {
                     Error::new(ErrorCode::NotFound, format!("step '{name}' has no Result to continue from"))
                         .at(format!("step '{}'", step.name))
                         .suggest(format!("solve.run on step '{name}' first"))
                 })?;
-                if hash != &current_hash {
+                if hash.validity != current_hash {
                     return Err(Error::new(
                         ErrorCode::ResultStale,
                         format!("step '{name}' has a Result that does not match the current Model state"),
@@ -484,7 +484,8 @@ impl Engine {
             result
         };
         result.solver.time_ms = self.host.now_ms() - started;
-        let hash = self.model_hash();
+        let hash =
+            crate::engine::ResultHashes { model: self.model_hash(), validity: crate::hash::result_hash(&self.model) };
         self.results.insert(step.name.clone(), (hash, self.revision(), result));
         Ok(Output::Solve { summary: Box::new(self.result_summary(&step.name)) })
     }
@@ -579,7 +580,10 @@ impl Engine {
         let err: Vec<f64> = values.iter().map(|v| (v - extrapolated).abs()).collect();
         let rate = observed_rate(&h, &err);
         if restore == Some(false) {
-            let hash = self.model_hash();
+            let hash = crate::engine::ResultHashes {
+                model: self.model_hash(),
+                validity: crate::hash::result_hash(&self.model),
+            };
             self.results.insert(step.name, (hash, self.revision(), last.expect("at least two sizes ran")));
         } else {
             self.model.mesh = Some(settings);
@@ -663,7 +667,7 @@ impl Engine {
     pub(crate) fn stored<'e>(
         &'e self,
         step: Option<&str>,
-    ) -> Result<(&'e str, &'e String, u32, &'e StepResult), Error> {
+    ) -> Result<(&'e str, &'e crate::engine::ResultHashes, u32, &'e StepResult), Error> {
         let name: &'e str = match step {
             Some(n) => self.results.get_key_value(n).map(|(k, _)| k.as_str()).unwrap_or(""),
             None => self
@@ -678,10 +682,11 @@ impl Engine {
     }
 
     /// A Result safe to combine with the current Mesh. Node counts alone cannot detect
-    /// changed coordinates or connectivity; the Model hash covers every mesh input.
+    /// changed coordinates or connectivity; the Result-validity fingerprint covers every
+    /// physics and mesh input while deliberately excluding the display name (ADR 0017).
     pub(crate) fn current_result(&self, step: Option<&str>) -> Result<&StepResult, Error> {
         let (name, hash, _, result) = self.stored(step)?;
-        if *hash != self.model_hash() {
+        if hash.validity != crate::hash::result_hash(&self.model) {
             return Err(Error::new(
                 ErrorCode::ResultStale,
                 format!("step '{name}' has a Result that does not match the current Model state"),
@@ -744,7 +749,7 @@ impl Engine {
             step: name.to_string(),
             reaction_quantity: res.reaction_quantity,
             revision: revision + 1,
-            stale: *hash != self.model_hash(),
+            stale: hash.validity != crate::hash::result_hash(&self.model),
             solver: res.solver.solver.to_string(),
             iterations: res.solver.iterations as u32,
             residual: res.solver.rel_residual,

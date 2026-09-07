@@ -49,7 +49,7 @@ export function fakeTransport(): EngineTransport {
     field: vi.fn(),
     export: vi.fn(async () => ({ filename: 'beam.vtu', mime: 'application/xml', bytes: new Uint8Array([1, 2]) })),
     exportFile: vi.fn(async () => MODEL_FILE),
-    importFile: vi.fn(async () => ACK),
+    importFile: vi.fn(async () => ({ ...ACK, journal: MODEL_FILE.journal })),
     cancel: vi.fn(async () => undefined),
   };
 }
@@ -93,6 +93,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
     files: {
       pick: vi.fn(async () => JSON.stringify(MODEL_FILE)),
       download: vi.fn(),
+      markSaved: vi.fn(),
       shareLink: vi.fn(async () => ({ url: 'https://x/#j' })),
       restore: vi.fn(async (id?: string) => id === undefined ? SAVED : AUTOSAVES.find(x => x.id === id) ?? null),
       autosave: vi.fn(() => ({ enabled: autosaveOn, saved: SAVED })),

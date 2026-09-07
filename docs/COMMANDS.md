@@ -51,6 +51,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [model.new](#commands-model-new)
 - [model.rename](#commands-model-rename)
 - [model.setIdealisation](#commands-model-setIdealisation)
+- [model.setName](#commands-model-setName)
 - [model.setUnits](#commands-model-setUnits)
 - [plugin.load](#commands-plugin-load)
 - [solve.run](#commands-solve-run)
@@ -594,6 +595,19 @@ solid bodies; mixing them makes the Model ill-posed.
 | --- | --- | --- | --- |
 | idealisation | yes | <code>{"$ref":"#/$defs/IdealisationSpec"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"model.setIdealisation"}</code> |  |
+
+<a id="commands-model-setName"></a>
+
+### model.setName
+
+Change the Model's display name without resetting geometry, history or solved Results.
+A name-only edit is undoable and changes the full Model/Journal identity, but does not
+change the Result-validity fingerprint. Whitespace-only names are rejected.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"model.setName"}</code> |  |
 
 <a id="commands-model-setUnits"></a>
 
@@ -3067,6 +3081,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "units"
+      ]
+    },
+    {
+      "description": "Change the Model's display name without resetting geometry, history or solved Results.\nA name-only edit is undoable and changes the full Model/Journal identity, but does not\nchange the Result-validity fingerprint. Whitespace-only names are rejected.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "model.setName"
+        }
+      },
+      "required": [
+        "cmd",
+        "name"
       ]
     },
     {
