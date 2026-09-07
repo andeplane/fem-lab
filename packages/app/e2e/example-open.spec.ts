@@ -28,17 +28,19 @@ test('@cpu public example.open and gallery alias replay the same Journal and pre
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
   expect((await page.evaluate(() => window.fem.query.journal())).entries).toEqual(expected.journal.entries);
   await expect(dirty).toBeHidden();
-  await page.route('**/examples/broken.json', route => route.fulfill({ json: [
+  await page.route('**/examples/cantilever.json', route => route.fulfill({ json: [
     { cmd: { cmd: 'model.new', name: 'partial example' } },
     { cmd: { cmd: 'material.assign', material: 'missing', bodies: ['missing'] } },
   ] }));
   const error = await page.evaluate(async () => {
-    try { await window.fem.dispatch({ cmd: 'example.open', name: 'broken' }); return null; }
+    try { await window.fem.dispatch({ cmd: 'example.open', name: 'cantilever' }); return null; }
     catch (error) { return String(error); }
   });
   expect(error).not.toBeNull();
   await expect(name).toHaveValue('partial example');
   await expect(dirty).toBeVisible();
+  await expect(page.locator('.theory-panel')).toHaveCount(0);
+  await page.unroute('**/examples/cantilever.json');
   await page.evaluate(() => window.fem.dispatch({ cmd: 'example.open', name: 'cantilever' }));
   await expect(dirty).toBeHidden();
 });

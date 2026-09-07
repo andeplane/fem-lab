@@ -3,6 +3,7 @@
 // except through the transport, and nothing in the registry knows the DOM exists.
 import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { attachComparison, benchmarkProvenance, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
@@ -38,6 +39,16 @@ async function fetchExample(name: string): Promise<string> {
   const res = await fetch(`${import.meta.env.BASE_URL}examples/${name}.json`);
   if (!res.ok) throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
   return res.text();
+}
+
+async function fetchExampleMetadata(name: string): Promise<ActiveBenchmark> {
+  const res = await fetch(`${import.meta.env.BASE_URL}examples/index.json`);
+  if (!res.ok) throw new FemError('file.not-found', 'the bundled example index could not be read', name, 'reload the app and open Examples again');
+  const entry = ((await res.json()) as { examples?: ExampleEntry[] }).examples?.find((example) => example.name === name);
+  if (!entry || typeof entry.theory !== 'string' || typeof entry.expected?.reference !== 'string') {
+    throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
+  }
+  return attachComparison(entry);
 }
 
 /**
@@ -447,15 +458,19 @@ export function makeHostContext(
 
 /** Replay bundled Journals through the engine and publish a baseline only after a complete open. */
 export async function openExample(name: string, store: Store, transport: EngineTransport, refresh: () => Promise<void>, results?: ResultsView) {
+  const benchmark = await fetchExampleMetadata(name);
   const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
   // An example that ends on solve.run opens solved, and a solved Model is shown as one:
   // the last solve's Ack goes where the Solve button's would (results tab, contours).
+  store.set({ benchmark: null, study: null });
   let solved: unknown = null;
+  let study: unknown = null;
   let opened: Awaited<ReturnType<EngineTransport['exportFile']>>;
   try {
     for (const e of entries) {
       const ack = await transport.dispatch(e.cmd as never);
-      if (String(e.cmd.cmd).startsWith('solve.') || e.cmd.cmd === 'study.converge') solved = ack;
+      if (String(e.cmd.cmd).startsWith('solve.')) solved = ack;
+      if (e.cmd.cmd === 'study.converge') study = ack;
     }
     opened = await transport.exportFile();
   } finally {
@@ -465,7 +480,10 @@ export async function openExample(name: string, store: Store, transport: EngineT
   }
   // The gallery has done its job; leaving it up hides the Model it just opened.
   store.togglePanel('examples', false);
+  const provenance = benchmarkProvenance(store.state.model, store.state.journal, store.state.revision);
+  if (study) await results?.onAck(study);
   if (solved) await results?.onAck(solved);
+  store.set({ benchmark: { ...benchmark, ...provenance } });
   // An example is an explicit open. Use the normalized Journal captured from the engine
   // before UI hydration, and establish the baseline only after the whole open succeeded.
   store.markSaved(opened.journal);
