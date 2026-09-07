@@ -316,8 +316,9 @@ export interface Fem {
      * temperature field and turns it into thermal stress. The remaining fields belong to one
      * procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-     * `dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
-     * `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+     * `dtFactor` and `outputEvery` to explicit, `fStart`, `fStop`, `points`, `sweep`,
+     * `dampingRatio`, `rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, and
+     * `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
      * prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
      * defaulting to the whole of it, so a table written in step fraction works unchanged) and
      * keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
@@ -330,6 +331,12 @@ export interface Fem {
      * Heat Results report net applied power, positive removed heat and stored-energy rate;
      * transient powers belong to the last θ-method integration stage (radiation uses weighted
      * endpoint fluxes), while temperature fields belong to its endpoint.
+     * A harmonic Step requires `after` to name a Step whose `modal` Result is current: it
+     * superposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is
+     * bounded by that Step's `nModes`. It drives its own Loads at each swept frequency and
+     * answers a nodal amplitude and a phase lag per retained frequency; `displacement` is the
+     * amplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero
+     * — a moving support is base excitation, which this procedure does not do.
      */
     add(args: Omit<Extract<Command, { cmd: 'step.add' }>, 'cmd'>): Promise<Ack>;
     /**

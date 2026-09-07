@@ -71,6 +71,26 @@ pub fn assemble_mass(p: &Problem<'_>, pat: &Pattern, lumped: bool) -> Result<Csr
     Ok(m)
 }
 
+/// The modal damping ratio of each mode, shared by every post-modal procedure.
+///
+/// `ratio` is a constant fraction of critical applied to every mode; `rayleigh` is the
+/// `(alpha, beta)` of `C = alpha M + beta K`, which a mass-orthonormal basis diagonalises into
+/// `zeta_k = alpha / (2 omega_k) + beta omega_k / 2` — alpha damping the low modes and beta the
+/// high ones. A rigid mode has `omega_k = 0` and no mass-proportional term to speak of: its
+/// response is multiplied by `omega_k` anyway, so it takes the constant ratio alone rather than
+/// an infinity.
+pub fn damping_ratios(frequencies: &[f64], ratio: Option<f64>, rayleigh: (f64, f64)) -> Vec<f64> {
+    let (alpha, beta) = rayleigh;
+    frequencies
+        .iter()
+        .map(|hz| {
+            let w = 2.0 * std::f64::consts::PI * hz;
+            let mass_term = if w > 0.0 { alpha / (2.0 * w) } else { 0.0 };
+            ratio.unwrap_or(0.0) + mass_term + beta * w / 2.0
+        })
+        .collect()
+}
+
 /// The `no-density` error: a modal or explicit Step over a Material without `rho`.
 fn no_density() -> Error {
     Error::new(ErrorCode::ModelIllPosed, "the mass matrix is zero: no Material in this Step has a density")
@@ -328,6 +348,17 @@ fn transpose(a: &[f64], q: usize) -> Vec<f64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn damping_ratios_add_the_constant_and_both_rayleigh_terms() {
+        // omega = 2 pi for 1 Hz: alpha/(2w) = 1/(4 pi), beta w / 2 = pi.
+        let z = super::damping_ratios(&[0.0, 1.0], Some(0.02), (1.0, 1.0));
+        assert_eq!(z[0], 0.02, "a rigid mode takes the constant ratio alone");
+        let expected = 0.02 + 1.0 / (4.0 * std::f64::consts::PI) + std::f64::consts::PI;
+        assert!(libm::fabs(z[1] - expected) < 1e-15, "{z:?}");
+        // No ratio and no Rayleigh is an undamped basis.
+        assert_eq!(super::damping_ratios(&[3.0], None, (0.0, 0.0)), vec![0.0]);
+    }
+
     #[test]
     fn dense_modes_preserve_global_parallelism_and_the_generalized_eigenproblem() {
         let before = faer::get_global_parallelism();

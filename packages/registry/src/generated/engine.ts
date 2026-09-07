@@ -676,6 +676,69 @@ export type Command =
        * Default 50.
        */
       nonlinearMaxIterations?: number | null;
+      /**
+       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       */
+      fStart?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Last frequency of a harmonic sweep; must be above fStart.
+       */
+      fStop?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * How many frequencies the sweep evaluates, including both endpoints. At least 2.
+       */
+      points?: number | null;
+      /**
+       * Frequency spacing of a harmonic sweep; default linear.
+       */
+      sweep?: SweepSpacing | null;
+      /**
+       * Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
+       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+       */
+      dampingRatio?: number | null;
+      /**
+       * Mass-proportional Rayleigh damping α of `C = αM + βK`, which contributes
+       * `ζ = α / (2ω)` — most of it at low frequency. Non-negative, e.g. "0.5 1/s".
+       */
+      rayleighAlpha?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Stiffness-proportional Rayleigh damping β of `C = αM + βK`, which contributes
+       * `ζ = βω / 2` — most of it at high frequency. Non-negative, e.g. "1e-5 s".
+       */
+      rayleighBeta?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
       cmd: "step.add";
     }
   | {
@@ -1649,7 +1712,7 @@ export type ContactKind = "bonded";
 /**
  * Analysis procedures.
  */
-export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
+export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit" | "harmonic";
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
@@ -1694,6 +1757,10 @@ export type AmplitudeSpec =
       value: number[];
       kind: "table";
     };
+/**
+ * How a harmonic Step spaces the frequencies between `fStart` and `fStop`.
+ */
+export type SweepSpacing = "linear" | "log";
 /**
  * Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations
  * (100 000 in the browser, where the heap is smaller) and above that a conjugate gradient
@@ -2684,6 +2751,69 @@ export type ModelFile_Command =
        * Default 50.
        */
       nonlinearMaxIterations?: number | null;
+      /**
+       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       */
+      fStart?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Last frequency of a harmonic sweep; must be above fStart.
+       */
+      fStop?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * How many frequencies the sweep evaluates, including both endpoints. At least 2.
+       */
+      points?: number | null;
+      /**
+       * Frequency spacing of a harmonic sweep; default linear.
+       */
+      sweep?: SweepSpacing | null;
+      /**
+       * Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
+       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+       */
+      dampingRatio?: number | null;
+      /**
+       * Mass-proportional Rayleigh damping α of `C = αM + βK`, which contributes
+       * `ζ = α / (2ω)` — most of it at low frequency. Non-negative, e.g. "0.5 1/s".
+       */
+      rayleighAlpha?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Stiffness-proportional Rayleigh damping β of `C = αM + βK`, which contributes
+       * `ζ = βω / 2` — most of it at high frequency. Non-negative, e.g. "1e-5 s".
+       */
+      rayleighBeta?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
       cmd: "step.add";
     }
   | {
@@ -4002,6 +4132,10 @@ export interface ResultSummary {
    */
   history?: HistoryRow[];
   /**
+   * One row per retained frequency of a harmonic sweep; empty for every other procedure.
+   */
+  sweep?: SweepRow[];
+  /**
    * Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
    * conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
    * Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
@@ -4063,6 +4197,18 @@ export interface HistoryRow {
   time: Valued;
   min: Valued;
   max: Valued;
+}
+/**
+ * One retained frequency of a harmonic sweep.
+ *
+ * `amplitude` is the largest displacement amplitude any DOF reached at this frequency, and
+ * `phase` is that same DOF's lag behind the driving load, so the pair describes one real
+ * motion: `u(t) = amplitude · cos(2π f t − phase)`.
+ */
+export interface SweepRow {
+  frequency: Valued;
+  amplitude: Valued;
+  phase: Valued;
 }
 export interface RetainedResults {
   limit: number;
@@ -4818,6 +4964,13 @@ export interface Step {
   initial?: number | null;
   nonlinearTolerance?: number | null;
   nonlinearMaxIterations?: number | null;
+  fStart?: number | null;
+  fStop?: number | null;
+  points?: number | null;
+  sweep?: SweepSpacing | null;
+  dampingRatio?: number | null;
+  rayleighAlpha?: number | null;
+  rayleighBeta?: number | null;
 }
 /**
  * A Plugin used by the Model (phase P).

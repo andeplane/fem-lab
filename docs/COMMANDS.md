@@ -780,8 +780,9 @@ Step whose Result this one continues — a static Step after a heat Step picks u
 temperature field and turns it into thermal stress. The remaining fields belong to one
 procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
-`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+`dtFactor` and `outputEvery` to explicit, `fStart`, `fStop`, `points`, `sweep`,
+`dampingRatio`, `rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, and
+`amplitude`, `dt`, `tEnd` and `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
 prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
 defaulting to the whole of it, so a table written in step fraction works unchanged) and
 keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
@@ -794,6 +795,12 @@ on its own answer — today a radiation load — and are ignored by a Step that 
 Heat Results report net applied power, positive removed heat and stored-energy rate;
 transient powers belong to the last θ-method integration stage (radiation uses weighted
 endpoint fluxes), while temperature fields belong to its endpoint.
+A harmonic Step requires `after` to name a Step whose `modal` Result is current: it
+superposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is
+bounded by that Step's `nModes`. It drives its own Loads at each swept frequency and
+answers a nodal amplitude and a phase lag per retained frequency; `displacement` is the
+amplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero
+— a moving support is base excitation, which this procedure does not do.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -814,6 +821,13 @@ endpoint fluxes), while temperature fields belong to its endpoint.
 | initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
 | nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Convergence tolerance for a Step that must iterate: the relative sup-norm change of the solution between two passes. Default 1e-6. |
 | nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iteration budget for a Step that must iterate; exceeding it is &#96;solve.diverged&#96;. Default 50. |
+| fStart | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | First frequency of a harmonic sweep, e.g. "1 Hz". |
+| fStop | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | Last frequency of a harmonic sweep; must be above fStart. |
+| points | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | How many frequencies the sweep evaluates, including both endpoints. At least 2. |
+| sweep | no | <code>{"anyOf":[{"$ref":"#/$defs/SweepSpacing"},{"type":"null"}]}</code> | Frequency spacing of a harmonic sweep; default linear. |
+| dampingRatio | no | <code>{"type":["number","null"],"format":"double"}</code> | Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02 for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. |
+| rayleighAlpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | Mass-proportional Rayleigh damping α of &#96;C = αM + βK&#96;, which contributes &#96;ζ = α / (2ω)&#96; — most of it at low frequency. Non-negative, e.g. "0.5 1/s". |
+| rayleighBeta | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Stiffness-proportional Rayleigh damping β of &#96;C = αM + βK&#96;, which contributes &#96;ζ = βω / 2&#96; — most of it at high frequency. Non-negative, e.g. "1e-5 s". |
 | cmd | yes | <code>{"type":"string","const":"step.add"}</code> |  |
 
 <a id="commands-step-remove"></a>
@@ -1763,6 +1777,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
       "const": "explicit"
+    },
+    {
+      "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
+      "type": "string",
+      "const": "harmonic"
     }
   ]
 }
@@ -1830,6 +1849,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "force"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_frequency</summary>
+
+```json
+{
+  "description": "A frequency with unit, e.g. \"50 Hz\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "frequency"
 }
 ```
 
@@ -2870,6 +2902,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
     "cpu-direct",
     "cpu-pcg",
     "gpu-pcg"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>SweepSpacing</summary>
+
+```json
+{
+  "description": "How a harmonic Step spaces the frequencies between `fStart` and `fStop`.",
+  "oneOf": [
+    {
+      "description": "Equal steps in frequency; both endpoints are hit exactly.",
+      "type": "string",
+      "const": "linear"
+    },
+    {
+      "description": "Equal ratios between neighbours, which is what a resonance plot wants. `fStart` must be\nabove zero.",
+      "type": "string",
+      "const": "log"
+    }
   ]
 }
 ```
@@ -4591,7 +4646,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, `fStart`, `fStop`, `points`, `sweep`,\n`dampingRatio`, `rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, and\n`amplitude`, `dt`, `tEnd` and `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.\nA harmonic Step requires `after` to name a Step whose `modal` Result is current: it\nsuperposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is\nbounded by that Step's `nModes`. It drives its own Loads at each swept frequency and\nanswers a nodal amplitude and a phase lag per retained frequency; `displacement` is the\namplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero\n— a moving support is base excitation, which this procedure does not do.",
       "type": "object",
       "properties": {
         "name": {
@@ -4722,6 +4777,78 @@ Expand a definition to inspect its complete schema. Definition names are local t
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "fStart": {
+          "description": "First frequency of a harmonic sweep, e.g. \"1 Hz\".",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_frequency"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fStop": {
+          "description": "Last frequency of a harmonic sweep; must be above fStart.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_frequency"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "points": {
+          "description": "How many frequencies the sweep evaluates, including both endpoints. At least 2.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "sweep": {
+          "description": "Frequency spacing of a harmonic sweep; default linear.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SweepSpacing"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dampingRatio": {
+          "description": "Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02\nfor 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "rayleighAlpha": {
+          "description": "Mass-proportional Rayleigh damping α of `C = αM + βK`, which contributes\n`ζ = α / (2ω)` — most of it at low frequency. Non-negative, e.g. \"0.5 1/s\".",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_frequency"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rayleighBeta": {
+          "description": "Stiffness-proportional Rayleigh damping β of `C = αM + βK`, which contributes\n`ζ = βω / 2` — most of it at high frequency. Non-negative, e.g. \"1e-5 s\".",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cmd": {
           "type": "string",
@@ -5900,6 +6027,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
       "const": "explicit"
+    },
+    {
+      "description": "Steady-state response to a sinusoidal load over a frequency sweep, by mode\nsuperposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,\n`fStop` and `points`.",
+      "type": "string",
+      "const": "harmonic"
     }
   ]
 }
@@ -5967,6 +6099,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "force"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_frequency</summary>
+
+```json
+{
+  "description": "A frequency with unit, e.g. \"50 Hz\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "frequency"
 }
 ```
 
@@ -7065,6 +7210,29 @@ Expand a definition to inspect its complete schema. Definition names are local t
     "cpu-direct",
     "cpu-pcg",
     "gpu-pcg"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>SweepSpacing</summary>
+
+```json
+{
+  "description": "How a harmonic Step spaces the frequencies between `fStart` and `fStop`.",
+  "oneOf": [
+    {
+      "description": "Equal steps in frequency; both endpoints are hit exactly.",
+      "type": "string",
+      "const": "linear"
+    },
+    {
+      "description": "Equal ratios between neighbours, which is what a resonance plot wants. `fStart` must be\nabove zero.",
+      "type": "string",
+      "const": "log"
+    }
   ]
 }
 ```

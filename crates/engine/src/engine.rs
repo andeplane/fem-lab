@@ -932,6 +932,13 @@ impl Engine {
                 initial,
                 nonlinear_tolerance,
                 nonlinear_max_iterations,
+                f_start,
+                f_stop,
+                points,
+                sweep,
+                damping_ratio,
+                rayleigh_alpha,
+                rayleigh_beta,
             } => {
                 check_name(name)?;
                 if let Some(tol) = nonlinear_tolerance {
@@ -947,6 +954,15 @@ impl Engine {
                     return Err(Error::schema("nonlinearMaxIterations must be at least 1")
                         .at("nonlinearMaxIterations")
                         .suggest("step.add with nonlinearMaxIterations 50"));
+                }
+                if let Some(zeta) = damping_ratio {
+                    if !(*zeta >= 0.0 && *zeta < 1.0) {
+                        return Err(Error::schema(format!(
+                            "dampingRatio is a fraction of critical damping in [0, 1), got {zeta}"
+                        ))
+                        .at("dampingRatio")
+                        .suggest("step.add with dampingRatio 0.02"));
+                    }
                 }
                 for c in constraints {
                     self.model
@@ -985,6 +1001,13 @@ impl Engine {
                     initial: opt_si(initial, "initial")?,
                     nonlinear_tolerance: *nonlinear_tolerance,
                     nonlinear_max_iterations: *nonlinear_max_iterations,
+                    f_start: opt_si(f_start, "fStart")?,
+                    f_stop: opt_si(f_stop, "fStop")?,
+                    points: *points,
+                    sweep: *sweep,
+                    damping_ratio: *damping_ratio,
+                    rayleigh_alpha: non_negative(opt_si(rayleigh_alpha, "rayleighAlpha")?, "rayleighAlpha")?,
+                    rayleigh_beta: non_negative(opt_si(rayleigh_beta, "rayleighBeta")?, "rayleighBeta")?,
                 };
                 Ok(upsert(&mut self.model.steps, s, |s| &s.name, ObjectKind::Step))
             }
@@ -1552,6 +1575,19 @@ fn in_use(kind: &str, name: &str, users: &[&str], what: &str) -> Error {
 
 fn geom_error(e: femlab_geometry::GeomError, where_: &str) -> Error {
     Error::new(ErrorCode::Schema, e.0).at(where_)
+}
+
+/// A Rayleigh damping coefficient must be non-negative and finite, or `C = alpha M + beta K`
+/// stops being positive semidefinite and a "damped" mode feeds itself energy.
+fn non_negative(v: Option<f64>, field: &'static str) -> Result<Option<f64>, Error> {
+    match v {
+        Some(x) if !(x >= 0.0 && x.is_finite()) => Err(Error::schema(format!(
+            "{field} is a Rayleigh damping coefficient and must be finite and non-negative, got {x}"
+        ))
+        .at(field)
+        .suggest(format!("step.add with {field} 0"))),
+        other => Ok(other),
+    }
 }
 
 fn opt_si<D: crate::units::Dim>(q: &Option<Q<D>>, field: &str) -> Result<Option<f64>, Error> {

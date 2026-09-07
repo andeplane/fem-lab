@@ -238,6 +238,13 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 initial: x.initial.map(|v| Q::new(v, "K")),
                 nonlinear_tolerance: x.nonlinear_tolerance,
                 nonlinear_max_iterations: x.nonlinear_max_iterations,
+                f_start: x.f_start.map(|v| Q::new(v, "Hz")),
+                f_stop: x.f_stop.map(|v| Q::new(v, "Hz")),
+                points: x.points,
+                sweep: x.sweep,
+                damping_ratio: x.damping_ratio,
+                rayleigh_alpha: x.rayleigh_alpha.map(|v| Q::new(v, "Hz")),
+                rayleigh_beta: x.rayleigh_beta.map(|v| Q::new(v, "s")),
                 amplitude: x.amplitude.as_ref().map(|a| match a {
                     Amplitude::Sine { amplitude, period } => {
                         AmplitudeSpec::Sine { amplitude: *amplitude, period: Q::new(*period, "s") }

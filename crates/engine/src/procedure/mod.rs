@@ -1,12 +1,14 @@
 //! Procedures: what a Step *does*. One `run` for every one of them (plan A §6).
 //!
 //! `Step::Static` is the linear static procedure ([`static_`]); [`modal`] finds natural
-//! frequencies by subspace iteration, [`heat`] solves steady and transient conduction, and
+//! frequencies by subspace iteration, [`harmonic`] superposes those modes into a frequency
+//! response, [`heat`] solves steady and transient conduction, and
 //! [`explicit`] integrates the equations of motion by central differences. Each one takes the
 //! same resolved [`Problem`] and answers the same [`StepResult`], so `solve.run` and every
 //! host read one shape whatever the physics.
 
 pub mod explicit;
+pub mod harmonic;
 pub mod heat;
 pub mod modal;
 pub mod static_;
@@ -170,6 +172,21 @@ pub enum Step {
         solver: SolveOptions,
         control: NonlinearControl,
     },
+    /// Steady-state harmonic response over a frequency sweep, by superposing the modes of the
+    /// `modal` Step this one continues (ADR 0020). It solves nothing.
+    Harmonic {
+        f_start: f64,
+        f_stop: f64,
+        /// Frequencies evaluated, endpoints included; at least 2.
+        points: usize,
+        spacing: crate::command::SweepSpacing,
+        /// Constant modal damping ratio added to every mode.
+        damping_ratio: Option<f64>,
+        /// `(alpha, beta)` of Rayleigh damping `C = alpha M + beta K`.
+        rayleigh: (f64, f64),
+        /// Keep one retained frequency every this many grid points.
+        output_every: usize,
+    },
     /// Explicit dynamics by central differences on a lumped mass (plan A §6).
     Explicit {
         t_end: f64,
@@ -190,9 +207,23 @@ impl Step {
             Step::Modal { .. } => "modal",
             Step::HeatSteady { .. } => "heat-steady",
             Step::HeatTransient { .. } => "heat-transient",
+            Step::Harmonic { .. } => "harmonic",
             Step::Explicit { .. } => "explicit",
         }
     }
+}
+
+/// A harmonic Step's frequency response: the frequencies it retained, and the nodal
+/// displacement amplitude and phase lag at each of them.
+///
+/// `amplitude[i]` and `phase[i]` are three-component nodal fields like any other, parallel to
+/// `frequencies[i]` in Hz. The phase is in radians and is the lag behind the driving load, so
+/// `u(t) = amplitude · cos(2π f t − phase)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sweep {
+    pub frequencies: Vec<f64>,
+    pub amplitude: Vec<FieldData>,
+    pub phase: Vec<FieldData>,
 }
 
 /// A transient Step's output: the times it kept and the nodal field at each of them.
@@ -274,6 +305,8 @@ pub struct StepResult {
     pub modes: Vec<FieldData>,
     /// Times and fields a transient Step kept.
     pub history: Option<History>,
+    /// Frequencies and response fields a harmonic Step kept; `None` for every other procedure.
+    pub sweep: Option<Sweep>,
     pub solver: SolveInfo,
     pub warnings: Vec<Warning>,
     /// Solver-used optional material defaults, captured by the Model-to-Problem boundary only
@@ -285,14 +318,13 @@ pub struct StepResult {
 ///
 /// `prev` is the previous Step's Result, which `solve.run` passes when the Step names another
 /// with `after`; the thermal-to-structural chain reads its temperature field before the
-/// Problem reaches here, so the procedures themselves only need it for the modal and explicit
-/// restarts a later phase adds.
+/// Problem reaches here, and the harmonic procedure reads its frequencies and mode shapes.
 pub async fn run(
     p: &Problem<'_>,
     step: &Step,
     pool: &crate::par::Pool,
     gpu: Option<&crate::gpu::Gpu>,
-    _prev: Option<&StepResult>,
+    prev: Option<&StepResult>,
     progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
     match step {
@@ -311,6 +343,19 @@ pub async fn run(
             amplitude.as_ref(),
             solver,
             control,
+            pool,
+            progress,
+        ),
+        Step::Harmonic { f_start, f_stop, points, spacing, damping_ratio, rayleigh, output_every } => harmonic::run(
+            p,
+            prev,
+            *f_start,
+            *f_stop,
+            *points,
+            *spacing,
+            *damping_ratio,
+            *rayleigh,
+            *output_every,
             pool,
             progress,
         ),
@@ -355,6 +400,7 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
         frequencies: Vec::new(),
         modes: Vec::new(),
         history: None,
+        sweep: None,
         solver,
         warnings: Vec::new(),
         assumptions: Vec::new(),

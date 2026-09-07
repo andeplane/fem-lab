@@ -1,0 +1,199 @@
+{
+  "name": "harmonic-cantilever-sweep",
+  "reference": "Benchmark F6: a 30-55 Hz sweep at 0.5 Hz spacing on B4's clamped-free steel beam (L = 1 m, 50 x 50 mm), damped at zeta = 0.02 and driven by a 1 kN tip traction. Retained row 24 is 42.0 Hz, the grid point nearest the beam's first bending mode, and three independent things say so: its frequency is Euler-Bernoulli's f1 = (1.8751^2 / 2 pi) sqrt(EI / rho A L^4) = 41.91 Hz within 1 %, its phase lag is the quadrature pi/2 that only a resonance produces, and its amplitude is the static tip deflection amplified by 1/(2 zeta) = 25. That last identity is exact only for the first mode: the static answer also carries the flexibility of the higher modes, which are not amplified at 42 Hz, so the sweep lands about 3 % below it and the gate is 4 %.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "harmonic-cantilever-sweep"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "beam",
+      "size": [
+        "1 m",
+        "50 mm",
+        "50 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3",
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "beam"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 20,
+          "ny": 2,
+          "nz": 2
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.xmin"
+    },
+    {
+      "cmd": "load.traction",
+      "name": "tip",
+      "on": "beam.xmax",
+      "total": [
+        "0 N",
+        "0 N",
+        "1 kN"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "tip-static",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "tip"
+      ],
+      "output": [
+        "displacement"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "modes",
+      "procedure": "modal",
+      "constraints": [
+        "root"
+      ],
+      "loads": [],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 4
+    },
+    {
+      "cmd": "step.add",
+      "name": "sweep",
+      "procedure": "harmonic",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "tip"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "after": "modes",
+      "fStart": "30 Hz",
+      "fStop": "55 Hz",
+      "points": 51,
+      "sweep": "linear",
+      "dampingRatio": 0.02
+    },
+    {
+      "cmd": "solve.run",
+      "step": "tip-static"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "modes"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "sweep"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep"
+      },
+      "path": "/sweep/24/frequency/value",
+      "expect": 41.9107,
+      "tol": 0.01,
+      "rel": true,
+      "note": "the peak row sits on the Euler-Bernoulli first bending frequency"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep"
+      },
+      "path": "/sweep/24/amplitude/value",
+      "expect": 75.76575407585221,
+      "tol": 0.04,
+      "rel": true,
+      "note": "resonant amplification of the static tip deflection by 1/(2 zeta)"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep"
+      },
+      "path": "/sweep/24/phase/value",
+      "expect": 1.5707963267948966,
+      "tol": 0.05,
+      "rel": true,
+      "note": "a driven resonance responds in quadrature with its load"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes"
+      },
+      "path": "/frequencies/0/value",
+      "expect": 41.9107,
+      "tol": 0.015,
+      "rel": true,
+      "note": "the modal basis the sweep superposes, gated as B4 gates it"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "tip-static"
+      },
+      "path": "/extremes/2/max/value",
+      "expect": 3.0306301630340884,
+      "tol": 1e-09,
+      "rel": true,
+      "note": "the static tip deflection the amplification check is measured against"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep"
+      },
+      "path": "/sweep/24/frequency/unit",
+      "expect": "Hz"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "sweep"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

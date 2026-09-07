@@ -831,5 +831,24 @@
       "nonlinearTolerance": 1e-08,
       "nonlinearMaxIterations": 25
     }
+  },
+  {
+    "kind": "step",
+    "command": {
+      "cmd": "step.add",
+      "name": "editable",
+      "procedure": "harmonic",
+      "constraints": [],
+      "loads": [],
+      "after": "prior",
+      "fStart": "10 Hz",
+      "fStop": "200 Hz",
+      "points": 64,
+      "sweep": "log",
+      "dampingRatio": 0.02,
+      "rayleighAlpha": "0.5 Hz",
+      "rayleighBeta": "1e-5 s",
+      "outputEvery": 2
+    }
   }
 ]

@@ -55,6 +55,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cook-membrane-plane-strain-quad8 | green | 3/3 | 21.50184 | 21.5262 | 0.11 % |
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
+| harmonic-cantilever-sweep | green | 7/7 | 42 | 41.9107 | 0.21 % |
+| harmonic-sdof-magnification | green | 29/29 | 3.5731e-6 | 3.5731e-6 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
 | imported-mesh-prism | green | 6/6 | 6.24289 | 6.24289 | 0.00 % |
 | kirsch-quarter-quad8 | green | 4/4 | 302.187087 | 300 | 0.73 % |
@@ -72,6 +74,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | nafems-le1-quad8 | green | 3/3 | 92.582436 | 92.7 | 0.13 % |
 | le10-full-face-hex20 | green | 3/3 | -5.234137 | -5.25 | 0.30 % |
 | le10-full-face-hex8 | green | 3/3 | -5.400396 | -5.400396 | 0.00 % |
+| nafems-le10-tet10 | green | 3/3 | -5.163953 | -5.25 | 1.64 % |
 | nafems-t3-transient | green | 4/4 | 36.792975 | 36.6 | 0.53 % |
 | nafems-t4-conduction | green | 2/2 | 18.254191 | 18.3 | 0.25 % |
 | near-incompressible-049 | green | 4/4 | 5.9894e-5 | 5.9898e-5 | 0.01 % |
@@ -551,6 +554,10 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
 | F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+| F5 | Damped harmonic magnification of one degree of freedom, r = f/f_n from 0.1 to 3.0, ζ = 0.02, 0.05 and 0.2 | `\|u\|/u_static = 1/√((1−r²)² + (2ζr)²)` and `phase = atan2(2ζr, 1−r²)` — exact for one degree of freedom, so mode superposition is exact too | 1e-8 on magnitude and phase | harmonic response by mode superposition (ADR 0020) | green + engine test |
+| F6 | Harmonic sweep on B1's cantilever, ζ = 0.02, 30–55 Hz at 0.5 Hz | the peak row sits on B4's Euler–Bernoulli f₁ = 41.91 Hz; its phase is the quadrature π/2 a resonance produces; its amplitude is the static tip deflection amplified by 1/(2ζ) | 1 % in frequency, 5 % in phase, 4 % in amplitude | the sweep finds the real resonance of a real structure | green |
+| F9 | NAFEMS R0016 case 5H, forced harmonic response of the simply-supported thin plate | the published peak displacement and stress table | — | | **resolve** — needs the published table |
+| F10 | NAFEMS R0016 case 5R, random response of the same plate | the published RMS table | — | | **resolve** — needs the published table |
 
 The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
 the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
@@ -593,6 +600,33 @@ conserved to roundoff and the total momentum is the block's mass times `v₀`. F
 monitor is an energy balance — for a linear undamped system the energy in the model can never
 exceed the work the loads have done, so `E > 1e3 · max(E₀, |W|)` is the test — which is what
 lets a Step that starts from rest under a load be watched at all.
+
+**F5 is gated at roundoff on purpose.** A single degree of freedom is the one case where mode
+superposition is not an approximation: the modal basis is complete, so `u(ω)` is the closed form
+evaluated in floating point and nothing else. A tolerance of 1 % there would pass a wrong sign in
+the complex denominator, a phase convention off by π, or a modal participation scaled by the
+wrong normalisation. `harmonic-sdof-magnification` is one hex8 clamped at `xmin` and guided at
+`xmax`, so the only free displacements are the four axial ones on the loaded face; the symmetry
+of that square face makes their uniform combination its own mode, and a uniform axial traction
+excites nothing else. The case pins `u_static` from the *static* procedure and `f_n` from the
+*modal* one with their own checks, so the closed form it gates against is anchored on two
+independent code paths rather than on the one under test. The same curve runs as an engine test
+at every one of the thirty swept ratios and all three damping ratios.
+
+**F6's amplitude gate is 4 %, not 3 %, and the reason is physics rather than slack.** The
+identity `peak = u_static / (2ζ)` is exact for a single mode. A real cantilever's static tip
+deflection also contains the flexibility of every higher mode, and those are not amplified at the
+first resonance, so a converged sweep lands a little below the identity — 2.97 % below on this
+mesh. Gating at 3 % would leave no room for a legitimate solver change. The row that the peak
+occupies is identified three ways, not one: its frequency is Euler–Bernoulli's within 0.21 %, its
+phase is 1.526 rad against π/2, and its amplitude is 73.52 mm against the 75.77 mm the
+amplification identity predicts.
+
+**F9 and F10 are not claimed.** NAFEMS R0016, *Selected Benchmarks for Forced Vibration*, is the
+right published set for both harmonic and random response and covers them on one plate. Nobody on
+this change has read the publication, and BENCHMARKS' own rule forbids hard-coding a remembered
+number, so the rows say **resolve** and the harmonic PR is gated on F5 and F6, which are closed
+forms.
 
 F1/F2b also regress uniform gravity with the same HRZ inertia used by explicit dynamics (#278).
 Every retained nodal displacement equals `v₀ t + g t²/2` within `1e-10 tEnd` m for all eight

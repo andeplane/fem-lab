@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::units::{
-    Acceleration, Area, Conductivity, Density, Force, HeatFlux, HeatSource, HeatTransfer, Length, SecondMoment,
-    SpecificHeat, Stress, Temperature, ThermalExpansion, Time, UnitSet, Q,
+    Acceleration, Area, Conductivity, Density, Force, Frequency, HeatFlux, HeatSource, HeatTransfer, Length,
+    SecondMoment, SpecificHeat, Stress, Temperature, ThermalExpansion, Time, UnitSet, Q,
 };
 
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
@@ -105,6 +105,22 @@ pub enum Procedure {
     HeatTransient,
     /// Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.
     Explicit,
+    /// Steady-state response to a sinusoidal load over a frequency sweep, by mode
+    /// superposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,
+    /// `fStop` and `points`.
+    Harmonic,
+}
+
+/// How a harmonic Step spaces the frequencies between `fStart` and `fStop`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SweepSpacing {
+    /// Equal steps in frequency; both endpoints are hit exactly.
+    #[default]
+    Linear,
+    /// Equal ratios between neighbours, which is what a resonance plot wants. `fStart` must be
+    /// above zero.
+    Log,
 }
 
 /// A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
@@ -1150,8 +1166,9 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
-    /// `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+    /// `dtFactor` and `outputEvery` to explicit, `fStart`, `fStop`, `points`, `sweep`,
+    /// `dampingRatio`, `rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, and
+    /// `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
     /// prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
     /// defaulting to the whole of it, so a table written in step fraction works unchanged) and
     /// keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
@@ -1164,6 +1181,12 @@ pub enum Command {
     /// Heat Results report net applied power, positive removed heat and stored-energy rate;
     /// transient powers belong to the last θ-method integration stage (radiation uses weighted
     /// endpoint fluxes), while temperature fields belong to its endpoint.
+    /// A harmonic Step requires `after` to name a Step whose `modal` Result is current: it
+    /// superposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is
+    /// bounded by that Step's `nModes`. It drives its own Loads at each swept frequency and
+    /// answers a nodal amplitude and a phase lag per retained frequency; `displacement` is the
+    /// amplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero
+    /// — a moving support is base excitation, which this procedure does not do.
 
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
@@ -1206,6 +1229,30 @@ pub enum Command {
         /// Default 50.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nonlinear_max_iterations: Option<u32>,
+        /// First frequency of a harmonic sweep, e.g. "1 Hz".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        f_start: Option<Q<Frequency>>,
+        /// Last frequency of a harmonic sweep; must be above fStart.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        f_stop: Option<Q<Frequency>>,
+        /// How many frequencies the sweep evaluates, including both endpoints. At least 2.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        points: Option<u32>,
+        /// Frequency spacing of a harmonic sweep; default linear.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sweep: Option<SweepSpacing>,
+        /// Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
+        /// for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        damping_ratio: Option<f64>,
+        /// Mass-proportional Rayleigh damping α of `C = αM + βK`, which contributes
+        /// `ζ = α / (2ω)` — most of it at low frequency. Non-negative, e.g. "0.5 1/s".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rayleigh_alpha: Option<Q<Frequency>>,
+        /// Stiffness-proportional Rayleigh damping β of `C = αM + βK`, which contributes
+        /// `ζ = βω / 2` — most of it at high frequency. Non-negative, e.g. "1e-5 s".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rayleigh_beta: Option<Q<Time>>,
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced

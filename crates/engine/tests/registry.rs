@@ -5830,6 +5830,158 @@ fn convergence_studies_reject_modal_and_chained_steps_without_mutation() {
     assert_eq!(serde_json::to_value(e.export_file()).unwrap(), serde_json::to_value(before).unwrap());
 }
 
+/// The whole harmonic path from a Journal: a modal Step, a sweep that continues it, and the
+/// per-frequency amplitude and phase the summary reports in the Model's own units.
+fn harmonic_bar(e: &mut Engine, sweep: &str) {
+    ok(e, r#"{"cmd":"model.new","name":"harmonic"}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","0.1 m","0.1 m"]}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3","source":"EN 10025"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["bar"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}},"formulation":"full"}"#);
+    ok(e, r#"{"cmd":"constraint.fix","name":"root","on":"bar.xmin"}"#);
+    ok(e, r#"{"cmd":"constraint.fix","name":"guide","on":"bar.xmax","dofs":["uy","uz"]}"#);
+    ok(e, r#"{"cmd":"load.traction","name":"pull","on":"bar.xmax","total":["10 kN","0 N","0 N"]}"#);
+    ok(
+        e,
+        r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root","guide"],"loads":[],"nModes":4}"#,
+    );
+    ok(
+        e,
+        &format!(
+            r#"{{"cmd":"step.add","name":"sweep","procedure":"harmonic","constraints":["root","guide"],
+                "loads":["pull"],"after":"modes"{sweep}}}"#
+        ),
+    );
+}
+
+fn summary(e: &mut Engine, step: &str) -> femlab_engine::query::ResultSummary {
+    match e.query(Query::Result { result_id: None, step: Some(step.into()) }).expect("a solved Step") {
+        QueryResult::Result(r) => r,
+        other => panic!("query.result answered {other:?}"),
+    }
+}
+
+#[test]
+fn a_harmonic_step_superposes_the_modes_of_the_step_it_continues() {
+    let mut e = engine();
+    harmonic_bar(&mut e, r#","fStart":"800 Hz","fStop":"2400 Hz","points":9,"dampingRatio":0.05"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
+    let s = summary(&mut e, "sweep");
+    assert_eq!(s.sweep.len(), 9, "nine points, kept every one");
+    assert_eq!((s.sweep[0].frequency.value, s.sweep[0].frequency.unit.as_str()), (800.0, "Hz"));
+    assert_eq!((s.sweep[8].frequency.value, s.sweep[8].frequency.unit.as_str()), (2400.0, "Hz"));
+    assert_eq!(s.sweep[0].amplitude.unit, "m");
+    assert_eq!(s.sweep[0].phase.unit, "rad");
+    // The bar's driven mode is at 1659.55 Hz, which is between rows 4 and 5: the response there
+    // is the largest, and the phase crosses quadrature between the same two rows.
+    let peak =
+        (0..9).fold(0, |best, i| if s.sweep[i].amplitude.value > s.sweep[best].amplitude.value { i } else { best });
+    assert_eq!(peak, 4, "{:?}", s.sweep.iter().map(|r| r.amplitude.value).collect::<Vec<_>>());
+    assert!(s.sweep[3].phase.value < std::f64::consts::FRAC_PI_2);
+    assert!(s.sweep[5].phase.value > std::f64::consts::FRAC_PI_2);
+    // A harmonic amplitude is not a force in equilibrium at one instant, so like a modal Step
+    // it reports no applied total and no reaction, and the balance stays honest.
+    assert_eq!(s.balance, 0.0);
+    assert!(s.reactions.is_empty());
+    assert_eq!(s.frequencies.len(), 4, "the modal basis is reported with the response");
+    // The displacement field is the amplitude at the peak, so extremes and probes work.
+    let extreme = s.extremes.iter().find(|x| x.field == "displacement" && x.component == 0).expect("ux extremes");
+    assert!((extreme.max.value - s.sweep[peak].amplitude.value).abs() <= 1e-12 * extreme.max.value);
+    assert!(e.field_named(Some("sweep"), "displacement").is_ok());
+    // The sweep crosses to a host as JSON like every other summary member.
+    let json = serde_json::to_value(&s).expect("a summary serialises");
+    assert_eq!(json["sweep"][0]["phase"]["unit"], "rad");
+    let back: femlab_engine::query::ResultSummary = serde_json::from_value(json).expect("and round-trips");
+    assert_eq!(back.sweep, s.sweep);
+    assert!(format!("{:?}", s.sweep[0]).contains("frequency"));
+    // The retained payload is charged for both fields of every retained frequency.
+    let QueryResult::Results(retained) = e.query(Query::Results {}).expect("a catalogue") else { panic!("results") };
+    let row = retained.records.iter().find(|r| r.step == "sweep").expect("the harmonic Result");
+    assert!(row.field_bytes > 9 * 2 * 8 * 8, "amplitude and phase for nine frequencies: {}", row.field_bytes);
+}
+
+#[test]
+fn a_harmonic_sweep_strides_and_logs_like_the_schema_says() {
+    let mut e = engine();
+    harmonic_bar(
+        &mut e,
+        r#","fStart":"800 Hz","fStop":"2400 Hz","points":9,"sweep":"log","outputEvery":4,"rayleighBeta":"1e-5 s""#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
+    let s = summary(&mut e, "sweep");
+    // Nine log-spaced points from 800 to 2400 Hz, kept every fourth: 800, 800·3^(1/2), 2400.
+    assert_eq!(s.sweep.len(), 3);
+    assert_eq!(s.sweep[0].frequency.value, 800.0);
+    assert!((s.sweep[1].frequency.value - 800.0 * 3.0f64.sqrt()).abs() < 1e-9);
+    assert_eq!(s.sweep[2].frequency.value, 2400.0);
+    assert!(s.sweep.iter().all(|r| r.amplitude.value > 0.0));
+}
+
+#[test]
+fn a_harmonic_step_needs_a_current_modal_result_and_a_usable_sweep() {
+    // Its predecessor has not been solved.
+    let mut e = engine();
+    harmonic_bar(&mut e, r#","fStart":"800 Hz","fStop":"2400 Hz","points":9"#);
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#).code, ErrorCode::NotFound);
+    // A Step with no sweep at all is a schema error naming the field it wants.
+    let mut e = engine();
+    harmonic_bar(&mut e, r#","fStop":"2400 Hz","points":9"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    let missing = err(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
+    assert_eq!((missing.code, missing.where_.as_deref()), (ErrorCode::Schema, Some("fStart")));
+    assert!(missing.suggestion.expect("a way out").contains("harmonic"));
+    // One point is not a sweep, and `query.cost` says so before anything is allocated.
+    let mut e = engine();
+    harmonic_bar(&mut e, r#","fStart":"800 Hz","fStop":"2400 Hz","points":1"#);
+    let thin = e.query(Query::Cost { step: "sweep".into() }).expect_err("one point is not a sweep");
+    assert_eq!((thin.code, thin.where_.as_deref()), (ErrorCode::Schema, Some("points")));
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#).code, ErrorCode::Schema);
+}
+
+#[test]
+fn harmonic_damping_is_validated_where_it_is_written() {
+    let mut e = engine();
+    harmonic_bar(&mut e, r#","fStart":"800 Hz","fStop":"2400 Hz","points":9"#);
+    let cases = [
+        (r#","dampingRatio":1.0"#, "dampingRatio"),
+        (r#","dampingRatio":-0.1"#, "dampingRatio"),
+        (r#","rayleighAlpha":"-1 Hz""#, "rayleighAlpha"),
+        (r#","rayleighBeta":"-1 s""#, "rayleighBeta"),
+    ];
+    for (extra, field) in cases {
+        let bad = err(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"bad","procedure":"harmonic","constraints":[],"loads":[],
+                    "after":"modes","fStart":"1 Hz","fStop":"2 Hz","points":2{extra}}}"#
+            ),
+        );
+        assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some(field)), "{extra}");
+        assert!(bad.suggestion.is_some(), "{extra}");
+    }
+    // Zero is the boundary that must be accepted: no damping at all is a legal sweep.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"undamped","procedure":"harmonic","constraints":[],"loads":[],
+            "after":"modes","fStart":"1 Hz","fStop":"2 Hz","points":2,"dampingRatio":0.0,
+            "rayleighAlpha":"0 Hz","rayleighBeta":"0 s"}"#,
+    );
+}
+
+#[test]
+fn a_harmonic_sweep_too_large_to_retain_is_refused_before_it_allocates() {
+    let mut e = engine();
+    harmonic_bar(&mut e, r#","fStart":"1 Hz","fStop":"1e9 Hz","points":300000000"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    let big = err(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
+    assert_eq!(big.code, ErrorCode::SolveTooLarge);
+    let suggestion = big.suggestion.clone().expect("a way out");
+    assert!(suggestion.contains("harmonic"), "{big:?}");
+}
+
 #[test]
 fn sections_are_named_assigned_removed_and_listed_like_materials() {
     let mut e = engine();
