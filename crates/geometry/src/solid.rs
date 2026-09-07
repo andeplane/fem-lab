@@ -110,7 +110,7 @@ fn point_segment_distance3(p: [f64; 3], a: [f64; 3], b: [f64; 3]) -> f64 {
 
 /// Distance from a point to a triangle: the plane distance when the projection falls inside,
 /// else the distance to the nearest edge.
-fn point_triangle_distance(p: [f64; 3], t: &[[f64; 3]; 3]) -> f64 {
+pub(crate) fn point_triangle_distance(p: [f64; 3], t: &[[f64; 3]; 3]) -> f64 {
     let n = tri_normal(t[0], t[1], t[2]);
     let h = dot3(sub(p, t[0]), n);
     let q = [p[0] - h * n[0], p[1] - h * n[1], p[2] - h * n[2]];
