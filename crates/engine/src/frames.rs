@@ -47,7 +47,7 @@ fn time_index(times: &[f64], time: f64, sampling: TimeSampling) -> Result<usize,
 impl Engine {
     /// Metadata uses the stored primary field's shape, never a possibly edited current Mesh.
     fn history(&self, step: Option<&str>) -> Result<(&str, &String, &History, usize), Error> {
-        let (name, hash, result) = self.stored(step)?;
+        let (name, hash, _, result) = self.stored(step)?;
         let history = result.history.as_ref().ok_or_else(|| {
             Error::new(ErrorCode::Unsupported, format!("step '{name}' has no retained transient frames"))
                 .at("step")

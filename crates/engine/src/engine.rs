@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::{RegionPredicate, Shape, Solid};
 
-use crate::command::{Command, ExportFormat, IdealisationSpec, ObjectKind};
+use crate::command::{Command, ContactKind, ExportFormat, IdealisationSpec, ObjectKind};
 use crate::error::{Error, ErrorCode, Warning};
 use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
@@ -66,9 +66,9 @@ pub struct Engine {
     pub(crate) solids: BTreeMap<String, Solid>,
     /// The derived Mesh with its resolved Sets; cleared by every Command, rebuilt on demand.
     pub(crate) mesh: Option<crate::mesh::BuiltMesh>,
-    /// One Result per Step with the Model hash it was solved at. An edit does not throw a
-    /// Result away — it makes it stale, and `query.result` says so (plan B §2.1).
-    pub(crate) results: BTreeMap<String, (String, crate::procedure::StepResult)>,
+    /// One Result per Step with the Model hash and Journal line it was solved at. An edit does
+    /// not throw a Result away — it makes it stale, and `query.result` says so (plan B §2.1).
+    pub(crate) results: BTreeMap<String, (String, u32, crate::procedure::StepResult)>,
     /// The last `study.converge` report per Step, so `query.report` can append the table. Not
     /// part of the Model and never hashed: a study is a measurement, not a definition.
     pub(crate) studies: BTreeMap<String, crate::query::StudyReport>,
@@ -716,6 +716,27 @@ impl Engine {
                     Constraint { name: name.clone(), on: on.clone(), kind: ConstraintKind::Temperature { value: v } };
                 Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
             }
+            Command::ContactAdd { name, master, slave, kind, tol } => {
+                check_name(name)?;
+                self.check_set(master).map_err(|e| e.at("master"))?;
+                self.check_set(slave).map_err(|e| e.at("slave"))?;
+                if master == slave {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("contact '{name}' ties set '{master}' to itself"),
+                    )
+                    .at("slave")
+                    .suggest("contact.add with the facing Sets of two different Bodies"));
+                }
+                let t = tol.as_ref().map(|q| q.si().map_err(|e| e.at("tol"))).transpose()?;
+                let ContactKind::Bonded = kind;
+                let c = Constraint {
+                    name: name.clone(),
+                    on: slave.clone(),
+                    kind: ConstraintKind::Bonded { master: master.clone(), tol: t },
+                };
+                Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
+            }
             Command::ConstraintRemove { name } => {
                 self.model
                     .constraint(name)
@@ -780,6 +801,32 @@ impl Engine {
                 let l = Load { name: name.clone(), kind: LoadKind::Convection { on: on.clone(), h: hv, t_inf: tv } };
                 Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
             }
+            Command::LoadRadiation { name, on, emissivity, t_inf } => {
+                check_name(name)?;
+                self.check_set(on)?;
+                if !(*emissivity > 0.0 && *emissivity <= 1.0) {
+                    return Err(Error::schema(format!("emissivity must be a fraction in (0, 1], got {emissivity}"))
+                        .at("emissivity")
+                        .suggest("load.radiation with emissivity between 0 and 1, 1 for a black body"));
+                }
+                let tv = t_inf.si().map_err(|e| e.at("tInf"))?;
+                // Absolute temperature: a fourth power of a negative kelvin is meaningless, and
+                // 0 K (a deep-space sink) is the one legitimate edge of the range. `si` has
+                // already refused a non-finite quantity, so this comparison is total.
+                if tv < 0.0 {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("load '{name}' radiates to {tv} K, below absolute zero"),
+                    )
+                    .at("tInf")
+                    .suggest("load.radiation with tInf at or above 0 K"));
+                }
+                let l = Load {
+                    name: name.clone(),
+                    kind: LoadKind::Radiation { on: on.clone(), emissivity: *emissivity, t_inf: tv },
+                };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
             Command::LoadHeatFlux { name, on, q } => {
                 check_name(name)?;
                 self.check_set(on)?;
@@ -822,8 +869,24 @@ impl Engine {
                 dt_factor,
                 amplitude,
                 initial,
+                nonlinear_tolerance,
+                nonlinear_max_iterations,
             } => {
                 check_name(name)?;
+                if let Some(tol) = nonlinear_tolerance {
+                    if !(*tol > 0.0 && tol.is_finite()) {
+                        return Err(Error::schema(format!(
+                            "nonlinearTolerance must be finite and positive, got {tol}"
+                        ))
+                        .at("nonlinearTolerance")
+                        .suggest("step.add with nonlinearTolerance 1e-6"));
+                    }
+                }
+                if nonlinear_max_iterations == &Some(0) {
+                    return Err(Error::schema("nonlinearMaxIterations must be at least 1")
+                        .at("nonlinearMaxIterations")
+                        .suggest("step.add with nonlinearMaxIterations 50"));
+                }
                 for c in constraints {
                     self.model
                         .constraint(c)
@@ -859,6 +922,8 @@ impl Engine {
                     dt_factor: *dt_factor,
                     amplitude: amplitude.as_ref().map(to_amplitude).transpose()?,
                     initial: opt_si(initial, "initial")?,
+                    nonlinear_tolerance: *nonlinear_tolerance,
+                    nonlinear_max_iterations: *nonlinear_max_iterations,
                 };
                 Ok(upsert(&mut self.model.steps, s, |s| &s.name, ObjectKind::Step))
             }
@@ -1010,7 +1075,7 @@ impl Engine {
         let m = &self.model;
         let mut users: Vec<String> = Vec::new();
         for c in &m.constraints {
-            if set_refers_to(&c.on, name) {
+            if c.sets().iter().any(|s| set_refers_to(s, name)) {
                 users.push(format!("constraint '{}'", c.name));
             }
         }
@@ -1056,7 +1121,7 @@ impl Engine {
             let users: Vec<String> = m
                 .constraints
                 .iter()
-                .filter(|c| set_refers_to(&c.on, name))
+                .filter(|c| c.sets().iter().any(|s| set_refers_to(s, name)))
                 .map(|c| format!("constraint '{}'", c.name))
                 .chain(
                     m.loads
@@ -1077,7 +1142,7 @@ impl Engine {
             let users: Vec<String> = m
                 .constraints
                 .iter()
-                .filter(|c| c.on == name)
+                .filter(|c| c.sets().contains(&name))
                 .map(|c| format!("constraint '{}'", c.name))
                 .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
                 .collect();
@@ -1158,7 +1223,9 @@ impl Engine {
                     }
                 }
                 for c in &mut m.constraints {
-                    c.on = rename_set_ref(&c.on, name, to);
+                    for set in c.sets_mut() {
+                        *set = rename_set_ref(set, name, to);
+                    }
                 }
                 for l in &mut m.loads {
                     match &mut l.kind {
@@ -1166,6 +1233,7 @@ impl Engine {
                         | LoadKind::Traction { on, .. }
                         | LoadKind::Force { on, .. }
                         | LoadKind::Convection { on, .. }
+                        | LoadKind::Radiation { on, .. }
                         | LoadKind::HeatFlux { on, .. } => *on = rename_set_ref(on, name, to),
                         LoadKind::Temperature { bodies, .. } | LoadKind::HeatSource { bodies, .. } => {
                             for b in bodies {
@@ -1228,8 +1296,10 @@ impl Engine {
                     }
                 }
                 for c in &mut m.constraints {
-                    if c.on == name {
-                        c.on = to.into();
+                    for set in c.sets_mut() {
+                        if set == name {
+                            *set = to.into();
+                        }
                     }
                 }
                 for l in &mut m.loads {
@@ -1238,6 +1308,7 @@ impl Engine {
                         | LoadKind::Traction { on, .. }
                         | LoadKind::Force { on, .. }
                         | LoadKind::Convection { on, .. }
+                        | LoadKind::Radiation { on, .. }
                         | LoadKind::HeatFlux { on, .. } => {
                             if on == name {
                                 *on = to.into();

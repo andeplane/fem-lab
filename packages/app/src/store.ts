@@ -52,7 +52,24 @@ export interface LastError {
   suggestion: string | null;
 }
 
+/** Assistant-authored observations, never engine measurements or a solver acceptance gate. */
+export interface AssistantVerification {
+  rows: { status: 'ok' | 'warn' | 'fail'; what: string; value: string }[];
+  model: string | null;
+  revision: number;
+  journalHash: string | null;
+  result: { step: string; revision: number } | null;
+}
+
+export function verificationState(record: AssistantVerification, state: UiState): string {
+  if (!record.journalHash || !state.journal?.hash) return 'Model revision unconfirmed';
+  if (record.journalHash !== state.journal.hash || record.model !== (state.model?.name ?? null) || record.revision !== state.revision || (record.result === null ? state.result !== null : state.result?.stale || record.result.step !== state.result?.step || record.result.revision !== state.result?.revision)) return 'Stale — Model or Result changed';
+  return `Recorded at Model rev ${record.revision}${record.result ? ` · Result ${record.result.step} rev ${record.result.revision}` : ' · no Result'}`;
+}
+
 export interface UiState {
+  assistantVerifications: AssistantVerification[];
+
   autosave: AutosaveState['saved'];
   autosaves: AutosaveVersion[];
   /** Session mirror of the ai.setModel host Command, shared with the Assistant. */
@@ -93,8 +110,10 @@ export interface UiState {
   journalWho: Record<number, { who: 'you' | 'ai'; at: number }>;
   /** What the caller of `dispatch` currently counts as; the script host flips it to `ai`. */
   source: 'you' | 'ai';
-  /** `null` while the Script tab shows the Journal; a string once it is being edited. */
+  /** An intentional draft survives switching back to the live Journal script. */
   scriptDraft: string | null;
+  /** Whether the Script tab is showing the draft editor or the live Journal script. */
+  scriptEditing: boolean;
   scriptOut: string[];
   scriptRunning: boolean;
   hostCaps: HostCaps | null;
@@ -130,6 +149,8 @@ export interface UiState {
   playing: boolean;
   /** Where in one sweep the scrub sits, in turns 0…1. */
   phase: number;
+  /** True while Chromium is encoding the viewer canvas as WebM. */
+  capturingAnimation: boolean;
   /** Pixels per CSS pixel a saved PNG is rendered at: the export dialog's 1× / 2×. */
   screenshotScale: number;
   animationSpeed: number;
@@ -175,6 +196,8 @@ export function solveLabel(stage: Stage, s: Pick<UiState, 'progress' | 'result'>
 export const EMPTY_SELECTION: Selection = { bodies: [], faces: [], sets: [], refs: [] };
 
 export const initialState: UiState = {
+  assistantVerifications: [],
+
   autosave: null,
   autosaves: [],
   assistantModel: null,
@@ -217,6 +240,7 @@ export const initialState: UiState = {
   journalWho: {},
   source: 'you',
   scriptDraft: null,
+  scriptEditing: false,
   scriptOut: [],
   scriptRunning: false,
   hostCaps: null,
@@ -239,6 +263,7 @@ export const initialState: UiState = {
   yieldStress: null,
   playing: false,
   phase: 0,
+  capturingAnimation: false,
   screenshotScale: 1,
   animationSpeed: 1,
   reportReady: false,
@@ -263,14 +288,12 @@ export function refsOf(s: Omit<Selection, 'refs'>): string[] {
   return [...s.bodies.map((n) => `body:${n}`), ...s.faces.map((n) => `face:${n}`), ...s.sets.map((n) => `set:${n}`)];
 }
 
-export function selectionReducer(cur: Selection, input: { bodies?: string[]; faces?: string[]; sets?: string[]; mode?: 'replace' | 'add' | 'remove' }): Selection {
+export function selectionReducer(cur: Selection, input: { refs?: string[]; bodies?: string[]; faces?: string[]; sets?: string[]; mode?: 'replace' | 'add' | 'remove' }): Selection {
   const mode = input.mode ?? 'replace';
-  const next = {
-    bodies: merge(mode, cur.bodies, input.bodies),
-    faces: merge(mode, cur.faces, input.faces),
-    sets: merge(mode, cur.sets, input.sets),
-  };
-  return { ...next, refs: refsOf(next) };
+  const supplied = [...(input.refs ?? []), ...refsOf({ bodies: input.bodies ?? [], faces: input.faces ?? [], sets: input.sets ?? [] })];
+  const refs = merge(mode, cur.refs, supplied);
+  const names = (kind: string) => refs.filter((ref) => ref.startsWith(`${kind}:`)).map((ref) => ref.slice(kind.length + 1));
+  return { bodies: names('body'), faces: names('face'), sets: names('set'), refs };
 }
 
 export function consoleReducer(lines: ConsoleLine[], line: ConsoleLine): ConsoleLine[] {

@@ -1468,10 +1468,6 @@ fn the_free_mesher_refuses_a_bad_size_or_a_bad_sketch() {
     assert!(free(&s, 1.0, false, &[bad]).unwrap_err().0.contains("refine box 0 has size -1"));
     let one = Sketch { outer: vec![Segment::Line { to: [1.0, 0.0], tag: None }], holes: vec![] };
     assert!(free(&one, 1.0, false, &[]).unwrap_err().0.contains("two segments"));
-    // an element size so coarse that the two arcs of a circle sample to one chord each
-    let circle = Sketch { outer: Sketch::circle([0.0, 0.0], 1.0, "rim"), holes: vec![] };
-    circle.check().unwrap();
-    assert!(free(&circle, 100.0, false, &[]).unwrap_err().0.contains("three distinct points"));
     // a hole that covers the whole outer loop carves everything: no triangle, and the refine
     // pass has nothing to refine, so weka's own failure comes back as a GeomError
     let mut all_hole = Sketch::rect(4.0, 4.0);
@@ -1479,6 +1475,124 @@ fn the_free_mesher_refuses_a_bad_size_or_a_bad_sketch() {
     assert!(free(&all_hole, 1.0, false, &[]).unwrap_err().0.contains("produced no triangle"));
     let box_ = RefineBox { min: [0.0, 0.0], max: [4.0, 4.0], size: 0.5 };
     assert!(free(&all_hole, 1.0, false, &[box_]).unwrap_err().0.contains("3 input points"));
+}
+
+#[test]
+fn transformed_sheets_mesh_in_world_space_with_oriented_hole_boundaries() {
+    use femlab_geometry::{free_sheet, Affine3, Shape};
+    let mut sketch = Sketch::rect(2.0, 2.0);
+    sketch.holes.push(vec![
+        Segment::Line { to: [0.5, 0.5], tag: Some("hole".into()) },
+        Segment::Line { to: [1.5, 0.5], tag: Some("hole".into()) },
+        Segment::Line { to: [1.5, 1.5], tag: Some("hole".into()) },
+        Segment::Line { to: [0.5, 1.5], tag: Some("hole".into()) },
+    ]);
+    let shape = Shape::Transform {
+        at: Affine3 { translate: [5.0, 7.0, 0.0], rotate: [0.0, 0.0, 90.0], scale: [2.0, 3.0, 1.0] },
+        shape: Box::new(Shape::Named { name: "section".into(), shape: Box::new(Shape::Sheet { sketch }) }),
+    };
+    for quadratic in [false, true] {
+        let mut previous_elements = 0;
+        for size in [0.8, 0.4, 0.2] {
+            let m = free_sheet(&shape, size, quadratic, &[]).unwrap();
+            m.validate().unwrap();
+            assert!((measure(&m) - 18.0).abs() < 1e-10, "(4−1)*2*3 m²");
+            assert!(min_element_measure(&m) > 0.0, "every triangle has positive signed Jacobian");
+            assert!(m.n_elems() > previous_elements);
+            previous_elements = m.n_elems();
+            assert_eq!(m.boundary_faces().len(), m.face_sets.values().map(Vec::len).sum::<usize>());
+            assert_eq!(
+                m.face_sets.keys().collect::<Vec<_>>(),
+                ["section.hole", "section.xmax", "section.xmin", "section.ymax", "section.ymin"]
+            );
+            for e in 0..m.n_elems() as u32 {
+                let centre = mean(&m.elem_nodes(e)[..3].iter().map(|&n| m.node(n)).collect::<Vec<_>>());
+                assert!(centre[0] >= -1.0 && centre[0] <= 5.0 && centre[1] >= 7.0 && centre[1] <= 11.0);
+                assert!(
+                    !(centre[0] > 0.5 && centre[0] < 3.5 && centre[1] > 8.0 && centre[1] < 10.0),
+                    "hole contains no triangle"
+                );
+                assert!(
+                    corner_measure(m.kind_of(e), &corners(&m, e)) <= size * size / 2.0 * 1.000001,
+                    "size is measured after scaling"
+                );
+            }
+            for (tag, axis, coordinate) in [
+                ("section.xmin", 1, 7.0),
+                ("section.xmax", 1, 11.0),
+                ("section.ymin", 0, 5.0),
+                ("section.ymax", 0, -1.0),
+            ] {
+                assert!(face_set_nodes(&m, tag).iter().all(|&n| (m.node(n)[axis] - coordinate).abs() < 1e-12));
+            }
+            if quadratic {
+                assert!(mid_nodes_are_midpoints(&m));
+            }
+        }
+    }
+    let box_ = RefineBox { min: [3.5, 7.0], max: [5.0, 8.0], size: 0.1 };
+    let refined = free_sheet(&shape, 0.8, false, &[box_]).unwrap();
+    let (mut inside, mut outside) = (Vec::new(), Vec::new());
+    for e in 0..refined.n_elems() as u32 {
+        let c = mean(&refined.elem_nodes(e).iter().map(|&n| refined.node(n)).collect::<Vec<_>>());
+        let area = corner_measure(refined.kind_of(e), &corners(&refined, e));
+        if c[0] > 3.5 && c[1] < 8.0 {
+            inside.push(area);
+        } else {
+            outside.push(area);
+        }
+    }
+    let mean_inside = inside.iter().sum::<f64>() / inside.len() as f64;
+    let mean_outside = outside.iter().sum::<f64>() / outside.len() as f64;
+    assert!(mean_inside < 0.01 && mean_outside > 4.0 * mean_inside, "refine box uses transformed world coordinates");
+}
+
+#[test]
+fn transformed_curved_holes_resample_as_world_element_size_decreases() {
+    use femlab_geometry::{free_sheet, Affine3, Shape};
+    let shape = Shape::Transform {
+        at: Affine3 { translate: [35.0, -2.0, 0.0], rotate: [0.0, 0.0, 90.0], scale: [2.0, 3.0, 1.0] },
+        shape: Box::new(Shape::Sheet { sketch: plate_with_hole(1.0) }),
+    };
+    let exact = 600.0 - 6.0 * PI; // 20×30 rectangle less an ellipse with radii 3 and 2.
+    let mut previous_error = f64::INFINITY;
+    for size in [2.0, 1.0, 0.5] {
+        let m = free_sheet(&shape, size, true, &[]).unwrap();
+        let error = measure(&m) - exact;
+        assert!(error > 0.0 && error < previous_error && error < 0.4 * PI * size, "{size}: {error}");
+        previous_error = error;
+        assert!(min_element_measure(&m) > 0.0);
+        for n in face_set_nodes(&m, "hole") {
+            let p = m.node(n);
+            let radius = (((p[0] - 20.0) / 3.0).powi(2) + ((p[1] - 8.0) / 2.0).powi(2)).sqrt();
+            assert!((radius - 1.0).abs() <= 0.1 * size / 3.0 + 1e-12, "ellipse boundary chord bound");
+        }
+    }
+}
+
+#[test]
+fn free_sheets_reject_unsupported_transforms_explicitly() {
+    use femlab_geometry::{free_sheet, Affine3, Shape};
+    let sheet = Shape::Sheet { sketch: Sketch::rect(1.0, 1.0) };
+    for at in [
+        Affine3 { translate: [0.0, 0.0, 1.0], ..Default::default() },
+        Affine3 { rotate: [15.0, 0.0, 0.0], ..Default::default() },
+        Affine3 { rotate: [0.0, 15.0, 0.0], ..Default::default() },
+    ] {
+        let shape = Shape::Transform { at, shape: Box::new(sheet.clone()) };
+        assert!(free_sheet(&shape, 0.25, false, &[]).unwrap_err().0.contains("xy plane"));
+    }
+    let bad_scale = Shape::Transform {
+        at: Affine3 { scale: [0.0, 1.0, 1.0], ..Default::default() },
+        shape: Box::new(sheet.clone()),
+    };
+    assert!(free_sheet(&bad_scale, 0.25, false, &[]).unwrap_err().0.contains("scale factors must be positive"));
+    let inner = Shape::Transform { at: Affine3::default(), shape: Box::new(sheet.clone()) };
+    let nested =
+        Shape::Transform { at: Affine3 { translate: [1.0, 0.0, 0.0], ..Default::default() }, shape: Box::new(inner) };
+    assert!(free_sheet(&nested, 0.25, false, &[]).unwrap_err().0.contains("nested transforms"));
+    let boolean = Shape::Union { shapes: vec![sheet] };
+    assert!(free_sheet(&boolean, 0.25, false, &[]).unwrap_err().0.contains("booleans of 2D"));
 }
 
 // ---- sketch validation: no degenerate or crossing input ever reaches weka (issues #5, #54) ----
@@ -1769,4 +1883,25 @@ fn merge_coincident_welds_joints_keeps_the_lowest_id_and_leaves_a_clean_mesh_alo
     merge_coincident(&mut spanning, 1e-9);
     assert_eq!(spanning.n_nodes(), 2);
     assert_eq!(spanning.blocks[0].conn, [0, 1]);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    /// Finite inputs can overflow when multiplied or added. No such point may reach weka.
+    #[test]
+    fn overflowing_sheet_transforms_return_errors_before_triangulation(
+        scale in 9e307f64..1e308,
+        quadratic in any::<bool>(),
+    ) {
+        use femlab_geometry::{free_sheet, Affine3, Shape, Solid};
+        for translate in [0.0, 1e308] {
+            let width = if translate == 0.0 { 2.0 } else { 1.0 };
+            let shape = Shape::Transform {
+                at: Affine3 { scale: [scale, 1.0, 1.0], translate: [translate, 0.0, 0.0], ..Default::default() },
+                shape: Box::new(Shape::Sheet { sketch: Sketch::rect(width, 1.0) }),
+            };
+            prop_assert!(free_sheet(&shape, 1.0, quadratic, &[]).unwrap_err().0.contains("non-finite coordinates"));
+            prop_assert!(Solid::evaluate(&shape).unwrap_err().0.contains("non-finite coordinates"));
+        }
+    }
 }

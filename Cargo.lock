@@ -666,6 +666,7 @@ name = "femlab-engine"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "dyn-stack",
  "faer",
  "femlab-geometry",
  "futures-channel",

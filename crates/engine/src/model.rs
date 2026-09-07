@@ -122,6 +122,13 @@ pub enum ConstraintKind {
     Temperature {
         value: f64,
     },
+    /// A bonded contact: the Constraint's own Set is the slave, `master` names the face Set it
+    /// is tied to, and `tol` is the largest pairing gap in metres (`None` scales with the Mesh).
+    Bonded {
+        master: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
 }
 
 /// A Constraint on a Set.
@@ -134,6 +141,27 @@ pub struct Constraint {
     pub kind: ConstraintKind,
 }
 
+impl Constraint {
+    /// Every Set this Constraint names: the one it holds, and a bonded tie's master face. One
+    /// accessor, so a rename or an in-use check can never miss the second one.
+    pub fn sets(&self) -> Vec<&str> {
+        let mut out = vec![self.on.as_str()];
+        if let ConstraintKind::Bonded { master, .. } = &self.kind {
+            out.push(master);
+        }
+        out
+    }
+
+    /// The same Sets, for a rename to rewrite in place.
+    pub fn sets_mut(&mut self) -> Vec<&mut String> {
+        let mut out = vec![&mut self.on];
+        if let ConstraintKind::Bonded { master, .. } = &mut self.kind {
+            out.push(master);
+        }
+        out
+    }
+}
+
 /// Load kinds, SI.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -144,6 +172,7 @@ pub enum LoadKind {
     Gravity { g: [f64; 3] },
     Temperature { bodies: Vec<String>, value: f64, reference: f64 },
     Convection { on: String, h: f64, t_inf: f64 },
+    Radiation { on: String, emissivity: f64, t_inf: f64 },
     HeatFlux { on: String, q: f64 },
     HeatSource { bodies: Vec<String>, q: f64 },
 }
@@ -167,6 +196,7 @@ impl LoadKind {
             | LoadKind::Force { .. }
             | LoadKind::Gravity { .. }
             | LoadKind::Convection { .. }
+            | LoadKind::Radiation { .. }
             | LoadKind::HeatFlux { .. } => &[],
         }
     }
@@ -178,6 +208,7 @@ impl LoadKind {
             | LoadKind::Traction { on, .. }
             | LoadKind::Force { on, .. }
             | LoadKind::Convection { on, .. }
+            | LoadKind::Radiation { on, .. }
             | LoadKind::HeatFlux { on, .. } => Some(on),
             LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => None,
         }
@@ -222,6 +253,10 @@ pub struct Step {
     pub amplitude: Option<Amplitude>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonlinear_tolerance: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonlinear_max_iterations: Option<u32>,
 }
 
 /// Mesher settings, SI.
@@ -533,6 +568,8 @@ mod tests {
             dt_factor: None,
             amplitude: None,
             initial: None,
+            nonlinear_tolerance: None,
+            nonlinear_max_iterations: None,
         });
         m.sets.push(NamedSet {
             name: "top".into(),
@@ -561,6 +598,7 @@ mod tests {
             LoadKind::Force { on: "a".into(), total: [0.0; 3] },
             LoadKind::Gravity { g: [0.0; 3] },
             LoadKind::Convection { on: "a".into(), h: 1.0, t_inf: 300.0 },
+            LoadKind::Radiation { on: "a".into(), emissivity: 0.8, t_inf: 300.0 },
             LoadKind::HeatFlux { on: "a".into(), q: 1.0 },
         ] {
             assert!(kind.bodies().is_empty());

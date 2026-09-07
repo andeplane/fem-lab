@@ -1,7 +1,7 @@
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
-import { HOST_COMMANDS, Registry, type EngineSchema, type ModelSummary } from '@femlab/registry';
+import { HOST_COMMANDS, Registry, type Command, type QueryResult, type EngineSchema, type JournalDump, type ModelSummary, type ObjectRef, type ResultSummary } from '@femlab/registry';
 import { h, render } from 'preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
@@ -10,6 +10,8 @@ import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import { Store, visibilityReducer } from '../src/store';
 import { App, handleGlobalKey, isEditableTarget } from '../src/ui/App';
+import { journalTarget } from '../src/ui/Bottom';
+import type { Dispatch } from '../src/ui/cmd';
 import type { WorkerTransport } from '../src/worker-transport';
 import { afterEffects, waitFor, waitForGone } from './wait-for';
 
@@ -37,7 +39,41 @@ const model = (): ModelSummary =>
     warnings: [{ code: 'W-1200', text: 'no mesh settings yet', where: null }],
   }) as unknown as ModelSummary;
 
+const objects = (): ObjectRef[] => [
+  { ref: 'body:beam', kind: 'body', name: 'beam', summary: 'a box' },
+  { ref: 'material:steel', kind: 'material', name: 'steel', summary: 'steel' },
+  { ref: 'constraint:fix', kind: 'constraint', name: 'fix', summary: 'on beam.xmin' },
+  { ref: 'load:p', kind: 'load', name: 'p', summary: 'on beam.top' },
+  { ref: 'step:static', kind: 'step', name: 'static', summary: 'static' },
+] as ObjectRef[];
+
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
+
+const journal = (...commands: Record<string, unknown>[]): JournalDump =>
+  ({
+    entries: commands.map((cmd, seq) => ({ seq, cmd, hashAfter: `h${seq}` })),
+    revision: commands.length,
+    canUndo: commands.length > 0,
+    canRedo: false,
+  }) as unknown as JournalDump;
+
+const result = (step: string, stale: boolean, producingSeq: number): ResultSummary =>
+  ({
+    step,
+    revision: producingSeq + 1,
+    stale,
+    solver: 'cpu-direct',
+    iterations: 1,
+    residual: 0,
+    timeMs: 1,
+    extremes: [],
+    reactions: [],
+    appliedTotal: [0, 0, 0].map((value) => ({ value, unit: 'N' })),
+    balance: 0,
+  }) as unknown as ResultSummary;
+
+const boundarySeq = (root: HTMLElement): string | undefined => root.querySelector('.boundary')?.previousElementSibling?.querySelector('.no')?.textContent ?? undefined;
+const staleSeqs = (root: HTMLElement): string[] => [...root.querySelectorAll('.jrow.stale .no')].map((el) => el.textContent ?? '');
 
 /**
  * The whole shell with every panel showing at once: the tree, the generated Properties form,
@@ -57,7 +93,7 @@ function mount(
     host: makeHostContext(store, transport, viewer, host),
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, async () => undefined)],
   });
-  store.set({ ready: true, model: model(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
+  store.set({ ready: true, model: model(), objects: objects(), revision: 3, hostCaps: host, script: 'fem.model.new({ name: "demo" })', journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new', name: 'demo' }, hashAfter: 'h' }], revision: 1, canUndo: true, canRedo: false } as never, ...patch });
   store.openForm('load.pressure', { name: 'p', on: 'beam.top', value: '2.4 MPa' });
   const root = document.createElement('div');
   document.body.append(root);
@@ -92,8 +128,10 @@ describe('the shell', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ cmd: 'panel.toggle', panel: 'palette' });
     await cleanupShells();
+    // Journal unmount clears its viewer highlight through dispatch. Count only the next key.
+    vi.mocked(dispatch).mockClear();
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }));
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
     expect(document.body.children).toHaveLength(0);
   });
 
@@ -288,6 +326,34 @@ describe('the shell', () => {
     expect(root.querySelector('.bottom-body')!.textContent).toContain('model.new');
   });
 
+  it('keeps an intentional Script draft while showing the live Journal script', async () => {
+    const { registry, store } = mount({ tab: 'script' });
+    await registry.dispatch({ cmd: 'script.setSource', code: '// draft' });
+    expect(store.state).toMatchObject({ tab: 'script', scriptDraft: '// draft', scriptEditing: true });
+    await registry.dispatch({ cmd: 'script.setSource', code: '\n// inserted Journal', append: true });
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+
+    store.set({ script: '// live Journal' });
+    await registry.dispatch({ cmd: 'script.setEditing', editing: false });
+    expect(store.state.scriptEditing).toBe(false);
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+    expect(store.state.script).toBe('// live Journal');
+    await registry.dispatch({ cmd: 'script.setEditing', editing: true });
+    expect(store.state).toMatchObject({ tab: 'script', scriptEditing: true, scriptDraft: '// draft\n// inserted Journal' });
+  });
+
+  it('recognises the fields that own editing shortcuts', () => {
+    const { root } = mount();
+    const input = root.querySelector<HTMLInputElement>('input')!;
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+    const token = document.createElement('span');
+    editor.append(token);
+    expect(isEditableTarget(input)).toBe(true);
+    expect(isEditableTarget(token)).toBe(true);
+    expect(isEditableTarget(root)).toBe(false);
+  });
+
   // plan E — the tutorial spotlight finds "the + add material chip" from a Command id alone by
   // reading `data-opens`, so that attribute is under the same invariant as `data-cmd`.
   it('names only Commands the registry has on every data-opens, and puts it only on form.open', () => {
@@ -324,6 +390,159 @@ describe('the shell', () => {
     expect(root.querySelector('.workspace aside.assistant')).toBeNull();
     // A sibling of `.shell`, which is what lets it outlive the flip out of the start screen.
     expect(root.querySelector('.shell ~ aside.assistant')).not.toBeNull();
+  });
+
+  it('shows the Result boundary for a fresh solve', () => {
+    const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' });
+    const { root } = mount({ journal: entries, result: result('static', false, 1) });
+    expect(boundarySeq(root)).toBe('1');
+    expect(staleSeqs(root)).toEqual([]);
+  });
+
+  it('marks only rows after a stale Result and moves the boundary when that Step is re-solved', () => {
+    const staleJournal = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'geometry.addBox', name: 'after' });
+    const stale = mount({ journal: staleJournal, result: result('static', true, 1) }).root;
+    expect(boundarySeq(stale)).toBe('1');
+    expect(staleSeqs(stale)).toEqual(['2']);
+
+    const resolvedJournal = journal(...staleJournal.entries.map((entry) => entry.cmd as unknown as Record<string, unknown>), { cmd: 'solve.run', step: 'static' });
+    const resolved = mount({ journal: resolvedJournal, result: result('static', false, 3) }).root;
+    expect(boundarySeq(resolved)).toBe('3');
+    expect(staleSeqs(resolved)).toEqual([]);
+  });
+
+  it('attributes the boundary to the current Result and does not invent one after undo', () => {
+    const twoSteps = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'solve.run', step: 'static' }, { cmd: 'solve.run', step: 'modal' });
+    const currentStatic = mount({ journal: twoSteps, result: result('static', false, 1) }).root;
+    expect(boundarySeq(currentStatic)).toBe('1');
+
+    const undone = journal({ cmd: 'model.new', name: 'demo' });
+    expect(boundarySeq(mount({ journal: undone, result: result('static', false, undone.revision) }).root)).toBeUndefined();
+    expect(boundarySeq(mount({ journal: twoSteps, result: null }).root)).toBeUndefined();
+  });
+
+  it('does not attribute an undone re-solve to an older solve of the same Step', () => {
+    const solvedTwice = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'solve.run', step: 'static' },
+      { cmd: 'load.traction', name: 'p', on: 'beam.top', total: ['0 N', '0 N', '-2 kN'] },
+      { cmd: 'solve.run', step: 'static' },
+    );
+    expect(boundarySeq(mount({ journal: solvedTwice, result: result('static', false, 3) }).root)).toBe('3');
+
+    const undone = journal(...solvedTwice.entries.slice(0, -1).map((entry) => entry.cmd as unknown as Record<string, unknown>));
+    expect(boundarySeq(mount({ journal: undone, result: result('static', false, 3) }).root)).toBeUndefined();
+  });
+
+  it('attributes a retained convergence Result only to its exact producing study', () => {
+    const converged = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'study.converge', step: 'static', sizes: ['50 mm', '25 mm'], quantity: { kind: 'max', field: 'vonMises' }, restore: false },
+    );
+    expect(boundarySeq(mount({ journal: converged, result: result('static', false, 1) }).root)).toBe('1');
+
+    const restoring = journal(
+      { cmd: 'model.new', name: 'demo' },
+      { cmd: 'study.converge', step: 'static', sizes: ['50 mm', '25 mm'], quantity: { kind: 'max', field: 'vonMises' }, restore: true },
+    );
+    // A restoring study never produces a cached Result, even if inconsistent host data points
+    // at that exact Journal line.
+    expect(boundarySeq(mount({ journal: restoring, result: result('static', false, 1) }).root)).toBeUndefined();
+  });
+
+  it('resolves only explicit, live Journal targets to drawable Model names', () => {
+    const current = model();
+    const refs = objects();
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'beam' }, current, refs)).toEqual({ ref: 'body:beam', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'material.add', name: 'steel' }, current, refs)).toEqual({ ref: 'material:steel', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'constraint.fix', name: 'fix', on: 'old.face' }, current, refs)).toEqual({ ref: 'constraint:fix', highlight: { sets: ['beam.xmin'] } });
+    expect(journalTarget({ cmd: 'load.pressure', name: 'p', on: 'old.face' }, current, refs)).toEqual({ ref: 'load:p', highlight: { sets: ['beam.top'] } });
+    expect(journalTarget({ cmd: 'model.rename', kind: 'body', name: 'old', to: 'beam' }, current, refs)).toEqual({ ref: 'body:beam', highlight: { bodies: ['beam'] } });
+    expect(journalTarget({ cmd: 'step.add', name: 'static' }, current, refs)).toEqual({ ref: 'step:static', highlight: null });
+
+    expect(journalTarget({ cmd: 'geometry.addBox', name: 'deleted' }, current, refs)).toBeNull();
+    expect(journalTarget({ cmd: 'geometry.remove', name: 'beam' }, current, refs)).toBeNull();
+    expect(journalTarget({ cmd: 'solve.run', step: 'static' }, current, refs)).toBeNull();
+  });
+
+  it('selects and highlights a Journal target while keeping copy separate', async () => {
+    const dispatch = vi.fn<Dispatch>(async () => undefined);
+    const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m', '1 m'] }, { cmd: 'geometry.addBox', name: 'deleted', size: ['1 m', '1 m', '1 m'] });
+    const { root, store } = mount({ tab: 'journal', journal: entries }, dispatch);
+    const row = root.querySelector<HTMLElement>('[data-target-ref="body:beam"]')!;
+    const select = row.querySelector<HTMLButtonElement>('.jrow-main')!;
+
+    row.dispatchEvent(new MouseEvent('mouseenter'));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight', bodies: ['beam'] });
+    row.dispatchEvent(new MouseEvent('mouseleave'));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+    select.focus();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight', bodies: ['beam'] });
+    select.blur();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+
+    select.click();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'selection.set', refs: ['body:beam'] });
+    row.querySelector<HTMLButtonElement>('.jcopy')!.click();
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
+    expect(store.state.journal).toBe(entries);
+
+    const unavailable = [...root.querySelectorAll<HTMLElement>('.jrow')].find((item) => item.textContent?.includes('deleted'))!;
+    expect(unavailable.dataset['targetRef']).toBeUndefined();
+    expect(unavailable.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+    expect(root.querySelector<HTMLElement>('.jrow')!.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+
+    row.dispatchEvent(new MouseEvent('mouseenter'));
+    render(null, root);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'view.highlight' });
+  });
+
+  it('keeps semantic object selection and Properties on the Journal object', async () => {
+    const { registry, store } = mount();
+    const definition = { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3, rho: '7800 kg/m^3', alpha: '12e-6 1/K' } satisfies Command;
+    const query = vi.spyOn(transport, 'query').mockResolvedValueOnce({ command: definition });
+    await registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    expect(query).toHaveBeenCalledWith({ query: 'query.definition', kind: 'material', name: 'steel' });
+    expect(store.state.selection.refs).toEqual(['material:steel']);
+    expect(store.state.selection.bodies).toEqual([]);
+    const { cmd, ...values } = definition;
+    expect(store.state.form).toMatchObject({ cmd, values });
+    query.mockRestore();
+  });
+
+  it('keeps a newer explicit form edit when a Journal selection definition returns late', async () => {
+    const { registry, store } = mount();
+    let resolveSelection!: (value: QueryResult) => void;
+    const query = vi.spyOn(transport, 'query')
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSelection = resolve; }))
+      .mockResolvedValueOnce({ command: { cmd: 'load.pressure', name: 'newer', on: 'beam.top', value: '3 MPa' } });
+    const selection = registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    await registry.dispatch({ cmd: 'form.edit', kind: 'load', name: 'newer' });
+    resolveSelection({ command: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3 } });
+    await selection;
+    expect(store.state.form).toMatchObject({ cmd: 'load.pressure', values: { name: 'newer', on: 'beam.top', value: '3 MPa' } });
+    query.mockRestore();
+  });
+
+  it.each([
+    { cmd: 'selection.clear' },
+    { cmd: 'selection.set', bodies: ['beam'] },
+  ])('does not open a late Journal definition after $cmd changes the selection', async (next) => {
+    const { registry, store } = mount();
+    const previousForm = store.state.form;
+    let resolveSelection!: (value: QueryResult) => void;
+    const query = vi.spyOn(transport, 'query')
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSelection = resolve; }));
+    const selection = registry.dispatch({ cmd: 'selection.set', refs: ['material:steel'] });
+    await registry.dispatch(next);
+    const selected = store.state.selection;
+    resolveSelection({ command: { cmd: 'material.add', name: 'steel', E: '210 GPa', nu: 0.3 } });
+    await selection;
+    expect(store.state.form).toBe(previousForm);
+    expect(store.state.selection).toBe(selected);
+    expect(store.state.selection.refs).not.toContain('material:steel');
+    query.mockRestore();
   });
 
   // Issue #41: the start screen leads with the assistant composer, then New project, then the
