@@ -46,7 +46,7 @@ describe('fieldsOf', () => {
 
   it('reads an enum as options and a list of names as a multi picker', () => {
     const fields = fieldsOf(byName('step.add'), DEFS);
-    expect(fields.find((f) => f.path[0] === 'procedure')).toMatchObject({ kind: 'enum', options: ['static', 'modal', 'heat-steady', 'heat-transient', 'explicit'], multi: false });
+    expect(fields.find((f) => f.path[0] === 'procedure')).toMatchObject({ kind: 'enum', options: ['static', 'modal', 'buckling', 'heat-steady', 'heat-transient', 'explicit'], multi: false });
     expect(fields.find((f) => f.path[0] === 'constraints')).toMatchObject({ kind: 'ref', refKind: 'constraint', multi: true });
     expect(fields.find((f) => f.path[0] === 'output')).toMatchObject({ kind: 'enum', multi: true });
   });

@@ -2506,6 +2506,18 @@ fn an_axisymmetric_geometric_stiffness_is_refused_and_says_why() {
         assert!(e.suggestion.expect("a way out").contains("model.setIdealisation"));
         assert_eq!(kg, vec![0.0; kg.len()], "a refused integral writes nothing");
     }
+    // A folded element fails the same Jacobian the stiffness does, reported as it is: the
+    // geometric integral recovers stress through the same kinematics and inherits its errors.
+    let kind = ElementKind::Hex8;
+    let mut coords = affine_coords(kind);
+    for z in coords.iter_mut().skip(2).step_by(3) {
+        *z = 0.0;
+    }
+    let u = linear_displacement(kind, &coords);
+    let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::Full);
+    let mut kg = vec![0.0; (kind.n_nodes() * kind.dim()).pow(2)];
+    let folded = element_for(kind).geometric(&c, &u, &mut kg).expect_err("a flat hexahedron has no volume");
+    assert_eq!(folded.code, ErrorCode::MeshInverted);
 }
 
 // ---------------------------------------------------------------- assembly
@@ -3235,11 +3247,12 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
             control: NonlinearControl::default(),
         },
         Step::Explicit { t_end: 1.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 },
+        Step::Buckling { n_modes: 1, solver: opts },
     ]
     .iter()
     .map(Step::name)
     .collect();
-    assert_eq!(names, ["static", "modal", "heat-steady", "heat-transient", "explicit"]);
+    assert_eq!(names, ["static", "modal", "heat-steady", "heat-transient", "explicit", "buckling"]);
 }
 
 /// The checks pass but the material does not: a law given the wrong number of properties
@@ -5105,9 +5118,16 @@ fn a_buckling_step_needs_a_factorisation_and_reports_a_residual_it_cannot_reach(
         vec![fix("root", "xmin", [true, true, true], 0.0)],
     );
     p.loads = vec![Load::Pressure { faces: "xmax".into(), p: BUCKLING_PRESSURE }];
-    let tight = SolveOptions { rel_tol: 1e-15, ..SolveOptions::default() };
+    // A tolerance the equilibrium solve clears with a hair to spare: its acceptance limit is
+    // 100 x rel_tol, so this is the static residual plus 0.1 %. The sweeps then solve against
+    // `K_sigma phi`, a right-hand side far more ill-conditioned than the load vector, and the
+    // first one that cannot reach the same residual is `solve.stalled` rather than a quiet answer.
+    let equilibrium = run_step(&p, &static_step(SolveOptions::default())).expect("the static state solves");
+    let residual = equilibrium.scalars["rel_residual"];
+    let tight = SolveOptions { rel_tol: residual * 1.001 / 100.0, ..SolveOptions::default() };
+    run_step(&p, &static_step(tight)).expect("the equilibrium solve still clears its own residual");
     let stalled = run_step(&p, &Step::Buckling { n_modes: 1, solver: tight })
-        .expect_err("f64 cannot reach that residual on a slender column");
+        .expect_err("the sweeps cannot hold the equilibrium solve's own residual");
     assert_eq!(stalled.code, ErrorCode::SolveStalled);
     let iterative = SolveOptions { solver: Solver::CpuPcg, ..slender_solver() };
     let refused = run_step(&p, &Step::Buckling { n_modes: 1, solver: iterative })
@@ -5137,6 +5157,35 @@ fn a_buckling_step_refuses_a_model_that_can_still_move_as_a_rigid_body() {
     let e = run_step(&p, &Step::Buckling { n_modes: 1, solver: slender_solver() })
         .expect_err("a floating column is not a buckling model");
     assert_eq!(e.code, ErrorCode::ConstraintRigidModes);
+}
+
+/// A host that says stop cancels a buckling Step at every phase it reports, including the two
+/// the procedure adds between the static solve and the eigenproblem.
+#[test]
+fn a_host_that_says_stop_cancels_a_buckling_step_at_every_phase() {
+    let (length, side) = (1.0, 0.02);
+    let mesh = Structured { kind: ElementKind::Hex20, n: [2, 1, 1] }.box_([length, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: BUCKLING_PRESSURE }];
+    let step = Step::Buckling { n_modes: 1, solver: slender_solver() };
+    // assemble, solve, the geometric assembly, the subspace iteration, and post.
+    for at in 0..5 {
+        let mut stop = cancel_on(at);
+        let e =
+            pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut stop)).expect_err("cancelled");
+        assert_eq!(e.code, ErrorCode::Cancelled, "phase {at}");
+    }
+    let mut go = cancel_on(99);
+    assert!(pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut go)).is_ok());
 }
 
 /// A buckling Step whose Loads leave the structure unstressed has no load factor to find, and

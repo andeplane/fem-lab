@@ -141,14 +141,20 @@ pub async fn solve_reusable(
         // answer does not depend on which pool ran it.
         Solver::CpuPcg => {
             let mut inner = crate::gpu::cg::Inner::Cpu(pcg::CpuPcg::new(k, opts.inner_tol, opts.max_iterations));
-            refine::refine(k, b, &mut inner, "cpu-pcg", opts.rel_tol, opts.max_outer, progress)
-                .await
-                .map(|(x, info)| (x, info, None))
+            refine::refine(k, b, &mut inner, "cpu-pcg", opts.rel_tol, opts.max_outer, progress).await.map(no_factor)
         }
         // `Auto` is already resolved, so what is left is the GPU. Its whole body — including
         // the "no adapter" error — lives under `src/gpu/`, so nothing here needs a device.
-        _ => crate::gpu::cg::solve_refined(gpu, k, b, opts, progress).await.map(|(x, info)| (x, info, None)),
+        _ => crate::gpu::cg::solve_refined(gpu, k, b, opts, progress).await.map(no_factor),
     }
+}
+
+/// An iterative answer, with the `None` that says it built no factorisation.
+///
+/// A named function rather than a closure per arm: a host without a GPU never runs the GPU
+/// arm's success path, and a closure there would be a function no test could enter.
+fn no_factor((x, info): (Vec<f64>, SolveInfo)) -> (Vec<f64>, SolveInfo, Option<direct::Direct>) {
+    (x, info, None)
 }
 
 /// Counting scratch is bounded independently of the requested matrix size. The adjacency
