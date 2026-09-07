@@ -92,6 +92,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | nlgeom-cantilever-hex20 | green | 6/6 | -382.167439 | -387.25775 | 1.31 % |
 | nlgeom-small-strain-hex20 | green | 4/4 | -0.190407 | -0.190407 | 0.00 % |
 | nlgeom-uniaxial-svk | green | 6/6 | 24255 | 24255 | 0.00 % |
+| orthotropic-cylinder-axisymmetric | green | 5/5 | 157.133313 | 157.716261 | 0.37 % |
+| orthotropic-lamina-off-axis | green | 7/7 | 10 | 10 | 0.00 % |
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
@@ -121,6 +123,11 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | A8 | Journal replay, every case | Model hash identical after replay | exact | the engine is deterministic and scriptable | engine test |
 | A9 | GPU CG early convergence on identity and positive diagonal systems, 1 / 7 / 257 equations | `x_i = b_i / d_i`, including zero RHS | exact for powers-of-four diagonals | converged corrections survive the rest of a 25-iteration submission; reused contexts reset correctly | GPU test |
 | A10 | Simplex consistent mass and capacity, tri3/tri6/tet4/tet10 | Dirichlet barycentric integrals: ∫∏λᵢ^aᵢ = ∏aᵢ!/(d+Σaᵢ)! | 2e-12 × total mass/capacity per entry | exact entries, positive definite consistent mass, positive conservative HRZ lumping | engine test |
+| A11 | **Isotropic invariance** of the orthotropic law: E1=E2=E3, Gij=E/2(1+ν), all ν equal, wrapped in `Rotated` at any orientation | `isotropic_d(E, ν)`, which shares no code with `orthotropic_d` or the Voigt rotation | 1e-11 rel over a fixed sweep and a 96-case proptest over random axes and angles | the Voigt rotation's factors of two: a wrong one breaks the invariance | engine test |
+| A12 | Off-axis unidirectional lamina, plane stress, uniaxial σx at θ = 0…90° | the *compliance* rotated, `S̄ = T⁻¹ S T⁻ᵀ` with `T⁻¹ = voigt_rotation(Rᵀ)` — the opposite path from the stiffness rotation the element takes — cross-checked against the classical `1/Ex = c⁴/E1 + (1/G12 − 2ν12/E1)s²c² + s⁴/E2`, which agrees to 1e-12; at 45° Ex = 12.7727 GPa against E1 = 155 GPa, with the shear–extension coupling S̄₁₆ that only a correct rotation produces | 1e-9 rel on the element path, 1e-8 rel on the Command-level row | orthotropic elasticity, orientation and plane-stress condensation through a rotated law | engine test + green |
+| A13 | Constant-strain patch, all 8 kinds × 4 idealisations, orthotropic at a legal orientation | exact constant stress `D_glob ε` with `D_glob = Tᵀ D_mat T` assembled in the test; `uᵀKu = V ε:σ` | 1e-10 rel | the rotated law is conforming and complete on every element | engine test |
+| A14 | Free expansion of an unconstrained block, α = (α1, α2, α3) at eight orientations | `u = Rᵀ diag(α) R ΔT (x − x₀)`, σ = 0 — 3×3 matrix algebra with no Voigt in it | σ ≤ 1e-8 E α ΔT; the thermal load equals `K u` to 1e-9 | that thermal strain rotates by `T⁻¹`, not `Tᵀ`: with engineering shear the two differ by factors of two, and only an anisotropic α at an orientation shows it | engine test |
+| A15 | Linear temperature field over one element, orthotropic k at an orientation, all 8 kinds × 4 idealisations | `TᵀK_T T = (∇T · K ∇T) V` with `K = Rᵀ diag(k) R` formed in the test | 1e-11 rel | the conductivity is a second-order tensor and rotates without Voigt bookkeeping | engine test |
 
 A5 is run for all eight element kinds, driven by a prescribed end displacement so the reaction
 *is* `F`; A7's scale is the largest force that flows through the model, because a Step driven by
@@ -395,6 +402,7 @@ Harder's parallelogram specimen *is* a parallelogram, whose own converged answer
 | C7 | NAFEMS T4 steady conduction + convection | T(E) = 18.3 °C (converged 18.25) | 0.5 °C | convection BC | engine test + green |
 | C8 | Thermal → structural chain, restrained plate (**substitute for NAFEMS T1**) | σxx = −E α ΔT/(1−ν) = −150 MPa at mid-height | 2 % | thermal → structural coupling | green |
 | C9 | Free 2D mesh with overlapping refinement boxes | finer overlap mean triangle area ≤ 0.5 · 0.25²; outside the coarse box, a triangle area > 0.9 · 0.5 · 2² | exact | centroid-based refinement selection, input-order determinism | geometry test |
+| C10 | Cylindrically orthotropic thick tube, axisymmetric, internal pressure | Lekhnitskii: with ε_z = 0, `C_rr u'' + C_rr u'/r − C_θθ u/r² = 0`, so `u = A r^k + B r^{−k}` with `k = √(C_θθ/C_rr)` = 2.4606480774; the oracle is written out in the case's `reference`. σ_θ(a) = 157.716 MPa against 100 MPa for the isotropic tube of C2, so the row cannot pass on an isotropic answer | 2 % stress, 0.5 % displacement at p=2; the stress error falls by about four when both divisions double | cylindrical orthotropy needs no orientation, because the axisymmetric Voigt rows are already (rr, zz, θθ, rz) | green |
 
 **C1's finite width is 3 %, not 1.6 %.** Plan C's half-width of 10 hole radii was measured and
 extrapolates to K_t = 3.094 — three per cent above Kirsch's infinite-plate 3.00, not the 1.6 %

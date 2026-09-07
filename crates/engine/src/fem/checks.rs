@@ -25,6 +25,7 @@ const RIGID_TOL: f64 = 1e-10;
 pub fn all(p: &Problem<'_>) -> Vec<Error> {
     let mut out = Vec::new();
     out.extend(missing_materials(p));
+    out.extend(misoriented_materials(p));
     out.extend(missing_sections(p));
     out.extend(empty_sets(p));
     out.extend(uncoupled_points(p));
@@ -152,6 +153,42 @@ fn missing_materials(p: &Problem<'_>) -> Vec<Error> {
         .collect();
     bodies.dedup();
     bodies.into_iter().map(no_material).collect()
+}
+
+/// A material whose axes a 2D idealisation cannot carry.
+///
+/// `material.add` refuses the same thing outright, but `model.setIdealisation` can come after
+/// the Material, so the pairing has to be checked again where the two meet. The Body is named
+/// rather than the Material because that is the level at which the idealisation applies, and it
+/// matches the heat-property checks.
+fn misoriented_materials(p: &Problem<'_>) -> Vec<Error> {
+    if p.idealisation.dim() == 3 {
+        return Vec::new();
+    }
+    let mut bodies: Vec<&str> = p
+        .material_of_block
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| {
+            m.and_then(|m| p.materials[m].axes).is_some_and(|axes| !crate::fem::material::axes_are_planar(&axes))
+        })
+        .map(|(b, _)| p.body_of_block[b].as_str())
+        .collect();
+    bodies.dedup();
+    bodies
+        .into_iter()
+        .map(|body| {
+            Error::new(
+                ErrorCode::ModelIllPosed,
+                format!(
+                    "Body '{body}' has a material whose axes are turned out of the plane: a 2D idealisation only \
+                     allows a material orientation about the out-of-plane axis [0, 0, 1]"
+                ),
+            )
+            .at(format!("body '{body}'"))
+            .suggest("material.add with orientation.axis [0, 0, 1], or model.setIdealisation solid3d")
+        })
+        .collect()
 }
 
 /// A Body of line members with no Section: a member is a curve, so nothing else says how much
