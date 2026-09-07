@@ -9,7 +9,7 @@ import { FemError, type FrameResult, type FramesResult, type ResultSummary, type
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store } from './store';
-import type { WorkerTransport } from './worker-transport';
+import type { EngineTransport } from '@femlab/registry';
 import { TransientPlayback, type PlaybackClock, type TransientInput } from './transient';
 
 /** `view.setDeformScale`'s argument. */
@@ -70,7 +70,7 @@ export class ResultsView {
 
   constructor(
     private readonly store: Store,
-    private readonly transport: WorkerTransport,
+    private readonly transport: EngineTransport,
     private readonly viewer: ViewerRef,
     clock?: PlaybackClock,
   ) {

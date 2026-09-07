@@ -141,6 +141,11 @@ export function forkProject(): void {
   projects?.fork();
 }
 
+export interface SessionHostServices {
+  projects: Projects;
+  replay(commands: ShareCommand[], benchmark?: ActiveBenchmark): Promise<void>;
+}
+
 export function makeHostContext(
   store: Store,
   transport: EngineTransport,
@@ -152,10 +157,12 @@ export function makeHostContext(
   printPage: () => void = () => window.print(),
   captureEnvironment: AnimationCaptureEnvironment = browserAnimationCaptureEnvironment(),
   refresh: () => Promise<void> = async () => undefined,
+  session?: SessionHostServices,
 ): HostContext {
   // A Journal replayed onto the engine, one Command at a time. As with an example: a Journal
   // that ends on a solve comes back solved on screen rather than as a Model with no Result.
   const replay = async (cmds: ShareCommand[]): Promise<void> => {
+    if (session) return session.replay(cmds);
     let solved: unknown = null;
     for (const cmd of cmds) {
       const ack = await transport.dispatch(cmd as never);
@@ -166,7 +173,7 @@ export function makeHostContext(
     if (solved) await results?.onAck(solved);
     store.markOpened(opened.journal);
   };
-  const own = makeProjects({
+  const own = session?.projects ?? makeProjects({
     // A browser with IndexedDB blocked (private mode, or a headless harness) keeps working:
     // projects are then per-session, the start screen says so, and file.save is still there.
     store: typeof indexedDB === 'undefined' ? memoryProjects() : indexedDbProjects(indexedDB),
@@ -180,7 +187,7 @@ export function makeHostContext(
     onError: (e) => console.warn('the project save failed', e),
     onChange: () => store.set({ projects: own.list(), project: own.current() }),
   });
-  projects = own;
+  if (!session) projects = own;
   const capture = new AnimationCapture(captureEnvironment);
   const v = (): Viewer => {
     if (!viewer.current) throw new FemError('unsupported', 'the viewer has not been mounted yet', 'viewer', 'wait for the start screen to hand over to the app');
@@ -402,6 +409,10 @@ export function makeHostContext(
         }
         if (!saved) return null;
         // As with an example: a restored Journal that ends on a solve comes back solved on screen.
+        if (session) {
+          await session.replay(saved.cmds);
+          return { name: saved.name, at: saved.at, commands: saved.cmds.length };
+        }
         own.fork();
         let solved: unknown = null;
         await applyShared(
@@ -447,7 +458,13 @@ export function makeHostContext(
       writeText: soon('the folder on disk', 'use file.save for now'),
       writeBytes: soon('the folder on disk', 'use file.save for now'),
     },
-    examples: { open: (name) => openExample(name, store, transport, refresh, results) },
+    examples: { open: async (name) => {
+      if (!session) return openExample(name, store, transport, refresh, results);
+      const benchmark = await fetchExampleMetadata(name);
+      const entries = JSON.parse(await fetchExample(name)) as { cmd: ShareCommand }[];
+      await session.replay(entries.map(entry => entry.cmd), benchmark);
+      return { name, commands: entries.length };
+    } },
     ai: {
       setKey: (key, provider: AiProvider) => {
         storeKey(provider, key);
@@ -523,7 +540,6 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
  */
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, _results?: ResultsView, registry?: () => Registry): HostDef[] {
   let intentRun = 0;
-  store.setJournalDiffQuery(async (base) => (await transport.query({ query: 'query.journalDiff', base })) as JournalDiff);
   return [
     {
       name: 'palette.resolve',

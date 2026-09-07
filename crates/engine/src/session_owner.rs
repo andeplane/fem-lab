@@ -39,6 +39,7 @@ pub struct DocumentSnapshot {
     pub stamp: Stamp,
     pub model: crate::query::ModelSummary,
     pub file: ModelFile,
+    pub journal: crate::query::JournalDump,
     pub objects: crate::query::ObjectList,
     pub results: crate::query::RetainedResults,
     pub script: String,
@@ -66,6 +67,7 @@ pub struct SessionOwner {
     outcome_order: VecDeque<OperationKey>,
     pending: Option<crate::replacement::ReplacementTicket>,
     next_ticket: StateVersion,
+    retired: bool,
 }
 
 impl SessionOwner {
@@ -83,6 +85,7 @@ impl SessionOwner {
             outcome_order: VecDeque::new(),
             pending: None,
             next_ticket: StateVersion::default(),
+            retired: false,
         })
     }
 
@@ -102,6 +105,12 @@ impl SessionOwner {
         Ok(RunLease { stamp: self.stamp(), run_id })
     }
 
+    /// Child producers inherit a live parent's activation; revocation cannot be bypassed by fork.
+    pub fn fork_run(&mut self, context: &ExecutionContext) -> Result<RunLease, Error> {
+        self.check_context(context)?;
+        self.begin_run(&context.session)
+    }
+
     /// Revoke before returning to the host; a message posted earlier is checked when executed.
     pub fn cancel_run(&mut self, session: &SessionRef, run_id: &str) -> Result<(), Error> {
         self.check_session(session)?;
@@ -113,7 +122,7 @@ impl SessionOwner {
     }
 
     fn check_session(&self, session: &SessionRef) -> Result<(), Error> {
-        if session != &self.stamp.session {
+        if self.retired || session != &self.stamp.session {
             return Err(Error::new(
                 ErrorCode::SessionExpired,
                 "this operation belongs to a different model activation",
@@ -142,6 +151,20 @@ impl SessionOwner {
     pub fn snapshot(&mut self, context: &ExecutionContext) -> Result<DocumentSnapshot, Error> {
         self.check_context(context)?;
         document_snapshot(&mut self.inner, self.stamp.clone())
+    }
+
+    /// The read borrow keeps the admission check and all rendering inputs in one version.
+    pub fn render_view(&mut self, context: &ExecutionContext) -> Result<(Stamp, crate::engine::RenderView<'_>), Error> {
+        self.check_context(context)?;
+        let stamp = self.stamp();
+        self.inner.render_view().map(|view| (stamp, view))
+    }
+
+    pub async fn gpu_self_test(&mut self, context: &ExecutionContext, n: u32) -> Result<f64, Error> {
+        self.check_context(context)?;
+        let gpu = self.inner.gpu_mut().ok_or_else(|| Error::unsupported("gpu (no adapter)"))?;
+        let a: Vec<f32> = (1..=n).map(|i| i as f32).collect();
+        gpu.dot(&a, &vec![1.0; n as usize]).await.map(|v| v as f64)
     }
 
     /// Reserve one replacement against the captured active stamp. Old reads remain available.
@@ -190,6 +213,20 @@ impl SessionOwner {
             );
         }
         self.pending = None;
+        Ok(())
+    }
+
+    /// A browser candidate may live in a separate Worker. Retire its reserved predecessor
+    /// before publishing that endpoint, rejecting even messages already posted to the old one.
+    pub fn retire_replacement(&mut self, ticket: &crate::replacement::ReplacementTicket) -> Result<(), Error> {
+        if self.pending.as_ref() != Some(ticket) {
+            return Err(
+                Error::new(ErrorCode::SessionConflict, "replacement no longer owns retirement").at("replacement")
+            );
+        }
+        self.retired = true;
+        self.pending = None;
+        self.runs.clear();
         Ok(())
     }
 
@@ -310,6 +347,13 @@ pub(crate) fn document_snapshot(inner: &mut Engine, stamp: Stamp) -> Result<Docu
         stamp,
         model: inner.query_model()?,
         file: inner.export_file(),
+        journal: crate::query::JournalDump {
+            hash: inner.journal().hash(),
+            entries: inner.journal().entries.clone(),
+            revision: inner.revision(),
+            can_undo: inner.can_undo(),
+            can_redo: inner.can_redo(),
+        },
         objects: inner.query_objects(None),
         results: inner.query_results(),
         script: inner.journal().as_script(crate::version()),

@@ -17,6 +17,12 @@ use crate::par::Pool;
 use crate::query::{Ack, Output};
 use crate::units::{Dimension, Q};
 
+/// A borrowed rendering input exposes no model mutator or active-engine pointer.
+pub enum RenderView<'a> {
+    Mesh(&'a crate::mesh::BuiltMesh),
+    Geometry(Vec<GeometrySurface>),
+}
+
 /// What the host provides: a clock, for timings.
 pub trait Host {
     /// Milliseconds on a monotonic clock.
@@ -437,6 +443,14 @@ impl Engine {
             self.mesh = Some(crate::mesh::build(&self.model, &self.solids)?);
         }
         Ok(self.mesh.as_ref().expect("just built"))
+    }
+
+    pub fn render_view(&mut self) -> Result<RenderView<'_>, Error> {
+        if self.model.mesh.is_some() {
+            self.mesh().map(RenderView::Mesh)
+        } else {
+            self.geometry_surface().map(RenderView::Geometry)
+        }
     }
 
     /// The mesh skin the viewer draws.

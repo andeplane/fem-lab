@@ -269,3 +269,18 @@ fn replacement_admission_rejects_unbound_or_malformed_requests() {
     );
     assert!(owner.begin_replacement(context(&lease, "2"), lease.stamp.state_version).is_ok());
 }
+
+#[test]
+fn cross_worker_retirement_checks_the_reservation_and_revokes_posted_work() {
+    let (mut owner, lease) = setup();
+    let ticket = owner.begin_replacement(context(&lease, "2"), lease.stamp.state_version.clone()).unwrap();
+    owner.cancel_run(&lease.stamp.session, &lease.run_id).unwrap();
+    assert_eq!(owner.retire_replacement(&ticket).unwrap_err().code, ErrorCode::SessionConflict);
+    let mut lease = owner.begin_run(&owner.stamp().session).unwrap();
+    let ticket = owner.begin_replacement(context(&lease, "1"), lease.stamp.state_version.clone()).unwrap();
+    owner.retire_replacement(&ticket).unwrap();
+    assert_eq!(owner.begin_run(&lease.stamp.session).unwrap_err().code, ErrorCode::SessionExpired);
+    assert_eq!(owner.snapshot(&context(&lease, "read")).unwrap_err().code, ErrorCode::SessionExpired);
+    lease.stamp = owner.stamp(); // Explicit acquisition cannot revive a retired endpoint either.
+    assert_eq!(owner.begin_run(&lease.stamp.session).unwrap_err().code, ErrorCode::SessionExpired);
+}

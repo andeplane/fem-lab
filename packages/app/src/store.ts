@@ -355,7 +355,7 @@ export class Store {
   private journalDiffQuery: ((base: Journal) => Promise<JournalDiff>) | null = null;
   private listeners = new Set<() => void>();
 
-  constructor(public state: UiState = initialState) {}
+  constructor(public state: UiState = structuredClone(initialState)) {}
 
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);

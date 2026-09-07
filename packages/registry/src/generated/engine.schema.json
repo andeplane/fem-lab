@@ -30649,6 +30649,9 @@
       "file": {
         "$ref": "#/$defs/ModelFile"
       },
+      "journal": {
+        "$ref": "#/$defs/JournalDump"
+      },
       "objects": {
         "$ref": "#/$defs/ObjectList"
       },
@@ -30669,6 +30672,7 @@
       "stamp",
       "model",
       "file",
+      "journal",
       "objects",
       "results",
       "script",
@@ -36013,6 +36017,40 @@
               "sha256"
             ]
           }
+        ]
+      },
+      "JournalDump": {
+        "description": "`query.journal` response.",
+        "type": "object",
+        "properties": {
+          "hash": {
+            "description": "Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.",
+            "type": "string"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JournalEntry"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "canUndo": {
+            "type": "boolean"
+          },
+          "canRedo": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hash",
+          "entries",
+          "revision",
+          "canUndo",
+          "canRedo"
         ]
       },
       "ObjectList": {

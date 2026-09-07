@@ -24,6 +24,7 @@ function setup() {
   const file = { format: 'femlab/1', model: { name: 'A' }, journal: { entries: [structuredClone(first)] } };
   const query = vi.fn(async (): Promise<JournalDiff> => diff());
   const transport = { exportFile: vi.fn(async () => file), query, importFile: vi.fn() };
+  store.setJournalDiffQuery(async base => await (transport as unknown as WorkerTransport).query({ query: 'query.journalDiff', base }) as JournalDiff);
   const ctx = makeHostContext(store, transport as unknown as WorkerTransport, { current: null }, {} as HostCaps);
   const registry = new Registry({
     schema: schema as unknown as EngineSchema, host: ctx,
