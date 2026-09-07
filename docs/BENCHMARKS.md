@@ -571,6 +571,14 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F12c | A `rigid` coupling on the same face | every node of the face takes one displacement; the tip is stiffer than F5b's and the reaction resultant is still exact | 1e-12 on the kinematics, 1e-9 rel on the resultant | `rigid` holds its face flat | engine test |
 | F13 | Rayleigh's tip-mass cantilever: a 500 kg `geometry.addMass` on a 1 m × 40 × 40 mm steel beam, coupled `distributed` to the tip | f₁ = (1/2π)√(3EI/(L³(m + 0.24 m_beam))) = 2.601925 Hz | 1 % | a point mass reaches the mass matrix, and only the mass matrix (#67) | green |
 
+The cavity-face regression for #407 builds a 200 × 30 × 200 mm slab with a
+10 mm-high box cut and a separate matching core. At both 10 and 5 mm lattice sizes,
+for hex8 and hex20, each cut's `ymin`/`ymax` Set must cover the full rectangle:
+`(width / size)²` faces and `width²` area (1e-12 m² absolute tolerance), with the same
+count and bounding box as both the core's face and an explicit plane-predicate Set.
+Both a full-width cut and a cut inset by 10 mm are checked. This catches missing
+interface faces before they can leave a bonded contact partially constrained.
+
 The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
 the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
 and F4c gate at roundoff rather than at an engineering tolerance. F4c's reference is the value
