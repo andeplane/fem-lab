@@ -428,7 +428,7 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
  * `+ add …` chip, every blocker fix link and the palette's ⇥). They go in through `Registry`'s
  * `hostCommands` option, so `registry.list()` still covers every `[data-cmd]` in the DOM.
  */
-export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, _results?: ResultsView, registry?: () => Registry): HostDef[] {
+export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, results?: ResultsView, registry?: () => Registry): HostDef[] {
   let intentRun = 0;
   return [
     {
@@ -458,11 +458,12 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     {
       name: 'view.setMode',
       execution: 'sessionView',
-      description: 'Choose what the viewer draws: the Bodies (`geometry`), the Mesh (`mesh`) or the Result contours (`results`). Display only — the Model and the Journal are untouched and the mode survives every solve.',
+      description: 'Choose what the viewer draws: the Bodies (`geometry`), the Mesh (`mesh`) or the Result contours (`results`). Geometry and Mesh show the current model; Results shows the selected retained Result mesh and its matching fields. Display only — the Model and the Journal are untouched.',
       schema: z.object({ mode: z.enum(['geometry', 'mesh', 'results']) }),
       tool: true,
       run: (input) => {
         const { mode } = input as { mode: ViewMode };
+        if (results) return results.setMode(mode);
         store.set({ viewMode: mode });
         viewer.current?.setMode(mode);
       },

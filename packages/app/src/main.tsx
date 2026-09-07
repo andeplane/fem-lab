@@ -96,10 +96,6 @@ class Bundle {
     if (this.disposed) throw expired();
     const snapshot = await this.transport.snapshot();
     if (this.publishSnapshot(snapshot)) await this.store.refreshJournalComparison();
-    const surface = await this.transport.surface();
-    if (this.disposed) throw expired();
-    this.viewer.current?.setSurface(surface);
-    this.viewer.current?.setMode(this.store.state.viewMode);
     await this.results.refresh();
     if (this.disposed) throw expired();
     if (snapshot.file.journal.entries.length && !this.projectDeleted) {
