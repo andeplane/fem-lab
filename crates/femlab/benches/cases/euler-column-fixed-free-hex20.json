@@ -1,0 +1,121 @@
+{
+  "name": "euler-column-fixed-free-hex20",
+  "reference": "Benchmark B5: Euler buckling of a fixed-free (cantilever) column, E = 210 GPa, nu = 0.3, 20 x 20 x 1000 mm of hex20. I = b^4 / 12 = 1.3333e-8 m^4, so P_cr = pi^2 EI / (4 L^2) = 6908.72 N against the 1 MPa reference pressure on the 20 x 20 mm free end (P_ref = 400 N): lambda = 17.2718, gated at 1 %. The square section makes the first two modes a degenerate pair -- the same load in two perpendicular planes -- so nModes is 2 and both are checked against the same value, which is what fails if the p + 8 subspace ever shrinks back to the modal path's min(2p, p + 8) and stops separating a pair. The closed form neglects shear; at L/b = 50 that correction is about 0.10 %.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "euler-column-fixed-free"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "column",
+      "size": [
+        "1 m",
+        "20 mm",
+        "20 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "column"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 16,
+          "ny": 1,
+          "nz": 1
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "column.xmin"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "squeeze",
+      "on": "column.xmax",
+      "value": "1 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "buckle",
+      "procedure": "buckling",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "squeeze"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 2
+    },
+    {
+      "cmd": "solve.run",
+      "step": "buckle"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/bucklingFactors/0",
+      "expect": 17.2718,
+      "tol": 0.01,
+      "rel": true,
+      "note": "P_cr = pi^2 EI / (4 L^2) over the 400 N reference load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/bucklingFactors/1",
+      "expect": 17.2718,
+      "tol": 0.01,
+      "rel": true,
+      "note": "its twin in the other plane: a square section"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0,
+      "tol": 1e-8,
+      "note": "the pre-buckling static state balances its applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

@@ -633,6 +633,14 @@ pub struct ResultSummary {
     /// shape is the Result field named `mode:k`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frequencies: Vec<Valued>,
+    /// Buckling load factors, smallest magnitude first and dimensionless; empty unless the Step
+    /// was a buckling one. Multiply the Step's Loads by one to get its critical load; a negative
+    /// factor buckles under the reversed load. Factor `k`'s shape is the field named `mode:k`,
+    /// and it has arbitrary amplitude: it says where the structure buckles, not how far. The
+    /// factor is an upper bound — imperfections, pre-buckling rotation and yielding all lower
+    /// the real capacity — so it is not a safety factor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buckling_factors: Vec<f64>,
     /// One row per retained output time: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,

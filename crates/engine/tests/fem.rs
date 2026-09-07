@@ -1413,6 +1413,9 @@ impl Element for LegacyInverseMap {
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
         self.inner.recover(c, u, stress, strain)
     }
+    fn geometric(&self, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error> {
+        self.inner.geometric(c, u, kg)
+    }
     fn tangent_and_force(
         &self,
         c: &ElementCtx<'_>,
@@ -1773,6 +1776,8 @@ fn a_material_with_the_wrong_props_fails_every_integral_that_calls_the_law() {
             el.thermal_load(&c, &mut v).err(),
             el.recover(&c, &u, &mut sig, &mut eps).err(),
             el.omega_max(&c).err(),
+            // the geometric stiffness recovers its own stress through the law, so it fails too
+            el.geometric(&c, &u, &mut k).err(),
         ];
         for e in fails {
             let e = e.expect("a props mismatch must fail");
@@ -2423,6 +2428,191 @@ fn stl_gives_a_degenerate_triangle_a_zero_normal() {
     let tri = TriMesh { positions: vec![[0.0; 3]; 3], triangles: vec![[0, 1, 2]], ..Default::default() };
     let text = write_stl(&tri, "degenerate");
     assert!(text.contains("facet normal 0 0 0\n"), "{text}");
+}
+
+// ------------------------------------------------- geometric stiffness (linear buckling)
+
+/// An affine map. Its Jacobian is constant, so an element's volume is one determinant times its
+/// reference measure and every rule integrates a constant exactly — which is what lets the
+/// closed form below be written without touching the kernel's quadrature.
+fn affine_map(p: [f64; 3]) -> [f64; 3] {
+    [
+        2.0 + 1.3 * p[0] + 0.2 * p[1] + 0.1 * p[2],
+        1.0 + 0.15 * p[0] + 1.1 * p[1] + 0.2 * p[2],
+        0.5 + 0.1 * p[0] + 0.05 * p[1] + 0.9 * p[2],
+    ]
+}
+
+/// One kind's affine element, flattened onto `z = 0` in 2D.
+fn affine_coords(kind: ElementKind) -> Vec<f64> {
+    let mut v = map_nodes(kind, affine_map);
+    if kind.dim() == 2 {
+        for a in 0..kind.n_nodes() {
+            v[3 * a + 2] = 0.0;
+        }
+    }
+    v
+}
+
+/// The eight isoparametric kinds a geometric stiffness is defined for, each with the measure of
+/// its own reference element. A line member is not here: it has its own closed form, and its
+/// reference measure would be a length rather than a volume.
+const AFFINE_KINDS: [(ElementKind, f64); 8] = [
+    (ElementKind::Hex8, 8.0),
+    (ElementKind::Hex20, 8.0),
+    (ElementKind::Quad4, 4.0),
+    (ElementKind::Quad8, 4.0),
+    (ElementKind::Tet4, 1.0 / 6.0),
+    (ElementKind::Tet10, 1.0 / 6.0),
+    (ElementKind::Tri3, 0.5),
+    (ElementKind::Tri6, 0.5),
+];
+
+/// The measure `affine` maps one reference element onto: `|det M|` times that reference measure,
+/// both written out by hand from the coefficients above.
+fn affine_measure(kind: ElementKind, reference: f64) -> f64 {
+    let det = if kind.dim() == 3 {
+        1.3 * (1.1 * 0.9 - 0.2 * 0.05) - 0.2 * (0.15 * 0.9 - 0.2 * 0.1) + 0.1 * (0.15 * 0.05 - 1.1 * 0.1)
+    } else {
+        1.3 * 1.1 - 0.2 * 0.15
+    };
+    reference * det
+}
+
+/// The gradient `A` of the linear displacement field the oracle uses. It has both a symmetric
+/// and a skew part, so `AᵀA` is not `A²` and a kernel that lost the transpose would show it.
+const GRADIENT: [[f64; 3]; 3] = [[2e-4, -7e-4, 3e-4], [5e-4, -1e-4, 9e-4], [-4e-4, 6e-4, 8e-4]];
+
+/// `u_i = A_ij x_j` on one element's nodes, over the components the idealisation has.
+fn linear_displacement(kind: ElementKind, coords: &[f64]) -> Vec<f64> {
+    let (nn, dim) = (kind.n_nodes(), kind.dim());
+    let mut u = vec![0.0; nn * dim];
+    for a in 0..nn {
+        for i in 0..dim {
+            u[dim * a + i] = (0..dim).map(|j| GRADIENT[i][j] * coords[3 * a + j]).sum();
+        }
+    }
+    u
+}
+
+/// The Voigt strain of that field: the symmetric part of `A`, with engineering shear.
+fn linear_strain(dim: usize) -> [f64; VOIGT] {
+    let mut e = [0.0; VOIGT];
+    e[0] = GRADIENT[0][0];
+    e[1] = GRADIENT[1][1];
+    e[3] = GRADIENT[0][1] + GRADIENT[1][0];
+    if dim == 3 {
+        e[2] = GRADIENT[2][2];
+        e[4] = GRADIENT[0][2] + GRADIENT[2][0];
+        e[5] = GRADIENT[1][2] + GRADIENT[2][1];
+    }
+    e
+}
+
+/// `½ V σ_ij (AᵀA)_ij`: the geometric strain energy of a uniform stress state under a linear
+/// displacement field, from closed forms alone.
+fn geometric_energy_closed_form(id: &Idealisation, kind: ElementKind, reference: f64) -> f64 {
+    let dim = kind.dim();
+    let s = expected_stress(id, &linear_strain(dim));
+    let sigma = [[s[0], s[3], s[4]], [s[3], s[1], s[5]], [s[4], s[5], s[2]]];
+    let mut sum = 0.0;
+    for i in 0..dim {
+        for j in 0..dim {
+            let ata: f64 = (0..dim).map(|k| GRADIENT[k][i] * GRADIENT[k][j]).sum();
+            sum += sigma[i][j] * ata;
+        }
+    }
+    // The axisymmetric idealisation never reaches here, so Pappus' radius is never read.
+    0.5 * weighted(id, affine_measure(kind, reference), 0.0) * sum
+}
+
+/// The idealisations a geometric stiffness exists for: every one but the axisymmetric ring.
+fn buckling_idealisations(kind: ElementKind) -> Vec<Idealisation> {
+    if kind.dim() == 3 {
+        vec![Idealisation::Solid3d]
+    } else {
+        vec![Idealisation::PlaneStress { thickness: THICKNESS }, Idealisation::PlaneStrain]
+    }
+}
+
+/// `K_σ x`, so the assertions below read as one matrix–vector product.
+fn kg_times(kg: &[f64], v: &[f64], nd: usize) -> Vec<f64> {
+    (0..nd).map(|r| (0..nd).map(|c| kg[r * nd + c] * v[c]).sum()).collect()
+}
+
+/// The independent oracle for `K_σ`. Under a uniform stress state and a linear displacement
+/// field both integrands are constant, so `½ uᵀ K_σ u` collapses to `½ V σ_ij (AᵀA)_ij` — a
+/// closed form that shares no line with the kernel. The same matrices carry the three structural
+/// properties: `K_σ` is symmetric, a rigid translation is in its null space (because the shape
+/// gradients sum to zero), and it scales linearly with the stress.
+#[test]
+fn the_geometric_stiffness_matches_its_closed_form_for_every_kind() {
+    let mat = steel();
+    for (kind, reference) in AFFINE_KINDS {
+        let coords = affine_coords(kind);
+        let (nn, dim) = (kind.n_nodes(), kind.dim());
+        let nd = nn * dim;
+        let u = linear_displacement(kind, &coords);
+        for id in buckling_idealisations(kind) {
+            let c = ctx(&coords, &mat, id.clone(), Formulation::Full);
+            let mut kg = vec![0.0; nd * nd];
+            element_for(kind).geometric(&c, &u, &mut kg).expect("steel on an affine element integrates");
+            let scale = kg.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            assert!(scale > 0.0, "{kind:?} {id:?}: the geometric stiffness is all zeros");
+            for r in 0..nd {
+                for col in 0..nd {
+                    let gap = (kg[r * nd + col] - kg[col * nd + r]).abs();
+                    assert!(gap <= 1e-12 * scale, "{kind:?} {id:?}: not symmetric at ({r}, {col}) by {gap}");
+                }
+            }
+            for comp in 0..dim {
+                let t: Vec<f64> = (0..nd).map(|i| if i % dim == comp { 1.0 } else { 0.0 }).collect();
+                let row = kg_times(&kg, &t, nd).iter().fold(0.0f64, |m, v| m.max(v.abs()));
+                assert!(row <= 1e-9 * scale, "{kind:?} {id:?}: translation {comp} is not in the null space ({row})");
+            }
+            let energy = 0.5 * u.iter().zip(kg_times(&kg, &u, nd)).map(|(a, b)| a * b).sum::<f64>();
+            let want = geometric_energy_closed_form(&id, kind, reference);
+            let error = (energy - want).abs() / want.abs();
+            assert!(error <= 1e-10, "{kind:?} {id:?}: energy {energy}, closed form {want} ({error:e})");
+            // Doubling the displacement doubles the stress, and a linear kernel doubles with it.
+            let twice: Vec<f64> = u.iter().map(|v| 2.0 * v).collect();
+            let mut kg2 = vec![0.0; nd * nd];
+            element_for(kind).geometric(&c, &twice, &mut kg2).expect("steel on an affine element integrates");
+            let worst = kg2.iter().zip(&kg).fold(0.0f64, |m, (a, b)| m.max((a - 2.0 * b).abs()));
+            assert!(worst <= 1e-9 * scale, "{kind:?} {id:?}: not linear in the stress ({worst})");
+        }
+    }
+}
+
+/// The axisymmetric ring is refused by name rather than integrated without its hoop term, which
+/// would silently under-stiffen it.
+#[test]
+fn an_axisymmetric_geometric_stiffness_is_refused_and_says_why() {
+    let mat = steel();
+    for kind in [ElementKind::Quad4, ElementKind::Quad8, ElementKind::Tri3, ElementKind::Tri6] {
+        let coords = affine_coords(kind);
+        let u = linear_displacement(kind, &coords);
+        let c = ctx(&coords, &mat, Idealisation::Axisymmetric, Formulation::Full);
+        let mut kg = vec![0.0; (kind.n_nodes() * kind.dim()).pow(2)];
+        let e = element_for(kind).geometric(&c, &u, &mut kg).expect_err("the hoop term is not written");
+        assert_eq!(e.code, ErrorCode::Unsupported);
+        assert_eq!(e.where_.as_deref(), Some("idealisation"));
+        assert!(e.cause.contains("hoop"), "{}", e.cause);
+        assert!(e.suggestion.expect("a way out").contains("model.setIdealisation"));
+        assert_eq!(kg, vec![0.0; kg.len()], "a refused integral writes nothing");
+    }
+    // A folded element fails the same Jacobian the stiffness does, reported as it is: the
+    // geometric integral recovers stress through the same kinematics and inherits its errors.
+    let kind = ElementKind::Hex8;
+    let mut coords = affine_coords(kind);
+    for z in coords.iter_mut().skip(2).step_by(3) {
+        *z = 0.0;
+    }
+    let u = linear_displacement(kind, &coords);
+    let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::Full);
+    let mut kg = vec![0.0; (kind.n_nodes() * kind.dim()).pow(2)];
+    let folded = element_for(kind).geometric(&c, &u, &mut kg).expect_err("a flat hexahedron has no volume");
+    assert_eq!(folded.code, ErrorCode::MeshInverted);
 }
 
 // ---------------------------------------------------------------- assembly
@@ -3209,6 +3399,7 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
             control: NonlinearControl::default(),
         },
         Step::Explicit { t_end: 1.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 },
+        Step::Buckling { n_modes: 1, solver: opts },
         implicit_step(1.0, 2.0, 0.0, (0.0, 0.0), None, 1),
         harmonic_step(1.0, 2.0, 3, 0.02, 1),
     ]
@@ -3217,7 +3408,17 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
     .collect();
     assert_eq!(
         names,
-        ["static", "static-nonlinear", "modal", "heat-steady", "heat-transient", "explicit", "implicit", "harmonic"]
+        [
+            "static",
+            "static-nonlinear",
+            "modal",
+            "heat-steady",
+            "heat-transient",
+            "explicit",
+            "buckling",
+            "implicit",
+            "harmonic"
+        ]
     );
 }
 
@@ -4993,6 +5194,295 @@ fn a_slender_cantilever_has_the_euler_bernoulli_bending_frequencies() {
     for shape in &res.modes {
         assert!(shape.data.iter().any(|v| v.abs() > 0.0));
     }
+}
+
+// ------------------------------------------------- linear buckling (Benchmark B5)
+
+/// The reference end pressure of every buckling case: 1 MPa, so a load factor reads directly as
+/// the critical end stress in MPa and needs no area to interpret.
+const BUCKLING_PRESSURE: f64 = 1e6;
+
+/// A slender steel column in SI puts stiffnesses of order `1e9` against end forces of order
+/// `1e2`, and the direct solve's default acceptance floor (100 × 1e-10) sits right on the
+/// resulting relative residual. One decade of headroom is still four decades tighter than the
+/// 1 % these Benchmarks are gated at.
+fn slender_solver() -> SolveOptions {
+    SolveOptions { rel_tol: 1e-9, ..SolveOptions::default() }
+}
+
+/// A hex20 column of `n` elements along its length, clamped at `xmin` and pressed on `xmax`.
+fn column_buckling(n: usize, length: f64, side: f64, pressure: f64, modes: usize) -> StepResult {
+    let mesh = Structured { kind: ElementKind::Hex20, n: [n, 1, 1] }.box_([length, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let constraints = vec![fix("root", "xmin", [true, true, true], 0.0)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: pressure }];
+    run_step(&p, &Step::Buckling { n_modes: modes, solver: slender_solver() })
+        .expect("a loaded column has a buckling load")
+}
+
+/// `P_cr / P_ref` for a square column: Euler's load over the reference end force, which is the
+/// dimensionless number the procedure reports.
+fn euler_factor(length: f64, side: f64, effective: f64) -> f64 {
+    let i = side.powi(4) / 12.0;
+    PI * PI * YOUNG * i / (effective * length).powi(2) / (BUCKLING_PRESSURE * side * side)
+}
+
+/// Benchmark B5: a fixed–free hex20 column buckles at `P_cr = π²EI/(4L²)`.
+///
+/// The square section makes the first two modes a degenerate pair — the same load in two
+/// perpendicular planes — so this is also the test that the `p + 8` subspace separates a pair
+/// rather than reporting one of them twice or missing the second.
+#[test]
+fn a_fixed_free_column_buckles_at_the_euler_load() {
+    let (length, side) = (1.0, 0.02);
+    let res = column_buckling(20, length, side, BUCKLING_PRESSURE, 2);
+    let want = euler_factor(length, side, 2.0);
+    assert_eq!(res.buckling_factors.len(), 2);
+    for (i, got) in res.buckling_factors.iter().enumerate() {
+        let error = (got - want).abs() / want;
+        assert!(error <= 0.01, "mode {}: factor {got}, Euler {want} ({:.2} %)", i + 1, 100.0 * error);
+    }
+    let (a, b) = (res.buckling_factors[0], res.buckling_factors[1]);
+    assert!((a - b).abs() <= 1e-6 * a, "a square section buckles at one load in two planes: {a} and {b}");
+    // The shapes are scaled to unit peak and are transverse: a buckling shape says where.
+    for shape in &res.modes {
+        let peak = shape.data.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+        assert!((peak - 1.0).abs() <= 1e-12, "unit peak, got {peak}");
+    }
+    // The static state is still the Result: its reactions balance the 400 N end load.
+    let applied = res.scalars["applied_total_x"];
+    let reaction: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
+    assert!((applied + reaction).abs() <= 1e-9 * applied.abs(), "applied {applied}, reactions {reaction}");
+    assert!((applied + BUCKLING_PRESSURE * side * side).abs() <= 1e-6, "1 MPa on 400 mm² is 400 N: {applied}");
+}
+
+/// Clamping *both* ends quadruples the Euler load: the effective length is halved.
+///
+/// A pressure cannot load such a column — a face held only in its transverse components is a
+/// pin, not a clamp, because rotating a section at constant `x` moves it along `x` alone — so
+/// the far end is driven by a prescribed axial shortening instead, which holds the section plane
+/// and normal. The load factor then multiplies the reaction that settlement produces, so the
+/// reference is compared against the reaction the Result reports rather than an assumed `EAδ/L`:
+/// the clamped ends restrain Poisson contraction, so those two are not quite the same number.
+#[test]
+fn a_fixed_fixed_column_buckles_at_four_times_the_euler_load() {
+    let (length, side) = (1.0, 0.02);
+    let mesh = Structured { kind: ElementKind::Hex20, n: [20, 1, 1] }.box_([length, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![
+            fix("root", "xmin", [true, true, true], 0.0),
+            fix("guide", "xmax", [false, true, true], 0.0),
+            fix("settle", "xmax", [true, false, false], -1e-4),
+        ],
+    );
+    let res = run_step(&p, &Step::Buckling { n_modes: 1, solver: slender_solver() })
+        .expect("a shortened column has a buckling load");
+    let root = res.reactions.iter().find(|(name, _)| name == "root").expect("the clamped end reacts").1;
+    let i = side.powi(4) / 12.0;
+    let want = PI * PI * YOUNG * i / (0.5 * length).powi(2) / root[0].abs();
+    let got = res.buckling_factors[0];
+    let error = (got - want).abs() / want;
+    assert!(error <= 0.01, "factor {got}, 4 pi^2 EI/L^2 gives {want} ({:.2} %)", 100.0 * error);
+}
+
+/// Reversing the load reverses the stress, so it reverses `K_σ` and the load factor with it. A
+/// column in tension does not buckle, and the negative factor says exactly that: it would buckle
+/// under the reversed load, at the same magnitude.
+#[test]
+fn a_column_in_tension_reports_a_negative_load_factor() {
+    let (length, side) = (1.0, 0.02);
+    let compressed = column_buckling(8, length, side, BUCKLING_PRESSURE, 1).buckling_factors[0];
+    let stretched = column_buckling(8, length, side, -BUCKLING_PRESSURE, 1).buckling_factors[0];
+    assert!(compressed > 0.0, "compression buckles at a positive factor: {compressed}");
+    assert!(stretched < 0.0, "tension buckles only under the reversed load: {stretched}");
+    assert!((stretched + compressed).abs() <= 1e-9 * compressed, "{stretched} is not −{compressed}");
+}
+
+/// One mesh size is not a Benchmark: the load factor must approach the closed form as the column
+/// is refined. A displacement model is too stiff, so it comes in from above and the error falls.
+#[test]
+fn the_euler_load_factor_converges_as_the_column_is_refined() {
+    let (length, side) = (1.0, 0.02);
+    let want = euler_factor(length, side, 2.0);
+    let errors: Vec<f64> = [4usize, 8, 16]
+        .into_iter()
+        .map(|n| column_buckling(n, length, side, BUCKLING_PRESSURE, 1).buckling_factors[0] / want - 1.0)
+        .collect();
+    for pair in errors.windows(2) {
+        assert!(pair[1].abs() < pair[0].abs(), "the error must fall with refinement: {errors:?}");
+    }
+    assert!(errors[0] > 0.0, "a displacement model is too stiff, so it starts above: {errors:?}");
+    assert!(errors[2].abs() <= 0.01, "the finest mesh is within 1 %: {errors:?}");
+}
+
+/// The iteration back-substitutes through the static solve's factorisation, so its residual is
+/// held to the Step's own tolerance: an unreachable one is `solve.stalled`, not a silent answer.
+/// An iterative solver builds no factorisation at all, and buckling says so rather than making
+/// one behind the caller's back.
+#[test]
+fn a_buckling_step_needs_a_factorisation_and_reports_a_residual_it_cannot_reach() {
+    let (length, side) = (1.0, 0.02);
+    let mesh = Structured { kind: ElementKind::Hex20, n: [4, 1, 1] }.box_([length, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: BUCKLING_PRESSURE }];
+    // A tolerance the equilibrium solve clears with a hair to spare: its acceptance limit is
+    // 100 x rel_tol, so this is the static residual plus 0.1 %. The sweeps then solve against
+    // `K_sigma phi`, a right-hand side far more ill-conditioned than the load vector, and the
+    // first one that cannot reach the same residual is `solve.stalled` rather than a quiet answer.
+    let equilibrium = run_step(&p, &static_step(SolveOptions::default())).expect("the static state solves");
+    let residual = equilibrium.scalars["rel_residual"];
+    let tight = SolveOptions { rel_tol: residual * 1.001 / 100.0, ..SolveOptions::default() };
+    run_step(&p, &static_step(tight)).expect("the equilibrium solve still clears its own residual");
+    let stalled = run_step(&p, &Step::Buckling { n_modes: 1, solver: tight })
+        .expect_err("the sweeps cannot hold the equilibrium solve's own residual");
+    assert_eq!(stalled.code, ErrorCode::SolveStalled);
+    let iterative = SolveOptions { solver: Solver::CpuPcg, ..slender_solver() };
+    let refused = run_step(&p, &Step::Buckling { n_modes: 1, solver: iterative })
+        .expect_err("an iterative solve leaves nothing to iterate against");
+    assert_eq!(refused.code, ErrorCode::Unsupported);
+    assert_eq!(refused.where_.as_deref(), Some("solver"));
+    assert!(refused.cause.contains("factorisation"), "{}", refused.cause);
+    assert!(refused.suggestion.expect("a way out").contains("cpu-direct"));
+}
+
+/// A buckling Step is a static Step first, so a model the static checks refuse never reaches the
+/// eigenproblem: an unsupported column floats away before it can buckle.
+#[test]
+fn a_buckling_step_refuses_a_model_that_can_still_move_as_a_rigid_body() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("slide", "xmin", [true, false, false], 0.0)],
+    );
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: BUCKLING_PRESSURE }];
+    let e = run_step(&p, &Step::Buckling { n_modes: 1, solver: slender_solver() })
+        .expect_err("a floating column is not a buckling model");
+    assert_eq!(e.code, ErrorCode::ConstraintRigidModes);
+}
+
+/// A host that says stop cancels a buckling Step at every phase it reports, including the two
+/// the procedure adds between the static solve and the eigenproblem.
+#[test]
+fn a_host_that_says_stop_cancels_a_buckling_step_at_every_phase() {
+    let (length, side) = (1.0, 0.02);
+    let mesh = Structured { kind: ElementKind::Hex20, n: [2, 1, 1] }.box_([length, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: BUCKLING_PRESSURE }];
+    let step = Step::Buckling { n_modes: 1, solver: slender_solver() };
+    // assemble, solve, the geometric assembly, the subspace iteration, and post.
+    for at in 0..5 {
+        let mut stop = cancel_on(at);
+        let e =
+            pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut stop)).expect_err("cancelled");
+        assert_eq!(e.code, ErrorCode::Cancelled, "phase {at}");
+    }
+    let mut go = cancel_on(99);
+    assert!(pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut go)).is_ok());
+}
+
+/// A buckling Step whose Loads leave the structure unstressed has no load factor to find, and
+/// says so against the Loads rather than dividing by a zero eigenvalue.
+#[test]
+fn a_buckling_step_without_stress_is_ill_posed() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    let e = run_step(&p, &Step::Buckling { n_modes: 1, solver: SolveOptions::default() })
+        .expect_err("an unloaded structure never buckles");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert_eq!(e.where_.as_deref(), Some("loads"));
+    assert!(e.cause.contains("no stress"), "{}", e.cause);
+    assert!(e.suggestion.expect("a way out").contains("Load"));
+}
+
+/// Every displacement DOF constrained leaves no eigenproblem, and buckling reports the same
+/// over-constraint the modal procedure does.
+#[test]
+fn a_buckling_step_with_every_dof_fixed_is_ill_posed() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0), fix("tip", "xmax", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: BUCKLING_PRESSURE }];
+    let e = run_step(&p, &Step::Buckling { n_modes: 1, solver: SolveOptions::default() })
+        .expect_err("nothing is free to buckle");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert_eq!(e.where_.as_deref(), Some("constraints"));
+    assert!(e.cause.contains("no free displacement DOF"), "{}", e.cause);
+}
+
+/// A plane-stress sheet buckles too, and its geometric stiffness is the 2D one: the same
+/// fixed–free column laid flat carries the same factor about its in-plane axis.
+#[test]
+fn a_plane_stress_column_buckles_about_its_in_plane_axis() {
+    let (length, width, thickness) = (1.0, 0.02, 0.01);
+    let mesh = Structured { kind: ElementKind::Quad8, n: [16, 2, 1] }.box_([length, width, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStress { thickness },
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, false], 0.0)],
+    );
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: BUCKLING_PRESSURE }];
+    let res = run_step(&p, &Step::Buckling { n_modes: 1, solver: slender_solver() })
+        .expect("a loaded sheet has a buckling load");
+    let i = thickness * width.powi(3) / 12.0;
+    let want = PI * PI * YOUNG * i / (2.0 * length).powi(2) / (BUCKLING_PRESSURE * width * thickness);
+    let got = res.buckling_factors[0];
+    let error = (got - want).abs() / want;
+    assert!(error <= 0.01, "factor {got}, Euler {want} ({:.2} %)", 100.0 * error);
 }
 
 /// Benchmark C6 (NAFEMS FV32): the first six frequencies of the cantilevered tapered membrane,
@@ -6873,6 +7363,7 @@ fn the_truss_maps_points_onto_its_own_axis_and_stops_at_its_ends() {
             el.body_load(&c, &|_x| [0.0, 0.0, -1.0], &mut out).expect_err("no axis").code,
             ErrorCode::MeshInverted
         );
+        assert_eq!(el.geometric(&c, &[0.0; 6], &mut out).expect_err("no axis").code, ErrorCode::MeshInverted);
     }
 }
 
@@ -6909,6 +7400,7 @@ fn a_truss_refuses_a_face_load_and_a_missing_section() {
         el.mass(&bare, &mut big, false).expect_err("no section").code,
         el.body_load(&bare, &|_x| [0.0; 3], &mut big).expect_err("no section").code,
         el.thermal_load(&bare_hot, &mut big).expect_err("no section").code,
+        el.geometric(&bare, &[0.0; 6], &mut big).expect_err("no section").code,
     ] {
         assert_eq!(code, ErrorCode::ModelNoSection);
     }
@@ -6932,6 +7424,7 @@ fn a_truss_reports_a_material_props_mismatch_from_every_integral_that_calls_the_
         el.thermal_load(&c, &mut v).err(),
         el.recover(&c, &[0.0; 6], &mut sig, &mut eps).err(),
         el.omega_max(&c).err(),
+        el.geometric(&c, &[0.0; 6], &mut k).err(),
     ];
     for e in fails {
         let e = e.expect("a props mismatch must fail");
@@ -7046,6 +7539,121 @@ fn truss_axial_modes_converge_to_the_closed_form_bar_frequency() {
 
 /// A generic section of unit area, so `E = rho = A = L = 1` makes every closed form a round
 /// number.
+/// Benchmark B5c: a two-bar (von Mises) truss buckles when its geometric stiffness cancels its
+/// axial stiffness, at a load this test derives rather than quotes.
+///
+/// A truss column cannot be a Benchmark here: a straight chain of members has *no* transverse
+/// stiffness at all, so its `K` is singular across the axis and there is no eigenproblem to
+/// pose. A braced joint is the smallest truss assembly that does have one.
+///
+/// Two bars run from pinned supports at `(±a, 0)` up to an apex at `(0, h)` carrying a downward
+/// force `P`; the apex is held out of plane and free in the plane, so the model has exactly two
+/// degrees of freedom and the closed form is exact rather than converged.
+///
+/// Vertical equilibrium at the apex gives each bar `N = −P L / (2h)`, with `L = √(a² + h²)`.
+/// Summing `(EA/L) e⊗e` over the two bars gives the apex stiffness `diag(2EAa²/L³, 2EAh²/L³)`,
+/// and each bar contributes `N/L` to both directions, so `K + λ K_σ` is singular when
+/// `2EAh²/L³ = λ P/h` — that is, at `λ_y = 2EAh³/(P L³)` — and the horizontal mode follows at
+/// `λ_x = 2EAa²h/(P L³)`. A truss deeper than it is wide would buckle sideways first; this one
+/// is shallow (`a > h`), so the vertical snap is critical and `λ_x/λ_y = a²/h²` separates them
+/// by more than a factor of ten.
+#[test]
+fn a_two_bar_truss_buckles_where_its_axial_stiffness_and_its_axial_force_cancel() {
+    let (a, h, force) = (1.0, 0.3, 1.0e5);
+    let mesh = femlab_geometry::line(
+        &[[-a, 0.0, 0.0], [0.0, h, 0.0], [a, 0.0, 0.0]],
+        &[[0, 1], [1, 2]],
+        1,
+        ElementKind::Truss2,
+    )
+    .expect("two straight members");
+    let node_set = |nodes: Vec<u32>| ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes, elems: Vec::new() };
+    let sets =
+        BTreeMap::from([("supports".to_string(), node_set(vec![0, 2])), ("apex".to_string(), node_set(vec![1]))]);
+    let bodies = vec!["bar".to_string()];
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![
+            fix("pins", "supports", [true, true, true], 0.0),
+            // The apex is free in the plane of the truss and held out of it, which is what
+            // leaves the two degrees of freedom the closed form is written for.
+            fix("planar", "apex", [false, false, true], 0.0),
+        ],
+    );
+    p.sections = vec![truss_section()];
+    p.section_of_block = vec![Some(0), Some(0)];
+    p.loads = vec![Load::NodalForce { nodes: "apex".into(), f: [0.0, -force, 0.0] }];
+    let res = run_step(&p, &Step::Buckling { n_modes: 1, solver: SolveOptions::default() })
+        .expect("a compressed two-bar truss buckles");
+    let length = libm::sqrt(a * a + h * h);
+    let want = 2.0 * YOUNG * TRUSS_AREA * h * h * h / (force * length.powi(3));
+    let got = res.buckling_factors[0];
+    assert!((got - want).abs() <= 1e-6 * want, "factor {got}, closed form {want}");
+    // The critical mode is the vertical snap, not the sideways one: its shape moves the apex
+    // in y, and unit peak means that component is exactly 1.
+    let shape = &res.modes[0];
+    let apex = |c: usize| libm::fabs(shape.component(c)[1]);
+    assert!((apex(1) - 1.0).abs() <= 1e-12, "the apex moves vertically: {}", apex(1));
+    assert!(apex(0) <= 1e-9, "and not sideways: {}", apex(0));
+}
+
+/// The truss geometric stiffness against its own closed form: `(N/L)[[I, −I], [−I, I]]`, with
+/// the axial force `N = EA·Δ/L` computed here from the stretch alone. Symmetry and the
+/// rigid-translation null space come from the same matrix, as they do for the solids.
+#[test]
+fn the_truss_geometric_stiffness_is_the_axial_force_over_the_length() {
+    let coords = truss_coords();
+    let (mat, sec) = (steel(), truss_section());
+    let c = truss_ctx(&coords, &mat, Some(&sec), None);
+    let el = element_for(ElementKind::Truss2);
+    // Pull the far node a known distance along the member's own axis: the stretch is that
+    // distance, so `N = EA Δ / L` needs nothing from the element.
+    let stretch = 1e-4;
+    let mut u = [0.0; 6];
+    for i in 0..3 {
+        u[3 + i] = stretch * TRUSS_DIR[i];
+    }
+    let mut kg = vec![0.0; 36];
+    el.geometric(&c, &u, &mut kg).expect("a stretched member has an axial force");
+    let n_l = YOUNG * TRUSS_AREA * (stretch / TRUSS_LENGTH) / TRUSS_LENGTH;
+    let scale = kg.iter().fold(0.0f64, |m, v| m.max(libm::fabs(*v)));
+    for row in 0..6 {
+        for col in 0..6 {
+            let same_node = (row / 3) == (col / 3);
+            let want = if row % 3 == col % 3 {
+                if same_node {
+                    n_l
+                } else {
+                    -n_l
+                }
+            } else {
+                0.0
+            };
+            assert!((kg[row * 6 + col] - want).abs() <= 1e-9 * n_l, "({row}, {col}) is {}", kg[row * 6 + col]);
+            assert!((kg[row * 6 + col] - kg[col * 6 + row]).abs() <= 1e-12 * scale, "not symmetric");
+        }
+    }
+    // A rigid translation carries no axial force, so it is in the null space.
+    for comp in 0..3 {
+        let t: Vec<f64> = (0..6).map(|i| if i % 3 == comp { 1.0 } else { 0.0 }).collect();
+        for row in 0..6 {
+            let sum: f64 = (0..6).map(|col| kg[row * 6 + col] * t[col]).sum();
+            assert!(libm::fabs(sum) <= 1e-9 * scale, "translation {comp} moves row {row}");
+        }
+    }
+    // Compression reverses it, which is the sign a buckling factor turns on.
+    let mut pushed = vec![0.0; 36];
+    let squashed: Vec<f64> = u.iter().map(|v| -v).collect();
+    el.geometric(&c, &squashed, &mut pushed).expect("a compressed member too");
+    for (a, b) in pushed.iter().zip(&kg) {
+        assert!((a + b).abs() <= 1e-9 * n_l, "compression is not the negative of tension");
+    }
+}
+
 fn unit_section() -> Section {
     properties(&SectionSpec::Generic {
         a: Q::new(1.0, "m^2"),
