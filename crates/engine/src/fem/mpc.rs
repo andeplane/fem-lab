@@ -24,10 +24,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use femlab_geometry::mesh::{Face, FaceKind};
 use femlab_geometry::Mesh;
 
+use crate::command::CoupleKind;
 use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::assembly::Csr;
+use crate::fem::heat::{face_integrals, HeatLoad};
 use crate::fem::problem::{Coupling, Problem};
 use crate::fem::shape::{face_dshape_of, face_shape_of};
+use crate::mesh::ResolvedSet;
 use crate::par;
 
 /// Gauss–Newton steps taken to project a node onto a face. A planar face converges in one; six
@@ -57,6 +60,12 @@ pub struct Mpc {
     pub rows: Vec<Row>,
     /// The same slaves, ascending: the `eliminated` list [`crate::fem::assembly::reduce`] wants.
     pub slaves: Vec<u32>,
+    /// The rows of a bonded contact a `contact.thermal` names, ascending by `slave`. These are
+    /// the tie [`build`] built and then *excluded* from `rows`/`slaves`: a `contact.thermal`
+    /// replaces the perfect thermal tie with a finite conductance, so its node stays a free
+    /// unknown rather than an eliminated one, and `heat::assemble` reads these rows directly to
+    /// add that conductance to `K` (plan B §5). Empty for every Problem without one.
+    pub contact: Vec<Row>,
     pub warnings: Vec<Warning>,
 }
 
@@ -88,6 +97,26 @@ impl Mpc {
         out
     }
 
+    /// Every node pair a thermal contact's excluded rows put an entry of `K` at directly: the
+    /// slave with each master, and every master with every other, since the added fill is the
+    /// full outer product `w(eₙ − Σaₖeₖ)(eₙ − Σaₖeₖ)ᵀ`. Heat has one DOF per node, so this is
+    /// already node-indexed — what [`crate::fem::assembly::pattern_coupled`] needs to make room
+    /// for the entries [`transform`] would otherwise have built for free.
+    pub fn contact_pairs(&self) -> Vec<[u32; 2]> {
+        let mut out = Vec::new();
+        for row in &self.contact {
+            let nodes: Vec<u32> = std::iter::once(row.slave).chain(row.masters.iter().map(|&(m, _)| m)).collect();
+            for (i, &a) in nodes.iter().enumerate() {
+                for &b in &nodes[i + 1..] {
+                    out.push([a.min(b), a.max(b)]);
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// The row that eliminates `dof`, if any.
     fn row_of(&self, dof: u32) -> Option<&Row> {
         self.slaves.binary_search(&dof).ok().map(|i| &self.rows[i])
@@ -99,12 +128,51 @@ impl Mpc {
 /// Pure: it reads the Problem and its Mesh and caches nothing, so a Newton loop may call it
 /// once per iteration.
 pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
+    // A heat Problem's temperature tie is one row per node (`dofs_per_node() == 1`); a
+    // `contact.thermal` names the Coupling whose row that is and asks for it to stay a free
+    // unknown instead. A structural Problem never sees this: its `heat_loads` are always empty,
+    // so the mechanical tie of the very same Coupling is unaffected, exactly as the doc string
+    // for `contact.thermal` says.
+    let thermal_of: BTreeSet<&str> = if p.heat {
+        p.heat_loads
+            .iter()
+            .filter_map(|l| match l {
+                HeatLoad::Contact { of, .. } => Some(of.as_str()),
+                HeatLoad::Convection { .. }
+                | HeatLoad::Flux { .. }
+                | HeatLoad::Source { .. }
+                | HeatLoad::Radiation { .. } => None,
+            })
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
     let mut rows: Vec<Row> = Vec::new();
+    let mut contact: Vec<Row> = Vec::new();
     let mut warnings: Vec<Warning> = Vec::new();
     for (owner, c) in p.couplings.iter().enumerate() {
-        bonded_rows(p, c, owner, &mut rows, &mut warnings)?;
+        let mut produced: Vec<Row> = Vec::new();
+        match c {
+            Coupling::Bonded { name, master, slave, tol } => {
+                bonded_rows(p, name, master, slave, *tol, owner, &mut produced, &mut warnings)?;
+            }
+            Coupling::Cyclic { name, from, to, axis, through, angle, tol } => {
+                cyclic_rows(p, name, from, to, *axis, *through, *angle, *tol, owner, &mut rows)?;
+            }
+            Coupling::Couple { name, node, faces, kind, .. } => {
+                couple_rows(p, name, *node, faces, *kind, owner, &mut produced)?;
+            }
+        }
+        // `contact.thermal` only ever names a bonded contact (the Command checks), so a
+        // coupling's rows always stay mechanical ties.
+        if thermal_of.contains(c.name()) {
+            contact.extend(produced);
+        } else {
+            rows.extend(produced);
+        }
     }
     rows.sort_by_key(|r| r.slave);
+    contact.sort_by_key(|r| r.slave);
     let dpn = p.dofs_per_node();
     let mut slaves: Vec<u32> = Vec::with_capacity(rows.len());
     for (i, row) in rows.iter().enumerate() {
@@ -122,33 +190,35 @@ pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
             }
         }
     }
-    Ok(Mpc { rows, slaves, warnings })
+    Ok(Mpc { rows, slaves, contact, warnings })
 }
 
 /// The `constraint.dependent` error: a DOF that two couplings both eliminate, or that one
 /// eliminates while another leans on it. Either makes `T` rank-deficient.
 fn dependent(p: &Problem<'_>, dof: u32, dpn: usize, first: usize, second: usize, what: &str) -> Error {
-    let comp = ["ux", "uy", "uz"][dof as usize % dpn];
+    let comp = p.dof_labels()[dof as usize % dpn];
     let (a, b) = (p.couplings[first].name(), p.couplings[second].name());
     Error::new(
         ErrorCode::ConstraintDependent,
         format!("{comp} of node {} {what}: '{a}' and '{b}' both constrain it", dof as usize / dpn),
     )
-    .at(format!("contact '{b}'"))
+    .at(format!("{} '{b}'", p.couplings[second].label()))
     .suggest("constraint.remove one of them, or tie faces that do not overlap")
 }
 
 /// The rows of one bonded contact: every node of `slave` tied to the point it projects onto in
 /// `master`, in every component.
+#[allow(clippy::too_many_arguments)]
 fn bonded_rows(
     p: &Problem<'_>,
-    coupling: &Coupling,
+    name: &str,
+    master: &str,
+    slave: &str,
+    tol: f64,
     owner: usize,
     out: &mut Vec<Row>,
     warnings: &mut Vec<Warning>,
 ) -> Result<(), Error> {
-    let Coupling::Bonded { name, master, slave, tol } = coupling;
-    let (master, slave, tol) = (master.as_str(), slave.as_str(), *tol);
     let at = || format!("contact '{name}'");
     let faces = &p.set(master).map_err(|e| e.at(at()))?.faces;
     let slave_set = p.set(slave).map_err(|e| e.at(at()))?;
@@ -229,6 +299,193 @@ fn bonded_rows(
         });
     }
     Ok(())
+}
+
+/// The rows of one cyclic symmetry tie (plan B §4): every node of `from` is tied to the node it
+/// rotates onto in `to`. Node to node, not node to face, because a matching sector mesh from the
+/// revolve mesher is the only case in scope, and the pairing is a nearest-node match rather than
+/// a projection. `axis` is a coordinate axis (0 = x, 1 = y, 2 = z) and `through` is a point on
+/// it; `angle` is in radians.
+///
+/// A structural DOF mixes its `dpn` components under the rotation `R`; a heat DOF (`dpn == 1`)
+/// does not, because a temperature has no orientation to rotate. [`rotation`] returns the right
+/// `dpn × dpn` block for either case, so the row loop below never branches on `p.heat`.
+// ponytail: O(from nodes × to nodes) scan, same as the bonded pairing above; a bbox grid if a
+// tie ever needs more than the few hundred nodes a mesh face at reasonable order-2 density has.
+#[allow(clippy::too_many_arguments)]
+fn cyclic_rows(
+    p: &Problem<'_>,
+    name: &str,
+    from: &str,
+    to: &str,
+    axis: usize,
+    through: [f64; 3],
+    angle: f64,
+    tol: f64,
+    owner: usize,
+    out: &mut Vec<Row>,
+) -> Result<(), Error> {
+    let at = || format!("cyclic '{name}'");
+    let from_nodes = &p.set(from).map_err(|e| e.at(at()))?.nodes;
+    let to_set = p.set(to).map_err(|e| e.at(at()))?;
+    if let Some(&shared) = from_nodes.iter().find(|n| to_set.nodes.contains(n)) {
+        return Err(Error::new(
+            ErrorCode::ModelIllPosed,
+            format!("cyclic '{name}' ties node {shared} to itself: sets '{from}' and '{to}' share it"),
+        )
+        .at(at())
+        .suggest("constraint.cyclic between the two sector faces of one revolved Body"));
+    }
+    let dpn = p.dofs_per_node();
+    let r = rotation(axis, angle, dpn);
+    for &node in from_nodes {
+        let xr = rotate_point(p.mesh.node(node), axis, through, angle);
+        let mut best = (f64::INFINITY, 0u32);
+        for &cand in &to_set.nodes {
+            let d = dot3_sub(xr, p.mesh.node(cand));
+            if d < best.0 {
+                best = (d, cand);
+            }
+        }
+        let gap = best.0.sqrt();
+        if gap.is_nan() || gap > tol {
+            return Err(Error::new(
+                ErrorCode::ContactUnpaired,
+                format!(
+                    "cyclic '{name}': node {node} of '{from}' rotates to {gap} m from the nearest node of '{to}', \
+                     more than the tolerance {tol} m",
+                ),
+            )
+            .at(at())
+            .suggest(
+                "mesh both sector faces with the revolve mesher, whose theta0/theta1 Sets mesh identically, \
+                 or constraint.cyclic with a larger tol",
+            ));
+        }
+        let t = best.1;
+        for (c, row) in r.iter().enumerate().take(dpn) {
+            let masters: Vec<(u32, f64)> = (0..dpn)
+                .filter(|&d| row[d].abs() > WEIGHT_EPS)
+                .map(|d| (node * dpn as u32 + d as u32, row[d]))
+                .collect();
+            out.push(Row { slave: t * dpn as u32 + c as u32, masters, owner });
+        }
+    }
+    Ok(())
+}
+
+/// The rows of one point coupling.
+///
+/// `distributed` eliminates the point: `u_point = Σ (a_i / A) u_i` over the face's nodes, with
+/// `a_i = ∫ N_i dS` the face's own lumped areas and `A` their sum. The point's row of `K` is
+/// empty, so `TᵀKT` adds no stiffness anywhere — the face is free to deform exactly as it was —
+/// while `Tᵀf` spreads a force at the point over the face in precisely the weights a uniform
+/// traction of the same total would assemble, because that traction's consistent nodal force is
+/// `t a_i` and this one is `(a_i / A)(t A)`.
+///
+/// `rigid` is the transpose: every DOF of the face is eliminated onto the point's matching
+/// component, so the whole face takes one displacement and cannot deform at all.
+///
+/// A node carries translations only, so neither kind transmits a moment: there is no rotational
+/// DOF at the point to apply one to, and a rigid face translates rather than rotates.
+fn couple_rows(
+    p: &Problem<'_>,
+    name: &str,
+    node: u32,
+    faces: &str,
+    kind: CoupleKind,
+    owner: usize,
+    out: &mut Vec<Row>,
+) -> Result<(), Error> {
+    let at = || format!("coupling '{name}'");
+    let set = p.set(faces).map_err(|e| e.at(at()))?;
+    if set.faces.is_empty() {
+        return Err(Error::schema(format!("coupling '{name}' is on set '{faces}', which has no faces"))
+            .at(at())
+            .suggest("constraint.couple to a face Set, from geometry.nameFace or an auto face"));
+    }
+    let dpn = p.dofs_per_node() as u32;
+    match kind {
+        CoupleKind::Rigid => {
+            for &n in &set.nodes {
+                for c in 0..dpn {
+                    out.push(Row { slave: n * dpn + c, masters: vec![(node * dpn + c, 1.0)], owner });
+                }
+            }
+        }
+        CoupleKind::Distributed => {
+            let area = lumped_areas(p, set)?;
+            let total: f64 = area.values().sum();
+            for c in 0..dpn {
+                let masters = area.iter().map(|(&n, &a)| (n * dpn + c, a / total)).collect();
+                out.push(Row { slave: node * dpn + c, masters, owner });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `dpn × dpn` block of the rotation by `angle` about coordinate axis `axis` (0 = x, 1 = y,
+/// 2 = z) that a cyclic tie's DOFs use. A heat Problem's single scalar DOF has no orientation,
+/// so `dpn == 1` is the 1×1 identity rather than the top-left corner of the 3×3 matrix — the
+/// same code in [`cyclic_rows`] then ties `T_to = T_from` with no branch.
+fn rotation(axis: usize, angle: f64, dpn: usize) -> [[f64; 3]; 3] {
+    if dpn == 1 {
+        return [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
+    }
+    let (c, s) = (libm::cos(angle), libm::sin(angle));
+    match axis {
+        0 => [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]],
+        1 => [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]],
+        _ => [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+    }
+}
+
+/// `x` rotated by `angle` about the line through `through` parallel to coordinate axis `axis`.
+fn rotate_point(x: [f64; 3], axis: usize, through: [f64; 3], angle: f64) -> [f64; 3] {
+    let d = [x[0] - through[0], x[1] - through[1], x[2] - through[2]];
+    let r = rotation(axis, angle, 3);
+    let mut out = [0.0; 3];
+    for (c, row) in r.iter().enumerate() {
+        out[c] = through[c] + dot3(*row, d);
+    }
+    out
+}
+
+/// Squared distance between two points, named for what the caller does with it: find the
+/// smallest one without an intervening square root.
+fn dot3_sub(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    dot3(d, d)
+}
+
+/// `∫ N_i dS` per node of a face Set: the lumped areas the heat kernel's face integral already
+/// produces, so a coupling weights a face exactly as a convection boundary does.
+fn lumped_areas(p: &Problem<'_>, set: &ResolvedSet) -> Result<BTreeMap<u32, f64>, Error> {
+    let mut area: BTreeMap<u32, f64> = BTreeMap::new();
+    let mut coords = Vec::new();
+    let mut mat = Vec::new();
+    let mut w = Vec::new();
+    let mut t = Vec::new();
+    for &face in &set.faces {
+        let kind = p.mesh.kind_of(face.elem);
+        let nn = kind.n_nodes();
+        coords.resize(nn * 3, 0.0);
+        p.mesh.elem_coords(face.elem, &mut coords);
+        t.resize(nn, 0.0);
+        p.gather_temperature(face.elem, &mut t);
+        mat.clear();
+        mat.resize(nn * nn, 0.0);
+        w.clear();
+        w.resize(nn, 0.0);
+        // One `?`: a face integral is pure geometry, so it fails only where the context does.
+        p.ctx(face.elem, &coords, &t).and_then(|c| face_integrals(kind, &c, face.local, &mut mat, &mut w))?;
+        let conn = p.mesh.elem_nodes(face.elem);
+        for &a in kind.face_nodes(face.local as usize) {
+            *area.entry(conn[a as usize]).or_insert(0.0) += w[a as usize];
+        }
+    }
+    Ok(area)
 }
 
 /// The face of `faces` nearest `x`: its gap, the face, and the face coordinates of the closest

@@ -1,5 +1,7 @@
+import { checkResultIdentity, isBulkQuery, scientificQuery } from './result-transfer';
+import type { ResultSelector } from '@femlab/registry';
 // A channel never changes Workers. A producer never acquires a different session implicitly.
-import { decodeBulk, FemError, type Ack, type Command, type DocumentSnapshot, type EngineTransport, type ExecutionContext, type ExportedFile, type ExportSpec, type Field, type FieldData, type ImportAck, type JournalEntry, type ModelFile, type Progress, type Query, type QueryResult, type ResultField, type RunLease, type SessionRef, type Stamp } from '@femlab/registry';
+import { decodeBulk, FemError, type Ack, type Command, type DocumentSnapshot, type EngineTransport, type ExecutionContext, type ExportedFile, type ExportSpec, type Field, type FieldData, type ImportAck, type JournalEntry, type ModelFile, type Progress, type Query, type QueryResult, type RunLease, type SessionRef, type Stamp } from '@femlab/registry';
 import type { AppSurface } from './surface';
 import type { ReplacementSource, SessionMessage, SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 
@@ -154,19 +156,24 @@ export class SessionTransport implements EngineTransport {
     const query = structuredClone(input);
     return this.ordered(async () => {
       const value = this.accept(await this.channel.request({ op: 'query', context: this.context(), query })) as Record<string, unknown>;
-      if (value['values'] instanceof Float64Array) value['values'] = Array.from(value['values']);
+      if (isBulkQuery(query)) return scientificQuery(query, value);
       return value as unknown as QueryResult;
     });
   }
-  surface(resultId?: string): Promise<AppSurface> {
-    return this.ordered(async () => this.accept(await this.channel.request({ op: 'surface', context: this.context(), ...(resultId === undefined ? {} : { resultId }) })) as AppSurface);
+  surface(selector?: ResultSelector): Promise<AppSurface> {
+    const captured = selector === undefined ? undefined : structuredClone(selector);
+    return this.ordered(async () => {
+      const value = this.accept(await this.channel.request({ op: 'surface', context: this.context(), ...(captured === undefined ? {} : { selector: captured }) })) as AppSurface;
+      if (captured !== undefined) checkResultIdentity({ query: 'query.surface', ...captured }, value);
+      return value;
+    });
   }
-  async field(step: string, field: Field, component?: number, resultId?: string): Promise<FieldData> {
-    const result = await this.query({ query: 'query.field', step, field, ...(resultId === undefined ? {} : { resultId }) }) as ResultField;
-    const values = new Float32Array(component === undefined ? result.values : result.values.filter((_, index) => index % result.components === component));
-    let min = values[0] ?? 0; let max = min;
-    for (const value of values) { min = Math.min(min, value); max = Math.max(max, value); }
-    return { values, min, max, unit: result.unit };
+  field(step: string, field: Field, component?: number, resultId?: string): Promise<FieldData> {
+    return this.ordered(async () => {
+      const value = this.accept(await this.channel.request({ op: 'field', context: this.context(), field: { step, field, component, resultId } })) as FieldData;
+      checkResultIdentity({ query: 'query.field', step, field, resultId }, value);
+      return value;
+    });
   }
   async export(spec: ExportSpec): Promise<ExportedFile> {
     const ack = await this.dispatch({ cmd: 'mesh.export', ...spec } as Command);

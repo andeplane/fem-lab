@@ -43,3 +43,23 @@ test('@cpu tetrahedral accuracy fix produces quadratic tetrahedra on Apply', asy
   expect(after.entries).toHaveLength(journal.entries.length + 1);
   expect(after.entries.at(-1)?.cmd).toEqual({ cmd: 'mesh.set', ...args, order: 2 });
 });
+
+test('@cpu the free tet mesher warns at order 1 without needing simplices', async ({ page }) => {
+  await page.goto('./');
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
+  await page.evaluate(async () => {
+    await window.fem.model.new({ name: 'free-tet-accuracy' });
+    await window.fem.geometry.addBox({ name: 'block', size: ['1 m', '1 m', '1 m'] });
+  });
+  const args = { mesher: { kind: 'tet', size: '0.3 m' }, order: 1 };
+  await page.evaluate((args) => window.fem.dispatch({ cmd: 'form.open', command: 'mesh.set', args }), args);
+  const journal = await page.evaluate(() => window.fem.query.journal());
+  const warning = page.locator('.props [data-field="order"] [role="status"]');
+  await expect(warning).toContainText('Linear tetrahedra');
+  await warning.getByRole('button', { name: 'Switch to quadratic' }).click();
+  expect(await page.evaluate(() => window.fem.query.journal())).toEqual(journal);
+  await page.locator('.props button.apply').click();
+  await expect.poll(() => page.evaluate(async () => (await window.fem.query.mesh()).elementKind)).toBe('tet10');
+  const after = await page.evaluate(() => window.fem.query.journal());
+  expect(after.entries.at(-1)?.cmd).toEqual({ cmd: 'mesh.set', ...args, order: 2 });
+});

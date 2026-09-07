@@ -10,7 +10,7 @@ import schema from '../../registry/src/generated/engine.schema.json';
 import { readHostCaps } from '../src/capabilities';
 import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, legendTicks, siUnitOf } from '../src/fields';
 import { appHostCommands, makeHostContext } from '../src/host';
-import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
+import { ResultsView, available, fieldKeyOf, magnitude } from '../src/results';
 import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
 import { Store, initialState, solveLabel, stageOf, verificationState, type AssistantVerification } from '../src/store';
 import { exaggerationHelp, probeLine } from '../src/ui/App';
@@ -59,6 +59,13 @@ const RESULT: ResultSummary = {
   reactions: [{ constraint: 'root', total: [kN(0), kN(0), kN(1)] }],
   appliedTotal: [kN(0), kN(0), kN(-1)],
   balance: 0,
+};
+
+const BUCKLING_RESULT: ResultSummary = {
+  ...RESULT,
+  step: 'buckle',
+  frequencies: [],
+  bucklingFactors: [17.3996, 17.3996],
 };
 
 
@@ -253,13 +260,13 @@ function harness(result: ResultSummary | null = RESULT) {
   const store = new Store({ ...initialState, model: MODEL, viewMode: 'results' });
   const viewer = { current: fakeViewer() };
   const transport = {
-    surface: vi.fn(async () => ({})),
+    surface: vi.fn(async (_selector?: { resultId?: string | null }) => ({ positions: new Float32Array([0, 0, 0, 1, 0, 0]), indices: new Uint32Array(), triBody: new Uint32Array(), triFace: new Uint32Array(), faceNames: [], bodyNames: ['body'], source: 'mesh' as const })),
     query: vi.fn(async (q: { query: string; quantity?: { value: number } }) => {
       if (q.query === 'query.convert') return { value: q.quantity!.value * 1000, unit: 'mm' };
       if (result) return result;
       throw { code: 'not-found', cause: 'no Step has been solved yet' };
     }),
-    field: vi.fn(async (_s: string, field: string) => ({ values: field === 'displacement' ? Float32Array.from([0, 0, 0, 0, 0, -0.0001919]) : Float32Array.from([0, 12.4e6]), min: 0, max: 1, unit: '' })),
+    field: vi.fn(async (_s: string, field: string, _component?: number, _resultId?: string) => ({ values: field === 'displacement' ? Float32Array.from([0, 0, 0, 0, 0, -0.0001919]) : Float32Array.from([0, 12.4e6]), min: 0, max: 1, unit: '' })),
   };
   return { store, viewer, results: new ResultsView(store, transport as unknown as WorkerTransport, viewer as never), transport };
 }
@@ -277,6 +284,100 @@ function registryHarness(result: ResultSummary) {
 }
 
 describe('ResultsView', () => {
+  it('pairs a dimmed stale Result with its retained mesh and restores current previews on mode changes', async () => {
+    const { store, viewer, results, transport } = harness({ ...RESULT, stale: true });
+    const solved = await transport.surface({ resultId: RESULT.resultId });
+    const current = { ...solved, positions: new Float32Array([0, 0, 0, 2, 0, 0, 2, 1, 0]) };
+    transport.surface.mockImplementation(async selector => selector?.resultId === RESULT.resultId ? solved : current);
+    transport.field.mockImplementation(async (_step, field, _component, resultId) => {
+      if (resultId !== RESULT.resultId) throw { code: 'result.stale', cause: 'default Result is stale' };
+      return { values: new Float32Array(field === 'displacement' ? [0, 0, 0, 0, 0, 0.1] : [1, 2]), min: 0, max: 2, unit: '' };
+    });
+    const caps = readHostCaps({ navigator: { userAgent: 'Chrome/140.0.0.0', hardwareConcurrency: 8, gpu: {} }, crossOriginIsolated: true });
+    const host = makeHostContext(store, transport as unknown as WorkerTransport, viewer as never, caps, undefined, results);
+    const mode = appHostCommands(store, transport as unknown as WorkerTransport, viewer as never, async () => undefined, results).find(command => command.name === 'view.setMode')!;
+    await results.refresh();
+    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(solved);
+    expect(viewer.current.setDim).toHaveBeenLastCalledWith(true);
+    expect(viewer.current.setField.mock.calls.at(-1)![0]).toHaveLength(2);
+    expect(viewer.current.setDeformed.mock.calls.at(-1)![0]).toHaveLength(6);
+    for (const value of ['geometry', 'mesh']) {
+      await mode.run({ mode: value }, host);
+      expect(viewer.current.setSurface).toHaveBeenLastCalledWith(current);
+      expect(viewer.current.setField).toHaveBeenLastCalledWith(null, [0, 1]);
+      expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(null, 0);
+      expect(viewer.current.setDim).toHaveBeenLastCalledWith(false);
+      await mode.run({ mode: 'results' }, host);
+      expect(viewer.current.setSurface).toHaveBeenLastCalledWith(solved);
+      expect(viewer.current.setDim).toHaveBeenLastCalledWith(true);
+      expect(viewer.current.setField.mock.calls.at(-1)![0]).toHaveLength(2);
+    }
+    await results.showField({ field: null });
+    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(current);
+    expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(null, 0);
+    expect(store.state.legend).toBeNull();
+    await results.animate({ step: RESULT.step, playing: false, frame: 100 });
+    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(solved);
+    await mode.run({ mode: 'geometry' }, host);
+    await results.animate({ step: RESULT.step, playing: false, frame: 100 });
+    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(solved);
+    expect(viewer.current.setDeformed.mock.calls.at(-1)![0]).toHaveLength(6);
+
+    // A preview already in flight cannot replace a newer retained-results selection.
+    let releasePreview!: (surface: typeof current) => void;
+    const pendingSurface = new Promise<typeof current>(resolve => { releasePreview = resolve; });
+    transport.surface.mockImplementationOnce(async () => pendingSurface);
+    const preview = mode.run({ mode: 'geometry' }, host);
+    await vi.waitFor(() => expect(transport.surface).toHaveBeenLastCalledWith());
+    await mode.run({ mode: 'results' }, host);
+    const retainedLegend = store.state.legend;
+    releasePreview(current);
+    await preview;
+    expect(store.state.legend).toEqual(retainedLegend);
+    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(solved);
+    expect(viewer.current.setField.mock.calls.at(-1)![0]).toHaveLength(2);
+  });
+
+  it('preserves deformation on an unchanged mesh using the same pinned solve surface', async () => {
+    const { store, viewer, results, transport } = harness();
+    await results.refresh();
+    results.setDeformScale(200);
+    store.set({ viewMode: 'mesh' });
+    await results.refresh(true);
+    expect(transport.surface).toHaveBeenLastCalledWith({ resultId: RESULT.resultId });
+    expect(transport.field).toHaveBeenLastCalledWith('static', 'displacement', undefined, RESULT.resultId);
+    expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(expect.any(Float32Array), 200);
+    expect(store.state.legend).toBeNull();
+  });
+
+  it('reloads a different solve ID even when the Step and Journal revision are unchanged', async () => {
+    const { results, transport } = harness();
+    await results.refresh();
+    transport.query.mockImplementation(async q => q.query === 'query.convert' ? { value: 1000, unit: 'mm' } : { ...RESULT, resultId: 'result-2' });
+    await results.refresh();
+    expect(transport.surface).toHaveBeenLastCalledWith({ resultId: 'result-2' });
+    expect(transport.field).toHaveBeenLastCalledWith('static', 'displacement', undefined, 'result-2');
+  });
+
+  it('propagates unexpected result-read failures without clearing the existing drawing', async () => {
+    const { results, transport, viewer } = harness();
+    await results.refresh();
+    const calls = viewer.current.setSurface.mock.calls.length;
+    transport.query.mockRejectedValueOnce({ code: 'internal', cause: 'read failed' });
+    await expect(results.refresh()).rejects.toMatchObject({ code: 'internal', cause: 'read failed' });
+    expect(viewer.current.setSurface).toHaveBeenCalledTimes(calls);
+  });
+
+  it('uses buckling factors when frequencies are empty for mode animation and fallback selection', async () => {
+    expect(available('mode:99', BUCKLING_RESULT, false)).toBe('mode:1');
+    const { store, viewer, results, transport } = harness(BUCKLING_RESULT);
+    await results.animate({ step: 'buckle', mode: 2, playing: false, frame: 50 });
+    expect(transport.field).toHaveBeenCalledWith('buckle', 'mode:2', undefined, BUCKLING_RESULT.resultId);
+    expect(store.state).toMatchObject({ fieldKey: 'mode:2', phase: 0.5, viewMode: 'results' });
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, 0.5);
+    await expect(results.animate({ step: 'buckle', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
+  });
+
   it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
     const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
     await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
@@ -554,59 +655,13 @@ describe('ResultsView', () => {
     expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(expect.any(Float32Array), 120);
   });
 
-  it('installs the selected surface before computing automatic deformation scale', async () => {
-    const { store, viewer, results } = harness();
+  it('loads the retained surface before scaling a newly mounted viewer', async () => {
+    const { store, viewer, results, transport } = harness();
     viewer.current.hasSurface = false;
-    viewer.current.setSurface.mockImplementation(() => { viewer.current.hasSurface = true; });
-    viewer.current.autoScale.mockImplementation(() => {
-      expect(viewer.current.hasSurface).toBe(true);
-      return 120;
-    });
     await results.onAck({ output: { type: 'solve' } });
+    expect(transport.surface).toHaveBeenCalledWith({ resultId: RESULT.resultId });
+    expect(viewer.current.setSurface.mock.invocationCallOrder[0]).toBeLessThan(viewer.current.autoScale.mock.invocationCallOrder[0]!);
     expect(store.state.deformScale).toBe(120);
-  });
-
-  it('keeps current and retained meshes separate across modes, edits and cached refreshes', async () => {
-    const { store, viewer, results, transport } = harness({ ...RESULT, stale: true });
-    const retained = { positions: new Float32Array([0, 0, 0, 1, 0, 0]), source: 'mesh' };
-    let current = { positions: new Float32Array([0, 0, 0, 2, 0, 0]), source: 'mesh' };
-    transport.surface.mockImplementation(async (...args: unknown[]) => args[0] === RESULT.resultId ? retained : current);
-    const host = makeHostContext(store, transport as unknown as WorkerTransport, viewer as never, readHostCaps({ navigator: { userAgent: 'Chrome/140' } }), undefined, results);
-    const registry = new Registry({ schema: schema as unknown as EngineSchema, host,
-      hostCommands: appHostCommands(store, transport as unknown as WorkerTransport, viewer as never, async () => undefined, results) });
-    for (const mode of ['results', 'geometry', 'mesh', 'results', 'geometry'] as const) {
-      await registry.dispatch({ cmd: 'view.setMode', mode });
-      await results.refresh();
-      expect(viewer.current.setSurface).toHaveBeenLastCalledWith(mode === 'results' ? retained : current);
-      expect(viewer.current.setDim).toHaveBeenLastCalledWith(mode === 'results');
-      if (mode !== 'results') {
-        expect(viewer.current.setField).toHaveBeenLastCalledWith(null, [0, 1]);
-        expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(null, 0);
-      }
-    }
-    current = { ...current, positions: new Float32Array([0, 0, 0, 3, 0, 0]) };
-    await results.refresh();
-    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(current);
-    await results.showField({ field: 'displacement' });
-    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(retained);
-    await results.showField({ field: null });
-    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(current);
-  });
-
-  it('does not publish a pending retained field after switching to the current model', async () => {
-    const { viewer, results, transport } = harness({ ...RESULT, stale: true });
-    let finish!: () => void;
-    const gate = new Promise<void>(resolve => { finish = resolve; });
-    const original = transport.field.getMockImplementation()!;
-    transport.field.mockImplementation(async (...args) => { await gate; return original(...args); });
-    const loading = results.refresh();
-    await vi.waitFor(() => expect(transport.field).toHaveBeenCalled());
-    await results.setMode('geometry');
-    viewer.current.setSurface.mockClear();
-    finish();
-    await loading;
-    expect(viewer.current.setSurface).not.toHaveBeenCalled();
-    expect(viewer.current.setField).toHaveBeenLastCalledWith(null, [0, 1]);
   });
 
   it('keeps a typed exaggeration across a field switch and a re-solve', async () => {

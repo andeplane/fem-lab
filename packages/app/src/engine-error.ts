@@ -4,7 +4,7 @@ const CODES = new Set([
   'session.expired', 'session.conflict', 'session.transitioning', 'operation.reused', 'operation.unknown',
   'schema', 'unit.dimension', 'unit.unknown', 'name.taken', 'not-found', 'in-use', 'set.empty',
   'unsupported', 'cancelled', 'internal', 'file.scope', 'file.not-found', 'export.unavailable',
-  'material.props', 'mesh.inverted', 'mesh.failed', 'model.no-material', 'model.ill-posed',
+  'material.props', 'mesh.inverted', 'mesh.failed', 'model.no-material', 'model.no-section', 'model.ill-posed',
   'constraint.conflict', 'constraint.rigid-modes', 'solve.not-positive-definite', 'solve.stalled',
   'solve.too-large', 'gpu.shader', 'gpu.too-large', 'explicit.unstable', 'result.stale',
 ]);

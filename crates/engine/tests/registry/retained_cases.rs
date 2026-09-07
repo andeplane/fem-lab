@@ -285,6 +285,15 @@ fn difference_fields_keep_two_dimensional_holes_outside_and_all_components_null(
     ok(&mut e, r#"{"cmd":"step.add","name":"zero","procedure":"static","constraints":["root"],"loads":[]}"#);
     let full_id = retained_solve(&mut e, "zero");
     let full_coords = e.mesh().unwrap().mesh.coords.clone();
+    let surface = retained_query(&mut e, json!({"query":"query.surface","resultId":full_id}));
+    assert_eq!(surface["positions"], json!(full_coords));
+    assert_eq!(surface["indices"].as_array().unwrap().len(), 96);
+    assert_eq!(surface["edgeBody"], json!(vec![0; 16]));
+    assert_eq!(surface["edges"].as_array().unwrap().len(), 32);
+    assert_eq!(surface["triFace"], json!(vec![u32::MAX; 32]));
+    assert_eq!(surface["triSetOffsets"], json!(vec![0; 33]));
+    assert_eq!(surface["triSets"], json!([]));
+    assert!(surface["edgeFace"].as_array().unwrap().iter().all(|face| face.as_u64().unwrap() < 4));
     let holed = r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
       {"kind":"line","to":["1 m","0 m"],"tag":"bottom"},{"kind":"line","to":["1 m","1 m"],"tag":"right"},
       {"kind":"line","to":["0 m","1 m"],"tag":"top"},{"kind":"line","to":["0 m","0 m"],"tag":"left"}],
@@ -894,4 +903,79 @@ fn retained_thermal_reaction_fields_and_samples_use_power_with_solved_units() {
             retained_close(value, 2.25);
         }
     }
+}
+
+#[test]
+fn retained_surfaces_preserve_solve_geometry_and_resolve_default_identity() {
+    let mut e = engine();
+    assert_eq!(retained_error(&mut e, json!({"query":"query.surface"})).code, ErrorCode::NotFound);
+    retained_conductor(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"tip-alias","of":"bar","where":{"kind":"normal","normal":[1,0,0]}}"#,
+    );
+    let (first, coords) = conductivity_solve(&mut e, 2, 1, 45);
+    let surface = retained_query(&mut e, json!({"query":"query.surface","resultId":first}));
+    assert_eq!(surface["positions"], json!(coords));
+    assert_eq!(surface["nodeCount"], 12);
+    assert_eq!(surface["unit"], "m");
+    assert_eq!(surface["bodyNames"], json!(["bar"]));
+    assert_eq!(surface["indices"].as_array().unwrap().len(), 60);
+    assert_eq!(surface["triBody"], json!(vec![0; 20]));
+    assert_eq!(surface["triSetOffsets"].as_array().unwrap().len(), 21);
+    let names = surface["setNames"].as_array().unwrap();
+    let alias = names.iter().position(|name| name == "tip-alias").unwrap();
+    let tip = names.iter().position(|name| name == "bar.xmax").unwrap();
+    let offsets = surface["triSetOffsets"].as_array().unwrap();
+    let sets = surface["triSets"].as_array().unwrap();
+    let mut aliased = 0;
+    for interval in offsets.windows(2) {
+        let members = &sets[interval[0].as_u64().unwrap() as usize..interval[1].as_u64().unwrap() as usize];
+        if members.contains(&json!(alias)) {
+            assert!(members.contains(&json!(tip)));
+            aliased += 1;
+        }
+    }
+    assert_eq!(aliased, 2);
+    assert_eq!(retained_query(&mut e, json!({"query":"query.surface"})), surface);
+    let (second, second_coords) = conductivity_solve(&mut e, 4, 2, 90);
+    assert_ne!(first, second);
+    let latest = retained_query(&mut e, json!({"query":"query.surface","step":"conduct"}));
+    assert_eq!(latest["resultId"], second);
+    assert_eq!(latest["positions"], json!(second_coords));
+    assert_ne!(latest["nodeCount"], surface["nodeCount"]);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["2 m","100 mm","100 mm"]}"#);
+    assert_eq!(retained_error(&mut e, json!({"query":"query.surface"})).code, ErrorCode::ResultStale);
+    let journal = e.export_file();
+    for _ in 0..2 {
+        assert_eq!(retained_query(&mut e, json!({"query":"query.surface","resultId":first})), surface);
+        assert_eq!(retained_query(&mut e, json!({"query":"query.surface","resultId":second})), latest);
+    }
+    assert_eq!(e.export_file(), journal);
+    assert_eq!(
+        retained_error(&mut e, json!({"query":"query.surface","resultId":first,"step":"other"})).code,
+        ErrorCode::Schema
+    );
+    assert_eq!(retained_error(&mut e, json!({"query":"query.surface","resultId":"missing"})).code, ErrorCode::NotFound);
+}
+
+#[test]
+fn retained_line_surfaces_keep_member_connectivity_and_body_identity() {
+    let mut e = engine();
+    truss_model(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"all","where":{"kind":"bbox","min":["-1 m","-1 m","-1 m"],"max":["2 m","2 m","2 m"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"held","on":"all"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"zero","procedure":"static","constraints":["held"],"loads":[]}"#);
+    let id = retained_solve(&mut e, "zero");
+    let surface = retained_query(&mut e, json!({"query":"query.surface","resultId":id}));
+    assert_eq!(surface["nodeCount"], 5);
+    assert_eq!(surface["indices"], json!([]));
+    assert_eq!(surface["triSetOffsets"], json!([0]));
+    assert_eq!(surface["edgeBody"], json!([0, 0, 0, 0]));
+    assert_eq!(surface["edgeFace"], json!(vec![u32::MAX; 4]));
+    assert_eq!(surface["edges"].as_array().unwrap().len(), 8);
+    assert_eq!(surface["bodyNames"], json!(["truss"]));
 }

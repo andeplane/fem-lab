@@ -9,11 +9,12 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::Mesh;
 
-use crate::command::Formulation;
+use crate::command::{CoupleKind, Formulation};
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::{ElementCtx, Material};
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::Load;
+use crate::fem::section::Section;
 use crate::mesh::ResolvedSet;
 use crate::model::Idealisation;
 
@@ -44,20 +45,60 @@ pub enum Coupling {
     /// A bonded contact: every node of `slave` follows the point it projects onto in the face
     /// Set `master`, in every component. `tol` is the largest gap that still pairs, in metres.
     Bonded { name: String, master: String, slave: String, tol: f64 },
+    /// A cyclic symmetry tie: every node of `to` is tied to the node it rotates onto in `from`,
+    /// `angle` (radians) about the coordinate axis `axis` (0 = x, 1 = y, 2 = z) through
+    /// `through`. The zero-harmonic condition (plan B §4): a structural DOF mixes its
+    /// components under the rotation, a heat DOF (one per node) does not.
+    Cyclic { name: String, from: String, to: String, axis: usize, through: [f64; 3], angle: f64, tol: f64 },
+    /// A point mass attached to the face Set `faces`: `distributed` eliminates the point onto
+    /// the face's weighted mean, `rigid` eliminates every face node onto the point. `node` is
+    /// the point's own mesh node, resolved with the Mesh so the numerics never look a name up.
+    Couple { name: String, point: String, node: u32, faces: String, kind: CoupleKind },
 }
 
 impl Coupling {
     /// The name the Command gave it, which every error and warning quotes.
     pub fn name(&self) -> &str {
-        let Coupling::Bonded { name, .. } = self;
-        name
+        match self {
+            Coupling::Bonded { name, .. } | Coupling::Cyclic { name, .. } | Coupling::Couple { name, .. } => name,
+        }
+    }
+
+    /// What an error calls it: a tie between Bodies is a contact, a point attachment a coupling.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Coupling::Bonded { .. } => "contact",
+            Coupling::Cyclic { .. } => "cyclic",
+            Coupling::Couple { .. } => "coupling",
+        }
     }
 
     /// The Sets it names, so `checks::all` can report an empty one before the pairing runs.
     pub fn sets(&self) -> [&str; 2] {
-        let Coupling::Bonded { master, slave, .. } = self;
-        [master, slave]
+        match self {
+            Coupling::Bonded { master, slave, .. } => [master, slave],
+            Coupling::Cyclic { from, to, .. } => [from, to],
+            Coupling::Couple { point, faces, .. } => [faces, point],
+        }
     }
+
+    /// The point mass it attaches, if it attaches one.
+    pub fn point(&self) -> Option<&str> {
+        match self {
+            Coupling::Bonded { .. } | Coupling::Cyclic { .. } => None,
+            Coupling::Couple { point, .. } => Some(point),
+        }
+    }
+}
+
+/// One resolved point mass: the Set name it owns, the node the Mesh builder gave it, and its
+/// mass in kilograms. It has no element, so it reaches the numerics only through the mass
+/// matrix, gravity, and whatever [`Coupling::Couple`] attaches it to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointMass {
+    pub name: String,
+    pub node: u32,
+    pub mass: f64,
 }
 
 /// Everything a procedure needs about one analysis: the Mesh, its Sets, the material of every
@@ -71,11 +112,17 @@ pub struct Problem<'a> {
     /// Per block: index into `materials`, or `None` — which `checks::all` reports.
     pub material_of_block: Vec<Option<usize>>,
     pub materials: Vec<Material>,
+    /// Per block: index into `sections`, or `None`. A line block without one is reported by
+    /// `checks::missing_sections`; a solid block never needs one.
+    pub section_of_block: Vec<Option<usize>>,
+    pub sections: Vec<Section>,
     pub idealisation: Idealisation,
     pub formulation: Formulation,
     pub constraints: Vec<Constraint>,
     /// Bonded contacts and the other multipoint constraints, in Step order.
     pub couplings: Vec<Coupling>,
+    /// Lumped point masses, one node each, in Model order.
+    pub points: Vec<PointMass>,
     pub loads: Vec<Load>,
     /// Nodal temperature and the reference temperature; `None` is no thermal strain.
     /// Registry Loads with different Body references use increments with a zero reference.
@@ -89,18 +136,27 @@ pub struct Problem<'a> {
 }
 
 impl Problem<'_> {
-    /// Unknowns per node: one temperature for a heat Step, else 3 displacements in 3D and 2 in
-    /// every 2D idealisation.
+    /// Unknowns per node: one temperature for a heat Step, else whatever the idealisation
+    /// carries (3 displacements in 3D, 2 in a plane idealisation, 3 under axisymmetric twist).
+    /// Every element kernel and assembly path takes its DOF stride from here, so a new
+    /// idealisation with more (or fewer) unknowns per node needs no change anywhere else.
     pub fn dofs_per_node(&self) -> usize {
         if self.heat {
             1
         } else {
-            self.mesh.dim
+            self.idealisation.dofs_per_node()
         }
     }
 
     pub fn n_dofs(&self) -> usize {
         self.mesh.n_nodes() * self.dofs_per_node()
+    }
+
+    /// The component names an error names a DOF by, indexed the same way `dofs_per_node`
+    /// counts them: `ur`/`uz`/`utheta` under axisymmetric (the third only ever reached with
+    /// twist), `ux`/`uy`/`uz` everywhere else.
+    pub fn dof_labels(&self) -> [&'static str; 3] {
+        dof_labels(&self.idealisation)
     }
 
     /// The material of an element, or the `model.no-material` error naming its Body.
@@ -120,6 +176,7 @@ impl Problem<'_> {
         Ok(ElementCtx {
             coords,
             material: self.material_of(elem)?,
+            section: self.section_of_block[self.mesh.block_of(elem).0].map(|i| &self.sections[i]),
             idealisation: self.idealisation.clone(),
             formulation: self.formulation,
             temperature: self.temperature.as_ref().map(|_| temperature),
@@ -152,9 +209,25 @@ pub fn no_material(body: &str) -> Error {
         .suggest("material.assign")
 }
 
+/// The `model.no-section` error for one Body of line members.
+pub fn no_section(body: &str) -> Error {
+    Error::new(ErrorCode::ModelNoSection, format!("body '{body}' is made of line members and has no section"))
+        .at(format!("body '{body}'"))
+        .suggest("section.add, then section.assign")
+}
+
 /// The `set.empty` error for a Set a Constraint or Load names.
 pub fn empty_set(name: &str) -> Error {
     Error::new(ErrorCode::SetEmpty, format!("set '{name}' resolves to nothing on this mesh"))
         .at(format!("set '{name}'"))
         .suggest("geometry.nameFace")
+}
+
+/// The DOF component names an error message quotes, indexed `dof % dofs_per_node`: `ur`/`uz`
+/// (and, with twist, `utheta`) under axisymmetric, `ux`/`uy`/`uz` everywhere else.
+pub fn dof_labels(id: &Idealisation) -> [&'static str; 3] {
+    match id {
+        Idealisation::Axisymmetric { .. } => ["ur", "uz", "utheta"],
+        _ => ["ux", "uy", "uz"],
+    }
 }

@@ -8,7 +8,7 @@ import { attachComparison, type ActiveBenchmark, type ExampleEntry } from './ben
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
-import { choiceOf } from './fields';
+import { choiceOf, modeCount } from './fields';
 import type { Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
@@ -192,9 +192,9 @@ export function makeHostContext(
         capture.run(async (record) => {
           const s = store.state;
           const mode = choiceOf(s.fieldKey).mode;
-          const modes = s.result?.frequencies?.length ?? 0;
+          const modes = modeCount(s.result);
           if (mode === undefined || mode < 1 || mode > modes) {
-            throw new FemError('export.unavailable', 'the selected field is not a mode in the current modal Result', 'file.export', 'solve a modal Step and select one of its mode fields');
+            throw new FemError('export.unavailable', 'the selected field is not a mode in the current Result', 'file.export', 'solve a modal or buckling Step and select one of its mode fields');
           }
           const target = v();
           const before = target.animationState();
@@ -461,7 +461,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
       description: 'Choose what the viewer draws: the Bodies (`geometry`), the Mesh (`mesh`) or the Result contours (`results`). Geometry and Mesh show the current model; Results shows the selected retained Result mesh and its matching fields. Display only — the Model and the Journal are untouched.',
       schema: z.object({ mode: z.enum(['geometry', 'mesh', 'results']) }),
       tool: true,
-      run: (input) => {
+      run: async (input) => {
         const { mode } = input as { mode: ViewMode };
         if (results) return results.setMode(mode);
         store.set({ viewMode: mode });

@@ -32,6 +32,7 @@ async function mount(input: Record<string, unknown>) {
   const engine = new wasm.Engine(1);
   for (const command of [
     { cmd: 'geometry.addBox', name: 'base', size: ['1 m', '1 m', '1 m'] },
+    { cmd: 'geometry.addMass', name: 'ref', at: ['2 m', '0 m', '0 m'], mass: '1 kg' },
     { cmd: 'step.add', name: 'prior', procedure: 'heat-steady', constraints: [], loads: [] }, input,
   ]) await engine.dispatch(JSON.stringify(command));
   const transport = {
@@ -63,7 +64,7 @@ describe('editing Model tree objects', () => {
     try {
       const before = JSON.parse(app.engine.export_file()).model;
       expect(app.sent[0]).toEqual({ cmd: 'form.edit', kind: c.kind, name: 'editable' });
-      expect(app.store.state.form!.cmd).toBe(c.kind === 'body' ? 'geometry.add' : c.command.cmd);
+      expect(app.store.state.form!.cmd).toBe(c.command.cmd);
       app.root.querySelector<HTMLButtonElement>('.apply')!.click(); await app.done();
       expect(JSON.parse(app.engine.export_file()).model).toEqual(before);
     } finally { app.close(); }

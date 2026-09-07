@@ -9,7 +9,13 @@ export interface Progress {
   fraction?: number;
   message?: string;
 }
+/** The same optional selector accepted by query.surface and query.field. */
+export type ResultSelector = Pick<Extract<Query, { query: 'query.surface' }>, 'resultId' | 'step'>;
+
 export interface Surface {
+  /** Present for a selected retained solve; absent on current geometry/Mesh previews. */
+  resultId?: string;
+  step?: string;
   positions: Float32Array;
   indices: Uint32Array;
   triBody: Uint32Array;
@@ -26,6 +32,9 @@ export interface Surface {
   bodyNames: string[];
 }
 export interface FieldData {
+  /** Immutable solve identity, carried by retained Result rendering routes. */
+  resultId?: string;
+  step?: string;
   values: Float32Array;
   min: number;
   max: number;
@@ -50,7 +59,11 @@ export interface EngineTransport {
   /** Rejects with a structured `EngineError`, never a bare string. */
   dispatch(cmd: Command, onProgress?: (p: Progress) => void): Promise<Ack>;
   query(q: Query): Promise<QueryResult>;
-  surface(resultId?: string): Promise<Surface>;
+  /** Renderer staging: no selector keeps current geometry/mesh preview; a selector requests
+   * a retained solve ({} is the compatible default). Positions are f32; query.surface is f64. */
+  surface(selector?: ResultSelector): Promise<Surface>;
+  /** Renderer staging for a retained solve: values and min/max are f32, with immutable identity.
+   * Omit resultId for the compatible Step default. query.field preserves scientific f64 values. */
   field(step: string, field: Field, component?: number, resultId?: string): Promise<FieldData>;
   export(spec: ExportSpec): Promise<ExportedFile>;
   exportFile(): Promise<ModelFile>;

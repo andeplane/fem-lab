@@ -15,7 +15,7 @@ use crate::fem::element::min_det_j;
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::Load;
 use crate::fem::mpc::{self, Mpc};
-use crate::fem::problem::{empty_set, no_material, Coupling, Problem};
+use crate::fem::problem::{empty_set, no_material, no_section, Coupling, Problem};
 use crate::model::Idealisation;
 
 /// A restricted rigid mode this small is not constrained at all.
@@ -25,9 +25,13 @@ const RIGID_TOL: f64 = 1e-10;
 pub fn all(p: &Problem<'_>) -> Vec<Error> {
     let mut out = Vec::new();
     out.extend(missing_materials(p));
+    out.extend(misoriented_materials(p));
+    out.extend(missing_sections(p));
     out.extend(empty_sets(p));
+    out.extend(uncoupled_points(p));
     out.extend(inverted(p.mesh));
     out.extend(resolve(p).err());
+    out.extend(unknown_thermal_contacts(p));
     // The couplings are checked whatever the physics: a tie a heat Step cannot pair is as
     // broken as one a static Step cannot. Without a valid `Mpc` the rigid-body test would be
     // answering a different question, so it waits for the next run.
@@ -49,7 +53,7 @@ fn tied_and_held(p: &Problem<'_>, mpc: &Mpc) -> Option<Error> {
     let (&(dof, _), &owner) =
         rc.fixed.iter().zip(&rc.owner).find(|(&(d, _), _)| mpc.slaves.binary_search(&d).is_ok())?;
     let row = &mpc.rows[mpc.slaves.binary_search(&dof).expect("the row that matched")];
-    let comp = ["ux", "uy", "uz"][dof as usize % dpn];
+    let comp = p.dof_labels()[dof as usize % dpn];
     let (c, tie) = (&p.constraints[owner].name, p.couplings[row.owner].name());
     Some(
         Error::new(
@@ -89,8 +93,53 @@ fn unheld_temperature(p: &Problem<'_>) -> Option<Error> {
 fn holds_temperature(load: &HeatLoad) -> bool {
     match load {
         HeatLoad::Convection { .. } | HeatLoad::Radiation { .. } => true,
-        HeatLoad::Flux { .. } | HeatLoad::Source { .. } => false,
+        // A contact resistance ties two temperatures to each other, not either one to a fixed
+        // level: two Bodies joined only by one still float together, exactly as an ordinary
+        // bonded tie (which is not a heat load at all) already does.
+        HeatLoad::Flux { .. } | HeatLoad::Source { .. } | HeatLoad::Contact { .. } => false,
     }
+}
+
+/// A `contact.thermal` names a contact this Step's Constraints do not include. Without this,
+/// `heat::assemble` would have no Coupling to look the pairing up in and no lumped area to
+/// weight it by; catching it here keeps that lookup total.
+fn unknown_thermal_contacts(p: &Problem<'_>) -> Vec<Error> {
+    p.heat_loads
+        .iter()
+        .filter_map(|l| match l {
+            HeatLoad::Contact { of, .. } => Some(of.as_str()),
+            HeatLoad::Convection { .. }
+            | HeatLoad::Flux { .. }
+            | HeatLoad::Source { .. }
+            | HeatLoad::Radiation { .. } => None,
+        })
+        .filter(|of| !p.couplings.iter().any(|c| c.name() == *of))
+        .map(|of| {
+            Error::new(
+                ErrorCode::ModelIllPosed,
+                format!("contact.thermal names '{of}', which this Step's constraints do not list as a bonded contact"),
+            )
+            .at(format!("contact '{of}'"))
+            .suggest("step.add listing the contact.add Constraint that contact.thermal names")
+        })
+        .collect()
+}
+
+/// A point mass nothing attaches to the model. It carries mass and no stiffness at all, so its
+/// own rows of `K` are empty and the factorisation has nothing to work with there.
+fn uncoupled_points(p: &Problem<'_>) -> Vec<Error> {
+    p.points
+        .iter()
+        .filter(|pm| !p.couplings.iter().any(|c| c.point() == Some(pm.name.as_str())))
+        .map(|pm| {
+            Error::new(
+                ErrorCode::ModelIllPosed,
+                format!("point mass '{}' is attached to nothing: on its own it has no stiffness", pm.name),
+            )
+            .at(format!("point mass '{}'", pm.name))
+            .suggest("constraint.couple it to a face Set, and list that Constraint in the Step")
+        })
+        .collect()
 }
 
 /// A Body whose blocks have no material: nothing can be integrated over it.
@@ -104,6 +153,57 @@ fn missing_materials(p: &Problem<'_>) -> Vec<Error> {
         .collect();
     bodies.dedup();
     bodies.into_iter().map(no_material).collect()
+}
+
+/// A material whose axes a 2D idealisation cannot carry.
+///
+/// `material.add` refuses the same thing outright, but `model.setIdealisation` can come after
+/// the Material, so the pairing has to be checked again where the two meet. The Body is named
+/// rather than the Material because that is the level at which the idealisation applies, and it
+/// matches the heat-property checks.
+fn misoriented_materials(p: &Problem<'_>) -> Vec<Error> {
+    if p.idealisation.dim() == 3 {
+        return Vec::new();
+    }
+    let mut bodies: Vec<&str> = p
+        .material_of_block
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| {
+            m.and_then(|m| p.materials[m].axes).is_some_and(|axes| !crate::fem::material::axes_are_planar(&axes))
+        })
+        .map(|(b, _)| p.body_of_block[b].as_str())
+        .collect();
+    bodies.dedup();
+    bodies
+        .into_iter()
+        .map(|body| {
+            Error::new(
+                ErrorCode::ModelIllPosed,
+                format!(
+                    "Body '{body}' has a material whose axes are turned out of the plane: a 2D idealisation only \
+                     allows a material orientation about the out-of-plane axis [0, 0, 1]"
+                ),
+            )
+            .at(format!("body '{body}'"))
+            .suggest("material.add with orientation.axis [0, 0, 1], or model.setIdealisation solid3d")
+        })
+        .collect()
+}
+
+/// A Body of line members with no Section: a member is a curve, so nothing else says how much
+/// cross-sectional area carries the force.
+fn missing_sections(p: &Problem<'_>) -> Vec<Error> {
+    let mut bodies: Vec<&str> = p
+        .mesh
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(b, blk)| blk.kind.dim() == 1 && p.section_of_block[*b].is_none())
+        .map(|(b, _)| p.body_of_block[b].as_str())
+        .collect();
+    bodies.dedup();
+    bodies.into_iter().map(no_section).collect()
 }
 
 /// A Constraint or Load on a Set that resolved to nothing does nothing, silently.
@@ -135,10 +235,14 @@ fn inverted(mesh: &Mesh) -> Option<Error> {
     )
 }
 
-/// A rigid motion: a translation along an axis, or an infinitesimal rotation about one.
+/// A rigid motion: a translation along an axis, an infinitesimal rotation about one, or the
+/// axisymmetric twist idealisation's rigid rotation about its axis.
 enum Rigid {
     Translate(usize),
     Rotate(usize),
+    /// `u_theta = r`, measured from the axis (`x = 0`), not the bounding-box centre: the only
+    /// zero-energy motion the twist DOF adds.
+    AxisTwist,
 }
 
 /// The rigid motions an idealisation actually has.
@@ -148,7 +252,13 @@ enum Rigid {
 /// not free and demanding a constraint against it would be a false alarm.
 fn rigid_list(id: &Idealisation) -> Vec<(&'static str, Rigid)> {
     match id {
-        Idealisation::Axisymmetric => vec![("translation y", Rigid::Translate(1))],
+        Idealisation::Axisymmetric { twist: false } => vec![("translation y", Rigid::Translate(1))],
+        // Every zero-energy motion twist adds is the same rotation about the axis, u_theta = r:
+        // a rigid axial translation still strains nothing, and this is the only additional one
+        // that strains nothing either.
+        Idealisation::Axisymmetric { twist: true } => {
+            vec![("translation y", Rigid::Translate(1)), ("rotation about the axis", Rigid::AxisTwist)]
+        }
         Idealisation::Solid3d => vec![
             ("translation x", Rigid::Translate(0)),
             ("translation y", Rigid::Translate(1)),
@@ -167,8 +277,7 @@ fn rigid_list(id: &Idealisation) -> Vec<(&'static str, Rigid)> {
 
 /// The rigid modes of the mesh as DOF vectors, each unit-normalised over *every* DOF so that a
 /// rotation (which scales with the model) and a translation (which does not) are comparable.
-fn rigid_basis(mesh: &Mesh, id: &Idealisation) -> Vec<(&'static str, Vec<f64>)> {
-    let dpn = mesh.dim;
+fn rigid_basis(mesh: &Mesh, id: &Idealisation, dpn: usize) -> Vec<(&'static str, Vec<f64>)> {
     let (lo, hi) = mesh.bbox();
     let centre = [0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.5 * (lo[2] + hi[2])];
     let n_nodes = mesh.n_nodes();
@@ -190,6 +299,7 @@ fn rigid_basis(mesh: &Mesh, id: &Idealisation) -> Vec<(&'static str, Vec<f64>)> 
                     if a == 2 { r[0] } else { 0.0 } - if a == 0 { r[2] } else { 0.0 },
                     if a == 0 { r[1] } else { 0.0 } - if a == 1 { r[0] } else { 0.0 },
                 ],
+                Rigid::AxisTwist => [0.0, 0.0, x[0]],
             };
             for c in 0..dpn {
                 v[node * dpn + c] = w[c];
@@ -218,7 +328,7 @@ fn rigid_modes(p: &Problem<'_>, mpc: &Mpc) -> Option<Error> {
     let held: Vec<usize> = rc.fixed.iter().map(|&(d, _)| d as usize).collect();
     let mut basis: Vec<Vec<f64>> = Vec::new();
     let mut free: Vec<&str> = Vec::new();
-    for (name, mode) in rigid_basis(p.mesh, &p.idealisation) {
+    for (name, mode) in rigid_basis(p.mesh, &p.idealisation, p.dofs_per_node()) {
         let mut col: Vec<f64> =
             held.iter()
                 .map(|&d| mode[d])

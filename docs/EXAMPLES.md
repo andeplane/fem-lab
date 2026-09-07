@@ -30,7 +30,7 @@ Difficulty is 1 (a first model), 2 (a real workflow) or 3 (needs the theory to r
 
 Every reference-bearing example, its published or closed-form reference, and what the bundled
 Journal actually computes. Solve times are `femlab run <journal> --verify --cpu` on one laptop
-core in a release build; all 22 together take a couple of seconds on an idle machine.
+core in a release build; all 27 together take a couple of seconds on an idle machine.
 
 Native tests use Cargo's level-1 test profile: debug assertions remain enabled, while sparse
 assembly and factorisation get enough optimisation for this full-catalogue check. The CPU and
@@ -39,13 +39,14 @@ counts unreliable. Reproduce the source-accurate CPU gate with
 `CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov -p femlab-engine -p femlab-geometry
 --ignore-filename-regex 'src/gpu/' --fail-under-lines 100 --fail-under-functions 100
 --fail-under-regions 100`. A paired warm-binary measurement on one Apple M4 Max core replayed
-the same 22 Journals, including every solve and hash comparison, in 170.86 s at level 0 and
+the then-22 Journals, including every solve and hash comparison, in 170.86 s at level 0 and
 9.12 s at level 1. Those execution times exclude compilation and do not predict a CI runner's
 total job time; runner load, compiler cache state and host hardware all affect wall time.
 
 A bundled example that is bigger than the picture it draws still wastes verification time. Keep
 them around 20 000 degrees of freedom at the very most — the largest here are
-`plate-with-hole-2d` (19 396) and `slab-strip` (19 215) — and prefer a mesh that shows the physics
+`plate-with-hole-2d` (19 396) and `slab-strip` (19 215), and the three building-structures
+examples added for issue #440 cost 36, 3 480 and 5 805 dofs — and prefer a mesh that shows the physics
 to one that resolves it, since `docs/BENCHMARKS.md` owns the resolved answers.
 
 | Example | Quantity | Reference | Computed | Error | Solve |
@@ -53,6 +54,7 @@ to one that resolves it, since `docs/BENCHMARKS.md` owns the resolved answers.
 | `cantilever` | tip deflection δ | 0.1905 mm (PL³/3EI) | 0.19011 mm | −0.19 % | 0.04 s |
 | `cantilever-hex20` | tip deflection δ | 0.1905 mm (PL³/3EI) | 0.18994 mm | −0.28 % | 0.03 s |
 | `cantilever-modal` | f₁ … f₄ | 20.96 / 41.91 / 131.32 / 262.66 Hz (Euler–Bernoulli) | 21.06 / 42.01 / 131.67 / 260.33 Hz | +0.50 / +0.23 / +0.27 / −0.89 % | 0.22 s |
+| `free-free-beam-modal` | f₁ … f₈ | 0×6, 133.3, 266.7 Hz (rigid modes, then free-free Euler–Bernoulli) | ~0×6 (≤ 0.0012 Hz), 133.1, 264.4 Hz | −0.18 / −0.87 % on the two real modes | 0.24 s |
 | `mesh-convergence-cantilever` | Richardson estimate of δ | 0.1905 mm (PL³/3EI) | 0.19073 mm | +0.13 % | 0.23 s |
 | `heated-fin-convection` | tip temperature | 37.39 °C (1D fin, adiabatic tip) | 37.41 °C | +0.03 % | 0.03 s |
 | `bar-transient-heat` | T 20 mm inside the driven face, t = 32 s | 36.60 (NAFEMS T3) | 36.79 | +0.53 % | 0.04 s |
@@ -60,10 +62,15 @@ to one that resolves it, since `docs/BENCHMARKS.md` owns the resolved answers.
 | `explicit-free-fall` | u_z after 1 ms | −4.905 µm (gt²/2) | −4.915 µm | +0.20 % | 0.03 s |
 | `kirsch-quarter-plate` | σₓₓ at the hole edge | 300 MPa (Kirsch, Kₜ = 3) | 302.19 MPa | +0.73 % | 0.07 s |
 | `lame-cylinder-plane-strain` | σ_rr at the bore | −60 MPa (Lamé, = −p) | −59.65 MPa | −0.58 % | 0.02 s |
+| `lame-cylinder-axisymmetric` | σ_θθ at the bore | 100 MPa (Lamé) | 99.59 MPa | −0.41 % | — |
 | `cook-membrane` | tip u_y | 23.9 (Cook 1974, plane stress) | 23.93 | +0.14 % | 0.02 s |
 | `nafems-le1-membrane` | σ_yy at D | 92.7 MPa (NAFEMS LE1) | 92.16 MPa | −0.58 % | 0.02 s |
 | `nafems-le10-plate` | σ_yy at D, upper surface | −5.25 MPa (ESRD full-face LE10 variant) | −5.234 MPa | −0.30 % | — |
 | `macneal-harder-beam` | tip deflection | 0.1081 (MacNeal & Harder 1985) | 0.10733 | −0.71 % | 0.02 s |
+| `steel-roof-truss` | mid-span bottom-chord δ | 7.0427 mm (unit-load virtual work) | 7.04266 mm | −0.00 % | 0.02 s |
+| `steel-roof-truss` | diagonal U2–L3 axial stress | 10.731 MPa (method of sections, N = 10√2 kN) | 10.7308 MPa | −0.00 % | — |
+| `column-buckling` | P_cr | 11 054 kN (π²EI/L², K = 1) | 10 912 kN (λ = 272.81 × 40 kN) | −1.28 % | 0.08 s |
+| `concrete-floor-slab` | mid-span δ | 7.617 mm (5wL⁴/384EI + wL²/8GA_s) | 7.5922 mm | −0.33 % | 0.04 s |
 
 The everyday models have no published reference, so their `expected` sidecar names the hand
 estimate to sanity-check against instead: `bracket-L` 15.7 MPa peak von Mises (at a singular
@@ -81,10 +88,14 @@ path, not a stress: the lattice puts two or three elements across a bolt hole),
 | `cantilever` | 1 | A steel cantilever under a tip load — the first model to build, and the standard check against beam theory. | δ = PL³/3EI = 0.1905 mm | [cantilever](../packages/app/tutorials/cantilever.json) |
 | `cantilever-hex20` | 1 | The same cantilever at quadratic order (hex20) — bending accuracy from one lattice mesh setting. | δ = PL³/3EI = 0.1905 mm | [cantilever](../packages/app/tutorials/cantilever.json) |
 | `cantilever-modal` | 2 | A clamped-free steel beam with a rectangular section — four bending frequencies from one modal Step, two in each plane. | fₙ = (βₙ²/2π)·√(EI/ρAL⁴) | [modal-analysis](../packages/app/tutorials/modal-analysis.json) |
+| `free-free-beam-modal` | 3 | The same rectangular-section beam as `cantilever-modal`, this time with no constraints at all — six zero-frequency rigid-body modes, then the beam's own bending frequencies. | Free-free fₙ = (βₙ²/2π)·√(EI/ρAL⁴), β₁ = 4.730041 | [free-free-modal](../packages/app/tutorials/free-free-modal.json) |
 | `mesh-convergence-cantilever` | 2 | The cantilever solved at three mesh sizes by `study.converge`, with the observed rate and a Richardson estimate of the converged value. | δ = PL³/3EI = 0.1905 mm | [mesh-convergence](../packages/app/tutorials/mesh-convergence.json) |
 | `heated-fin-convection` | 2 | An aluminium fin held at its root temperature and cooled by air on all four long faces — steady conduction against the 1D fin formula. | θ/θ_b = cosh m(L−x) / cosh mL | [heat-conduction](../packages/app/tutorials/heat-conduction.json) |
-| `thermal-stress-plate` | 3 | A heat Step conducts a linear temperature field through a plate, and a static Step named after it picks that field up as thermal stress. | σₓₓ = −EαΔT/(1−ν) = −150 MPa | — |
+| `thermal-stress-plate` | 3 | A heat Step conducts a linear temperature field through a plate, and a static Step named after it picks that field up as thermal stress. | σₓₓ = −EαΔT/(1−ν) = −150 MPa | [thermal-stress-chaining](../packages/app/tutorials/thermal-stress-chaining.json) |
 | `explicit-free-fall` | 3 | An unconstrained block under gravity, integrated by central differences — explicit dynamics checked against a schoolbook drop. | u = gt²/2 = 4.905 µm at 1 ms | — |
+| `steel-roof-truss` | 2 | A 12 m parallel-chord Pratt roof truss in CHS 88.9 × 5 S355, pinned one end and rollered the other, 20 kN at each top-chord joint. | δ = Σ N n L / EA = 7.0427 mm | [steel-roof-truss](../packages/app/tutorials/steel-roof-truss.json) |
+| `column-buckling` | 3 | A 200 × 200 mm S355 column, 5 m between pins, modelled as its lower half with a symmetry plane at mid-height. | P_cr = π²EI/(KL)² = 11 054 kN | [column-buckling](../packages/app/tutorials/column-buckling.json) |
+| `concrete-floor-slab` | 2 | A 6 m one-way C30/37 floor strip on knife-edge bearings under self-weight plus a 5 kN/m² imposed load. | δ = 5wL⁴/384EI + wL²/8GA_s = 7.617 mm | [concrete-floor-slab](../packages/app/tutorials/concrete-floor-slab.json) |
 
 ## NAFEMS and named benchmarks
 
@@ -97,6 +108,7 @@ is the one the example computes.
 |---|---|---|---|---|
 | `kirsch-quarter-plate` | 3 | A quarter-symmetry model of a plate with a circular hole, two graded mapped blocks meeting at the hole. | Kt = σxx(0,a)/σ → 3.00 | Kirsch (1898); BENCHMARKS.md C1; [symmetry-and-2d](../packages/app/tutorials/symmetry-and-2d.json) |
 | `lame-cylinder-plane-strain` | 3 | A thick-walled cylinder under internal pressure, modelled as a plane-strain quarter section. | σθθ(a) = 100 MPa, σrr(a) = −60 MPa | Lamé closed form; BENCHMARKS.md C2 |
+| `lame-cylinder-axisymmetric` | 3 | The same cylinder, this time revolved into an axisymmetric slice instead of meshed as a flat quarter section. | σθθ(a) = 100 MPa, σrr(a) = −60 MPa | Lamé closed form; BENCHMARKS.md C2; [pressure-vessel](../packages/app/tutorials/pressure-vessel.json) |
 | `cook-membrane` | 2 | The classic tapered, shear-loaded panel used to test bending accuracy in a distorted mesh. | u_y at the tip ≈ 23.9 (plane stress, ν = 1/3) | Cook (1974); BENCHMARKS.md C4 |
 | `nafems-le1-membrane` | 3 | An elliptical plate with an elliptical hole under outward pressure — the standard curved-boundary benchmark. | σyy(D) = 92.7 MPa | NAFEMS Standard Benchmark LE1; BENCHMARKS.md C5 |
 | `nafems-le10-plate` | 3 | Elliptic thick plate with the whole outer face held; ESRD's variant of LE10. | σyy(D) = −5.25 MPa | ESRD StressCheck Benchmarks Guide pp. 29–31; BENCHMARKS.md D1 (#183) |
@@ -151,5 +163,6 @@ Every tutorial's `doIt` sequence is validated by `packages/app/test/tutorial-fix
 which replays it through the wasm build in Node — the same engine the browser gets. Where a
 tutorial shadows an example (`cantilever`, `plate-with-hole-2d`, `heated-fin`,
 `cantilever-modal`, `bar-transient-heat`, `mesh-convergence-cantilever`,
-`kirsch-quarter-plate`), it is by construction the same Command sequence the CLI has also
-checked, so a tutorial can never drift from a Model with a known answer.
+`kirsch-quarter-plate`, `free-free-beam-modal`, `steel-roof-truss`, `column-buckling`,
+`concrete-floor-slab`), it is by construction the same Command sequence
+the CLI has also checked, so a tutorial can never drift from a Model with a known answer.

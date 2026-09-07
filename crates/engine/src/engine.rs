@@ -10,8 +10,8 @@ use crate::error::{Error, ErrorCode, Warning};
 use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
 use crate::model::{
-    Body, Constraint, ConstraintKind, Cut, Idealisation, Load, LoadKind, Material, MeshSettings, Model, NamedSet,
-    SetSource, Step,
+    Axial, Body, Constraint, ConstraintKind, Cut, Idealisation, Load, LoadKind, Material, MeshSettings, Model,
+    NamedSet, PointMass, SetSource, Step,
 };
 use crate::par::Pool;
 use crate::query::{Ack, Output};
@@ -143,7 +143,7 @@ impl Engine {
         let before = self.model.clone();
         let solids_before = self.solids.clone();
         // The Mesh is derived from the Model, so any Command can stale it; it rebuilds lazily.
-        self.mesh = None;
+        let mesh_before = self.mesh.take();
         match self.apply(&cmd, on_progress).await {
             Ok(output @ (Output::Undo { .. } | Output::Redo { .. })) => {
                 let hash = self.model_hash();
@@ -156,6 +156,7 @@ impl Engine {
             Err(e) => {
                 self.model = before;
                 self.solids = solids_before;
+                self.mesh = mesh_before;
                 Err(e)
             }
         }
@@ -440,7 +441,8 @@ impl Engine {
     /// The derived Mesh with every Set resolved, built on demand (plan B §2.1).
     pub fn mesh(&mut self) -> Result<&crate::mesh::BuiltMesh, Error> {
         if self.mesh.is_none() {
-            let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
+            let bodies: Vec<String> =
+                self.model.bodies.iter().filter(|b| b.shape.dim() > 1).map(|b| b.name.clone()).collect();
             for b in &bodies {
                 self.solid(b)?;
             }
@@ -464,8 +466,12 @@ impl Engine {
     }
 
     /// The Bodies' triangles and Sheet outlines, for a host before there is a Mesh.
+    ///
+    /// A line Body has neither, so it has no preview row; it appears once the Mesh is built,
+    /// as line elements in [`Engine::mesh_surface`].
     pub fn geometry_surface(&mut self) -> Result<Vec<GeometrySurface>, Error> {
-        let bodies: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
+        let bodies: Vec<String> =
+            self.model.bodies.iter().filter(|b| b.shape.dim() > 1).map(|b| b.name.clone()).collect();
         let mut out = Vec::with_capacity(bodies.len());
         for b in bodies {
             let solid = self.solid(&b)?;
@@ -513,7 +519,7 @@ impl Engine {
                         Idealisation::PlaneStress { thickness: t }
                     }
                     IdealisationSpec::PlaneStrain => Idealisation::PlaneStrain,
-                    IdealisationSpec::Axisymmetric => Idealisation::Axisymmetric,
+                    IdealisationSpec::Axisymmetric { twist } => Idealisation::Axisymmetric { twist: *twist },
                 };
                 Ok(Output::None)
             }
@@ -531,6 +537,21 @@ impl Engine {
             }
             Command::GeometryAdd { name, shape } => {
                 let shape = shape.to_si("shape")?;
+                self.add_body(name, shape)
+            }
+            Command::GeometryAddLine { name, points, members, divisions } => {
+                let mut joints = Vec::with_capacity(points.len());
+                for (i, p) in points.iter().enumerate() {
+                    let mut q = [0.0; 3];
+                    for (k, v) in p.iter().enumerate() {
+                        q[k] = v.si().map_err(|e| e.at(format!("points[{i}][{k}]")))?;
+                    }
+                    joints.push(q);
+                }
+                // The default wiring is the chain the points describe, which is what a single
+                // polyline member usually is; a truss names its own members.
+                let members = members.clone().unwrap_or_else(|| (1..joints.len() as u32).map(|i| [i - 1, i]).collect());
+                let shape = Shape::Polyline { points: joints, members, divisions: divisions.unwrap_or(1) };
                 self.add_body(name, shape)
             }
             Command::GeometrySubtract { name, from, shape } => {
@@ -599,23 +620,81 @@ impl Engine {
                 let set = NamedSet { name: name.clone(), source: SetSource::Region { where_: pred } };
                 Ok(upsert(&mut self.model.sets, set, |s| &s.name, ObjectKind::Set))
             }
-            Command::GeometryRemove { name } => self.geometry_remove(name),
-            Command::MaterialAdd { name, e, nu, rho, alpha, k, cp, yield_, source } => {
+            Command::GeometryAddMass { name, at, mass } => {
                 check_name(name)?;
-                let e_si = e.si().map_err(|er| er.at("E"))?;
-                if e_si <= 0.0 {
-                    return Err(Error::schema("E must be positive").at("E"));
+                let kg = mass.si().map_err(|e| e.at("mass"))?;
+                if !(kg > 0.0 && kg.is_finite()) {
+                    return Err(Error::schema(format!("a point mass must be positive, got {kg} kg")).at("mass"));
                 }
-                if !(0.0..0.5).contains(nu) {
-                    return Err(Error::schema(format!("nu must be in [0, 0.5), got {nu}")).at("nu"));
+                let mut point = [0.0; 3];
+                for (k, q) in at.iter().enumerate() {
+                    point[k] = q.si().map_err(|e| e.at(format!("at[{k}]")))?;
                 }
+                // A point owns a Set of its own name, so it may not shadow one that exists.
+                if self.model.point(name).is_none()
+                    && (self.model.knows_set(name) || self.model.set_prefixes().contains(name))
+                {
+                    return Err(Error::new(
+                        ErrorCode::NameTaken,
+                        format!("'{name}' already names a Set or a Body, and a point mass owns a Set of its name"),
+                    )
+                    .at("name")
+                    .suggest("geometry.addMass with another name"));
+                }
+                self.invalidate_geometry();
+                let pm = PointMass { name: name.clone(), at: point, mass: kg };
+                Ok(upsert(&mut self.model.points, pm, |p| &p.name, ObjectKind::Set))
+            }
+            Command::GeometryRemove { name } => self.geometry_remove(name),
+            Command::MaterialAdd { name, e, nu, orthotropic, orientation, rho, alpha, k, cp, yield_, source } => {
+                check_name(name)?;
+                let isotropic = match (e, nu) {
+                    (Some(e), Some(nu)) => Some((e, nu)),
+                    (None, None) => None,
+                    _ => return Err(Error::schema("E and nu go together: give both or neither").at("E")),
+                };
+                let (e_si, nu) = match (isotropic, orthotropic.is_some()) {
+                    (Some(_), true) | (None, false) => {
+                        return Err(Error::schema(
+                            "give exactly one of (E, nu) for an isotropic material and orthotropic for an \
+                             orthotropic one",
+                        )
+                        .at("E")
+                        .suggest("material.add with E and nu, or with an orthotropic block"))
+                    }
+                    (Some((e, nu)), false) => {
+                        let e_si = e.si().map_err(|er| er.at("E"))?;
+                        if e_si <= 0.0 {
+                            return Err(Error::schema("E must be positive").at("E"));
+                        }
+                        if !(0.0..0.5).contains(nu) {
+                            return Err(Error::schema(format!("nu must be in [0, 0.5), got {nu}")).at("nu"));
+                        }
+                        (Some(e_si), Some(*nu))
+                    }
+                    (None, true) => (None, None),
+                };
+                let ortho = orthotropic.as_deref().map(orthotropic_si).transpose()?;
+                if let Some(o) = &ortho {
+                    // The compliance is inverted here, not at solve time, so an inadmissible set
+                    // of moduli is refused by the Command that introduced it.
+                    crate::fem::material::orthotropic_d(&o.props()).map_err(|er| er.at("orthotropic"))?;
+                }
+                let orientation = orientation.as_ref().map(resolve_orientation).transpose()?;
+                if let Some(o) = &orientation {
+                    check_orientation_fits(&self.model.idealisation, o)?;
+                }
+                let ortho_alpha = orthotropic.as_ref().and_then(|o| o.alpha.as_ref());
+                let ortho_k = orthotropic.as_ref().and_then(|o| o.k.as_ref());
                 let mat = Material {
                     name: name.clone(),
                     e: e_si,
-                    nu: *nu,
+                    nu,
+                    orthotropic: ortho,
+                    orientation,
                     rho: opt_si(rho, "rho")?,
-                    alpha: opt_si(alpha, "alpha")?,
-                    k: opt_si(k, "k")?,
+                    alpha: axis_property(alpha, ortho_alpha, "alpha")?,
+                    k: axis_property(k, ortho_k, "k")?,
                     cp: opt_si(cp, "cp")?,
                     yield_: opt_si(yield_, "yield")?,
                     source: source.clone(),
@@ -664,12 +743,55 @@ impl Engine {
                 self.model.materials.retain(|m| m.name != *name);
                 Ok(Output::None)
             }
+            Command::SectionAdd { name, shape } => {
+                check_name(name)?;
+                let section = crate::fem::section::properties(shape)?;
+                let named = crate::model::NamedSection { name: name.clone(), section };
+                Ok(upsert(&mut self.model.sections, named, |s| &s.name, ObjectKind::Section))
+            }
+            Command::SectionAssign { section, bodies } => {
+                self.model
+                    .section(section)
+                    .ok_or_else(|| Error::not_found("section", section, &self.model.names(ObjectKind::Section)))?;
+                // A Section belongs to explicit line geometry; a mesher's implicit Body is a
+                // surface and gets its cross-section from the idealisation, so it is not listed.
+                let known: Vec<&str> = self.model.bodies.iter().map(|b| b.name.as_str()).collect();
+                for b in bodies {
+                    if !known.contains(&b.as_str()) {
+                        return Err(Error::not_found("body", b, &known));
+                    }
+                }
+                for b in self.model.bodies.iter_mut().filter(|b| bodies.contains(&b.name)) {
+                    b.section = Some(section.clone());
+                }
+                Ok(Output::None)
+            }
+            Command::SectionRemove { name } => {
+                self.model
+                    .section(name)
+                    .ok_or_else(|| Error::not_found("section", name, &self.model.names(ObjectKind::Section)))?;
+                let users: Vec<&str> = self
+                    .model
+                    .bodies
+                    .iter()
+                    .filter(|b| b.section.as_deref() == Some(name))
+                    .map(|b| b.name.as_str())
+                    .collect();
+                if !users.is_empty() {
+                    return Err(in_use("section", name, &users, "bodies"));
+                }
+                self.model.sections.retain(|s| s.name != *name);
+                Ok(Output::None)
+            }
             Command::MeshSet { mesher, order, formulation, simplices } => {
                 let order = order.unwrap_or(1);
                 if !(1..=2).contains(&order) {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
                 }
                 let settings = crate::mesh::mesher_settings(mesher)?;
+                if let crate::model::MesherSettings::Lattice { sizes, .. } = &settings {
+                    crate::mesh::validate_body_sizes(&self.model, sizes)?;
+                }
                 let old_body = self.model.implicit_body();
                 let new_body = settings.implicit_body();
                 if let Some(body) = new_body {
@@ -762,14 +884,70 @@ impl Engine {
                 };
                 Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
             }
+            Command::ConstraintCyclic { name, from, to, axis, angle_deg, through, tol } => {
+                check_name(name)?;
+                self.check_set(from).map_err(|e| e.at("from"))?;
+                self.check_set(to).map_err(|e| e.at("to"))?;
+                if from == to {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("cyclic '{name}' ties set '{from}' to itself"),
+                    )
+                    .at("to")
+                    .suggest("constraint.cyclic between the two sector faces of one revolved Body"));
+                }
+                let t = tol.as_ref().map(|q| q.si().map_err(|e| e.at("tol"))).transpose()?;
+                let th = through.as_ref().map(|q| crate::queries::si3(q).map_err(|e| e.at("through"))).transpose()?;
+                let c = Constraint {
+                    name: name.clone(),
+                    on: to.clone(),
+                    kind: ConstraintKind::Cyclic {
+                        from: from.clone(),
+                        axis: *axis,
+                        angle_deg: *angle_deg,
+                        through: th,
+                        tol: t,
+                    },
+                };
+                Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
+            }
+            Command::ConstraintCouple { name, point, on, kind } => {
+                check_name(name)?;
+                if self.model.point(point).is_none() {
+                    let known: Vec<&str> = self.model.points.iter().map(|p| p.name.as_str()).collect();
+                    return Err(Error::not_found("point mass", point, &known)
+                        .at("point")
+                        .suggest("geometry.addMass at the point you want to couple"));
+                }
+                self.check_set(on).map_err(|e| e.at("on"))?;
+                let c = Constraint {
+                    name: name.clone(),
+                    on: on.clone(),
+                    kind: ConstraintKind::Couple { point: point.clone(), coupling: *kind },
+                };
+                Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
+            }
             Command::ConstraintRemove { name } => {
                 self.model
                     .constraint(name)
                     .ok_or_else(|| Error::not_found("constraint", name, &self.model.names(ObjectKind::Constraint)))?;
-                let users: Vec<&str> =
-                    self.model.steps.iter().filter(|s| s.constraints.contains(name)).map(|s| s.name.as_str()).collect();
+                let users: Vec<String> = self
+                    .model
+                    .steps
+                    .iter()
+                    .filter(|s| s.constraints.contains(name))
+                    .map(|s| format!("step '{}'", s.name))
+                    .chain(
+                        self.model
+                            .loads
+                            .iter()
+                            .filter(|l| l.kind.constraint() == Some(name.as_str()))
+                            .map(|l| format!("load '{}'", l.name)),
+                    )
+                    .collect();
                 if !users.is_empty() {
-                    return Err(in_use("constraint", name, &users, "steps"));
+                    let u: Vec<&str> = users.iter().map(String::as_str).collect();
+                    return Err(in_use("constraint", name, &u, "objects"));
                 }
                 self.model.constraints.retain(|c| c.name != *name);
                 Ok(Output::None)
@@ -866,6 +1044,36 @@ impl Engine {
                 let l = Load { name: name.clone(), kind: LoadKind::HeatSource { bodies: bodies.clone(), q: v } };
                 Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
             }
+            Command::LoadTorque { name, on, total } => {
+                check_name(name)?;
+                self.check_set(on)?;
+                if !matches!(self.model.idealisation, Idealisation::Axisymmetric { twist: true }) {
+                    return Err(Error::unsupported("load.torque outside the axisymmetric idealisation with twist")
+                        .at("on")
+                        .suggest("model.setIdealisation { idealisation: { kind: \"axisymmetric\", twist: true } }"));
+                }
+                let t = total.si().map_err(|e| e.at("total"))?;
+                let l = Load { name: name.clone(), kind: LoadKind::Torque { on: on.clone(), total: t } };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
+            Command::ContactThermal { name, of, conductance } => {
+                check_name(name)?;
+                let c = self
+                    .model
+                    .constraint(of)
+                    .ok_or_else(|| Error::not_found("constraint", of, &self.model.names(ObjectKind::Constraint)))?;
+                if !matches!(c.kind, ConstraintKind::Bonded { .. }) {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("contact '{name}': '{of}' is not a bonded contact"),
+                    )
+                    .at("of")
+                    .suggest("contact.thermal naming a contact.add Constraint"));
+                }
+                let h = conductance.si().map_err(|e| e.at("conductance"))?;
+                let l = Load { name: name.clone(), kind: LoadKind::ThermalContact { of: of.clone(), h } };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
             Command::LoadRemove { name } => {
                 self.model
                     .load(name)
@@ -894,8 +1102,19 @@ impl Engine {
                 dt_factor,
                 amplitude,
                 initial,
+                increments,
+                max_cutbacks,
                 nonlinear_tolerance,
                 nonlinear_max_iterations,
+                f_start,
+                f_stop,
+                points,
+                sweep,
+                damping_ratio,
+                alpha,
+                rayleigh_alpha,
+                rayleigh_beta,
+                initial_velocity,
             } => {
                 check_name(name)?;
                 if let Some(tol) = nonlinear_tolerance {
@@ -911,6 +1130,15 @@ impl Engine {
                     return Err(Error::schema("nonlinearMaxIterations must be at least 1")
                         .at("nonlinearMaxIterations")
                         .suggest("step.add with nonlinearMaxIterations 50"));
+                }
+                if let Some(zeta) = damping_ratio {
+                    if !(*zeta >= 0.0 && *zeta < 1.0) {
+                        return Err(Error::schema(format!(
+                            "dampingRatio is a fraction of critical damping in [0, 1), got {zeta}"
+                        ))
+                        .at("dampingRatio")
+                        .suggest("step.add with dampingRatio 0.02"));
+                    }
                 }
                 for c in constraints {
                     self.model
@@ -947,8 +1175,19 @@ impl Engine {
                     dt_factor: *dt_factor,
                     amplitude: amplitude.as_ref().map(to_amplitude).transpose()?,
                     initial: opt_si(initial, "initial")?,
+                    increments: *increments,
+                    max_cutbacks: *max_cutbacks,
                     nonlinear_tolerance: *nonlinear_tolerance,
                     nonlinear_max_iterations: *nonlinear_max_iterations,
+                    f_start: opt_si(f_start, "fStart")?,
+                    f_stop: opt_si(f_stop, "fStop")?,
+                    points: *points,
+                    sweep: *sweep,
+                    damping_ratio: *damping_ratio,
+                    alpha: *alpha,
+                    rayleigh_alpha: non_negative(opt_si(rayleigh_alpha, "rayleighAlpha")?, "rayleighAlpha")?,
+                    rayleigh_beta: non_negative(opt_si(rayleigh_beta, "rayleighBeta")?, "rayleighBeta")?,
+                    initial_velocity: initial_velocity.as_deref().map(to_initial_velocity).transpose()?,
                 };
                 Ok(upsert(&mut self.model.steps, s, |s| &s.name, ObjectKind::Step))
             }
@@ -1065,13 +1304,24 @@ impl Engine {
                 Error::new(ErrorCode::NameTaken, format!("'{name}' is already a cut")).at(format!("body '{name}'"))
             );
         }
-        shape.validate().map_err(|e| geom_error(e, "shape"))?;
         let dim = shape.dim();
-        let _ = Solid::evaluate(&Shape::Named { name: name.to_string(), shape: Box::new(shape.clone()) })
-            .map_err(|e| geom_error(e, "shape"))?;
-        let body =
-            Body { name: name.to_string(), shape, material: self.model.body(name).and_then(|b| b.material.clone()) };
-        let _ = dim;
+        let old = self.model.body(name);
+        let body = Body {
+            name: name.to_string(),
+            shape,
+            material: old.and_then(|b| b.material.clone()),
+            section: old.and_then(|b| b.section.clone()),
+        };
+        // An upsert keeps the Body's existing cuts, so validate the effective replacement
+        // before committing it. This catches both an empty result and a dimensionality change
+        // to line geometry, which cannot retain solid or sheet cuts.
+        let trial_shape = self.model.body_shape(&body);
+        trial_shape.validate().map_err(|e| geom_error(e, "shape"))?;
+        // A line Body never becomes a Solid — the line mesher is its own geometry — so the
+        // complete shape validation above is the whole of its geometric check.
+        if dim > 1 {
+            let _ = Solid::evaluate(&trial_shape).map_err(|e| geom_error(e, "shape"))?;
+        }
         self.invalidate_geometry();
         Ok(upsert(&mut self.model.bodies, body, |b| &b.name, ObjectKind::Body))
     }
@@ -1131,7 +1381,7 @@ impl Engine {
                 users.push(format!("set '{}'", s.name));
             }
         }
-        if m.mesh.as_ref().and_then(|mesh| mesh.mesher.source_body()) == Some(name) {
+        if m.mesh.as_ref().is_some_and(|mesh| mesh.mesher.references_body(name)) {
             users.push("mesher geometry".into());
         }
         if !users.is_empty() {
@@ -1175,14 +1425,18 @@ impl Engine {
             self.invalidate_geometry();
             return Ok(Output::None);
         }
+        if m.points.iter().any(|p| p.name == name) {
+            let users = set_users(m, name);
+            if !users.is_empty() {
+                let u: Vec<&str> = users.iter().map(String::as_str).collect();
+                return Err(in_use("point mass", name, &u, "objects"));
+            }
+            self.model.points.retain(|p| p.name != name);
+            self.invalidate_geometry();
+            return Ok(Output::None);
+        }
         if m.sets.iter().any(|s| s.name == name) {
-            let users: Vec<String> = m
-                .constraints
-                .iter()
-                .filter(|c| c.sets().contains(&name))
-                .map(|c| format!("constraint '{}'", c.name))
-                .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
-                .collect();
+            let users = set_users(m, name);
             if !users.is_empty() {
                 let u: Vec<&str> = users.iter().map(String::as_str).collect();
                 return Err(in_use("set", name, &u, "objects"));
@@ -1193,7 +1447,8 @@ impl Engine {
         let mut known: Vec<&str> = m.names(ObjectKind::Body);
         known.extend(m.cuts.iter().map(|c| c.name.as_str()));
         known.extend(m.names(ObjectKind::Set));
-        Err(Error::not_found("body, cut or set", name, &known))
+        known.extend(m.points.iter().map(|p| p.name.as_str()));
+        Err(Error::not_found("body, cut, set or point mass", name, &known))
     }
 
     fn check_set(&self, set: &str) -> Result<(), Error> {
@@ -1271,7 +1526,8 @@ impl Engine {
                         | LoadKind::Force { on, .. }
                         | LoadKind::Convection { on, .. }
                         | LoadKind::Radiation { on, .. }
-                        | LoadKind::HeatFlux { on, .. } => *on = rename_set_ref(on, name, to),
+                        | LoadKind::HeatFlux { on, .. }
+                        | LoadKind::Torque { on, .. } => *on = rename_set_ref(on, name, to),
                         LoadKind::Temperature { bodies, .. } | LoadKind::HeatSource { bodies, .. } => {
                             for b in bodies {
                                 if b == name {
@@ -1279,7 +1535,7 @@ impl Engine {
                                 }
                             }
                         }
-                        LoadKind::Gravity { .. } => {}
+                        LoadKind::Gravity { .. } | LoadKind::ThermalContact { .. } => {}
                     }
                 }
                 for s in &mut m.sets {
@@ -1314,6 +1570,18 @@ impl Engine {
                     m.mesher_material = Some(to.into());
                 }
             }
+            ObjectKind::Section => {
+                for sec in &mut m.sections {
+                    if sec.name == name {
+                        sec.name = to.into();
+                    }
+                }
+                for b in &mut m.bodies {
+                    if b.section.as_deref() == Some(name) {
+                        b.section = Some(to.into());
+                    }
+                }
+            }
             ObjectKind::Set => {
                 for s in &mut m.sets {
                     if s.name == name {
@@ -1334,12 +1602,16 @@ impl Engine {
                         | LoadKind::Force { on, .. }
                         | LoadKind::Convection { on, .. }
                         | LoadKind::Radiation { on, .. }
-                        | LoadKind::HeatFlux { on, .. } => {
+                        | LoadKind::HeatFlux { on, .. }
+                        | LoadKind::Torque { on, .. } => {
                             if on == name {
                                 *on = to.into();
                             }
                         }
-                        LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => {}
+                        LoadKind::Gravity { .. }
+                        | LoadKind::Temperature { .. }
+                        | LoadKind::HeatSource { .. }
+                        | LoadKind::ThermalContact { .. } => {}
                     }
                 }
             }
@@ -1353,6 +1625,13 @@ impl Engine {
                     for c in &mut s.constraints {
                         if c == name {
                             *c = to.into();
+                        }
+                    }
+                }
+                for l in &mut m.loads {
+                    if let LoadKind::ThermalContact { of, .. } = &mut l.kind {
+                        if of == name {
+                            *of = to.into();
                         }
                     }
                 }
@@ -1424,6 +1703,11 @@ impl Engine {
                 x.name = as_.into();
                 m.materials.push(x);
             }
+            ObjectKind::Section => {
+                let mut x = m.section(name).expect("checked").clone();
+                x.name = as_.into();
+                m.sections.push(x);
+            }
             ObjectKind::Set => {
                 let mut x = m.sets.iter().find(|s| s.name == name).expect("checked").clone();
                 x.name = as_.into();
@@ -1482,6 +1766,17 @@ fn check_name(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// The Constraints and Loads that name a Set by that exact name. A point mass owns a Set of its
+/// own name, so removing either asks the same question and both ask it here.
+fn set_users(m: &Model, name: &str) -> Vec<String> {
+    m.constraints
+        .iter()
+        .filter(|c| c.sets().contains(&name))
+        .map(|c| format!("constraint '{}'", c.name))
+        .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
+        .collect()
+}
+
 fn in_use(kind: &str, name: &str, users: &[&str], what: &str) -> Error {
     Error::new(ErrorCode::InUse, format!("{kind} '{name}' is used by {what}: {}", users.join(", ")))
         .at(format!("{kind} '{name}'"))
@@ -1492,11 +1787,115 @@ fn geom_error(e: femlab_geometry::GeomError, where_: &str) -> Error {
     Error::new(ErrorCode::Schema, e.0).at(where_)
 }
 
+/// A Rayleigh damping coefficient must be non-negative and finite, or `C = alpha M + beta K`
+/// stops being positive semidefinite and a "damped" mode feeds itself energy.
+fn non_negative(v: Option<f64>, field: &'static str) -> Result<Option<f64>, Error> {
+    match v {
+        Some(x) if !(x >= 0.0 && x.is_finite()) => Err(Error::schema(format!(
+            "{field} is a Rayleigh damping coefficient and must be finite and non-negative, got {x}"
+        ))
+        .at(field)
+        .suggest(format!("step.add with {field} 0"))),
+        other => Ok(other),
+    }
+}
+
 fn opt_si<D: crate::units::Dim>(q: &Option<Q<D>>, field: &str) -> Result<Option<f64>, Error> {
     match q {
         Some(v) => Ok(Some(v.si().map_err(|e| e.at(field))?)),
         None => Ok(None),
     }
+}
+
+/// A property that is either one isotropic value or one per material axis, resolved to the three
+/// components the element sees. Giving both forms is a Schema error rather than a silent winner.
+fn axis_property<D: crate::units::Dim>(
+    scalar: &Option<Q<D>>,
+    axes: Option<&[Q<D>; 3]>,
+    field: &str,
+) -> Result<Option<Axial>, Error> {
+    let per_axis = match axes {
+        Some(a) => {
+            let mut out = [0.0; 3];
+            for (i, (o, q)) in out.iter_mut().zip(a).enumerate() {
+                *o = q.si().map_err(|e| e.at(format!("orthotropic.{field}[{i}]")))?;
+            }
+            Some(Axial::Axes(out))
+        }
+        None => None,
+    };
+    match (opt_si(scalar, field)?, per_axis) {
+        (Some(_), Some(_)) => Err(Error::schema(format!(
+            "{field} is given twice: once on material.add and once per material axis in orthotropic"
+        ))
+        .at(field)
+        .suggest(format!("material.add with only one of {field} and orthotropic.{field}"))),
+        (Some(v), None) => Ok(Some(Axial::Isotropic(v))),
+        (None, per_axis) => Ok(per_axis),
+    }
+}
+
+/// The orthotropic block in SI.
+fn orthotropic_si(o: &crate::command::Orthotropic) -> Result<crate::model::Orthotropic, Error> {
+    let at = |field: &'static str| move |e: Error| e.at(format!("orthotropic.{field}"));
+    Ok(crate::model::Orthotropic {
+        e1: o.e1.si().map_err(at("E1"))?,
+        e2: o.e2.si().map_err(at("E2"))?,
+        e3: o.e3.si().map_err(at("E3"))?,
+        g12: o.g12.si().map_err(at("G12"))?,
+        g13: o.g13.si().map_err(at("G13"))?,
+        g23: o.g23.si().map_err(at("G23"))?,
+        nu12: o.nu12,
+        nu13: o.nu13,
+        nu23: o.nu23,
+    })
+}
+
+/// The orientation with its axis normalised, or a Schema error when the axis is degenerate.
+fn resolve_orientation(o: &crate::command::Orientation) -> Result<crate::model::Orientation, Error> {
+    let angle = o.angle.si().map_err(|e| e.at("orientation.angle"))?;
+    let norm = o.axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if !(norm.is_finite() && norm > 0.0 && angle.is_finite()) {
+        return Err(Error::schema(format!("the orientation axis {:?} has no direction", o.axis))
+            .at("orientation.axis")
+            .suggest("material.add with orientation.axis [0, 0, 1]"));
+    }
+    Ok(crate::model::Orientation { axis: o.axis.map(|v| v / norm), angle })
+}
+
+/// In a 2D idealisation the material axes may only turn about the out-of-plane direction: any
+/// other rotation couples the in-plane strains to the out-of-plane shears the idealisation
+/// drops. Checked here so `material.add` refuses immediately, and again in `fem::checks`,
+/// because `model.setIdealisation` can come afterwards.
+fn check_orientation_fits(
+    idealisation: &crate::model::Idealisation,
+    o: &crate::model::Orientation,
+) -> Result<(), Error> {
+    if idealisation.dim() == 3 || crate::fem::material::axes_are_planar(&o.rows()) {
+        return Ok(());
+    }
+    Err(Error::schema(format!(
+        "a 2D idealisation only allows a material orientation about the out-of-plane axis [0, 0, 1], not {:?}",
+        o.axis
+    ))
+    .at("orientation.axis")
+    .suggest("material.add with orientation.axis [0, 0, 1], or model.setIdealisation solid3d"))
+}
+
+/// The initial-velocity list in SI, each component error naming its entry.
+fn to_initial_velocity(
+    list: &[crate::command::InitialVelocitySpec],
+) -> Result<Vec<crate::model::InitialVelocity>, Error> {
+    list.iter()
+        .enumerate()
+        .map(|(i, spec)| {
+            let mut value = [0.0; 3];
+            for (c, q) in spec.value.iter().enumerate() {
+                value[c] = q.si().map_err(|e| e.at(format!("initialVelocity[{i}].value[{c}]")))?;
+            }
+            Ok(crate::model::InitialVelocity { on: spec.on.clone(), value })
+        })
+        .collect()
 }
 
 /// An `AmplitudeSpec` in SI, with a table checked for the two arrays agreeing.

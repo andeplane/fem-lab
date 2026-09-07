@@ -22,9 +22,10 @@ pub struct Valued {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "query")]
 pub enum Query {
-    /// Everything about the Model in one read: bodies with volumes and materials, materials,
-    /// named Sets, constraints, loads with their totals, steps, mesh settings, and the
-    /// well-posedness warnings that would block a solve. Read this before changing anything.
+    /// Everything about the Model in one read: bodies with volumes and materials, imported
+    /// face patches with paste-ready naming predicates, named Sets, constraints, loads with
+    /// their totals, steps, mesh settings, and the well-posedness warnings that would block a
+    /// solve. Read this before changing anything.
     #[serde(rename = "query.model")]
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ModelSummary"))]
@@ -76,6 +77,21 @@ pub enum Query {
     #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "RetainedResults"))]
     Results {},
+
+    /// The triangulated boundary of a retained Result's solved Mesh, with f64 SI positions,
+    /// original node indices, Body identities and face-Set memberships. Explicit resultId
+    /// reads that immutable solve even after Model edits; an omitted id selects the latest
+    /// compatible Result for step (or the last solved Step), rejecting stale or missing Results.
+    /// This never substitutes the current Mesh or a geometry preview. Use query.results for ids.
+    #[serde(rename = "query.surface", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
+    #[schemars(extend("x-returns" = "ResultSurface"))]
+    Surface {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
+    },
 
     /// A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
     /// Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
@@ -294,21 +310,77 @@ pub struct BodyRow {
     pub mass: Option<Valued>,
     /// Auto-named faces of this body (`beam.xmin` …), plus its cuts' faces.
     pub faces: Vec<String>,
+    /// Measured source patches and durable naming suggestions, for an imported mesh Body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patches: Vec<ImportedPatchRow>,
+}
+
+/// One face patch of an imported mesh Body.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedPatchRow {
+    /// The import's ordinal face name. Use `suggestedPredicate` to create a durable name.
+    pub tag: String,
+    pub triangle_count: u32,
+    pub area: Valued,
+    pub centroid: [Valued; 3],
+    /// Area-weighted mean of the triangles' outward unit normals. It is zero for a complete curved side.
+    pub mean_normal: [f64; 3],
+    /// Paste this value into `geometry.nameFace.where`.
+    pub suggested_predicate: crate::command::FacePredicate,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MaterialRow {
     pub name: String,
-    #[serde(rename = "E")]
-    pub e: Valued,
-    pub nu: f64,
+    /// Young's modulus, for an isotropic material; `orthotropic` carries the stiffness instead.
+    #[serde(rename = "E", default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<Valued>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nu: Option<f64>,
+    /// The nine orthotropic constants in the material axes, when the material is orthotropic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orthotropic: Option<OrthotropicRow>,
+    /// Where the material axes point, when they are not the global ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<OrientationRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rho: Option<Valued>,
     /// Current yield strength in the Model's display stress unit, when specified.
     #[serde(rename = "yield", default, skip_serializing_if = "Option::is_none")]
     pub yield_: Option<Valued>,
     pub assigned_to: Vec<String>,
+}
+
+/// The orthotropic constants of a Material, in the Model's display stress unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OrthotropicRow {
+    #[serde(rename = "E1")]
+    pub e1: Valued,
+    #[serde(rename = "E2")]
+    pub e2: Valued,
+    #[serde(rename = "E3")]
+    pub e3: Valued,
+    #[serde(rename = "G12")]
+    pub g12: Valued,
+    #[serde(rename = "G13")]
+    pub g13: Valued,
+    #[serde(rename = "G23")]
+    pub g23: Valued,
+    pub nu12: f64,
+    pub nu13: f64,
+    pub nu23: f64,
+}
+
+/// A Material's axes: `angle` degrees about the unit `axis`, which is how `material.add` took
+/// them and how the report and the tree read them back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OrientationRow {
+    pub axis: [f64; 3],
+    pub degrees: f64,
 }
 
 /// One primary source used by [`MaterialLibrary`]. Property `source` fields name its `id`.
@@ -408,6 +480,18 @@ pub struct ConnectionRow {
     pub summary: String,
 }
 
+/// One lumped point mass: where it sits and how heavy it is. It is also a node Set of the same
+/// name, which is what constraint.couple, load.force and query.set target.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PointRow {
+    pub name: String,
+    pub at: [Valued; 3],
+    pub mass: Valued,
+    /// The Constraints that attach it, empty when nothing does — which makes a Step ill-posed.
+    pub coupled_by: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadRow {
@@ -442,6 +526,9 @@ pub struct ModelSummary {
     pub sets: Vec<SetRow>,
     pub constraints: Vec<ConstraintRow>,
     pub connections: Vec<ConnectionRow>,
+    /// Lumped point masses; omitted when the Model has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<PointRow>,
     pub loads: Vec<LoadRow>,
     pub steps: Vec<StepRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,6 +562,16 @@ pub struct QualitySummary {
     pub max_aspect: f64,
     /// Smallest angle at any element corner, in degrees.
     pub min_angle_deg: f64,
+    /// Smallest interior angle between two faces meeting at an element edge, in degrees. Absent
+    /// for a 2D mesh. This is the number that judges a tetrahedral mesh: `minDetJRatio` is
+    /// identically 1 for a simplex whatever its shape. The free tet mesher holds it inside
+    /// [10.7, 164.8]; below about 10 degrees the element stiffness is badly conditioned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_dihedral_deg: Option<f64>,
+    /// Largest interior angle between two faces meeting at an element edge, in degrees. Absent
+    /// for a 2D mesh; 180 is a flat sliver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_dihedral_deg: Option<f64>,
     pub worst: Vec<QualityRow>,
 }
 
@@ -572,9 +669,20 @@ pub struct ResultSummary {
     /// shape is the Result field named `mode:k`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frequencies: Vec<Valued>,
+    /// Buckling load factors, smallest magnitude first and dimensionless; empty unless the Step
+    /// was a buckling one. Multiply the Step's Loads by one to get its critical load; a negative
+    /// factor buckles under the reversed load. Factor `k`'s shape is the field named `mode:k`,
+    /// and it has arbitrary amplitude: it says where the structure buckles, not how far. The
+    /// factor is an upper bound — imperfections, pre-buckling rotation and yielding all lower
+    /// the real capacity — so it is not a safety factor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buckling_factors: Vec<f64>,
     /// One row per retained output time: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
+    /// One row per retained frequency of a harmonic sweep; empty for every other procedure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sweep: Vec<SweepRow>,
     /// Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
     /// conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
     /// Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
@@ -584,6 +692,19 @@ pub struct ResultSummary {
     /// across a gap, a slave face coarser than its master. Retained with the Result.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
+}
+
+/// One retained frequency of a harmonic sweep.
+///
+/// `amplitude` is the largest displacement amplitude any DOF reached at this frequency, and
+/// `phase` is that same DOF's lag behind the driving load, so the pair describes one real
+/// motion: `u(t) = amplitude · cos(2π f t − phase)`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SweepRow {
+    pub frequency: Valued,
+    pub amplitude: Valued,
+    pub phase: Valued,
 }
 
 /// One retained output time in a Step's history: the extremes of the field at that instant.
@@ -828,6 +949,7 @@ pub enum QueryResult {
     Set(SetInfo),
     Result(ResultSummary),
     Results(RetainedResults),
+    Surface(ResultSurface),
     Field(ResultField),
     Difference(DifferenceField),
     Frames(FramesResult),
@@ -1006,6 +1128,35 @@ pub struct RetainedResult {
 pub struct RetainedResults {
     pub limit: usize,
     pub records: Vec<RetainedResult>,
+}
+
+/// A solved Mesh surface. Flat arrays preserve original node identities for field lookup.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultSurface {
+    pub result_id: String,
+    pub step: String,
+    pub node_count: usize,
+    /// Position unit, always metres.
+    pub unit: String,
+    /// Every solved Mesh node, xyz component-fastest, in f64 SI.
+    pub positions: Vec<f64>,
+    /// Triangle node indices, three per triangle, oriented outward.
+    pub indices: Vec<u32>,
+    pub tri_body: Vec<u32>,
+    /// First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
+    pub tri_face: Vec<u32>,
+    pub face_names: Vec<String>,
+    /// Every named Set, including overlapping face aliases; memberships are CSR by triangle.
+    pub set_names: Vec<String>,
+    pub tri_set_offsets: Vec<u32>,
+    pub tri_sets: Vec<u32>,
+    pub body_names: Vec<String>,
+    /// Sheet boundary edges and line members, two node indices per segment.
+    pub edges: Vec<u32>,
+    /// u32::MAX means no face Set, including line members.
+    pub edge_face: Vec<u32>,
+    pub edge_body: Vec<u32>,
 }
 
 /// Final scientific values are f64 SI in component-fastest entity order.

@@ -5,10 +5,11 @@
 
 use std::collections::BTreeMap;
 
+use femlab_geometry::GeomError;
 use femlab_geometry::{
-    extrude, face_centroid_normal, free_sheet, lattice, mapped, nearest_boundary_face, resolve_face_set,
-    resolve_region, revolve, split_to_simplices, Curve, ElementBlock, ElementKind, Face, Mesh, QuadBlock, RefineBox,
-    Shape, Solid,
+    extrude, face_centroid_normal, free_sheet, lattice, line, mapped, merge_coincident, nearest_boundary_face,
+    resolve_face_set, resolve_region, revolve, split_to_simplices, tet, Curve, ElementBlock, ElementKind, Face, Mesh,
+    QuadBlock, RefineBox, Shape, Solid,
 };
 
 use crate::command::ObjectKind;
@@ -68,6 +69,8 @@ pub struct BuiltMesh {
     pub body_of_block: Vec<String>,
     /// Auto face Sets (`beam.xmin`, `hole.side`) and named Sets alike.
     pub sets: BTreeMap<String, ResolvedSet>,
+    /// The node each of the Model's point masses was given, in Model order.
+    pub points: Vec<u32>,
 }
 
 impl BuiltMesh {
@@ -87,8 +90,17 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let dim = model.idealisation.dim();
     let quadratic = settings.order == 2;
     let (mut mesh, body_of_block, body_faces) = match &settings.mesher {
-        MesherSettings::Lattice { size, counts } => {
-            lattice_bodies(model, solids, dim, quadratic, *size, *counts, settings.simplices)?
+        MesherSettings::Lattice { size, counts, sizes } => {
+            validate_body_sizes(model, sizes)?;
+            bodies(model, solids, dim, settings.simplices, &|solid, body| {
+                let (size, counts) = sizes.get(body).map_or((*size, *counts), |&s| (Some(s), None));
+                lattice(solid, size, counts, quadratic)
+            })?
+        }
+        // A tet mesh is already simplices, so `simplices` is a no-op here rather than a second
+        // split of elements that have no quads or hexes to split.
+        MesherSettings::Tet { size, max_elements } => {
+            bodies(model, solids, dim, false, &|solid, _| tet(solid, *size, quadratic, *max_elements as usize))?
         }
         m => {
             let (body, part, mesher) = planar_or_swept(model, m, quadratic)?;
@@ -101,6 +113,15 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
     let mut sets: BTreeMap<String, ResolvedSet> = BTreeMap::new();
     for (name, faces) in &mesh.face_sets {
         sets.insert(name.clone(), face_set(&mesh, faces.clone()));
+    }
+    // A mesher may name nodes rather than faces — the line mesher names every joint — and those
+    // are Sets a Constraint or a Load can target like any other. Inert for the others, which
+    // produce no node sets at all.
+    for (name, nodes) in &mesh.node_sets {
+        sets.insert(
+            name.clone(),
+            ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: nodes.clone(), elems: Vec::new() },
+        );
     }
     for named in &model.sets {
         let (resolved, probe) = match &named.source {
@@ -140,7 +161,20 @@ pub fn build(model: &Model, solids: &BTreeMap<String, Solid>) -> Result<BuiltMes
         }
         sets.insert(named.name.clone(), resolved);
     }
-    Ok(BuiltMesh { mesh, body_of_block, sets })
+    // Points come last, after every predicate has been resolved, so a point mass never joins a
+    // region Set it merely happens to sit inside: it is only ever in the Set of its own name.
+    let mut points = Vec::with_capacity(model.points.len());
+    for pt in &model.points {
+        let node = mesh.n_nodes() as u32;
+        mesh.coords.extend_from_slice(&pt.at);
+        mesh.node_sets.insert(pt.name.clone(), vec![node]);
+        sets.insert(
+            pt.name.clone(),
+            ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![node], elems: Vec::new() },
+        );
+        points.push(node);
+    }
+    Ok(BuiltMesh { mesh, body_of_block, sets, points })
 }
 
 /// What a mesher produced: the Mesh, the Body of every element block, and the boundary faces
@@ -153,9 +187,9 @@ type Meshed = (Mesh, Vec<String>, BTreeMap<String, Vec<Face>>);
 /// swept mesh is the base's.
 fn planar_or_swept(model: &Model, m: &MesherSettings, quadratic: bool) -> Result<(String, Mesh, &'static str), Error> {
     match m {
-        MesherSettings::Lattice { .. } => Err(Error::new(
+        MesherSettings::Lattice { .. } | MesherSettings::Tet { .. } => Err(Error::new(
             ErrorCode::MeshFailed,
-            "a sweep needs a 2D base mesher, and the lattice mesher meshes whole Bodies",
+            "a sweep needs a 2D base mesher, and the lattice and tet meshers mesh whole Bodies",
         )
         .at("mesher.base")
         .suggest("mesh.set with a mapped base")),
@@ -235,15 +269,18 @@ fn one_body(body: &str, part: Mesh, dim: usize, mesher: &str) -> Result<Meshed, 
     Ok((mesh, vec![body.to_string(); blocks], BTreeMap::from([(body.to_string(), faces)])))
 }
 
-/// One lattice per Body of the Model, merged into one Mesh.
-fn lattice_bodies(
+/// One mesh per Body of the Model, merged into one Mesh.
+///
+/// `part` is the whole-Body mesher — the lattice or the free tet mesher — given the Solid and
+/// the Body's name (the lattice reads its per-Body size override by name), and everything after
+/// it (the node and element offsets, the `simplices` split, the `<body>.<tag>` face Set naming)
+/// is the same either way, which is why there is one copy of it.
+fn bodies(
     model: &Model,
     solids: &BTreeMap<String, Solid>,
     dim: usize,
-    quadratic: bool,
-    size: Option<f64>,
-    counts: Option<[u32; 3]>,
     simplices: bool,
+    part: &dyn Fn(&Solid, &str) -> Result<Mesh, GeomError>,
 ) -> Result<Meshed, Error> {
     if model.bodies.is_empty() {
         return Err(Error::new(ErrorCode::ModelIllPosed, "the Model has no Body to mesh").suggest("geometry.add"));
@@ -258,7 +295,29 @@ fn lattice_bodies(
     };
     let mut body_of_block: Vec<String> = Vec::new();
     let mut body_faces: BTreeMap<String, Vec<Face>> = BTreeMap::new();
+    let mut has_lines = false;
     for body in &model.bodies {
+        // A line Body is its own geometry: no Solid, no faces, and its node sets carry the
+        // Body's name so `truss.p0` is the joint a Constraint targets.
+        if let Shape::Polyline { points, members, divisions } = &body.shape {
+            if dim != 3 {
+                return Err(Error::new(
+                    ErrorCode::ModelIllPosed,
+                    format!("body '{}' is made of line members, which need the 3D idealisation", body.name),
+                )
+                .at(format!("body '{}'", body.name))
+                .suggest("model.setIdealisation with solid3d"));
+            }
+            has_lines = true;
+            let part = line(points, members, *divisions, ElementKind::Truss2).map_err(|e| {
+                Error::new(ErrorCode::MeshFailed, e.0)
+                    .at(format!("body '{}'", body.name))
+                    .suggest("geometry.addLine with joints that do not coincide")
+            })?;
+            append(&mut mesh, &part, &body.name, &mut body_of_block);
+            body_faces.insert(body.name.clone(), Vec::new());
+            continue;
+        }
         let solid = &solids[&body.name];
         if solid.dim() != dim {
             return Err(Error::new(
@@ -268,7 +327,7 @@ fn lattice_bodies(
             .at(format!("body '{}'", body.name))
             .suggest("model.setIdealisation, or give the Body a shape of the right dimension"));
         }
-        let part = lattice(solid, size, counts, quadratic).map_err(|e| {
+        let part = part(solid, &body.name).map_err(|e| {
             Error::new(ErrorCode::MeshFailed, e.0)
                 .at(format!("body '{}'", body.name))
                 .suggest("mesh.set with a smaller element size")
@@ -296,27 +355,79 @@ fn lattice_bodies(
         }
         body_faces.insert(body.name.clone(), part.boundary_faces().iter().map(shift).collect());
     }
+    // Only line Bodies arrive with joints meant to be shared; welding solids that merely touch
+    // would silently bond them, which is a modelling decision nobody made.
+    if has_lines {
+        let (lo, hi) = mesh.bbox();
+        let diagonal = libm::sqrt((0..3).map(|k| (hi[k] - lo[k]) * (hi[k] - lo[k])).sum::<f64>());
+        merge_coincident(&mut mesh, JOINT_TOL * diagonal);
+    }
     Ok((mesh, body_of_block, body_faces))
+}
+
+/// Two joints this close together, relative to the model's own size, are one joint.
+const JOINT_TOL: f64 = 1e-9;
+
+/// Concatenate one Body's mesh into the whole, renaming its node sets `<body>.<tag>`.
+fn append(mesh: &mut Mesh, part: &Mesh, body: &str, body_of_block: &mut Vec<String>) {
+    let node_offset = (mesh.coords.len() / 3) as u32;
+    let elem_offset = mesh.n_elems() as u32;
+    mesh.coords.extend_from_slice(&part.coords);
+    for blk in &part.blocks {
+        mesh.blocks.push(ElementBlock {
+            kind: blk.kind,
+            conn: blk.conn.iter().map(|n| n + node_offset).collect(),
+            first_elem: blk.first_elem + elem_offset,
+        });
+        body_of_block.push(body.to_string());
+    }
+    for (tag, nodes) in &part.node_sets {
+        mesh.node_sets.insert(format!("{body}.{tag}"), nodes.iter().map(|n| n + node_offset).collect());
+    }
+}
+
+/// Validate explicit size targets both at dispatch and after later geometry replacements.
+pub fn validate_body_sizes(model: &Model, sizes: &BTreeMap<String, f64>) -> Result<(), Error> {
+    for name in sizes.keys() {
+        let at = format!("mesher.sizes.{name}");
+        let body =
+            model.body(name).ok_or_else(|| Error::not_found("body", name, &model.names(ObjectKind::Body)).at(&at))?;
+        if let Shape::Polyline { .. } = body.shape {
+            return Err(Error::new(ErrorCode::Unsupported, "line Bodies use member divisions, not element sizes")
+                .at(at)
+                .suggest("mesh.set without the line override, then geometry.addLine with divisions"));
+        }
+    }
+    Ok(())
+}
+
+fn positive_size(q: &Q<Length>, at: &str) -> Result<f64, Error> {
+    let size = q.si().map_err(|e| e.at(at))?;
+    if size <= 0.0 {
+        return Err(Error::schema("element size must be positive").at(at).suggest("mesh.set with a positive length"));
+    }
+    Ok(size)
 }
 
 /// A `mesh.set` mesher spec with unit strings, converted to the Model's SI settings.
 pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
     match spec {
-        MesherSpec::Lattice { size } => match size {
-            LatticeSize::Size(q) => {
-                let s = q.si().map_err(|e| e.at("mesher.size"))?;
-                if s <= 0.0 {
-                    return Err(Error::schema("element size must be positive").at("mesher.size"));
+        MesherSpec::Lattice { size, sizes } => {
+            let (size, counts) = match size {
+                LatticeSize::Size(q) => (Some(positive_size(q, "mesher.size")?), None),
+                LatticeSize::Counts { nx, ny, nz } => {
+                    if *nx == 0 || *ny == 0 || *nz == 0 {
+                        return Err(Error::schema("element counts must be at least 1").at("mesher.size"));
+                    }
+                    (None, Some([*nx, *ny, *nz]))
                 }
-                Ok(MesherSettings::Lattice { size: Some(s), counts: None })
-            }
-            LatticeSize::Counts { nx, ny, nz } => {
-                if *nx == 0 || *ny == 0 || *nz == 0 {
-                    return Err(Error::schema("element counts must be at least 1").at("mesher.size"));
-                }
-                Ok(MesherSettings::Lattice { size: None, counts: Some([*nx, *ny, *nz]) })
-            }
-        },
+            };
+            let sizes = sizes
+                .iter()
+                .map(|(body, q)| Ok((body.clone(), positive_size(q, &format!("mesher.sizes.{body}"))?)))
+                .collect::<Result<_, Error>>()?;
+            Ok(MesherSettings::Lattice { size, counts, sizes })
+        }
         MesherSpec::Mapped { body, blocks } => {
             if blocks.is_empty() {
                 return Err(Error::schema("a mapped mesh needs at least one block").at("mesher.blocks"));
@@ -353,8 +464,23 @@ pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
         MesherSpec::Sweep { base, sweep } => {
             Ok(MesherSettings::Sweep { base: Box::new(mesher_settings(base)?), sweep: sweep_settings(sweep)? })
         }
+        MesherSpec::Tet(crate::command::TetSpec { size, max_elements }) => {
+            let s = size.si().map_err(|e| e.at("mesher.size"))?;
+            if s <= 0.0 {
+                return Err(Error::schema("element size must be positive").at("mesher.size"));
+            }
+            let max = max_elements.unwrap_or(DEFAULT_MAX_ELEMENTS);
+            if max == 0 {
+                return Err(Error::schema("maxElements must be at least 1").at("mesher.maxElements"));
+            }
+            Ok(MesherSettings::Tet { size: s, max_elements: max })
+        }
     }
 }
+
+/// Background tetrahedra the free tet mesher builds before it refuses, when `maxElements` is not
+/// given: about a minute of meshing, and a model a browser tab can still solve.
+const DEFAULT_MAX_ELEMENTS: u32 = 500_000;
 
 /// The same mesher asked for element size `h`, for one row of a `study.converge` (plan B §2.2).
 ///
@@ -367,13 +493,20 @@ pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
 pub fn scale_mesher(m: &MesherSettings, h0: f64, h: f64) -> MesherSettings {
     let k = |n: usize| ((n as f64 * h0 / h).round() as usize).max(1);
     match m {
-        MesherSettings::Lattice { size: Some(_), .. } => MesherSettings::Lattice { size: Some(h), counts: None },
-        MesherSettings::Lattice { counts, .. } => {
-            MesherSettings::Lattice { size: None, counts: counts.map(|c| c.map(|n| k(n as usize) as u32)) }
-        }
+        MesherSettings::Lattice { size: Some(original), sizes, .. } => MesherSettings::Lattice {
+            size: Some(h),
+            counts: None,
+            sizes: sizes.iter().map(|(body, size)| (body.clone(), size * h / original)).collect(),
+        },
+        MesherSettings::Lattice { counts, sizes, .. } => MesherSettings::Lattice {
+            size: None,
+            counts: counts.map(|c| c.map(|n| k(n as usize) as u32)),
+            sizes: sizes.iter().map(|(body, size)| (body.clone(), size * h / h0)).collect(),
+        },
         MesherSettings::Free { of, refine, .. } => {
             MesherSettings::Free { of: of.clone(), size: h, refine: refine.clone() }
         }
+        MesherSettings::Tet { max_elements, .. } => MesherSettings::Tet { size: h, max_elements: *max_elements },
         MesherSettings::Mapped { body, blocks } => MesherSettings::Mapped {
             body: body.clone(),
             blocks: blocks.iter().map(|b| QuadBlock { n: [k(b.n[0]), k(b.n[1])], ..b.clone() }).collect(),

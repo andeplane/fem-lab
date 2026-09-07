@@ -302,12 +302,12 @@ export function exaggerationHelp(scale: number): string {
 function Legend({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const l = s.legend;
   if (!l) return null;
-  const choices = fieldChoices(s.result?.extremes.map((e) => e.field) ?? [], s.result?.frequencies?.length ?? 0, s.yieldStress !== null);
+  const choices = fieldChoices(s.result?.extremes.map((e) => e.field) ?? [], s.result, s.yieldStress !== null);
   const ticks = legendTicks(l.min, l.max);
   return (
     <div class="legend">
       <div class="legend-head">
-        <span class="legend-field mono">{choiceOf(s.fieldKey).label}</span>
+        <span class="legend-field mono">{choiceOf(s.fieldKey, s.result).label}</span>
         <span class="legend-unit mono">{l.unit}</span>
         <span class="legend-sub mono" title={exaggerationHelp(s.deformScale)}>
           {s.result?.step}{s.transient ? ` · ${formatNumber(s.transient.frame.time.value)} ${s.transient.frame.time.unit}` : ''}{s.transient?.catalogue.field === 'temperature' ? '' : ` · ${s.deformScale === 1 ? 'true scale' : `exaggerated ×${formatNumber(s.deformScale)}`}`}

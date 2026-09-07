@@ -86,6 +86,8 @@ pub fn extremes(f: &FieldData, mesh: &Mesh) -> Vec<Extremum> {
 ///
 /// `reactions` is the Result's own three-component nodal field, so a host that has a
 /// `StepResult` can regroup the reactions without re-deriving the DOF numbering.
+// ponytail: `[f64; 3]` is exactly `dofs_per_node`'s ceiling today (twist's third DOF fills the
+// last slot); widen to `Vec<f64>` sized `dofs_per_node` if a future idealisation carries more.
 pub fn reactions_per_constraint(
     p: &Problem<'_>,
     rc: &ResolvedConstraints,

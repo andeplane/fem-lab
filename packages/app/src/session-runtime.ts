@@ -1,5 +1,6 @@
+import { isBulkQuery, queryBulk, retainedFieldBulk, retainedSurfaceBulk } from './result-transfer';
 import type { SessionEngine, PreparedEngine } from './generated/wasm/femlab_engine_wasm.js';
-import type { BufferSpec, DocumentSnapshot, Stamp } from '@femlab/registry';
+import type { BufferSpec, DocumentSnapshot, ExecutionContext, Stamp } from '@femlab/registry';
 import type { SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 import { toStructured } from './engine-error';
 const json = JSON.stringify;
@@ -29,6 +30,8 @@ const need = (): SessionEngine => {
   if (!this.engine) throw { code: 'internal', cause: 'session Worker has not been created' };
   return this.engine;
 };
+  const transfer = (context: ExecutionContext) => ({ query_transfer: (query: string) =>
+    (need().query_transfer(json({ context, query: JSON.parse(query) })) as { value: unknown }).value });
   switch (req.op) {
     case 'create':
       if (this.engine) throw { code: 'session.conflict', cause: 'a Worker owns exactly one backend epoch' };
@@ -42,13 +45,14 @@ const need = (): SessionEngine => {
       return new Publication(reply.stamp, reply.ack);
     }
     case 'query': {
-      const reply = need().query_transfer(json({ context: req.context, query: req.query })) as { value: Record<string, unknown> };
-      return 'values' in reply.value && reply.value['values'] instanceof Float64Array
-        ? bulk(reply.value, [['values', 'f64']]) : reply.value;
+      if (isBulkQuery(req.query)) return queryBulk(transfer(req.context), req.query);
+      return JSON.parse(need().query(json({ context: req.context, query: req.query }))).value;
     }
     case 'snapshot': return JSON.parse(need().snapshot(json(req.context)));
+    case 'field': return retainedFieldBulk(transfer(req.context), req.field);
     case 'surface': {
-      const value = need().surface(json(req.context), req.resultId) as Record<string, unknown>;
+      if (req.selector !== undefined) return retainedSurfaceBulk(transfer(req.context), req.selector);
+      const value = need().surface(json(req.context), undefined) as Record<string, unknown>;
       value['triFace'] = value['triSet']; delete value['triSet'];
       value['faceNames'] = value['setNames']; value['setNames'] = value['membershipNames']; delete value['membershipNames'];
       value['edgeFace'] = value['edgeSet']; delete value['edgeSet'];

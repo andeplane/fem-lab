@@ -41,7 +41,8 @@ function setup() {
     throw new Error(`unexpected Query ${q.query}`);
   });
   const field = vi.fn(async (): Promise<FieldData> => ({ values: new Float32Array([0, 10, 0]), min: 0, max: 10, unit: 'm' }));
-  const transport = { query, field, surface: vi.fn(async () => ({ positions: new Float32Array(), indices: new Uint32Array(), triBody: new Uint32Array(), triFace: new Uint32Array(), faceNames: [], bodyNames: [] })) } satisfies Pick<WorkerTransport, 'query' | 'field' | 'surface'>;
+  const surface = vi.fn(async () => ({ positions: new Float32Array([0, 0, 0]), indices: new Uint32Array(), triFace: new Uint32Array(), triBody: new Uint32Array(), faceNames: [], bodyNames: [], source: 'mesh' as const }));
+  const transport = { query, field, surface } satisfies Pick<WorkerTransport, 'query' | 'field' | 'surface'>;
   const results = new ResultsView(store, transport as unknown as WorkerTransport, { current: drawing as unknown as Viewer });
   return { store, drawing, query, field, results };
 }

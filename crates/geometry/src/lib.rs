@@ -15,10 +15,10 @@ pub mod sketch;
 pub mod solid;
 
 pub use imported::{MeshIndex, DEFAULT_FEATURE_ANGLE, MAX_TRIANGLES};
-pub use mesh::{Adjacency, ElementBlock, ElementKind, Face, FaceKind, Mesh, Surface};
+pub use mesh::{merge_coincident, Adjacency, ElementBlock, ElementKind, Face, FaceKind, Mesh, Surface};
 pub use mesher::{
-    annulus, elliptic_annulus, extrude, free, free_sheet, lattice, mapped, perturb_interior, revolve,
-    split_to_simplices, Curve, QuadBlock, RefineBox, Structured,
+    annulus, elliptic_annulus, extrude, free, free_sheet, lattice, line, mapped, perturb_interior, revolve,
+    split_to_simplices, tet, Curve, QuadBlock, RefineBox, Structured,
 };
 pub use predicate::{
     elem_centroid, face_centroid_normal, nearest_boundary_face, resolve_face_set, resolve_region, FacePredicate,
@@ -27,7 +27,7 @@ pub use predicate::{
 pub use quality::{quality, Quality};
 pub use shape::{Affine3, Shape};
 pub use sketch::{Segment, Sketch, SketchError};
-pub use solid::{Solid, TriMesh};
+pub use solid::{FacePatch, Solid, TriMesh};
 
 /// A geometry failure with a one-line, user-readable cause.
 #[derive(Debug, Clone, PartialEq, Eq)]

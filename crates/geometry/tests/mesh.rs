@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use femlab_geometry::{
-    annulus, elliptic_annulus, extrude, free, mapped, perturb_interior, revolve, split_to_simplices, Curve,
-    ElementBlock, ElementKind, Face, FaceKind, Mesh, QuadBlock, RefineBox, Segment, Structured,
+    annulus, elliptic_annulus, extrude, free, line as line_mesher, mapped, merge_coincident, perturb_interior, revolve,
+    split_to_simplices, Curve, ElementBlock, ElementKind, Face, FaceKind, Mesh, QuadBlock, RefineBox, Segment,
+    Structured,
 };
 use proptest::prelude::*;
 
@@ -1727,6 +1728,163 @@ fn any_segment() -> impl Strategy<Value = Segment> {
     ]
 }
 
+// ---- line members ----------------------------------------------------------------------------
+
+fn truss(points: &[[f64; 3]], members: &[[u32; 2]], divisions: u32) -> Mesh {
+    line_mesher(points, members, divisions, ElementKind::Truss2).expect("a valid line body")
+}
+
+#[test]
+fn truss2_tables_describe_a_two_node_line_member() {
+    let k = ElementKind::Truss2;
+    assert_eq!((k.n_nodes(), k.n_corners(), k.dim(), k.n_faces()), (2, 2, 1, 0));
+    assert_eq!(k.edges(), &[[0, 1]]);
+    // A member has no face, so no face table entry and no face load can name one.
+    assert!(k.face_nodes(0).is_empty());
+    assert_eq!(k.face_kind(), FaceKind::Line2);
+    assert_eq!(serde_json::to_string(&k).unwrap(), "\"truss2\"");
+    assert_eq!(serde_json::from_str::<ElementKind>("\"truss2\"").unwrap(), k);
+}
+
+#[test]
+fn the_line_mesher_divides_every_member_and_names_every_joint() {
+    // A two-bar planar truss: joints 0, 1, 2 with members 0-2 and 1-2.
+    let pts = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [1.0, 1.0, 0.0]];
+    let m = truss(&pts, &[[0, 2], [1, 2]], 1);
+    m.validate().unwrap();
+    assert_eq!((m.dim, m.n_nodes(), m.n_elems()), (3, 3, 2));
+    assert_eq!(m.blocks[0].conn, [0, 2, 1, 2]);
+    assert_eq!(m.node_sets.keys().collect::<Vec<_>>(), ["p0", "p1", "p2"]);
+    assert_eq!(m.node_sets["p2"], [2]);
+    // A member has no boundary face and no skin triangle: the segments are all it draws.
+    assert!(m.boundary_faces().is_empty());
+    let s = m.surface();
+    assert!(s.triangles.is_empty() && s.edges.is_empty());
+    assert_eq!(s.lines, [[0, 2], [1, 2]]);
+    assert_eq!(s.line_elem, [0, 1]);
+
+    // Subdivision adds interior nodes after the joints, in member order, evenly spaced.
+    let m = truss(&pts, &[[0, 1]], 4);
+    m.validate().unwrap();
+    assert_eq!((m.n_nodes(), m.n_elems()), (6, 4));
+    assert_eq!(m.blocks[0].conn, [0, 3, 3, 4, 4, 5, 5, 1]);
+    assert_eq!(m.node(4), [1.0, 0.0, 0.0]);
+    assert_eq!(m.node_sets.len(), 3);
+    // Total member length is preserved exactly by the subdivision.
+    let total: f64 = (0..m.n_elems() as u32)
+        .map(|e| {
+            let c = corners(&m, e);
+            dot(sub(c[1], c[0]), sub(c[1], c[0])).sqrt()
+        })
+        .sum();
+    assert!((total - 2.0).abs() < 1e-15, "{total}");
+}
+
+#[test]
+fn the_line_mesher_rejects_every_ill_formed_body() {
+    let ok = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
+    /// Points, members, divisions and the cause the mesher should name.
+    type BadLine<'a> = (&'a [[f64; 3]], &'a [[u32; 2]], u32, &'a str);
+    let cases: [BadLine<'_>; 6] = [
+        (&ok[..1], &[[0, 1]], 1, "at least 2 points"),
+        (&[[0.0, 0.0, 0.0], [f64::NAN, 0.0, 0.0]], &[[0, 1]], 1, "non-finite point"),
+        (&ok[..2], &[], 1, "at least one member"),
+        (&ok[..2], &[[0, 1]], 0, "divisions must be at least 1"),
+        (&ok[..2], &[[0, 2]], 1, "references point 2 but there are 2 points"),
+        (&ok, &[[1, 2]], 1, "zero length"),
+    ];
+    for (points, members, divisions, want) in cases {
+        let e = line_mesher(points, members, divisions, ElementKind::Truss2).unwrap_err();
+        assert!(e.0.contains(want), "got '{}', wanted '{want}'", e.0);
+    }
+    let e = line_mesher(&ok[..2], &[[1, 1]], 1, ElementKind::Truss2).unwrap_err();
+    assert!(e.0.contains("joins point 1 to itself"), "{}", e.0);
+}
+
+#[test]
+fn a_polyline_shape_has_no_interior_and_no_solid() {
+    let shape = Shape::Polyline { points: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 2 };
+    assert_eq!(shape.dim(), 1);
+    shape.validate().expect("a straight member");
+    // A curve has no volume for a point to be inside of, not even a point on it.
+    assert!(!shape.contains([0.5, 0.0, 0.0]).unwrap());
+    // And it never becomes a Solid: the line mesher is its own geometry.
+    let e = Solid::evaluate(&shape).unwrap_err();
+    assert!(e.0.contains("no volume"), "{}", e.0);
+    // Its validation is the line mesher's, so the Shape and the mesher agree on the cause.
+    let bad = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1 };
+    assert!(bad.validate().unwrap_err().0.contains("at least 2 points"));
+    // A boolean cannot mix dimensions, and the message says all three.
+    let mixed = Shape::Union { shapes: vec![shape.clone(), Shape::Box { size: [1.0; 3] }] };
+    assert!(mixed.validate().unwrap_err().0.contains("1D line members"));
+}
+
+#[test]
+fn a_line_block_is_accepted_in_a_3d_mesh_and_refused_in_a_2d_one() {
+    let mut m = truss(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1);
+    m.validate().unwrap();
+    m.dim = 2;
+    assert!(m.validate().unwrap_err().0.contains("Truss2 in a 2D mesh"));
+}
+
+#[test]
+fn quality_of_a_straight_member_is_perfect_whatever_its_direction() {
+    let m = truss(&[[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [2.0, 2.0, 3.0]], &[[0, 1], [1, 2]], 2);
+    let q = quality(&m, 4);
+    assert_eq!(q.min_det_j_ratio, 1.0);
+    assert!((q.max_aspect - 1.0).abs() < 1e-12, "{q:?}");
+    // A segment has no corner to measure an angle at, so nothing lowers the mesh minimum.
+    assert_eq!(q.min_angle_deg, 180.0);
+    assert_eq!(q.worst.len(), 4);
+}
+
+#[test]
+fn merge_coincident_welds_joints_keeps_the_lowest_id_and_leaves_a_clean_mesh_alone() {
+    // Two Bodies meeting at one joint: node 1 of the first and node 2 of the second coincide.
+    let a = truss(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], 1);
+    let mut m = a.clone();
+    m.coords.extend([1.0, 0.0, 0.0, 1.0, 1.0, 0.0]);
+    m.blocks.push(ElementBlock { kind: ElementKind::Truss2, conn: vec![2, 3], first_elem: 1 });
+    m.node_sets.insert("b.p0".into(), vec![2]);
+    m.node_sets.insert("b.p1".into(), vec![3]);
+    merge_coincident(&mut m, 1e-9);
+    m.validate().unwrap();
+    assert_eq!(m.n_nodes(), 3);
+    assert_eq!(m.blocks[0].conn, [0, 1]);
+    // The survivor is the lower id, so the second body's first joint became node 1.
+    assert_eq!(m.blocks[1].conn, [1, 2]);
+    assert_eq!(m.node_sets["p1"], [1]);
+    assert_eq!(m.node_sets["b.p0"], [1]);
+    assert_eq!(m.node_sets["b.p1"], [2]);
+
+    // Nothing coincident: the mesh comes back untouched, node ids included.
+    let mut clean = a.clone();
+    merge_coincident(&mut clean, 1e-9);
+    assert_eq!(clean, a);
+
+    // Three coincident nodes collapse to one, and a set naming all three becomes one node.
+    let mut triple = a.clone();
+    triple.coords.extend([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    triple.node_sets.insert("z".into(), vec![1, 2, 3]);
+    merge_coincident(&mut triple, 1e-9);
+    assert_eq!(triple.n_nodes(), 2);
+    assert_eq!(triple.node_sets["z"], [1]);
+
+    // A node within tolerance of two survivors that sit in different grid cells joins the
+    // lower-numbered one, whichever cell the scan reaches first.
+    let mut spanning = Mesh {
+        dim: 3,
+        coords: vec![0.6e-9, 0.0, 0.0, -0.6e-9, 0.0, 0.0, 0.0, 0.0, 0.0],
+        blocks: vec![ElementBlock { kind: ElementKind::Truss2, conn: vec![0, 1], first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    merge_coincident(&mut spanning, 1e-9);
+    assert_eq!(spanning.n_nodes(), 2);
+    assert_eq!(spanning.blocks[0].conn, [0, 1]);
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
     /// Finite inputs can overflow when multiplied or added. No such point may reach weka.
@@ -1761,6 +1919,16 @@ fn resample(shape: &Shape) -> Shape {
         triangles: t.triangles.clone(),
         feature_angle: None,
         simplify_below: None,
+    }
+}
+
+fn predicate_kind(predicate: &FacePredicate) -> &'static str {
+    match predicate {
+        FacePredicate::Plane { .. } => "plane",
+        FacePredicate::Normal { .. } => "normal",
+        FacePredicate::Bbox { .. } => "bbox",
+        FacePredicate::Cylinder { .. } => "cylinder",
+        FacePredicate::Any { .. } => "any",
     }
 }
 
@@ -1814,6 +1982,96 @@ fn an_imported_cube_is_exact_with_six_named_patches() {
     assert!(!s.contains([-0.5, 0.5, 0.5]));
     assert!(s.contains([0.125, 0.125, 0.125]));
     assert!(format!("{s:?}").contains("MeshIndex(12 triangles)"));
+}
+
+/// Patch measurements use triangle area and first moments, while the predicate classification
+/// is checked against analytic planes and a circular cylinder after a world-space transform.
+#[test]
+fn imported_patch_summaries_have_independent_geometric_oracles() {
+    let (positions, triangles) = cube_soup();
+    let cube = Solid::evaluate(&mesh_shape(positions, triangles)).unwrap();
+    let patches = cube.triangles().face_patches();
+    assert_eq!(patches.len(), 6);
+    for p in &patches {
+        assert_eq!(p.triangle_count, 2);
+        assert!((p.area - 1.0).abs() < 1e-12);
+        assert!((dot(p.mean_normal, p.mean_normal) - 1.0).abs() < 1e-12);
+        let FacePredicate::Plane { normal, offset, tol } = &p.suggested_predicate else {
+            panic!("cube patch is not planar: {p:?}")
+        };
+        assert!((dot(*normal, p.centroid) - offset).abs() <= tol.expect("explicit tolerance"));
+    }
+
+    let at = Affine3 { translate: [3.0, -2.0, 5.0], rotate: [23.0, 37.0, -19.0], scale: [2.0; 3] };
+    let cylinder = Shape::Transform {
+        shape: Box::new(Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(32) }),
+        at: at.clone(),
+    };
+    let imported = Solid::evaluate(&resample(&cylinder)).unwrap();
+    let patches = imported.triangles().face_patches();
+    assert_eq!(patches.len(), 3);
+    assert_eq!(patches.iter().filter(|p| predicate_kind(&p.suggested_predicate) == "plane").count(), 2);
+    let side =
+        patches.iter().find(|p| predicate_kind(&p.suggested_predicate) == "cylinder").expect("one cylindrical side");
+    let FacePredicate::Cylinder { point, axis, radius, tol } = side.suggested_predicate else { panic!() };
+    let p0 = at.apply([0.0, 0.0, 0.0]);
+    let p1 = at.apply([0.0, 0.0, 1.0]);
+    let expected_axis = sub(p1, p0);
+    assert!((radius - 2.0).abs() < 1e-9, "radius {radius}");
+    assert!((dot(axis, expected_axis).abs() - 2.0).abs() < 1e-9, "axis {axis:?}");
+    assert!(tol.expect("faceting tolerance") > 0.0);
+    assert!(libm::sqrt(dot(side.mean_normal, side.mean_normal)) < 1e-12, "{:?}", side.mean_normal);
+    let d = sub(point, p0);
+    let axial = dot(d, axis);
+    let radial = sub(d, [axis[0] * axial, axis[1] * axial, axis[2] * axial]);
+    assert!(libm::sqrt(dot(radial, radial)) < 1e-9, "axis point {point:?}");
+
+    let imported_shape = resample(&cylinder);
+    assert!(imported_shape.is_imported());
+    assert!(Shape::Transform { shape: Box::new(imported_shape), at: at.clone() }.is_imported());
+    assert!(Shape::Named { name: "part".into(), shape: Box::new(resample(&cylinder)) }.is_imported());
+    assert!(!cylinder.is_imported());
+
+    let along_x = Shape::Transform {
+        shape: Box::new(Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(16) }),
+        at: Affine3 { rotate: [0.0, 90.0, 0.0], ..Default::default() },
+    };
+    let along_x = Solid::evaluate(&resample(&along_x)).unwrap();
+    assert!(along_x.triangles().face_patches().iter().any(|p| predicate_kind(&p.suggested_predicate) == "cylinder"));
+
+    let sphere = Solid::evaluate(&resample(&Shape::Sphere { radius: 1.0, segments: Some(16) })).unwrap();
+    let sphere_patches = sphere.triangles().face_patches();
+    assert_eq!(sphere_patches.len(), 1);
+    assert_eq!(predicate_kind(&sphere_patches[0].suggested_predicate), "bbox");
+
+    let shallow = femlab_geometry::TriMesh {
+        positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.1]],
+        triangles: vec![[0, 1, 2], [0, 1, 3]],
+        tags: vec![0, 0],
+        tag_names: vec!["shallow".into()],
+    };
+    assert_eq!(predicate_kind(&shallow.face_patches()[0].suggested_predicate), "bbox");
+
+    let n = 16;
+    let mut positions = Vec::new();
+    for z in [0.0, 1.0] {
+        for i in 0..n {
+            let angle = 2.0 * PI * i as f64 / n as f64;
+            positions.push([2.0 * libm::cos(angle), libm::sin(angle), z]);
+        }
+    }
+    let mut triangles = Vec::new();
+    for i in 0..n as u32 {
+        let j = (i + 1) % n as u32;
+        triangles.extend([[i, j, n as u32 + j], [i, n as u32 + j, n as u32 + i]]);
+    }
+    let ellipse = femlab_geometry::TriMesh {
+        tags: vec![0; triangles.len()],
+        tag_names: vec!["ellipse".into()],
+        positions,
+        triangles,
+    };
+    assert_eq!(predicate_kind(&ellipse.face_patches()[0].suggested_predicate), "bbox");
 }
 
 #[test]
@@ -1988,4 +2246,200 @@ proptest! {
             let _ = lattice(&s, None, Some([2, 2, 2]), false);
         }
     }
+}
+
+// ---- the free tet mesher (isosurface stuffing) ------------------------------------------------
+
+use femlab_geometry::tet;
+
+/// The four bodies the dihedral gate is measured on, with the **closed-form** volume of each.
+///
+/// The reference is the analytic volume, never `Solid::volume()`: the mesher cuts against
+/// `Shape::contains`, which is an exact circle, while the Solid's own volume comes from its
+/// 32-segment facets and is 0.6 % (cylinder) to 2.2 % (sphere) short of it.
+fn tet_bodies() -> Vec<(&'static str, Solid, f64)> {
+    vec![
+        ("box", solid(Shape::Box { size: [1.0, 0.8, 0.6] }), 1.0 * 0.8 * 0.6),
+        ("cylinder", solid(Shape::Cylinder { radius: 0.4, height: 1.0, segments: Some(32) }), PI * 0.16),
+        ("sphere", solid(Shape::Sphere { radius: 0.5, segments: Some(32) }), 4.0 / 3.0 * PI * 0.125),
+        (
+            "box-minus-cylinder",
+            solid(Shape::Subtract {
+                from: Box::new(Shape::Box { size: [1.0, 1.0, 1.0] }),
+                cut: vec![Shape::Named {
+                    name: "bore".into(),
+                    shape: Box::new(Shape::Transform {
+                        shape: Box::new(Shape::Cylinder { radius: 0.25, height: 3.0, segments: Some(32) }),
+                        at: femlab_geometry::Affine3 { translate: [0.5, 0.5, -1.0], ..Default::default() },
+                    }),
+                }],
+            }),
+            1.0 - PI * 0.0625,
+        ),
+    ]
+}
+
+/// A closed surface's oriented face areas cancel. A tet mesh that did not conform — a
+/// quadrilateral split one way by one element and the other way by its neighbour — leaves a
+/// crack whose rim shows up here, so this is the conformity check.
+fn boundary_is_closed(m: &Mesh) -> f64 {
+    let mut sum = [0.0; 3];
+    for f in m.boundary_faces() {
+        let c: Vec<[f64; 3]> = m.face_nodes(f).take(3).map(|n| m.node(n)).collect();
+        let a = cross(sub(c[1], c[0]), sub(c[2], c[0]));
+        for k in 0..3 {
+            sum[k] += 0.5 * a[k];
+        }
+    }
+    libm::sqrt(dot(sum, sum))
+}
+
+#[test]
+fn tet_meshes_hold_their_dihedral_angles_volume_and_sets_at_two_sizes() {
+    for (name, body, exact) in tet_bodies() {
+        let mut previous = f64::INFINITY;
+        for (size, tol) in [(0.25, 0.07), (0.125, 0.02)] {
+            let m = tet(&body, size, false, 2_000_000).unwrap();
+            m.validate().unwrap();
+            assert_eq!(m.kind_of(0), ElementKind::Tet4, "{name}");
+            assert_eq!(m.elem_sets["all"].len(), m.n_elems());
+            // The isosurface-stuffing angle bound, measured rather than claimed.
+            let q = quality(&m, 1);
+            let lo = q.min_dihedral_deg.unwrap_or_default();
+            let hi = q.max_dihedral_deg.unwrap_or_default();
+            assert!(lo >= 10.7 && hi <= 164.8, "{name} at {size}: dihedral angles {lo}..{hi} degrees");
+            assert!(q.min_det_j_ratio > 0.0, "{name} at {size}: an element is inverted or degenerate");
+            // Conforming, so the skin closes.
+            assert!(boundary_is_closed(&m) < 1e-9, "{name} at {size}: the boundary is not closed");
+            // Volume against the closed form, and closer at the finer size.
+            let error = (measure(&m) - exact).abs() / exact;
+            assert!(error < tol, "{name} at {size}: volume error {error} against {exact}");
+            assert!(error < previous, "{name} at {size}: refining did not reduce the volume error");
+            previous = error;
+            // Every named CSG face resolves to a non-empty face Set at both sizes.
+            assert_eq!(m.face_sets.keys().cloned().collect::<Vec<_>>(), body.tags(), "{name} at {size}");
+            for tag in body.tags() {
+                assert!(set_len(&m, &tag) > 0, "{name} at {size}: face set '{tag}' is empty");
+            }
+        }
+    }
+}
+
+#[test]
+fn tet_meshes_are_exact_on_a_lattice_aligned_box_and_reproducible() {
+    let box_ = solid(Shape::Box { size: [1.0, 1.0, 1.0] });
+    let m = tet(&box_, 0.25, false, 100_000).unwrap();
+    // The lattice lands on every face of an aligned box, so the twelve tetrahedra per cell
+    // survive whole: 4 x 4 x 4 cells x 12, and the volume is exact.
+    assert_eq!(m.n_elems(), 960);
+    assert!((measure(&m) - 1.0).abs() < 1e-12, "{}", measure(&m));
+    let q = quality(&m, 1);
+    assert!((q.min_dihedral_deg.unwrap_or_default() - 45.0).abs() < 1e-9);
+    assert!((q.max_dihedral_deg.unwrap_or_default() - 90.0).abs() < 1e-9);
+    assert_eq!(m.face_sets.keys().cloned().collect::<Vec<_>>(), ["xmax", "xmin", "ymax", "ymin", "zmax", "zmin"]);
+    // Nothing in the mesher reads a clock, a thread count or a hash order.
+    assert_eq!(tet(&box_, 0.25, false, 100_000).unwrap(), m);
+}
+
+#[test]
+fn tet10_puts_its_mid_edge_nodes_on_the_curved_face() {
+    let r = 0.5;
+    let ball = solid(Shape::Sphere { radius: r, segments: Some(32) });
+    let m = tet(&ball, 0.2, true, 500_000).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.kind_of(0), ElementKind::Tet10);
+    assert!(quality(&m, 1).min_det_j_ratio > 0.0);
+    // On a boundary face the corners lie on the exact sphere and so, after projection, do the
+    // mid-edge nodes; the straight chord midpoint would sit a sagitta inside it.
+    let mut worst_node = 0.0f64;
+    let mut worst_chord = 0.0f64;
+    for f in m.boundary_faces() {
+        let n: Vec<u32> = m.face_nodes(f).collect();
+        for k in 0..3 {
+            let mid = m.node(n[3 + k]);
+            worst_node = worst_node.max((radius3(mid) - r).abs());
+            let chord = mean(&[m.node(n[k]), m.node(n[(k + 1) % 3])]);
+            worst_chord = worst_chord.max((radius3(chord) - r).abs());
+        }
+    }
+    assert!(worst_node < 1e-9, "mid-edge node off the sphere by {worst_node}");
+    assert!(worst_chord > 1e-3, "the chord midpoints were already on the sphere ({worst_chord})");
+    // Interior mid-edge nodes stay at the straight midpoint.
+    let e = m.elem_nodes(0);
+    let straight = mean(&[m.node(e[0]), m.node(e[1])]);
+    let moved = (0..3).map(|k| (m.node(e[4])[k] - straight[k]).abs()).fold(0.0f64, f64::max);
+    assert!(moved < 0.2 * 0.25, "a mid-edge node moved more than a quarter of its edge");
+}
+
+fn radius3(p: [f64; 3]) -> f64 {
+    libm::sqrt(dot(p, p))
+}
+
+#[test]
+fn the_tet_mesher_refuses_what_it_cannot_mesh_and_says_why() {
+    let ball = solid(Shape::Sphere { radius: 0.5, segments: Some(16) });
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(tet(&ball, bad, false, 100_000).unwrap_err().0.contains("positive, finite element size"));
+    }
+    // A denormal size is positive and finite, and is caught by the element-count estimate
+    // instead of overflowing the lattice.
+    assert!(tet(&ball, f64::MIN_POSITIVE / 2.0, false, 100_000).unwrap_err().0.contains("above the limit"));
+    assert!(tet(&annulus_sheet(), 0.1, false, 100_000).unwrap_err().0.contains("meshes 3D solids"));
+    assert!(tet(&ball, 0.01, false, 1_000).unwrap_err().0.contains("above the limit of 1000"));
+    // At an element size far larger than the body no lattice vertex lands inside it.
+    assert!(tet(&ball, 10.0, false, 100_000).unwrap_err().0.contains("no lattice vertex"));
+    // A body one element size across is seen, but too coarsely to keep its volume.
+    let bore = solid(Shape::Subtract {
+        from: Box::new(Shape::Box { size: [1.0, 1.0, 0.2] }),
+        cut: vec![Shape::Transform {
+            shape: Box::new(Shape::Cylinder { radius: 0.45, height: 1.0, segments: Some(32) }),
+            at: femlab_geometry::Affine3 { translate: [0.5, 0.5, -0.4], ..Default::default() },
+        }],
+    });
+    assert!(tet(&bore, 0.34, false, 100_000).unwrap_err().0.contains("differs from the body's own"));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+    /// A mesher takes free-form geometry, so whatever the CSG tree and the element size say,
+    /// the tet mesher returns. Any `Err` is a pass here; a panic is the failure.
+    #[test]
+    fn a_random_csg_tree_never_panics_the_tet_mesher(
+        shape in any_shape(3),
+        size in prop_oneof![Just(0.0), Just(-1.0), Just(f64::NAN), Just(f64::INFINITY), Just(1e-300), 0.05f64..2.0],
+        quadratic in any::<bool>(),
+    ) {
+        // The property is that these calls return at all.
+        if let Ok(s) = Solid::evaluate(&shape) {
+            let _ = tet(&s, size, quadratic, 200_000);
+        }
+    }
+}
+
+/// Random CSG to `depth`: leaves that are degenerate as often as they are valid, transforms
+/// that collapse an axis, and all three booleans over them.
+fn any_shape(depth: u32) -> BoxedStrategy<Shape> {
+    let leaf = prop_oneof![
+        (-1.0f64..2.0, -1.0f64..2.0, -1.0f64..2.0).prop_map(|(x, y, z)| Shape::Box { size: [x, y, z] }),
+        (-1.0f64..2.0, -1.0f64..2.0).prop_map(|(r, h)| Shape::Cylinder { radius: r, height: h, segments: Some(8) }),
+        (-1.0f64..2.0).prop_map(|r| Shape::Sphere { radius: r, segments: Some(8) }),
+        (-1.0f64..2.0).prop_map(|h| Shape::Extrude { sketch: Sketch::rect(1.0, 0.5), height: h }),
+    ];
+    if depth == 0 {
+        return leaf.boxed();
+    }
+    let inner = any_shape(depth - 1);
+    prop_oneof![
+        leaf,
+        (inner.clone(), -1.0f64..2.0).prop_map(|(s, k)| Shape::Transform {
+            shape: Box::new(s),
+            at: femlab_geometry::Affine3 { scale: [k, 1.0, 1.0], translate: [0.2, 0.0, 0.0], ..Default::default() },
+        }),
+        inner.clone().prop_map(|s| Shape::Named { name: "part".into(), shape: Box::new(s) }),
+        prop::collection::vec(inner.clone(), 0..3).prop_map(|shapes| Shape::Union { shapes }),
+        prop::collection::vec(inner.clone(), 0..3).prop_map(|shapes| Shape::Intersect { shapes }),
+        (inner.clone(), prop::collection::vec(inner, 0..2))
+            .prop_map(|(from, cut)| Shape::Subtract { from: Box::new(from), cut }),
+    ]
+    .boxed()
 }

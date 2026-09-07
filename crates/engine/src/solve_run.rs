@@ -12,22 +12,44 @@ use crate::engine::{display, Engine, OnProgress};
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
-use crate::fem::loads::{face_set_area, Load};
-use crate::fem::problem::{Constraint, Coupling, Problem};
+use crate::fem::loads::{face_set_area, face_set_polar_moment, Load};
+use crate::fem::problem::{Constraint, Coupling, PointMass, Problem};
 use crate::mesh::{scale_mesher, BuiltMesh};
-use crate::model::{ConstraintKind, LoadKind, MeshSettings, Model, Step};
+use crate::model::{Axial, ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
-use crate::post::{Extremum, FieldData};
+use crate::post::{Extremum, FieldData, Per};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{
     AssumedMaterialProperty, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary, StudyReport,
-    StudyRow, Valued,
+    StudyRow, SweepRow, Valued,
 };
 use crate::solve::SolveOptions;
 use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Q};
 
-/// The material law every Model material resolves to for now; plugins add their own later.
+/// The two built-in laws a Model material resolves to; plugins add their own later.
 const LAW: &str = "linear-elastic";
+const ORTHOTROPIC_LAW: &str = "orthotropic-elastic";
+
+/// One Model material as the numbers an element needs.
+///
+/// `material.add` guarantees exactly one of the isotropic and orthotropic forms is present. A
+/// Model that says neither — which only a hand-edited file can — resolves to a zero-stiffness
+/// isotropic material rather than panicking, and `fem::checks` reports the singular system.
+fn resolve_material(m: &crate::model::Material) -> Material {
+    let (id, props) = match &m.orthotropic {
+        Some(o) => (ORTHOTROPIC_LAW, o.props()),
+        None => (LAW, vec![m.e.unwrap_or(0.0), m.nu.unwrap_or(0.0)]),
+    };
+    Material {
+        law: crate::fem::material::builtin_law(id).expect("the built-in law"),
+        props,
+        rho: m.rho.unwrap_or(0.0),
+        alpha: m.alpha.map_or([0.0; 3], Axial::axes),
+        k: m.k.map_or([0.0; 3], Axial::axes),
+        cp: m.cp.unwrap_or(0.0),
+        axes: m.orientation.as_ref().map(crate::model::Orientation::rows),
+    }
+}
 
 /// A `contact.add` without a `tol` pairs across this fraction of the Mesh bounding-box
 /// diagonal: tight enough that a tie between faces that are not really touching is refused.
@@ -68,18 +90,7 @@ fn build_problem_with_temperature<'a>(
     previous: Option<&FieldData>,
 ) -> Result<Problem<'a>, Error> {
     let heat = matches!(step.procedure, Procedure::HeatSteady | Procedure::HeatTransient);
-    let materials: Vec<Material> = model
-        .materials
-        .iter()
-        .map(|m| Material {
-            law: crate::fem::material::builtin_law(LAW).expect("the built-in law"),
-            props: vec![m.e, m.nu],
-            rho: m.rho.unwrap_or(0.0),
-            alpha: m.alpha.unwrap_or(0.0),
-            k: m.k.unwrap_or(0.0),
-            cp: m.cp.unwrap_or(0.0),
-        })
-        .collect();
+    let materials: Vec<Material> = model.materials.iter().map(resolve_material).collect();
     let material_of_block = built
         .body_of_block
         .iter()
@@ -93,6 +104,14 @@ fn build_problem_with_temperature<'a>(
     let (lo, hi) = built.mesh.bbox();
     let default_tol =
         DEFAULT_TOL * ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
+    // Every point mass of the Model is on every Mesh, in Model order, whatever the Step does
+    // with it; a Step that couples none of them is what `checks::uncoupled_points` refuses.
+    let points: Vec<PointMass> = model
+        .points
+        .iter()
+        .zip(&built.points)
+        .map(|(pm, &node)| PointMass { name: pm.name.clone(), node, mass: pm.mass })
+        .collect();
     let mut couplings = Vec::new();
     let mut constraints = Vec::with_capacity(step.constraints.len());
     for name in &step.constraints {
@@ -104,6 +123,29 @@ fn build_problem_with_temperature<'a>(
                     master: master.clone(),
                     slave: c.on.clone(),
                     tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
+            ConstraintKind::Cyclic { from, axis, angle_deg, through, tol } => {
+                couplings.push(Coupling::Cyclic {
+                    name: c.name.clone(),
+                    from: from.clone(),
+                    to: c.on.clone(),
+                    axis: axis.index(),
+                    through: through.unwrap_or([0.0; 3]),
+                    angle: angle_deg.to_radians(),
+                    tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
+            ConstraintKind::Couple { point, coupling } => {
+                let pm = points.iter().find(|pm| pm.name == *point).expect("constraint.couple validated the point");
+                couplings.push(Coupling::Couple {
+                    name: c.name.clone(),
+                    point: point.clone(),
+                    node: pm.node,
+                    faces: c.on.clone(),
+                    kind: *coupling,
                 });
                 continue;
             }
@@ -130,16 +172,27 @@ fn build_problem_with_temperature<'a>(
         };
         constraints.push(Constraint { name: c.name.clone(), nodes: c.on.clone(), dofs, value });
     }
+    let section_of_block = built
+        .body_of_block
+        .iter()
+        .map(|body| {
+            let name = model.body(body).and_then(|b| b.section.as_deref())?;
+            model.sections.iter().position(|s| s.name == name)
+        })
+        .collect();
     let mut p = Problem {
         mesh: &built.mesh,
         sets: &built.sets,
         body_of_block: &built.body_of_block,
         material_of_block,
         materials,
+        section_of_block,
+        sections: model.sections.iter().map(|s| s.section).collect(),
         idealisation: model.idealisation.clone(),
         formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),
         constraints,
         couplings,
+        points,
         loads: Vec::new(),
         temperature: None,
         heat,
@@ -172,6 +225,11 @@ fn build_problem_with_temperature<'a>(
             LoadKind::HeatSource { bodies, q } => {
                 heat_loads.push(HeatLoad::Source { bodies: bodies.clone(), q: *q });
             }
+            LoadKind::Torque { on, total } => {
+                let j = face_set_polar_moment(&p, on)?;
+                loads.push(Load::Torque { faces: on.clone(), c: total / j });
+            }
+            LoadKind::ThermalContact { of, h } => heat_loads.push(HeatLoad::Contact { of: of.clone(), h: *h }),
         }
     }
     p.loads = loads;
@@ -233,6 +291,7 @@ fn rho_assumption_cause(procedure: Procedure, has_gravity: bool) -> Option<&'sta
         Procedure::Static if has_gravity => Some("gravity read the omitted density as zero"),
         Procedure::Modal => Some("modal mass assembly read the omitted density as zero"),
         Procedure::Explicit => Some("explicit mass assembly read the omitted density as zero"),
+        Procedure::Implicit => Some("implicit mass assembly read the omitted density as zero"),
         _ => None,
     }
 }
@@ -247,9 +306,10 @@ fn result_assumptions(
     p: &Problem<'_>,
 ) -> Vec<ResultAssumption> {
     let rho_cause = rho_assumption_cause(procedure, p.loads.iter().any(|load| matches!(load, Load::Gravity { .. })));
-    // Static and explicit assembly both form the thermal force. Modal forms stiffness too, but
-    // discards that load vector, so alpha is not solver-used there.
-    let reads_alpha = matches!(procedure, Procedure::Static | Procedure::Explicit) && p.temperature.is_some();
+    // Static, explicit and implicit assembly all form the thermal force. Modal forms stiffness
+    // too, but discards that load vector, so alpha is not solver-used there.
+    let reads_alpha =
+        matches!(procedure, Procedure::Static | Procedure::Explicit | Procedure::Implicit) && p.temperature.is_some();
     // A BuiltMesh block always has elements. Collecting by Body and material also collapses a
     // mapped Body made from several blocks into one assumption row per property.
     let assigned: std::collections::BTreeMap<(&str, usize), ()> = built
@@ -326,9 +386,24 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
                 output_every: step.output_every.unwrap_or(1) as usize,
             }
         }
+        Procedure::StaticNonlinear => procedure::Step::StaticNonlinear(procedure::nonlinear::Options {
+            increments: step.increments.unwrap_or(10) as usize,
+            converge: procedure::nonlinear::Converge {
+                tolerance: step.nonlinear_tolerance.unwrap_or(1e-8),
+                max_newton: step.nonlinear_max_iterations.unwrap_or(20) as usize,
+            },
+            max_cutbacks: step.max_cutbacks.unwrap_or(5) as usize,
+            // Pseudo-time, not physical time: one second of it is the whole load history.
+            t_end: step.t_end.unwrap_or(1.0),
+            amplitude: step.amplitude.as_ref().map(amplitude),
+            solver: opts,
+        }),
         Procedure::Modal => {
             procedure::Step::Modal { n_modes: step.n_modes.unwrap_or(6) as usize, shift: step.shift, solver: opts }
         }
+        // One factor by default: the smallest is the one that decides whether the structure
+        // stands, and asking for more costs a wider subspace.
+        Procedure::Buckling => procedure::Step::Buckling { n_modes: step.n_modes.unwrap_or(1) as usize, solver: opts },
         Procedure::HeatSteady => procedure::Step::HeatSteady { solver: opts, control: control(step) },
         Procedure::HeatTransient => procedure::Step::HeatTransient {
             control: control(step),
@@ -340,13 +415,81 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
             amplitude: step.amplitude.as_ref().map(amplitude),
             solver: opts,
         },
+        Procedure::Harmonic => procedure::Step::Harmonic {
+            f_start: want(step.f_start, "fStart")?,
+            f_stop: want(step.f_stop, "fStop")?,
+            points: step.points.unwrap_or(0) as usize,
+            spacing: step.sweep.unwrap_or_default(),
+            damping_ratio: step.damping_ratio,
+            rayleigh: (step.rayleigh_alpha.unwrap_or(0.0), step.rayleigh_beta.unwrap_or(0.0)),
+            output_every: step.output_every.unwrap_or(1) as usize,
+        },
+        // The initial velocity needs the Mesh; `initial_velocity` fills it in once the Problem
+        // exists, so this stays a pure SI mapping.
         Procedure::Explicit => procedure::Step::Explicit {
             t_end: want(step.t_end, "tEnd")?,
             dt_factor: step.dt_factor.unwrap_or(0.9),
             initial_velocity: None,
             output_every: step.output_every.unwrap_or(1) as usize,
         },
+        Procedure::Implicit => procedure::Step::Implicit {
+            dt: want(step.dt, "dt")?,
+            t_end: want(step.t_end, "tEnd")?,
+            alpha: step.alpha.unwrap_or(0.0),
+            rayleigh_alpha: step.rayleigh_alpha.unwrap_or(0.0),
+            rayleigh_beta: step.rayleigh_beta.unwrap_or(0.0),
+            initial_velocity: None,
+            output_every: step.output_every.unwrap_or(1) as usize,
+            amplitude: step.amplitude.as_ref().map(amplitude),
+        },
     })
+}
+
+/// The Step's `initialVelocity` entries resolved on the Mesh to one velocity per DOF, or
+/// `None` when the Step starts from rest. Two entries that give one node different velocities
+/// are `model.ill-posed`; the same velocity twice is not. Held components are zeroed by the
+/// procedures themselves.
+fn initial_velocity_of(p: &Problem<'_>, step: &Step) -> Result<Option<Vec<f64>>, Error> {
+    let Some(list) = step.initial_velocity.as_deref().filter(|l| !l.is_empty()) else { return Ok(None) };
+    let dpn = p.dofs_per_node();
+    let mut v = vec![0.0; p.n_dofs()];
+    let mut given: Vec<Option<usize>> = vec![None; p.mesh.n_nodes()];
+    for (i, entry) in list.iter().enumerate() {
+        for &node in &p.set(&entry.on)?.nodes {
+            if let Some(first) = given[node as usize] {
+                if list[first].value != entry.value {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!(
+                            "initialVelocity entries {first} ('{}') and {i} ('{}') give node {node} different velocities",
+                            list[first].on, entry.on
+                        ),
+                    )
+                    .at(format!("initialVelocity[{i}]"))
+                    .suggest("step.add with initialVelocity Sets that do not overlap, or the same value on both"));
+                }
+            }
+            given[node as usize] = Some(i);
+            for c in 0..dpn {
+                v[node as usize * dpn + c] = entry.value[c];
+            }
+        }
+    }
+    Ok(Some(v))
+}
+
+/// Give a dynamic Step its resolved initial velocity; every other Step is left alone.
+fn with_initial_velocity(
+    mut proc_step: procedure::Step,
+    p: &Problem<'_>,
+    step: &Step,
+) -> Result<procedure::Step, Error> {
+    if let procedure::Step::Explicit { initial_velocity, .. } | procedure::Step::Implicit { initial_velocity, .. } =
+        &mut proc_step
+    {
+        *initial_velocity = initial_velocity_of(p, step)?;
+    }
+    Ok(proc_step)
 }
 
 pub(crate) struct PlannedCost {
@@ -356,8 +499,13 @@ pub(crate) struct PlannedCost {
 
 /// The cost Query and solve preflight share one schedule and byte calculation. Explicit Steps
 /// derive their step count from the same element-frequency bound as the integrator.
+///
+/// `dofs_per_node` is the idealisation's structural stride (`Idealisation::dofs_per_node`, not
+/// the mesh's geometric dimension), so a twisted axisymmetric Model's cost reflects its third
+/// DOF; the heat arms ignore it and always budget one unknown per node.
 pub(crate) fn planned_cost(
     mesh: &femlab_geometry::Mesh,
+    dofs_per_node: usize,
     explicit_problem: Option<&Problem<'_>>,
     step: &procedure::Step,
 ) -> Result<PlannedCost, Error> {
@@ -367,12 +515,21 @@ pub(crate) fn planned_cost(
         // are the full-field vectors alive while it retains.
         procedure::Step::Static { solver, dt, t_end, amplitude: Some(_), output_every } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;
-            let base = crate::solve::cost_estimate(mesh, mesh.dim, solver.solver);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 6)
+            let base = crate::solve::cost_estimate(mesh, dofs_per_node, solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), dofs_per_node, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "static")) });
         }
-        procedure::Step::Static { solver, .. } | procedure::Step::Modal { solver, .. } => {
-            crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
+        procedure::Step::Static { solver, .. }
+        | procedure::Step::Modal { solver, .. }
+        | procedure::Step::Buckling { solver, .. } => crate::solve::cost_estimate(mesh, dofs_per_node, solver.solver),
+        // A nonlinear Step keeps one displacement field per converged increment — the
+        // load–deflection curve — so its retained history is counted exactly as a transient's.
+        // It is reported rather than enforced: `outputEvery`, which the budget error suggests,
+        // is not a control this procedure has.
+        procedure::Step::StaticNonlinear(o) => {
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, o.solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, o.increments, 1, 5)
+                .map(|estimate| PlannedCost { estimate, transient: None });
         }
         procedure::Step::HeatSteady { solver, .. } => crate::solve::cost_estimate(mesh, 1, solver.solver),
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
@@ -389,13 +546,29 @@ pub(crate) fn planned_cost(
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, work)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "heat-transient")) });
         }
+        // A harmonic Step solves nothing, but it retains two nodal fields per frequency, so it
+        // is budgeted like a transient with six stored components instead of three.
+        procedure::Step::Harmonic { f_start, f_stop, points, spacing, output_every, .. } => {
+            procedure::harmonic::sweep_grid(*f_start, *f_stop, *points, *spacing)?;
+            let steps = points - 1;
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, Solver::Auto);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 6, steps, *output_every, 4)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "harmonic")) });
+        }
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
             let p = explicit_problem.expect("an explicit cost plan needs its resolved Problem");
             let (steps, _) = procedure::explicit::retention_grid(p, *t_end, *dt_factor)?;
-            let components = p.dofs_per_node();
-            let base = crate::solve::cost_estimate(mesh, components, Solver::Auto);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), components, steps, *output_every, 6)
+            let base = crate::solve::cost_estimate(mesh, dofs_per_node, Solver::Auto);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), dofs_per_node, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "explicit")) });
+        }
+        // The state and its predictors (u, v, a, ũ, ṽ, w), the two full-length scratch
+        // vectors, the load and the frame being built: ten, always factorised directly.
+        procedure::Step::Implicit { dt, t_end, output_every, .. } => {
+            let (steps, _) = procedure::time_grid(*dt, *t_end)?;
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, Solver::CpuDirect);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 10)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "implicit")) });
         }
     };
     estimate.note.push_str(" Retained transient frames: none.");
@@ -480,34 +653,73 @@ impl Engine {
         let started = self.host.now_ms();
         let mut result = {
             let built = self.mesh.as_ref().expect("built above");
-            let p = build_problem_with_temperature(
+            let mut p = build_problem_with_temperature(
                 &self.model,
                 built,
                 &step,
                 prev.as_ref().and_then(|r| r.result.fields.get(&Field::Temperature)),
             )?;
-            if matches!(
-                &proc_step,
-                procedure::Step::HeatTransient { .. }
-                    | procedure::Step::Explicit { .. }
-                    | procedure::Step::Static { amplitude: Some(_), .. }
-            ) {
-                planned_cost(p.mesh, Some(&p), &proc_step)?
+            // A static Step chained to a heat-transient Result solves once per retained frame
+            // of that predecessor's temperature History instead of once at its final state
+            // (#84). Every other `after` combination — a steady predecessor, any Step that is
+            // not static, or a static Step with an amplitude, whose own schedule is the one it
+            // retains — keeps today's single end-state solve untouched.
+            let chained_history = match (&proc_step, prev.as_ref()) {
+                (procedure::Step::Static { amplitude: None, .. }, Some(record)) => {
+                    record.result.history.as_ref().filter(|h| h.field == Field::Temperature)
+                }
+                _ => None,
+            };
+            if let Some(h) = chained_history {
+                // Budget before the loop, not the History it would build: the retained field
+                // is one von Mises scalar per node per frame, so it is costed the same way any
+                // other transient output is, with a larger `outputEvery` on the heat Step as
+                // the suggested fix rather than a bigger mesh.
+                let frames = h.times.len();
+                let heat_step = step.after.as_deref().expect("chained_history only matches a Step with `after`");
+                let base = crate::solve::cost_estimate(p.mesh, p.dofs_per_node(), opts.solver);
+                // The predecessor retained exactly these frames of one value per node on this
+                // mesh, so the same count cannot overflow the accounting a second time.
+                let estimate = crate::solve::add_transient_cost(base, p.mesh.n_nodes(), 1, frames - 1, 1, 5)
+                    .expect("the predecessor's retention already budgeted these frames on this mesh");
+                PlannedCost { estimate, transient: Some((frames - 1, 1, "heat-transient")) }
                     .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
-                    .enforce(&step.name)?;
+                    .enforce(heat_step)?;
+                let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let (model, this_step) = (&self.model, &step);
+                let mut compose = |values: &[f64]| {
+                    thermal_field(model, built, this_step, Some(&FieldData::new(Per::Node, 1, values.to_vec())))
+                };
+                let mut result = procedure::static_::run_history(&mut p, h, &mut compose, &self.pool, on_progress)?;
+                result.assumptions = assumptions;
+                result
+            } else {
+                if matches!(
+                    &proc_step,
+                    procedure::Step::HeatTransient { .. }
+                        | procedure::Step::Explicit { .. }
+                        | procedure::Step::Implicit { .. }
+                        | procedure::Step::Harmonic { .. }
+                        | procedure::Step::Static { amplitude: Some(_), .. }
+                ) {
+                    planned_cost(p.mesh, p.dofs_per_node(), Some(&p), &proc_step)?
+                        .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
+                        .enforce(&step.name)?;
+                }
+                let proc_step = with_initial_velocity(proc_step, &p, &step)?;
+                let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let mut result = procedure::run(
+                    &p,
+                    &proc_step,
+                    &self.pool,
+                    self.gpu.as_ref(),
+                    prev.as_ref().map(|record| &record.result),
+                    on_progress,
+                )
+                .await?;
+                result.assumptions = assumptions;
+                result
             }
-            let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
-            let mut result = procedure::run(
-                &p,
-                &proc_step,
-                &self.pool,
-                self.gpu.as_ref(),
-                prev.as_ref().map(|record| &record.result),
-                on_progress,
-            )
-            .await?;
-            result.assumptions = assumptions;
-            result
         };
         result.solver.time_ms = self.host.now_ms() - started;
         self.retain_result(step.name.clone(), result);
@@ -587,6 +799,7 @@ impl Engine {
                 let p = build_problem(&self.model, built, &step)?;
                 let dofs = p.n_dofs() as u64;
                 let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let proc_step = with_initial_velocity(proc_step.clone(), &p, &step)?;
                 let mut result =
                     procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
                 result.assumptions = assumptions;
@@ -792,6 +1005,9 @@ impl Engine {
             applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
             assumptions: res.assumptions.clone(),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
+            // Dimensionless, so no display conversion: a load factor is a load factor in any unit
+            // system the Model is written in.
+            buckling_factors: res.buckling_factors.clone(),
             history: res
                 .history
                 .iter()
@@ -804,10 +1020,35 @@ impl Engine {
                     HistoryRow { time: display(m, t, Time::DIM), min: display(m, lo, dim), max: display(m, hi, dim) }
                 })
                 .collect(),
+            sweep: res.sweep.iter().flat_map(|s| sweep_rows(m, s)).collect(),
             balance: residual / biggest,
             warnings: res.warnings.clone(),
         })
     }
+}
+
+/// A harmonic sweep as summary rows: per retained frequency, the largest nodal displacement
+/// amplitude and the phase of the very component that reached it. The first maximum wins, so
+/// two DOFs at the same amplitude give the same row at any thread count.
+fn sweep_rows(model: &Model, sweep: &crate::procedure::Sweep) -> Vec<SweepRow> {
+    let mut rows = Vec::with_capacity(sweep.frequencies.len());
+    for (i, hz) in sweep.frequencies.iter().enumerate() {
+        let (amplitude, phase) = &(&sweep.amplitude[i], &sweep.phase[i]);
+        let at = amplitude.data.iter().enumerate().fold((0usize, f64::NEG_INFINITY), |best, (j, v)| {
+            if *v > best.1 {
+                (j, *v)
+            } else {
+                best
+            }
+        });
+        rows.push(SweepRow {
+            frequency: display(model, *hz, Frequency::DIM),
+            amplitude: display(model, at.1, Length::DIM),
+            // Radians are the SI angle and the Model has no display unit for one.
+            phase: Valued { value: phase.data[at.0], unit: "rad".to_string() },
+        });
+    }
+    rows
 }
 
 fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> [Valued; 3] {
@@ -858,6 +1099,10 @@ mod tests {
         assert_eq!(
             rho_assumption_cause(Procedure::Explicit, false),
             Some("explicit mass assembly read the omitted density as zero")
+        );
+        assert_eq!(
+            rho_assumption_cause(Procedure::Implicit, false),
+            Some("implicit mass assembly read the omitted density as zero")
         );
         for procedure in [Procedure::Static, Procedure::HeatSteady, Procedure::HeatTransient] {
             assert_eq!(rho_assumption_cause(procedure, false), None);

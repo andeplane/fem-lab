@@ -374,9 +374,25 @@ export class Viewer {
     if (outlineColour) {
       for (let i = 0; i < this.line.length; i++) {
         const edge = this.line[i]!;
-        const hot = (s.faceNames[s.edgeFace?.[edge] ?? -1] ?? null) === this.hoverFace && this.hoverFace !== null;
-        c.set(hot ? HIGHLIGHT : 0xbac3d0);
-        for (let k = 0; k < 2; k++) outlineColour.setXYZ(i * 2 + k, c.r, c.g, c.b);
+        const faceName = s.faceNames[s.edgeFace?.[edge] ?? -1] ?? null;
+        const bodyName = s.bodyNames[s.edgeBody?.[edge] ?? -1] ?? null;
+        const selected = (bodyName !== null && this.selectedBodies.has(bodyName)) || (faceName !== null && this.selectedFaces.has(faceName));
+        const hot = (faceName !== null && (faceName === this.hoverFace || this.highlightedFaces.has(faceName))) ||
+          (bodyName !== null && this.highlightedBodies.has(bodyName));
+        for (let k = 0; k < 2; k++) {
+          const node = s.edges?.[edge * 2 + k];
+          if (this.mode === 'results' && this.field) {
+            const value = node === undefined ? lo : this.field[node] ?? lo;
+            const [r, g, b] = sample(this.colormap, (value - lo) / span);
+            c.setRGB(r, g, b);
+          } else {
+            c.set(0xbac3d0);
+          }
+          if (selected) c.lerp(HIGHLIGHT, 0.28);
+          if (hot) c.lerp(HIGHLIGHT, 0.45);
+          if (this.dim) c.multiplyScalar(0.42);
+          outlineColour.setXYZ(i * 2 + k, c.r, c.g, c.b);
+        }
       }
       outlineColour.needsUpdate = true;
     }

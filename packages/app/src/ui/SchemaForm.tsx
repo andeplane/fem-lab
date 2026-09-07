@@ -230,7 +230,7 @@ function FieldView(props: FieldProps) {
     const byKind: Record<string, { name: string; summary: string }[]> = {
       set: sets,
       body: (s.model?.bodies ?? []).map((b) => ({ name: b.name, summary: `${b.measure.value.toPrecision(3)} ${b.measure.unit}` })),
-      material: (s.model?.materials ?? []).map((m) => ({ name: m.name, summary: `E ${m.E.value} ${m.E.unit}` })),
+      material: (s.model?.materials ?? []).map((m) => { const e = m.E ?? m.orthotropic?.E1; return { name: m.name, summary: e ? `E ${e.value} ${e.unit}` : 'no stiffness' }; }),
       constraint: (s.model?.constraints ?? []).map((c) => ({ name: c.name, summary: c.summary })),
       load: (s.model?.loads ?? []).map((l) => ({ name: l.name, summary: l.summary })),
       step: (s.model?.steps ?? []).map((st) => ({ name: st.name, summary: st.procedure })),
@@ -272,7 +272,7 @@ function FieldView(props: FieldProps) {
     // Only describe elements that this engine can actually produce. Order defaults to one.
     const linear = value === undefined || value === null || value === 1;
     const bendingWarning = s.form?.cmd === 'mesh.set' && field.path.join('.') === 'order' && linear
-      ? values['simplices'] === true
+      ? values['simplices'] === true || mesher === 'tet'
         ? 'Linear tetrahedra and triangles have constant strain and can be too stiff in bending. Use quadratic elements and check mesh convergence.'
         : mesher === 'free'
         ? 'Linear triangles have constant strain and can be too stiff in bending. Use quadratic elements and check mesh convergence.'

@@ -148,7 +148,7 @@ describe('animation capture', () => {
     const store = new Store();
     store.set({ fieldKey: 'vonMises', result: { step: 'static', history: [] } as never });
     const ctx = makeHostContext(store, {} as WorkerTransport, { current: null }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, undefined, c.env);
-    await expect(ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 })).rejects.toMatchObject({ code: 'export.unavailable', suggestion: expect.stringContaining('modal Step') });
+    await expect(ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 })).rejects.toMatchObject({ code: 'export.unavailable', suggestion: expect.stringContaining('modal or buckling Step') });
   });
 
   it('rejects a stale mode selection after its Result has gone before touching the viewer', async () => {
@@ -161,11 +161,27 @@ describe('animation capture', () => {
 
     await expect(ctx.view.captureAnimation({ width: 640, height: 360, fps: 24, duration: 1 })).rejects.toMatchObject({
       code: 'export.unavailable',
-      cause: expect.stringContaining('current modal Result'),
+      cause: expect.stringContaining('current Result'),
       where: 'file.export',
-      suggestion: expect.stringContaining('solve a modal Step'),
+      suggestion: expect.stringContaining('modal or buckling Step'),
     });
     expect(animationState).not.toHaveBeenCalled();
+  });
+
+  it('accepts a selected buckling mode for capture', async () => {
+    const c = controlled();
+    const store = new Store();
+    store.set({ fieldKey: 'mode:1', result: { step: 'buckle', bucklingFactors: [17.3996], history: [] } as never, playing: false, phase: 0.25 });
+    const viewer = {
+      animationState: () => ({ playing: false, phase: 0.25, speed: 1 }),
+      setPhase: () => undefined,
+      restoreAnimation: () => undefined,
+      atCaptureSize: (_width: number, _height: number, task: (canvas: HTMLCanvasElement) => Promise<unknown>) => task(document.createElement('canvas')),
+    } as unknown as Viewer;
+    const ctx = makeHostContext(store, {} as WorkerTransport, { current: viewer }, { webgpu: false, crossOriginIsolated: false, sharedArrayBuffer: false, threads: 1, chromium: true, userAgent: 'Chrome/140' }, undefined, undefined, undefined, undefined, c.env);
+    const recording = ctx.view.captureAnimation({ width: 320, height: 240, fps: 24, duration: 1 });
+    c.complete([1, 2, 3]);
+    await expect(recording).resolves.toEqual({ webm: Uint8Array.from([1, 2, 3]) });
   });
 
   it('restores a paused view after recorder failure and cancellation', async () => {

@@ -254,19 +254,58 @@ impl SessionEngine {
     }
 
     pub fn query_transfer(&mut self, request_json: String) -> Result<JsValue, JsValue> {
+        use femlab_engine::query::QueryResult;
         let request = serde_json::from_str(&request_json).map_err(schema_err)?;
-        let mut reply = self.inner.query(request).map_err(|e| throw(&e))?;
-        let values = match &mut reply.value {
-            femlab_engine::query::QueryResult::Frame(frame) => Some(std::mem::take(&mut frame.values)),
-            femlab_engine::query::QueryResult::Field(field) => Some(std::mem::take(&mut field.values)),
-            _ => None,
+        let reply = self.inner.query(request).map_err(|e| throw(&e))?;
+        let result = reply.value;
+        let mut arrays: Vec<(&str, JsValue)> = Vec::new();
+        let json = match result {
+            QueryResult::Frame(mut frame) => {
+                let values = std::mem::take(&mut frame.values);
+                arrays.push(("values", js_sys::Float64Array::from(&values[..]).into()));
+                serde_json::to_string(&frame)
+            }
+            QueryResult::Field(mut field) => {
+                let values = std::mem::take(&mut field.values);
+                arrays.push(("values", js_sys::Float64Array::from(&values[..]).into()));
+                serde_json::to_string(&field)
+            }
+            QueryResult::Difference(mut difference) => {
+                let optional = std::mem::take(&mut difference.values);
+                let values: Vec<f64> = optional.iter().map(|v| v.unwrap_or(0.0)).collect();
+                let valid: Vec<u8> = optional.iter().map(|v| u8::from(v.is_some())).collect();
+                arrays.push(("values", js_sys::Float64Array::from(&values[..]).into()));
+                arrays.push(("valid", js_sys::Uint8Array::from(&valid[..]).into()));
+                serde_json::to_string(&difference)
+            }
+            QueryResult::Surface(mut surface) => {
+                let positions = std::mem::take(&mut surface.positions);
+                arrays.push(("positions", js_sys::Float64Array::from(&positions[..]).into()));
+                for (name, values) in [
+                    ("indices", &mut surface.indices),
+                    ("triBody", &mut surface.tri_body),
+                    ("triFace", &mut surface.tri_face),
+                    ("triSetOffsets", &mut surface.tri_set_offsets),
+                    ("triSets", &mut surface.tri_sets),
+                    ("edges", &mut surface.edges),
+                    ("edgeFace", &mut surface.edge_face),
+                    ("edgeBody", &mut surface.edge_body),
+                ] {
+                    arrays.push((name, js_sys::Uint32Array::from(&std::mem::take(values)[..]).into()));
+                }
+                serde_json::to_string(&surface)
+            }
+            other => serde_json::to_string(&other),
         };
-        let out = js_sys::JSON::parse(&serde_json::to_string(&reply).map_err(schema_err)?)?;
-        if let Some(values) = values {
-            let value = js_sys::Reflect::get(&out, &"value".into())?;
-            js_sys::Reflect::set(&value, &"values".into(), &js_sys::Float64Array::from(&values[..]))?;
+        let out = js_sys::JSON::parse(&json.map_err(schema_err)?)?;
+        for (name, values) in arrays {
+            js_sys::Reflect::set(&out, &name.into(), &values)?;
         }
-        Ok(out)
+        let envelope = js_sys::Object::new();
+        put(&envelope, "context", js_sys::JSON::parse(&serde_json::to_string(&reply.context).map_err(schema_err)?)?);
+        put(&envelope, "stamp", js_sys::JSON::parse(&serde_json::to_string(&reply.stamp).map_err(schema_err)?)?);
+        put(&envelope, "value", out);
+        Ok(envelope.into())
     }
 
     pub fn snapshot(&mut self, context_json: String) -> Result<String, JsValue> {
@@ -414,6 +453,10 @@ fn render_surface(view: femlab_engine::RenderView<'_>) -> Result<JsValue, JsValu
                 edge_set.extend(s.set_of_face.iter().map(|set| set.unwrap_or(u32::MAX)));
                 edge_body.extend(s.faces.iter().map(|face| built.mesh.block_of(face.elem).0 as u32));
             }
+            // Truss/beam lines share the checked surface staging route with mesh boundaries.
+            edges.extend(s.lines.iter().flatten().copied());
+            edge_set.extend(s.lines.iter().map(|_| u32::MAX));
+            edge_body.extend(s.line_elem.iter().map(|&e| built.mesh.block_of(e).0 as u32));
             set_names = s.set_names;
             body_names = built.body_of_block.clone();
             "mesh"

@@ -1,12 +1,22 @@
 //! Lossless editable Commands, read from the current Model rather than display summaries.
 use crate::command::*;
 use crate::model::{Amplitude, ConstraintKind, LoadKind, Model, SetSource};
-use crate::units::{Length, Q};
+use crate::units::{Dim, Length, Q};
 use crate::{Error, ErrorCode};
 use femlab_geometry::{FacePredicate as Face, RegionPredicate as Region, Segment, Shape, Sketch};
 
 fn length(v: f64) -> Q<Length> {
     Q::new(v, "m")
+}
+
+/// An SI value written as text rather than as `{value, unit}` parts.
+///
+/// `serde_json`'s float parser is not correctly rounded, so a value that needs all seventeen
+/// significant digits — a second moment of area usually does — comes back one ulp away and the
+/// definition would not re-apply to the same Model. `Display` writes the shortest string that
+/// round-trips and Rust's own `str::parse` reads it back exactly, both ways.
+fn si_text<D: Dim>(v: f64, unit: &str) -> Q<D> {
+    Q::text(&format!("{v} {unit}"))
 }
 
 fn sketch(s: &Sketch) -> SketchSpec {
@@ -49,9 +59,10 @@ fn shape(s: &Shape) -> Result<ShapeSpec, Error> {
             shape: Box::new(shape(s)?),
             at: Placement { translate: Some(at.translate.map(length)), rotate: Some(at.rotate), scale: Some(at.scale) },
         },
-        // Named shapes are an internal geometry wrapper, not a public ShapeSpec. Imported
-        // snapshots can contain them; refuse editing instead of silently dropping face tags.
-        Shape::Named { .. } => {
+        // Named shapes are an internal geometry wrapper and a line body has its own Command,
+        // so neither is a public ShapeSpec. Imported snapshots can contain them nested; refuse
+        // editing instead of silently dropping face tags.
+        Shape::Named { .. } | Shape::Polyline { .. } => {
             return Err(Error::new(ErrorCode::Unsupported, "this imported shape contains internal face-name wrappers")
                 .at("shape")
                 .suggest("geometry.add with an explicit public shape definition"))
@@ -66,7 +77,7 @@ fn shape(s: &Shape) -> Result<ShapeSpec, Error> {
     })
 }
 
-fn face(p: &Face) -> FacePredicate {
+pub(crate) fn face(p: &Face) -> FacePredicate {
     match p {
         Face::Plane { normal, offset, tol } => {
             FacePredicate::Plane { normal: *normal, offset: length(*offset), tol: tol.map(length) }
@@ -92,17 +103,65 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
     Ok(match kind {
         ObjectKind::Body => {
             let b = m.body(name).ok_or_else(missing)?;
-            Command::GeometryAdd { name: b.name.clone(), shape: shape(&b.shape)? }
+            match &b.shape {
+                Shape::Polyline { points, members, divisions } => Command::GeometryAddLine {
+                    name: b.name.clone(),
+                    points: points.iter().map(|p| p.map(length)).collect(),
+                    members: Some(members.clone()),
+                    divisions: Some(*divisions),
+                },
+                other => Command::GeometryAdd { name: b.name.clone(), shape: shape(other)? },
+            }
+        }
+        // A Section is stored as its resolved properties, so its definition comes back in the
+        // `generic` form: the same numbers, and re-applying it is exactly idempotent.
+        ObjectKind::Section => {
+            let x = m.section(name).ok_or_else(missing)?;
+            Command::SectionAdd {
+                name: x.name.clone(),
+                shape: SectionSpec::Generic {
+                    a: si_text(x.section.a, "m^2"),
+                    i_y: si_text(x.section.i_y, "m^4"),
+                    i_z: si_text(x.section.i_z, "m^4"),
+                    j: si_text(x.section.j, "m^4"),
+                    k_y: Some(x.section.k_y),
+                    k_z: Some(x.section.k_z),
+                    c_y: Some(si_text(x.section.c_y, "m")),
+                    c_z: Some(si_text(x.section.c_z, "m")),
+                },
+            }
         }
         ObjectKind::Material => {
             let x = m.material(name).ok_or_else(missing)?;
+            // The three material-axis components come back on the orthotropic block when there
+            // is one and as a single isotropic value otherwise, which is where they can go.
+            let ortho = x.orthotropic.as_ref().map(|o| {
+                Box::new(crate::command::Orthotropic {
+                    e1: Q::new(o.e1, "Pa"),
+                    e2: Q::new(o.e2, "Pa"),
+                    e3: Q::new(o.e3, "Pa"),
+                    g12: Q::new(o.g12, "Pa"),
+                    g13: Q::new(o.g13, "Pa"),
+                    g23: Q::new(o.g23, "Pa"),
+                    nu12: o.nu12,
+                    nu13: o.nu13,
+                    nu23: o.nu23,
+                    alpha: x.alpha.map(|v| v.axes().map(|c| Q::new(c, "1/K"))),
+                    k: x.k.map(|v| v.axes().map(|c| Q::new(c, "W/(m K)"))),
+                })
+            });
+            let isotropic = ortho.is_none();
             Command::MaterialAdd {
                 name: x.name.clone(),
-                e: Q::new(x.e, "Pa"),
+                e: x.e.map(|v| Q::new(v, "Pa")),
                 nu: x.nu,
+                orientation: x
+                    .orientation
+                    .map(|o| crate::command::Orientation { axis: o.axis, angle: Q::new(o.angle, "1") }),
+                orthotropic: ortho,
                 rho: x.rho.map(|v| Q::new(v, "kg/m^3")),
-                alpha: x.alpha.map(|v| Q::new(v, "1/K")),
-                k: x.k.map(|v| Q::new(v, "W/(m K)")),
+                alpha: x.alpha.filter(|_| isotropic).map(|v| Q::new(v.axes()[0], "1/K")),
+                k: x.k.filter(|_| isotropic).map(|v| Q::new(v.axes()[0], "W/(m K)")),
                 cp: x.cp.map(|v| Q::new(v, "J/(kg K)")),
                 yield_: x.yield_.map(|v| Q::new(v, "Pa")),
                 source: x.source.clone(),
@@ -138,11 +197,23 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 ConstraintKind::Temperature { value } => {
                     Command::ConstraintTemperature { name, on, value: Q::new(*value, "K") }
                 }
+                ConstraintKind::Couple { point, coupling } => {
+                    Command::ConstraintCouple { name, point: point.clone(), on, kind: *coupling }
+                }
                 ConstraintKind::Bonded { master, tol } => Command::ContactAdd {
                     name,
                     master: master.clone(),
                     slave: on,
                     kind: ContactKind::Bonded,
+                    tol: tol.map(length),
+                },
+                ConstraintKind::Cyclic { from, axis, angle_deg, through, tol } => Command::ConstraintCyclic {
+                    name,
+                    from: from.clone(),
+                    to: on,
+                    axis: *axis,
+                    angle_deg: *angle_deg,
+                    through: through.map(|t| t.map(length)),
                     tol: tol.map(length),
                 },
             }
@@ -180,6 +251,12 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 LoadKind::HeatSource { bodies, q } => {
                     Command::LoadHeatSource { name, bodies: bodies.clone(), q: Q::new(*q, "W/m^3") }
                 }
+                LoadKind::Torque { on, total } => {
+                    Command::LoadTorque { name, on: on.clone(), total: Q::new(*total, "N*m") }
+                }
+                LoadKind::ThermalContact { of, h } => {
+                    Command::ContactThermal { name, of: of.clone(), conductance: Q::new(*h, "W/(m^2 K)") }
+                }
             }
         }
         ObjectKind::Step => {
@@ -201,6 +278,19 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 initial: x.initial.map(|v| Q::new(v, "K")),
                 nonlinear_tolerance: x.nonlinear_tolerance,
                 nonlinear_max_iterations: x.nonlinear_max_iterations,
+                f_start: x.f_start.map(|v| Q::new(v, "Hz")),
+                f_stop: x.f_stop.map(|v| Q::new(v, "Hz")),
+                points: x.points,
+                sweep: x.sweep,
+                damping_ratio: x.damping_ratio,
+                alpha: x.alpha,
+                rayleigh_alpha: x.rayleigh_alpha.map(|v| Q::new(v, "Hz")),
+                rayleigh_beta: x.rayleigh_beta.map(|v| Q::new(v, "s")),
+                initial_velocity: x.initial_velocity.as_ref().map(|list| {
+                    list.iter()
+                        .map(|iv| InitialVelocitySpec { on: iv.on.clone(), value: iv.value.map(|v| Q::new(v, "m/s")) })
+                        .collect()
+                }),
                 amplitude: x.amplitude.as_ref().map(|a| match a {
                     Amplitude::Sine { amplitude, period } => {
                         AmplitudeSpec::Sine { amplitude: *amplitude, period: Q::new(*period, "s") }
@@ -209,6 +299,8 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                         AmplitudeSpec::Table { t: t.iter().map(|v| Q::new(*v, "s")).collect(), value: value.clone() }
                     }
                 }),
+                increments: x.increments,
+                max_cutbacks: x.max_cutbacks,
             }
         }
     })

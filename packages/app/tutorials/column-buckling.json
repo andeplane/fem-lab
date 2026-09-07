@@ -1,0 +1,212 @@
+{
+  "id": "column-buckling",
+  "title": "Column buckling: Euler, the effective length, and why the code says less",
+  "minutes": 11,
+  "summary": "Run a linear buckling Step on a pinned–pinned S355 column, check the eigenvalue against π²EI/(KL)², and see why the EN 1993-1-1 buckling curve puts the design resistance at about 60 % of it.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "A column is the one structural member whose strength has almost nothing to do with its stress. This tutorial computes the load at which a straight column stops wanting to stay straight, and then says plainly why that number is not the load you may design to.",
+      "expect": {
+        "cmd": "model.new"
+      },
+      "highlight": "model.new",
+      "doIt": {
+        "cmd": "model.new",
+        "name": "column-buckling"
+      }
+    },
+    {
+      "title": "Units",
+      "explain": "Millimetres, kilonewtons, megapascals. A buckling factor is dimensionless and comes back the same in any unit system.",
+      "expect": {
+        "cmd": "model.setUnits"
+      },
+      "highlight": "model.setUnits",
+      "doIt": {
+        "cmd": "model.setUnits",
+        "units": {
+          "length": "mm",
+          "force": "kN",
+          "stress": "MPa"
+        }
+      }
+    },
+    {
+      "title": "Half a column",
+      "explain": "The column is 200 × 200 mm and 5 m between pins, but the Body is only 2.5 m tall. The first buckling mode is a half sine wave, symmetric about mid-height, so modelling the lower half with a symmetry plane at the top is exact for it and halves the cost. Keep the real length in mind: every formula below uses L = 5 m, not the 2.5 m on screen.",
+      "expect": {
+        "cmd": "geometry.addBox",
+        "match": {
+          "name": "column"
+        }
+      },
+      "highlight": "geometry.addBox",
+      "doIt": {
+        "cmd": "geometry.addBox",
+        "name": "column",
+        "size": [
+          "200 mm",
+          "200 mm",
+          "2.5 m"
+        ]
+      }
+    },
+    {
+      "title": "S355",
+      "explain": "Only `E` enters the eigenvalue — buckling is a stiffness problem, and the yield strength never appears in Euler's formula. It appears at the very end, in the code check, and that is exactly the point of this tutorial.",
+      "expect": {
+        "cmd": "material.add",
+        "match": {
+          "name": "S355"
+        }
+      },
+      "highlight": "material.add",
+      "doIt": {
+        "cmd": "material.add",
+        "name": "S355",
+        "E": "210 GPa",
+        "nu": 0.3,
+        "rho": "7850 kg/m^3",
+        "source": "EN 10025-2 S355J2"
+      }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material, one Body.",
+      "expect": {
+        "cmd": "material.assign"
+      },
+      "highlight": "material.assign",
+      "doIt": {
+        "cmd": "material.assign",
+        "material": "S355",
+        "bodies": [
+          "column"
+        ]
+      }
+    },
+    {
+      "title": "Mesh it, quadratic",
+      "explain": "Twenty hex20 elements up the half-height and three across each section dimension. A buckling mode is a bending shape, so the elements have to bend well: `order: 2` matters far more here than element count. Refining to 4 × 4 × 40 moves the answer by 0.14 %, so this mesh is converged enough to compare with a closed form.",
+      "expect": {
+        "cmd": "mesh.set"
+      },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": {
+          "kind": "lattice",
+          "size": {
+            "nx": 3,
+            "ny": 3,
+            "nz": 20
+          }
+        },
+        "order": 2
+      }
+    },
+    {
+      "title": "Pin the foot",
+      "explain": "`ux` and `uy` on the bottom face, and deliberately not `uz`. That holds the base against sliding sideways while leaving it free to rotate — which is what a pin is. Holding `uz` on the whole face as well would keep the end section horizontal, and that is a fixed base: the same column would then come out roughly twice as strong.",
+      "expect": {
+        "cmd": "constraint.fix",
+        "match": {
+          "name": "pin-foot"
+        }
+      },
+      "highlight": "constraint.fix",
+      "doIt": {
+        "cmd": "constraint.fix",
+        "name": "pin-foot",
+        "on": "column.zmin",
+        "dofs": [
+          "ux",
+          "uy"
+        ]
+      }
+    },
+    {
+      "title": "Symmetry at mid-height",
+      "explain": "`uz = 0` on the top face of the half model. At mid-height of a half-sine mode the section neither rises nor rotates, so this is the mode's own symmetry condition, not a restraint that changes it — and it is what carries the applied load, so the Result's balance check closes on zero. It does hide the antisymmetric modes, the full-sine shape at four times the load among them; ask for those and you would model the whole column.",
+      "expect": {
+        "cmd": "constraint.symmetry",
+        "match": {
+          "name": "mid-height"
+        }
+      },
+      "highlight": "constraint.symmetry",
+      "doIt": {
+        "cmd": "constraint.symmetry",
+        "name": "mid-height",
+        "on": "column.zmax",
+        "normal": "z"
+      }
+    },
+    {
+      "title": "A reference load of 1 MPa",
+      "explain": "A buckling Step does not need the real load: it reports the factor by which whatever you apply must be multiplied. Applying exactly 1 MPa over 40 000 mm² makes the reference load 40 kN — and makes the eigenvalue read directly as the critical stress in MPa, which is convenient to compare with f_y.",
+      "expect": {
+        "cmd": "load.pressure",
+        "match": {
+          "name": "axial"
+        }
+      },
+      "highlight": "load.pressure",
+      "doIt": {
+        "cmd": "load.pressure",
+        "name": "axial",
+        "on": "column.zmin",
+        "value": "1 MPa"
+      }
+    },
+    {
+      "title": "A buckling Step, two modes",
+      "explain": "`procedure: buckling` first solves the static state under the reference load, then the eigenproblem that uses its stresses. Two modes, because the section is square: bending about the two axes is equally easy, so the first two eigenvalues are a degenerate pair, the same load in two perpendicular planes. Two identical numbers is the answer, not a bug — and a warning that the real column has no preferred direction to fall in.",
+      "expect": {
+        "cmd": "step.add",
+        "match": {
+          "name": "buckle"
+        }
+      },
+      "highlight": "step.add",
+      "doIt": {
+        "cmd": "step.add",
+        "name": "buckle",
+        "procedure": "buckling",
+        "constraints": [
+          "pin-foot",
+          "mid-height"
+        ],
+        "loads": [
+          "axial"
+        ],
+        "output": [
+          "displacement"
+        ],
+        "nModes": 2
+      }
+    },
+    {
+      "title": "Solve, and read the factor",
+      "explain": "Both factors come back at 272.81. Multiply by the 40 kN reference load: the column buckles at about 10 900 kN. The mode shape is the quarter sine of the modelled half — it has no magnitude, only a shape, which is why a buckling plot has no useful contour scale.",
+      "expect": {
+        "cmd": "solve.run",
+        "match": {
+          "step": "buckle"
+        }
+      },
+      "highlight": "solve.run",
+      "doIt": {
+        "cmd": "solve.run",
+        "step": "buckle"
+      }
+    },
+    {
+      "title": "Euler, K, slenderness — and the design value",
+      "explain": "What the eigenvalue is, what it is not, and how EN 1993-1-1 turns it into a resistance.",
+      "expect": null,
+      "theory": "**The eigenvalue.** A linear buckling Step solves $(K + \\lambda K_g)\\varphi = 0$, where $K_g$ is the geometric stiffness built from the stress state of the reference load. $\\lambda$ is the factor on that load at which the column has a second equilibrium shape $\\varphi$ beside the straight one. The reference pressure was $1\\,\\mathrm{MPa}$ on $200 \\times 200 = 40\\,000\\,\\mathrm{mm}^2$, so $P_{\\mathrm{ref}} = 40\\,\\mathrm{kN}$ and\n\n$$P_{cr} = \\lambda P_{\\mathrm{ref}} = 272.81 \\times 40 = \\mathbf{10\\,912\\,\\mathrm{kN}}$$\n\nBecause the reference pressure was exactly 1 MPa, $\\lambda$ is also the critical stress in megapascals: $\\sigma_{cr} = 272.8\\,\\mathrm{MPa}$.\n\n**Euler.** For a prismatic elastic column,\n\n$$P_{cr} = \\frac{\\pi^2 EI}{(KL)^2}, \\qquad I = \\frac{b^4}{12} = 1.3333\\times 10^{8}\\,\\mathrm{mm}^4$$\n\nWith $K = 1$, $E = 210\\,\\mathrm{GPa}$ and $L = 5\\,\\mathrm{m}$ that is $11\\,054\\,\\mathrm{kN}$. The solved value sits $1.3\\,\\%$ below it, and the gap is physics plus discretisation rather than error: Euler's formula assumes bending only, while a solid column also shears. Engesser's correction $P_{cr} = P_E/(1 + P_E/GA_s)$ with $A_s = \\tfrac{5}{6}A$ gives $11\\,009\\,\\mathrm{kN}$, $0.4\\,\\%$ down, and the rest is the mesh together with the end faces being held flat in $u_x$ and $u_y$ rather than resting on a frictionless knife edge. Refining to $4 \\times 4 \\times 40$ moves the answer to $273.18$, converging from below.\n\n**The effective length $K$.** The same formula covers every classic end condition; only $K$ changes, and it is the *half-wavelength of the buckled shape* divided by $L$:\n\n- pinned–pinned: $K = 1.0$ — the case solved above, $P_{cr} = 1.00\\,P_E$.\n- fixed–fixed: $K = 0.5$ — $4.00\\,P_E$.\n- fixed–pinned: $K = 0.699$ — $2.05\\,P_E$.\n- fixed–free (a cantilever column, or an unbraced storey): $K = 2.0$ — $0.25\\,P_E$.\n\nA fixed base is worth a factor of two to four, which is why the base detail of a column is worth arguing about. In practice nothing is ideal, and design guidance raises the theoretical $K$ (AISC, for instance, recommends 0.65, 0.80 and 1.2 for the three restrained cases) because a real connection rotates.\n\n**Slenderness.** $i = \\sqrt{I/A} = b/\\sqrt{12} = 57.7\\,\\mathrm{mm}$, so $\\lambda = L/i = 86.6$. With $\\lambda_1 = 93.9\\varepsilon$ and $\\varepsilon = \\sqrt{235/f_y} = 0.814$ for S355, $\\lambda_1 = 76.4$ and the relative slenderness is\n\n$$\\bar{\\lambda} = \\frac{\\lambda}{\\lambda_1} = 1.13 \\qquad\\text{equivalently}\\qquad \\bar{\\lambda} = \\sqrt{\\frac{A f_y}{N_{cr}}} = \\sqrt{\\frac{14\\,200}{10\\,912}} = 1.14$$\n\n**Why the design value is lower — and why the eigenvalue is not one.** This number is an upper bound on strength, not a load you may design to. It assumes a perfectly straight member, a load exactly on the centroid, no residual stress from rolling or welding, and material that stays elastic. A real column has an initial bow of roughly $L/1000$, so it bends from the first kilonewton; residual stresses yield the flange tips early and shrink the effective section; and once yielding starts the tangent stiffness drops below $E$. EN 1993-1-1 §6.3.1 packages all of that into a reduction factor:\n\n$$N_{b,Rd} = \\frac{\\chi A f_y}{\\gamma_{M1}}, \\qquad \\chi = \\frac{1}{\\Phi + \\sqrt{\\Phi^2 - \\bar{\\lambda}^2}} \\le 1, \\qquad \\Phi = 0.5\\left[1 + \\alpha(\\bar{\\lambda} - 0.2) + \\bar{\\lambda}^2\\right]$$\n\nA solid section takes buckling curve c (EN 1993-1-1 Table 6.2), $\\alpha = 0.49$. At $\\bar{\\lambda} = 1.14$ that gives $\\Phi = 1.381$ and $\\chi = 0.463$, so with $\\gamma_{M1} = 1.0$\n\n$$N_{b,Rd} = 0.463 \\times 40\\,000 \\times 355 = \\mathbf{6\\,575\\,\\mathrm{kN}}$$\n\nabout **60 % of the eigenvalue**, and well under the squash load $A f_y = 14\\,200\\,\\mathrm{kN}$ that a stub of the same section would carry. Use the eigenvalue to find out *how* the column wants to fail and at what order of magnitude, and to compare schemes; use the buckling curve to size it."
+    }
+  ]
+}

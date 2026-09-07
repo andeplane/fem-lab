@@ -2,11 +2,11 @@
 // `fake-indexeddb` is a full implementation of the spec, so the version-1 → version-2 upgrade is
 // exercised here rather than stood in for by a hand-rolled fake (AGENTS: ponytail applies to
 // code, never to verification).
-import { IDBFactory } from 'fake-indexeddb';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { IDBFactory, IDBObjectStore } from 'fake-indexeddb';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DB_NAME, HANDLES, JOURNALS, PROJECTS, REVISIONS, openDb, tx, type ProjectMeta } from '../src/db';
 import { indexedDbAtomicProjects } from '../src/project-repository';
-import { forgetHandle, recallHandle, rememberHandle, type DirHandle } from '../src/ai/project';
+import { RESTORING, forgetHandle, recallHandle, rememberHandle, rememberedFolder, reopenRemembered, type Breadcrumbs, type DirHandle } from '../src/ai/project';
 import { indexedDbStore, type ShareCommand } from '../src/share';
 
 const CMDS: ShareCommand[] = [
@@ -145,5 +145,141 @@ describe('the femlab database', () => {
 describe('tx', () => {
   it('rejects rather than swallowing a request that fails', async () => {
     await expect(tx(factory, PROJECTS, 'readonly', (s) => s.get(undefined as never))).rejects.toBeTruthy();
+  });
+});
+
+/**
+ * Issue #247. Chromium 153 ends the browser process when IndexedDB deserialises a stored
+ * `FileSystemHandle` in an off-the-record profile — no exception, no crash event, nothing a `try`
+ * can catch. So what is tested here is that start-up never makes that read, and that a record
+ * which cannot become a usable handle is recoverable data: forgotten, reported as
+ * `file.not-found`, and costing the rest of the browser's storage nothing.
+ */
+describe('a remembered project folder', () => {
+  const crumbs = (initial: Record<string, string> = {}): Breadcrumbs & { all: Record<string, string> } => {
+    const all: Record<string, string> = { ...initial };
+    return {
+      all,
+      getItem: (key: string) => all[key] ?? null,
+      setItem: (key: string, value: string) => void (all[key] = value),
+      removeItem: (key: string) => void delete all[key],
+    };
+  };
+  const handleKeys = (): Promise<IDBValidKey[]> => tx<IDBValidKey[]>(factory, HANDLES, 'readonly', (s) => s.getAllKeys());
+  /** Every key whose *value* is deserialised, and what the breadcrumb said at the time. */
+  const watchGets = (crumb: Breadcrumbs): { reads: string[]; restore: () => void } => {
+    const reads: string[] = [];
+    const real = IDBObjectStore.prototype.get;
+    const spy = vi.spyOn(IDBObjectStore.prototype, 'get').mockImplementation(function (this: IDBObjectStore, key: IDBValidKey | IDBKeyRange) {
+      reads.push(`${String(key)} while ${crumb.getItem(RESTORING) ?? 'clear'}`);
+      return real.call(this, key);
+    });
+    return { reads, restore: () => spy.mockRestore() };
+  };
+  const dirHandle = (name: string): DirHandle => ({ kind: 'directory', name }) as unknown as DirHandle;
+  /** Both records as a browser would hold them, with whatever the handle slot deserialised to. */
+  const poison = async (value: unknown, name = 'poison'): Promise<void> => {
+    await tx(factory, HANDLES, 'readwrite', (s) => s.put(value, 'folder'));
+    await tx(factory, HANDLES, 'readwrite', (s) => s.put({ name, at: 7 }, 'folder:info'));
+  };
+  const project: ProjectMeta = { id: 'kept', name: 'kept', at: 2, createdAt: 1, commands: 2, hash: null, thumbnail: null };
+
+  it('offers the folder by name at start-up without ever deserialising the handle', async () => {
+    await rememberHandle(dirHandle('corbel'), factory, () => 5);
+    const store = crumbs();
+    const watch = watchGets(store);
+    try {
+      expect(await rememberedFolder(factory)).toEqual({ name: 'corbel', at: 5 });
+    } finally {
+      watch.restore();
+    }
+    expect(watch.reads).toEqual(['folder:info while clear']);
+  });
+
+  it('keeps the projects and forgets a handle record that is no longer a directory handle', async () => {
+    await indexedDbAtomicProjects(factory).update(project.id, () => ({ id: project.id, meta: project, cmds: CMDS, generation: '1', version: '0' }));
+    await poison({ kind: 'file', name: 'not-a-folder' });
+
+    // The start screen still gets its list, and is still offered the folder: neither read deserialises it.
+    expect(await indexedDbAtomicProjects(factory).list()).toEqual([project]);
+    expect(await rememberedFolder(factory)).toEqual({ name: 'poison', at: 7 });
+
+    const store = crumbs();
+    await expect(recallHandle(factory, store)).rejects.toMatchObject({
+      code: 'file.not-found',
+      cause: 'the remembered folder ‘poison’ is no longer available in this browser',
+      where: 'the remembered project folder',
+      suggestion: 'open a project folder again to pick it',
+    });
+    // Recoverable data: the bad record is gone, the offer with it, the projects untouched.
+    expect(await handleKeys()).toEqual([]);
+    expect(await rememberedFolder(factory)).toBeNull();
+    expect(store.all).toEqual({});
+    expect(await indexedDbAtomicProjects(factory).list()).toEqual([project]);
+    expect((await indexedDbAtomicProjects(factory).read('kept'))?.cmds).toEqual(CMDS);
+  });
+
+  it('never reads the handle again when restoring it did not come back', async () => {
+    await indexedDbAtomicProjects(factory).update(project.id, () => ({ id: project.id, meta: project, cmds: CMDS, generation: '1', version: '0' }));
+    await poison(dirHandle('poison'));
+    // The breadcrumb the previous attempt left behind: the browser went down before it was cleared.
+    const store = crumbs({ [RESTORING]: 'poison' });
+    const watch = watchGets(store);
+    try {
+      await expect(recallHandle(factory, store)).rejects.toMatchObject({
+        code: 'file.not-found',
+        cause: 'restoring ‘poison’ ended this browser last time, so it is not tried again',
+      });
+    } finally {
+      watch.restore();
+    }
+    expect(watch.reads).toEqual(['folder:info while poison']);
+    expect(await handleKeys()).toEqual([]);
+    expect(store.all).toEqual({});
+    expect(await indexedDbAtomicProjects(factory).list()).toEqual([project]);
+  });
+
+  it('carries the breadcrumb across the read that can kill the browser, and clears it after', async () => {
+    await rememberHandle(dirHandle('corbel'), factory, () => 5);
+    const store = crumbs();
+    const watch = watchGets(store);
+    try {
+      expect(await recallHandle(factory, store)).toMatchObject({ kind: 'directory', name: 'corbel' });
+    } finally {
+      watch.restore();
+    }
+    expect(watch.reads).toEqual(['folder:info while clear', 'folder while corbel']);
+    expect(store.all).toEqual({});
+    // A handle that did come back stays remembered for the next reload.
+    expect(await rememberedFolder(factory)).toEqual({ name: 'corbel', at: 5 });
+  });
+
+  it('drops a handle an older build left without a descriptor beside it', async () => {
+    await tx(factory, HANDLES, 'readwrite', (s) => s.put(dirHandle('orphan'), 'folder'));
+    expect(await rememberedFolder(factory)).toBeNull();
+    expect(await handleKeys()).toEqual([]);
+    expect(await recallHandle(factory, crumbs())).toBeNull();
+  });
+
+  it('reports a remembered folder that no longer reads as the same structured error', async () => {
+    // Deserialises to a directory handle, but the folder behind it is gone: a revoked or moved one.
+    await poison(dirHandle('gone'), 'gone');
+    const store = crumbs();
+    await expect(reopenRemembered(factory, store)).rejects.toMatchObject({
+      code: 'file.not-found',
+      where: 'the remembered project folder',
+      suggestion: 'open a project folder again to pick it',
+    });
+    expect(await handleKeys()).toEqual([]);
+    await expect(reopenRemembered(factory, store)).resolves.toBeNull();
+  });
+
+  it('forgets both records together, so nothing half-remembered is ever offered', async () => {
+    await rememberHandle(dirHandle('corbel'), factory, () => 5);
+    expect(await handleKeys()).toEqual(['folder', 'folder:info']);
+    const store = crumbs({ [RESTORING]: 'corbel' });
+    await forgetHandle(factory, store);
+    expect(await handleKeys()).toEqual([]);
+    expect(store.all).toEqual({});
   });
 });

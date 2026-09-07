@@ -2,7 +2,7 @@
 
 use femlab_geometry::{face_centroid_normal, Face, Mesh};
 
-use crate::command::{Field, ObjectKind};
+use crate::command::{CoupleKind, Field, ObjectKind};
 use crate::engine::{display, Engine};
 use crate::error::{Error, ErrorCode};
 use crate::model::{ConstraintKind, Idealisation, LoadKind, SetSource};
@@ -90,6 +90,9 @@ impl Engine {
                 self.selected_summary(step.as_deref(), result_id.as_deref()).map(QueryResult::Result)
             }
             Query::Results {} => Ok(QueryResult::Results(self.query_results())),
+            Query::Surface { step, result_id } => {
+                self.query_surface(step.as_deref(), result_id.as_deref()).map(QueryResult::Surface)
+            }
             Query::Field { step, result_id, field } => {
                 self.query_field(step.as_deref(), result_id.as_deref(), &field).map(QueryResult::Field)
             }
@@ -136,6 +139,41 @@ impl Engine {
             measure: display(m, measure, Dimension([dim, 0, 0, 0])),
             mass: None,
             faces,
+            patches: Vec::new(),
+        })
+    }
+
+    /// A line Body as a row of [`query_model`](Engine::query_model): its bounding box and the
+    /// total length of its members, which is the measure a 1D Body has. `None` for a Body that
+    /// is not made of line members, which is what sends it down the Solid path instead.
+    fn line_body_row(m: &crate::model::Model, b: &crate::model::Body) -> Option<BodyRow> {
+        let (points, members) = match &b.shape {
+            femlab_geometry::Shape::Polyline { points, members, .. } => (points, members),
+            _ => return None,
+        };
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        for p in points {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        let length: f64 = members
+            .iter()
+            .map(|e| {
+                let (a, c) = (points[e[0] as usize], points[e[1] as usize]);
+                libm::sqrt((0..3).map(|k| (a[k] - c[k]) * (a[k] - c[k])).sum::<f64>())
+            })
+            .sum();
+        Some(BodyRow {
+            name: b.name.clone(),
+            material: b.material.clone(),
+            bbox: bbox6(m, lo, hi),
+            measure: display(m, length, Length::DIM),
+            mass: None,
+            faces: Vec::new(),
+            patches: Vec::new(),
         })
     }
 
@@ -144,6 +182,13 @@ impl Engine {
         let implicit = self.implicit_body_row();
         let mut bodies = Vec::with_capacity(names.len() + usize::from(implicit.is_some()));
         for n in &names {
+            // A line Body has no Solid: its extent and its measure come from its own joints,
+            // and it has no faces to list.
+            let line = Self::line_body_row(&self.model, self.model.body(n).expect("listed above"));
+            if let Some(row) = line {
+                bodies.push(row);
+                continue;
+            }
             let solid = self.solid(n)?.clone();
             let m = &self.model;
             let b = m.body(n).expect("listed above");
@@ -160,6 +205,23 @@ impl Engine {
                 .and_then(|mat| mat.rho)
                 .filter(|_| solid.dim() == 3)
                 .map(|rho| display(m, rho * solid.volume(), Mass::DIM));
+            let patches = if b.shape.is_imported() {
+                solid
+                    .triangles()
+                    .face_patches()
+                    .into_iter()
+                    .map(|p| ImportedPatchRow {
+                        tag: p.tag,
+                        triangle_count: p.triangle_count,
+                        area: display(m, p.area, Dimension([2, 0, 0, 0])),
+                        centroid: p.centroid.map(|x| display(m, x, Length::DIM)),
+                        mean_normal: p.mean_normal,
+                        suggested_predicate: crate::definition::face(&p.suggested_predicate),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             bodies.push(BodyRow {
                 name: b.name.clone(),
                 material: b.material.clone(),
@@ -167,6 +229,7 @@ impl Engine {
                 measure: display(m, measure, mdim),
                 mass,
                 faces: solid.tags(),
+                patches,
             });
         }
         bodies.extend(implicit);
@@ -176,8 +239,23 @@ impl Engine {
             .iter()
             .map(|mat| MaterialRow {
                 name: mat.name.clone(),
-                e: display(m, mat.e, Stress::DIM),
+                e: mat.e.map(|e| display(m, e, Stress::DIM)),
                 nu: mat.nu,
+                orthotropic: mat.orthotropic.map(|o| crate::query::OrthotropicRow {
+                    e1: display(m, o.e1, Stress::DIM),
+                    e2: display(m, o.e2, Stress::DIM),
+                    e3: display(m, o.e3, Stress::DIM),
+                    g12: display(m, o.g12, Stress::DIM),
+                    g13: display(m, o.g13, Stress::DIM),
+                    g23: display(m, o.g23, Stress::DIM),
+                    nu12: o.nu12,
+                    nu13: o.nu13,
+                    nu23: o.nu23,
+                }),
+                orientation: mat.orientation.map(|o| crate::query::OrientationRow {
+                    axis: o.axis,
+                    degrees: o.angle * 180.0 / std::f64::consts::PI,
+                }),
                 rho: mat.rho.map(|r| display(m, r, Density::DIM)),
                 yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)),
                 assigned_to: m
@@ -224,7 +302,45 @@ impl Engine {
                         }
                     },
                 }),
+                ConstraintKind::Cyclic { from, angle_deg, .. } => Some(ConnectionRow {
+                    name: c.name.clone(),
+                    kind: "cyclic".into(),
+                    master: from.clone(),
+                    slave: c.on.clone(),
+                    summary: format!("cyclic, {angle_deg} deg"),
+                }),
+                ConstraintKind::Couple { point, coupling } => Some(match coupling {
+                    CoupleKind::Distributed => ConnectionRow {
+                        name: c.name.clone(),
+                        kind: "distributed".into(),
+                        master: c.on.clone(),
+                        slave: point.clone(),
+                        summary: format!("point '{point}' follows the weighted mean of '{}'", c.on),
+                    },
+                    CoupleKind::Rigid => ConnectionRow {
+                        name: c.name.clone(),
+                        kind: "rigid".into(),
+                        master: point.clone(),
+                        slave: c.on.clone(),
+                        summary: format!("every node of '{}' follows point '{point}'", c.on),
+                    },
+                }),
                 _ => None,
+            })
+            .collect();
+        let points = m
+            .points
+            .iter()
+            .map(|pt| PointRow {
+                name: pt.name.clone(),
+                at: pt.at.map(|x| display(m, x, Length::DIM)),
+                mass: display(m, pt.mass, Mass::DIM),
+                coupled_by: m
+                    .constraints
+                    .iter()
+                    .filter(|c| matches!(&c.kind, ConstraintKind::Couple { point, .. } if *point == pt.name))
+                    .map(|c| c.name.clone())
+                    .collect(),
             })
             .collect();
         let constraints = m
@@ -232,8 +348,11 @@ impl Engine {
             .iter()
             .filter_map(|c| {
                 let summary = match &c.kind {
-                    // A tie prescribes nothing and names two Sets: it is a Connection above.
-                    ConstraintKind::Bonded { .. } => return None,
+                    // A tie, a cyclic tie or a coupling prescribes nothing and names two Sets: they are the
+                    // Connections above.
+                    ConstraintKind::Bonded { .. } | ConstraintKind::Cyclic { .. } | ConstraintKind::Couple { .. } => {
+                        return None
+                    }
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")
@@ -297,6 +416,10 @@ impl Engine {
                         let v = display(m, *q, crate::units::HeatSource::DIM);
                         ("heatSource", format!("{} {} on {}", units::fmt_sig(v.value, 4), v.unit, bodies.join(", ")))
                     }
+                    LoadKind::Torque { total, .. } => {
+                        let v = display(m, *total, crate::units::Torque::DIM);
+                        ("torque", format!("total {} {}", units::fmt_sig(v.value, 4), v.unit))
+                    }
                     LoadKind::Temperature { bodies, value, reference } => {
                         let v = display(m, *value, Temperature::DIM);
                         let r = display(m, *reference, Temperature::DIM);
@@ -311,6 +434,10 @@ impl Engine {
                                 bodies.join(", ")
                             ),
                         )
+                    }
+                    LoadKind::ThermalContact { of, h } => {
+                        let v = display(m, *h, HeatTransfer::DIM);
+                        ("thermalContact", format!("h = {} {} across '{of}'", units::fmt_sig(v.value, 4), v.unit))
                     }
                 };
                 LoadRow { name: l.name.clone(), kind: kind.into(), on: l.kind.set().map(str::to_string), summary }
@@ -339,13 +466,15 @@ impl Engine {
                     format!("planeStress (thickness {} {})", units::fmt_sig(t.value, 4), t.unit)
                 }
                 Idealisation::PlaneStrain => "planeStrain".into(),
-                Idealisation::Axisymmetric => "axisymmetric".into(),
+                Idealisation::Axisymmetric { twist: false } => "axisymmetric".into(),
+                Idealisation::Axisymmetric { twist: true } => "axisymmetric (twist)".into(),
             },
             bodies,
             materials,
             sets,
             constraints,
             connections,
+            points,
             loads,
             steps,
             mesh_settings: m.mesh.clone(),
@@ -375,7 +504,7 @@ impl Engine {
             nodes: mesh.n_nodes() as u32,
             elements: mesh.n_elems() as u32,
             element_kind: format!("{:?}", mesh.blocks[0].kind).to_lowercase(),
-            dofs: (mesh.n_nodes() * mesh.dim) as u32,
+            dofs: (mesh.n_nodes() * m.idealisation.dofs_per_node()) as u32,
             bbox: bbox6(m, lo, hi),
             min_edge: display(m, min_edge, Length::DIM),
             max_edge: display(m, max_edge, Length::DIM),
@@ -392,6 +521,8 @@ impl Engine {
                 min_det_j_ratio: q.min_det_j_ratio,
                 max_aspect: q.max_aspect,
                 min_angle_deg: q.min_angle_deg,
+                min_dihedral_deg: q.min_dihedral_deg,
+                max_dihedral_deg: q.max_dihedral_deg,
                 worst: q.worst.iter().map(|&(element, value)| QualityRow { element, value }).collect(),
             }),
         })
@@ -545,13 +676,14 @@ impl Engine {
         let procedure = crate::solve_run::procedure_step(&step, crate::solve::SolveOptions::default())?;
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
+        let dofs_per_node = self.model.idealisation.dofs_per_node();
         if matches!(procedure, crate::procedure::Step::Explicit { .. } | crate::procedure::Step::HeatTransient { .. }) {
             let problem = crate::solve_run::build_problem(&self.model, built, &step)?;
-            Ok(crate::solve_run::planned_cost(&built.mesh, Some(&problem), &procedure)?
+            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, Some(&problem), &procedure)?
                 .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                 .estimate)
         } else {
-            Ok(crate::solve_run::planned_cost(&built.mesh, None, &procedure)?
+            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, None, &procedure)?
                 .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                 .estimate)
         }
@@ -581,7 +713,34 @@ impl Engine {
                     ref_: format!("material:{}", mat.name),
                     kind: "material".into(),
                     name: mat.name.clone(),
-                    summary: format!("E = {} Pa, nu = {}", units::fmt_sig(mat.e, 4), mat.nu),
+                    summary: match &mat.orthotropic {
+                        Some(o) => format!(
+                            "orthotropic, E1 = {} Pa, E2 = {} Pa, E3 = {} Pa",
+                            units::fmt_sig(o.e1, 4),
+                            units::fmt_sig(o.e2, 4),
+                            units::fmt_sig(o.e3, 4)
+                        ),
+                        None => format!(
+                            "E = {} Pa, nu = {}",
+                            units::fmt_sig(mat.e.unwrap_or(0.0), 4),
+                            mat.nu.unwrap_or(0.0)
+                        ),
+                    },
+                });
+            }
+        }
+        if want(ObjectKind::Section) {
+            for sec in &m.sections {
+                objects.push(ObjectRef {
+                    ref_: format!("section:{}", sec.name),
+                    kind: "section".into(),
+                    name: sec.name.clone(),
+                    summary: format!(
+                        "A = {} m^2, Iy = {} m^4, Iz = {} m^4",
+                        units::fmt_sig(sec.section.a, 4),
+                        units::fmt_sig(sec.section.i_y, 4),
+                        units::fmt_sig(sec.section.i_z, 4)
+                    ),
                 });
             }
         }

@@ -1,0 +1,470 @@
+{
+  "id": "steel-roof-truss",
+  "title": "Steel roof truss: statics you can check by hand",
+  "minutes": 14,
+  "summary": "Build a 12 m Pratt roof truss from lines and a hollow section, brace it out of plane, load the top-chord joints, and check the solver against statics, the method of sections and unit-load virtual work — three numbers that agree to every digit.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "A roof truss is the model where a finite-element tool feels closest to hand calculation: the structure is statically determinate, the elements are exact, and every number the solver prints can be checked on paper. That is what this tutorial does.",
+      "expect": {
+        "cmd": "model.new"
+      },
+      "highlight": "model.new",
+      "doIt": {
+        "cmd": "model.new",
+        "name": "steel-roof-truss"
+      }
+    },
+    {
+      "title": "Units",
+      "explain": "Millimetres, kilonewtons, megapascals — the working units of steel design in Europe.",
+      "expect": {
+        "cmd": "model.setUnits"
+      },
+      "highlight": "model.setUnits",
+      "doIt": {
+        "cmd": "model.setUnits",
+        "units": {
+          "length": "mm",
+          "force": "kN",
+          "stress": "MPa"
+        }
+      }
+    },
+    {
+      "title": "The truss, as lines",
+      "explain": "`geometry.addLine` takes the joints and the members between them: twelve joints on a 12 m span, 2 m deep, and 21 members — six bottom-chord panels, four top-chord panels, five verticals and six diagonals, laid out as a Pratt truss so the diagonals slope down towards mid-span and carry tension. `divisions: 1` gives one element per member, which is all a pin-jointed member ever needs. Joint *i* becomes the node Set `truss.p<i>`.",
+      "expect": {
+        "cmd": "geometry.addLine",
+        "match": {
+          "name": "truss"
+        }
+      },
+      "highlight": "geometry.addLine",
+      "doIt": {
+        "cmd": "geometry.addLine",
+        "name": "truss",
+        "points": [
+          [
+            "0 mm",
+            "0 mm",
+            "0 mm"
+          ],
+          [
+            "2000 mm",
+            "0 mm",
+            "0 mm"
+          ],
+          [
+            "4000 mm",
+            "0 mm",
+            "0 mm"
+          ],
+          [
+            "6000 mm",
+            "0 mm",
+            "0 mm"
+          ],
+          [
+            "8000 mm",
+            "0 mm",
+            "0 mm"
+          ],
+          [
+            "10000 mm",
+            "0 mm",
+            "0 mm"
+          ],
+          [
+            "12000 mm",
+            "0 mm",
+            "0 mm"
+          ],
+          [
+            "2000 mm",
+            "2000 mm",
+            "0 mm"
+          ],
+          [
+            "4000 mm",
+            "2000 mm",
+            "0 mm"
+          ],
+          [
+            "6000 mm",
+            "2000 mm",
+            "0 mm"
+          ],
+          [
+            "8000 mm",
+            "2000 mm",
+            "0 mm"
+          ],
+          [
+            "10000 mm",
+            "2000 mm",
+            "0 mm"
+          ]
+        ],
+        "members": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            4,
+            5
+          ],
+          [
+            5,
+            6
+          ],
+          [
+            7,
+            8
+          ],
+          [
+            8,
+            9
+          ],
+          [
+            9,
+            10
+          ],
+          [
+            10,
+            11
+          ],
+          [
+            7,
+            1
+          ],
+          [
+            8,
+            2
+          ],
+          [
+            9,
+            3
+          ],
+          [
+            10,
+            4
+          ],
+          [
+            11,
+            5
+          ],
+          [
+            0,
+            7
+          ],
+          [
+            7,
+            2
+          ],
+          [
+            8,
+            3
+          ],
+          [
+            10,
+            3
+          ],
+          [
+            11,
+            4
+          ],
+          [
+            6,
+            11
+          ]
+        ],
+        "divisions": 1
+      }
+    },
+    {
+      "title": "S355",
+      "explain": "The structural steel of EN 10025-2, `E = 210 GPa`. `query.materialLibrary` has the same grade with its source and its yield strength; here only `E` reaches the answer, because a determinate truss's member forces do not depend on stiffness at all — only its deflections do.",
+      "expect": {
+        "cmd": "material.add",
+        "match": {
+          "name": "S355"
+        }
+      },
+      "highlight": "material.add",
+      "doIt": {
+        "cmd": "material.add",
+        "name": "S355",
+        "E": "210 GPa",
+        "nu": 0.3,
+        "rho": "7850 kg/m^3",
+        "source": "EN 10025-2 S355J2"
+      }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material, one Body.",
+      "expect": {
+        "cmd": "material.assign"
+      },
+      "highlight": "material.assign",
+      "doIt": {
+        "cmd": "material.assign",
+        "material": "S355",
+        "bodies": [
+          "truss"
+        ]
+      }
+    },
+    {
+      "title": "A section for the members",
+      "explain": "A line has no cross-section of its own, so a Section is where the area and the second moments come from. `tube` is a circular hollow section: radius 44.45 mm and wall 5 mm is CHS 88.9 × 5, a section you would really weld a light roof truss from. Its area works out at 1317.90 mm², which is the number the closing check divides by.",
+      "expect": {
+        "cmd": "section.add",
+        "match": {
+          "name": "chs-88x5"
+        }
+      },
+      "highlight": "section.add",
+      "doIt": {
+        "cmd": "section.add",
+        "name": "chs-88x5",
+        "shape": {
+          "kind": "tube",
+          "radius": "44.45 mm",
+          "thickness": "5 mm"
+        }
+      }
+    },
+    {
+      "title": "Assign the section",
+      "explain": "Every line Body needs a Section before it will solve; without one `solve.run` stops with `model.no-section`. One section for the whole truss keeps the hand check to a single EA — a real design would give the chords a heavier tube than the web members.",
+      "expect": {
+        "cmd": "section.assign"
+      },
+      "highlight": "section.assign",
+      "doIt": {
+        "cmd": "section.assign",
+        "section": "chs-88x5",
+        "bodies": [
+          "truss"
+        ]
+      }
+    },
+    {
+      "title": "Mesh settings",
+      "explain": "Line Bodies are not meshed as solids — the members are already elements — but a Mesher still has to be chosen. The size here is never used.",
+      "expect": {
+        "cmd": "mesh.set"
+      },
+      "highlight": "mesh.set",
+      "doIt": {
+        "cmd": "mesh.set",
+        "mesher": {
+          "kind": "lattice",
+          "size": "1 m"
+        }
+      }
+    },
+    {
+      "title": "A Set holding every joint",
+      "explain": "A box around the whole truss, which will be used to brace it out of plane. Named Sets are re-evaluated after every remesh, so this one keeps working if the truss changes.",
+      "expect": {
+        "cmd": "geometry.nameRegion",
+        "match": {
+          "name": "all-joints"
+        }
+      },
+      "highlight": "geometry.nameRegion",
+      "doIt": {
+        "cmd": "geometry.nameRegion",
+        "name": "all-joints",
+        "where": {
+          "kind": "bbox",
+          "min": [
+            "-100 mm",
+            "-100 mm",
+            "-10 mm"
+          ],
+          "max": [
+            "12100 mm",
+            "2100 mm",
+            "10 mm"
+          ]
+        }
+      }
+    },
+    {
+      "title": "A Set for the top-chord joints",
+      "explain": "A second box, this one only as tall as the top chord, holding the five joints U1…U5 where the purlins land.",
+      "expect": {
+        "cmd": "geometry.nameRegion",
+        "match": {
+          "name": "top-joints"
+        }
+      },
+      "highlight": "geometry.nameRegion",
+      "doIt": {
+        "cmd": "geometry.nameRegion",
+        "name": "top-joints",
+        "where": {
+          "kind": "bbox",
+          "min": [
+            "1900 mm",
+            "1900 mm",
+            "-10 mm"
+          ],
+          "max": [
+            "10100 mm",
+            "2100 mm",
+            "10 mm"
+          ]
+        }
+      }
+    },
+    {
+      "title": "Brace it out of plane",
+      "explain": "This is the gotcha that catches everyone the first time. A planar truss drawn in 3D has three translations per joint, and nothing in the model resists the third one: the whole truss can drift sideways at no cost, the stiffness matrix is singular, and the solve fails. Real trusses are held by purlins, bracing and the roof deck; in the model that is `uz = 0` at every joint. Fix it here, not later — an under-braced truss fails in the solver, not when you draw it.",
+      "expect": {
+        "cmd": "constraint.fix",
+        "match": {
+          "name": "bracing"
+        }
+      },
+      "highlight": "constraint.fix",
+      "doIt": {
+        "cmd": "constraint.fix",
+        "name": "bracing",
+        "on": "all-joints",
+        "dofs": [
+          "uz"
+        ]
+      }
+    },
+    {
+      "title": "Pin one end",
+      "explain": "`ux` and `uy` at the left support: it carries vertical load and holds the truss along its span. (`uz` there is already held by the bracing Set.)",
+      "expect": {
+        "cmd": "constraint.fix",
+        "match": {
+          "name": "pin"
+        }
+      },
+      "highlight": "constraint.fix",
+      "doIt": {
+        "cmd": "constraint.fix",
+        "name": "pin",
+        "on": "truss.p0",
+        "dofs": [
+          "ux",
+          "uy"
+        ]
+      }
+    },
+    {
+      "title": "Roller at the other",
+      "explain": "`uy` only. A roller is not a detailing nicety: pinning both ends would make the truss statically indeterminate along its span and lock in an axial force every time the roof warms up. One pin and one roller is the honest idealisation of a truss seated on a bearing at one end and a slide at the other.",
+      "expect": {
+        "cmd": "constraint.fix",
+        "match": {
+          "name": "roller"
+        }
+      },
+      "highlight": "constraint.fix",
+      "doIt": {
+        "cmd": "constraint.fix",
+        "name": "roller",
+        "on": "truss.p6",
+        "dofs": [
+          "uy"
+        ]
+      }
+    },
+    {
+      "title": "The purlin loads",
+      "explain": "`load.force` splits a total equally over the nodes of a Set, so 100 kN on the five top-chord joints is 20 kN each — the reaction a purlin at 2 m centres delivers under a factored roof load. Loading the joints and not the members is what keeps the truss a truss: a load between joints would bend the chord, and a pin-jointed member cannot bend.",
+      "expect": {
+        "cmd": "load.force",
+        "match": {
+          "name": "purlins"
+        }
+      },
+      "highlight": "load.force",
+      "doIt": {
+        "cmd": "load.force",
+        "name": "purlins",
+        "on": "top-joints",
+        "total": [
+          "0 kN",
+          "-100 kN",
+          "0 kN"
+        ]
+      }
+    },
+    {
+      "title": "One static Step",
+      "explain": "Ask for `stressUnaveraged` as well as `stress`. At a joint where five members meet at five different angles, the averaged nodal stress is the mean of five different axial stresses and belongs to none of them; `stressUnaveraged` keeps each member's own value. On a truss it is the field you read, not a diagnostic.",
+      "expect": {
+        "cmd": "step.add",
+        "match": {
+          "name": "gravity-case"
+        }
+      },
+      "highlight": "step.add",
+      "doIt": {
+        "cmd": "step.add",
+        "name": "gravity-case",
+        "procedure": "static",
+        "constraints": [
+          "bracing",
+          "pin",
+          "roller"
+        ],
+        "loads": [
+          "purlins"
+        ],
+        "output": [
+          "displacement",
+          "stress",
+          "stressUnaveraged",
+          "reaction"
+        ]
+      }
+    },
+    {
+      "title": "Solve, and read the members",
+      "explain": "Twelve joints, 21 elements, 36 degrees of freedom: this solves instantly. Colour by `stressUnaveraged` and the load path is immediately legible — the bottom chord in tension, rising to 60.7 MPa at mid-span; the top chord in compression, −68.3 MPa; the end diagonals at −53.7 MPa; and the verticals at the two outermost interior joints at exactly zero — the classic zero-force members, which a joint with two collinear members and one other always produces.",
+      "expect": {
+        "cmd": "solve.run",
+        "match": {
+          "step": "gravity-case"
+        }
+      },
+      "highlight": "solve.run",
+      "doIt": {
+        "cmd": "solve.run",
+        "step": "gravity-case"
+      }
+    },
+    {
+      "title": "Check it by hand",
+      "explain": "Reactions by statics, one diagonal by the method of sections, and the mid-span deflection by virtual work — against what the solver just printed.",
+      "expect": null,
+      "theory": "**The reactions, by statics.** Five purlin loads of $20\\,\\mathrm{kN}$ make $\\sum P = 100\\,\\mathrm{kN}$, and the truss and its load are symmetric about mid-span, so $R_A = R_B = \\tfrac{1}{2}\\sum P = 50\\,\\mathrm{kN}$. The Result's reaction rows read $50.000\\,\\mathrm{kN}$ at each support and nothing horizontal — the roller is doing its job, and a horizontal reaction here would mean you had pinned both ends and locked the truss against its own thermal movement.\n\n**One diagonal, by the method of sections.** Cut the truss vertically through the third panel, between $x = 4\\,\\mathrm{m}$ and $x = 6\\,\\mathrm{m}$: the cut crosses the top chord U2–U3, the bottom chord L2–L3 and the diagonal U2–L3. Both chords are horizontal, so the diagonal alone carries the shear on that section. To the left of the cut the free body has $R_A = 50\\,\\mathrm{kN}$ up and two purlin loads down, so $V = 50 - 2 \\times 20 = 10\\,\\mathrm{kN}$, and with the diagonal at $45^{\\circ}$,\n\n$$N = \\frac{V}{\\sin 45^{\\circ}} = 10\\sqrt{2} = 14.142\\,\\mathrm{kN}\\ \\text{(tension)}$$\n\nThe CHS 88.9 × 5 has $A = \\pi(44.45^2 - 39.45^2) = 1317.90\\,\\mathrm{mm}^2$, so $\\sigma = N/A = 10.731\\,\\mathrm{MPa}$. The solver reports $\\mathbf{10.7308\\,\\mathrm{MPa}}$ on that member — the same number, because a truss element is exact in extension and the truss is statically determinate, so the finite-element answer *is* the statics answer. Read it as `stressUnaveraged`: the averaged field at the same point reads $-4.86\\,\\mathrm{MPa}$, which is not a stress any member carries, only the mean of the five that meet at those joints.\n\n**Mid-span deflection, by unit-load virtual work.** Put a unit load at L3, the mid-span bottom-chord joint, solve the same determinate truss again for the member forces $n_i$ it produces, and sum\n\n$$\\delta = \\sum_i \\frac{N_i n_i L_i}{E A_i}$$\n\nover all 21 members. With $E = 210\\,\\mathrm{GPa}$ and the one section throughout that gives $\\delta = 7.0427\\,\\mathrm{mm}$; the solver reports $\\mathbf{7.0427\\,\\mathrm{mm}}$, agreeing to every digit for the same reason. Against a span/300 roof limit of $40\\,\\mathrm{mm}$ this truss is comfortable. Note the top-chord joint above it drops further, $7.19\\,\\mathrm{mm}$, because the top chord is shortening as well as bending.\n\n**What this model does not tell you.** The most heavily loaded member is the top chord U2–U3 at $-90\\,\\mathrm{kN}$ ($-68.3\\,\\mathrm{MPa}$ against $f_y = 355\\,\\mathrm{MPa}$), and that stress is not the check that governs it: a compression member has to be checked against flexural buckling over its own unrestrained length, which is what the `column-buckling` tutorial is about. Nor are the joints modelled — real welded CHS joints are semi-rigid and carry secondary bending the pin-jointed idealisation deliberately ignores, which EN 1993-1-8 allows for a truss whose members are slender enough."
+    }
+  ]
+}

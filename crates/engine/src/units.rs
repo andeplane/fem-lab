@@ -94,6 +94,7 @@ const DIM_NAMES: &[(Dimension, &str)] = &[
     (Dimension([0, 0, 0, 0]), "dimensionless"),
     (Dimension([1, 0, 0, 0]), "length"),
     (Dimension([2, 0, 0, 0]), "area"),
+    (Dimension([4, 0, 0, 0]), "second moment of area"),
     (Dimension([3, 0, 0, 0]), "volume"),
     (Dimension([0, 1, 0, 0]), "mass"),
     (Dimension([0, 0, 1, 0]), "time"),
@@ -146,6 +147,7 @@ dims! {
     Stress, "stress", "210 GPa", [-1,1,-2,0];
     Density, "density", "7850 kg/m^3", [-3,1,0,0];
     Acceleration, "acceleration", "9.81 m/s^2", [1,0,-2,0];
+    Velocity, "velocity", "1 m/s", [1,0,-1,0];
     ThermalExpansion, "thermal_expansion", "1.2e-5 1/K", [0,0,0,-1];
     Conductivity, "conductivity", "50 W/(m K)", [1,1,-3,-1];
     SpecificHeat, "specific_heat", "460 J/(kg K)", [2,0,-2,-1];
@@ -153,7 +155,12 @@ dims! {
     HeatFlux, "heat_flux", "1 kW/m^2", [0,1,-3,0];
     HeatSource, "heat_source", "1 kW/m^3", [-1,1,-3,0];
     Frequency, "frequency", "50 Hz", [0,0,-1,0];
+    Area, "area", "2000 mm^2", [2,0,0,0];
+    SecondMoment, "second_moment", "1.7e6 mm^4", [4,0,0,0];
     Dimensionless, "dimensionless", "0.3", [0,0,0,0];
+    // Same dimension as energy (force times length); a separate marker so a schema mismatch
+    // between a torque and a plain force is caught even though the SI unit is the same.
+    Torque, "torque", "100 N m", [2,1,-2,0];
 }
 
 /// A [`Quantity`] whose dimension is fixed by the schema. Serialises exactly like `Quantity`.

@@ -39,10 +39,11 @@ const SHIFT: f64 = 1e-6;
 /// The `q × q` dense reduction is sequential at any host thread count, per call, never globally.
 const DENSE_PAR: Par = Par::Seq;
 
-/// `M = ∫ ρ NᵀN dV` for the whole mesh, into a fresh copy of `pat.csr`.
+/// `M = ∫ ρ NᵀN dV` for the whole mesh plus every point mass, into a fresh copy of `pat.csr`.
 ///
 /// `lumped` gives the HRZ-scaled diagonal instead, which is what the explicit integrator
-/// needs; the modal path always wants the consistent matrix.
+/// needs; the modal path always wants the consistent matrix. A point mass is lumped either
+/// way — it has no shape function to spread it — so it lands on its own node's diagonal.
 pub fn assemble_mass(p: &Problem<'_>, pat: &Pattern, lumped: bool) -> Result<Csr, Error> {
     let dpn = p.dofs_per_node();
     let mut m = pat.csr.clone();
@@ -68,7 +69,35 @@ pub fn assemble_mass(p: &Problem<'_>, pat: &Pattern, lumped: bool) -> Result<Csr
             }
         }
     }
+    for pm in &p.points {
+        for c in 0..dpn {
+            let r = pm.node as usize * dpn + c;
+            let (lo, hi) = (m.row_ptr[r] as usize, m.row_ptr[r + 1] as usize);
+            let at = m.col_idx[lo..hi].binary_search(&(r as u32)).expect("the pattern seeds every node's diagonal");
+            m.vals[lo + at] += pm.mass;
+        }
+    }
     Ok(m)
+}
+
+/// The modal damping ratio of each mode, shared by every post-modal procedure.
+///
+/// `ratio` is a constant fraction of critical applied to every mode; `rayleigh` is the
+/// `(alpha, beta)` of `C = alpha M + beta K`, which a mass-orthonormal basis diagonalises into
+/// `zeta_k = alpha / (2 omega_k) + beta omega_k / 2` — alpha damping the low modes and beta the
+/// high ones. A rigid mode has `omega_k = 0` and no mass-proportional term to speak of: its
+/// response is multiplied by `omega_k` anyway, so it takes the constant ratio alone rather than
+/// an infinity.
+pub fn damping_ratios(frequencies: &[f64], ratio: Option<f64>, rayleigh: (f64, f64)) -> Vec<f64> {
+    let (alpha, beta) = rayleigh;
+    frequencies
+        .iter()
+        .map(|hz| {
+            let w = 2.0 * std::f64::consts::PI * hz;
+            let mass_term = if w > 0.0 { alpha / (2.0 * w) } else { 0.0 };
+            ratio.unwrap_or(0.0) + mass_term + beta * w / 2.0
+        })
+        .collect()
 }
 
 /// The `no-density` error: a modal or explicit Step over a Material without `rho`.
@@ -76,6 +105,17 @@ fn no_density() -> Error {
     Error::new(ErrorCode::ModelIllPosed, "the mass matrix is zero: no Material in this Step has a density")
         .at("materials")
         .suggest("material.add with rho, e.g. \"7850 kg/m^3\"")
+}
+
+/// The `model.ill-posed` error a Step with nothing left to move answers with. Buckling shares
+/// it: an eigenproblem over an empty free set is the same modelling mistake either way.
+pub(crate) fn no_free_dofs() -> Error {
+    Error::new(
+        ErrorCode::ModelIllPosed,
+        "modal analysis has no free displacement DOFs; every displacement DOF is constrained",
+    )
+    .at("constraints")
+    .suggest("constraint.remove on an over-constraining displacement constraint")
 }
 
 /// Solve one modal Step: `n_modes` frequencies and their M-normalised shapes.
@@ -108,12 +148,7 @@ pub fn run(
     let red_m = reduce(&mt, &zeros, &rc, &mpc.slaves);
     let n = red_k.k_ff.n;
     if n == 0 {
-        return Err(Error::new(
-            ErrorCode::ModelIllPosed,
-            "modal analysis has no free displacement DOFs; every displacement DOF is constrained",
-        )
-        .at("constraints")
-        .suggest("constraint.remove on an over-constraining displacement constraint"));
+        return Err(no_free_dofs());
     }
     let p_modes = n_modes.clamp(1, n);
     report(&mut progress, "solve", 0.3, "subspace iteration")?;
@@ -203,6 +238,7 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>) -> Result<Spectrum, 
             // A factorization may still produce an unacceptable residual.
             factored.solve(&y, &mut bar[c])?;
         }
+        orthonormalise(&mut bar);
         // K̂ = X̄ᵀ K X̄ and M̂ = X̄ᵀ M X̄, both q × q and symmetric by construction.
         let (k_hat, m_hat) = (project(k, &bar, q, n), project(m, &bar, q, n));
         let (lam, z) = dense_eigen(&k_hat, &m_hat, q);
@@ -226,8 +262,39 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>) -> Result<Spectrum, 
     Ok((lambda[..p].to_vec(), x[..p].to_vec(), sweeps))
 }
 
+/// Modified Gram-Schmidt on the iterated block, in place.
+///
+/// Subspace iteration drives every column towards the same lowest mode, and one dominant lumped
+/// mass makes `M` nearly rank-one on the DOFs it is coupled to, so `A⁻¹ M X` comes back with
+/// columns that are numerically parallel; `X̄ᵀ M X̄` is then singular and the Cholesky below has
+/// nothing to factorise. Orthonormalising changes the basis of the subspace and never the
+/// subspace, so the Ritz values are the same numbers — and with orthonormal columns and a
+/// positive definite `M`, `X̄ᵀ M X̄` is positive definite by construction.
+///
+/// The columns are taken in order and each is swept against the ones before it, so the result
+/// is the same at any thread count.
+fn orthonormalise(bar: &mut [Vec<f64>]) {
+    for c in 0..bar.len() {
+        for j in 0..c {
+            let (before, rest) = bar.split_at_mut(c);
+            let (col, basis) = (&mut rest[0], &before[j]);
+            let d: f64 = col.iter().zip(basis.iter()).map(|(a, b)| a * b).sum();
+            for (v, b) in col.iter_mut().zip(basis.iter()) {
+                *v -= d * b;
+            }
+        }
+        // `A⁻¹M` is invertible, so a column can only shrink towards its predecessors, never
+        // vanish exactly; the floor makes a shrunken one scaled rather than divided by zero.
+        let norm = bar[c].iter().map(|v| v * v).sum::<f64>().sqrt();
+        let scale = 1.0 / norm.max(f64::MIN_POSITIVE);
+        for v in bar[c].iter_mut() {
+            *v *= scale;
+        }
+    }
+}
+
 /// `Xᵀ A X` for `q` columns of length `n`, row-major `q × q`.
-fn project(a: &Csr, x: &[Vec<f64>], q: usize, n: usize) -> Vec<f64> {
+pub(crate) fn project(a: &Csr, x: &[Vec<f64>], q: usize, n: usize) -> Vec<f64> {
     let mut out = vec![0.0; q * q];
     let mut ax = vec![0.0; n];
     for c in 0..q {
@@ -244,7 +311,10 @@ fn project(a: &Csr, x: &[Vec<f64>], q: usize, n: usize) -> Vec<f64> {
 /// `M̂ = L Lᵀ`, and `L⁻¹ K̂ L⁻ᵀ` is symmetric with the same eigenvalues; faer's self-adjoint
 /// eigendecomposition returns them nondecreasing, and `z = L⁻ᵀ Q` makes the eigenvectors
 /// M̂-orthonormal, which is what keeps the iterated subspace M-orthonormal too.
-fn dense_eigen(k_hat: &[f64], m_hat: &[f64], q: usize) -> (Vec<f64>, Vec<f64>) {
+///
+/// Only the *second* operand is factorised, so a linear buckling Step passes its indefinite
+/// `X̄ᵀ(−K_σ)X̄` first and its positive definite `X̄ᵀKX̄` second and this needs no change.
+pub(crate) fn dense_eigen(k_hat: &[f64], m_hat: &[f64], q: usize) -> (Vec<f64>, Vec<f64>) {
     // `M̂ = X̄ᵀ M X̄` with `M` positive definite (the density check above) and `X̄` of full rank,
     // so the factorisation and the symmetric eigendecomposition below cannot fail. Both are the
     // low-level faer entry points, which take the parallelism as an argument: the high-level
@@ -328,6 +398,17 @@ fn transpose(a: &[f64], q: usize) -> Vec<f64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn damping_ratios_add_the_constant_and_both_rayleigh_terms() {
+        // omega = 2 pi for 1 Hz: alpha/(2w) = 1/(4 pi), beta w / 2 = pi.
+        let z = super::damping_ratios(&[0.0, 1.0], Some(0.02), (1.0, 1.0));
+        assert_eq!(z[0], 0.02, "a rigid mode takes the constant ratio alone");
+        let expected = 0.02 + 1.0 / (4.0 * std::f64::consts::PI) + std::f64::consts::PI;
+        assert!(libm::fabs(z[1] - expected) < 1e-15, "{z:?}");
+        // No ratio and no Rayleigh is an undamped basis.
+        assert_eq!(super::damping_ratios(&[3.0], None, (0.0, 0.0)), vec![0.0]);
+    }
+
     #[test]
     fn dense_modes_preserve_global_parallelism_and_the_generalized_eigenproblem() {
         let before = faer::get_global_parallelism();

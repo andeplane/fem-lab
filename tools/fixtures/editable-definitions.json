@@ -369,6 +369,41 @@
     }
   },
   {
+    "kind": "body",
+    "command": {
+      "cmd": "geometry.addLine",
+      "name": "editable",
+      "points": [
+        [
+          "0 m",
+          "0 m",
+          "0 m"
+        ],
+        [
+          "1 m",
+          "0 m",
+          "0 m"
+        ],
+        [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ]
+      ],
+      "members": [
+        [
+          0,
+          2
+        ],
+        [
+          1,
+          2
+        ]
+      ],
+      "divisions": 3
+    }
+  },
+  {
     "kind": "material",
     "command": {
       "cmd": "material.add",
@@ -390,6 +425,64 @@
       "cp": "460 J/(kg K)",
       "yield": "355 MPa",
       "source": "independent table"
+    }
+  },
+  {
+    "kind": "material",
+    "command": {
+      "cmd": "material.add",
+      "name": "editable",
+      "orthotropic": {
+        "E1": "155.123456789 GPa",
+        "E2": "12.1 GPa",
+        "E3": "12.1 GPa",
+        "G12": "4.4 GPa",
+        "G13": "4.4 GPa",
+        "G23": "3.2 GPa",
+        "nu12": 0.248,
+        "nu13": 0.248,
+        "nu23": 0.458
+      },
+      "rho": "1600 kg/m^3",
+      "source": "independent table"
+    }
+  },
+  {
+    "kind": "material",
+    "command": {
+      "cmd": "material.add",
+      "name": "editable",
+      "orthotropic": {
+        "E1": "11 GPa",
+        "E2": "0.9 GPa",
+        "E3": "0.5 GPa",
+        "G12": "0.7 GPa",
+        "G13": "0.65 GPa",
+        "G23": "0.04 GPa",
+        "nu12": 0.4,
+        "nu13": 0.45,
+        "nu23": 0.6,
+        "alpha": [
+          "3.5e-6 1/K",
+          "2.5e-5 1/K",
+          "3.4e-5 1/K"
+        ],
+        "k": [
+          "0.35 W/(m K)",
+          "0.2 W/(m K)",
+          "0.2 W/(m K)"
+        ]
+      },
+      "orientation": {
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "angle": "30 deg"
+      },
+      "rho": "500 kg/m^3",
+      "cp": "1600 J/(kg K)"
     }
   },
   {
@@ -575,6 +668,26 @@
   {
     "kind": "constraint",
     "command": {
+      "cmd": "constraint.couple",
+      "name": "editable",
+      "point": "ref",
+      "on": "base.xmax",
+      "kind": "distributed"
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
+      "cmd": "constraint.couple",
+      "name": "editable",
+      "point": "ref",
+      "on": "base.xmin",
+      "kind": "rigid"
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
       "cmd": "contact.add",
       "name": "editable",
       "master": "base.xmax",
@@ -590,6 +703,30 @@
       "master": "base.xmax",
       "slave": "base.xmin",
       "kind": "bonded",
+      "tol": "0.25 mm"
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
+      "cmd": "constraint.cyclic",
+      "name": "editable",
+      "from": "base.xmax",
+      "to": "base.xmin",
+      "axis": "z",
+      "angleDeg": 60
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
+      "cmd": "constraint.cyclic",
+      "name": "editable",
+      "from": "base.xmax",
+      "to": "base.xmin",
+      "axis": "z",
+      "angleDeg": 60,
+      "through": ["0 m", "0 m", "1 m"],
       "tol": "0.25 mm"
     }
   },
@@ -795,6 +932,79 @@
       "loads": [],
       "nonlinearTolerance": 1e-08,
       "nonlinearMaxIterations": 25
+    }
+  },
+  {
+    "kind": "step",
+    "command": {
+      "cmd": "step.add",
+      "name": "editable",
+      "procedure": "static-nonlinear",
+      "constraints": [],
+      "loads": [],
+      "increments": 8,
+      "maxCutbacks": 3,
+      "nonlinearTolerance": 1e-09,
+      "nonlinearMaxIterations": 12,
+      "tEnd": "1 s",
+      "amplitude": {
+        "kind": "table",
+        "t": [
+          "0 s",
+          "0.5 s",
+          "1 s"
+        ],
+        "value": [
+          0,
+          1,
+          0
+        ]
+      }
+    }
+  },
+  {
+    "kind": "step",
+    "command": {
+      "cmd": "step.add",
+      "name": "editable",
+      "procedure": "implicit",
+      "constraints": [],
+      "loads": [],
+      "dt": "0.1 ms",
+      "tEnd": "2 ms",
+      "alpha": -0.05,
+      "rayleighAlpha": "12 Hz",
+      "rayleighBeta": "3e-6 s",
+      "outputEvery": 2,
+      "initialVelocity": [
+        {
+          "on": "base.xmax",
+          "value": [
+            "1 m/s",
+            "0 m/s",
+            "-2 mm/s"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "kind": "step",
+    "command": {
+      "cmd": "step.add",
+      "name": "editable",
+      "procedure": "harmonic",
+      "constraints": [],
+      "loads": [],
+      "after": "prior",
+      "fStart": "10 Hz",
+      "fStop": "200 Hz",
+      "points": 64,
+      "sweep": "log",
+      "dampingRatio": 0.02,
+      "rayleighAlpha": "0.5 Hz",
+      "rayleighBeta": "1e-5 s",
+      "outputEvery": 2
     }
   }
 ]

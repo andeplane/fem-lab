@@ -366,6 +366,23 @@ export function History({ s }: { s: UiState }) {
 }
 
 /**
+ * A harmonic Step's frequency response: the largest nodal amplitude at every retained
+ * frequency, and the phase lag that goes with it. `query.result.sweep` is one row per retained
+ * frequency (crates/engine/src/solve_run.rs), so this is a plot of the Result.
+ */
+export function Sweep({ s }: { s: UiState }) {
+  const rows = s.result?.sweep ?? [];
+  if (rows.length === 0) return null;
+  return (
+    <>
+      <div class="section-label">Frequency response · {s.result!.step}</div>
+      <LineChart x={rows.map((r) => r.frequency.value)} y={rows.map((r) => r.amplitude.value)} xUnit={rows[0]!.frequency.unit} yUnit={rows[0]!.amplitude.unit} xLabel="f" yLabel="amplitude" />
+      <LineChart x={rows.map((r) => r.frequency.value)} y={rows.map((r) => r.phase.value)} xUnit={rows[0]!.frequency.unit} yUnit="rad" xLabel="f" yLabel="phase" />
+    </>
+  );
+}
+
+/**
  * A modal Step's natural frequencies, with the Command that puts each mode shape on screen.
  * Mode `k`'s shape is the Result field `mode:k` (crates/engine/src/solve_run.rs).
  */
@@ -393,6 +410,42 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
                   {formatNumber(hz.value)} {hz.unit}
                 </td>
                 <td class="mono n faint">{hz.value > 0 ? `${formatNumber(1 / hz.value)} s` : '—'}</td>
+                <td>
+                  <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
+                    show
+                  </Cmd>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div class="rule-note">A mode shape has no amplitude of its own: ▶ on the deformation bar sweeps it.</div>
+    </>
+  );
+}
+
+/** A buckling Step's critical load factors, with the Command that puts each mode shape on screen. */
+export function BucklingFactors({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  const factors = s.result?.bucklingFactors ?? [];
+  if (factors.length === 0) return null;
+  return (
+    <>
+      <div class="section-label">Buckling factors</div>
+      <div class="rtable-wrap">
+        <table class="rtable">
+          <thead>
+            <tr>
+              <th>mode</th>
+              <th>load factor λ</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {factors.map((factor, i) => (
+              <tr key={i} class={s.fieldKey === `mode:${i + 1}` ? 'peak' : ''}>
+                <td class="mono">{i + 1}</td>
+                <td class="mono n">λ {formatNumber(factor)}</td>
                 <td>
                   <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
                     show
@@ -456,6 +509,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
         <div class="section-label">Extremes</div>
         <Extremes s={s} dispatch={dispatch} />
         <Frequencies s={s} dispatch={dispatch} />
+        <BucklingFactors s={s} dispatch={dispatch} />
         <Sample s={s} query={query} />
       </div>
       <div class="rcol">
@@ -463,6 +517,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
         <div class="section-label">Reactions</div>
         <Reactions s={s} />
         <History s={s} />
+        <Sweep s={s} />
         <Convergence s={s} />
       </div>
     </div>

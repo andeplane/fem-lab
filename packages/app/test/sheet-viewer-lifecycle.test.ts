@@ -24,6 +24,12 @@ const surface: AppSurface = {
   edges: Uint32Array.from([0, 1, 1, 2, 2, 0]), edgeFace: Uint32Array.from([0, 1, 2]),
   edgeBody: Uint32Array.from([0, 0, 0]), bodyNames: ['sheet'], faceNames: ['bottom', 'diagonal', 'left'],
 };
+const lineSurface: AppSurface = {
+  source: 'mesh', positions: Float32Array.from([0, 0, 0, 1, 0, 0, 2, 1, 0]),
+  indices: new Uint32Array(), triBody: new Uint32Array(), triFace: new Uint32Array(),
+  edges: Uint32Array.from([0, 1, 1, 2]), edgeFace: Uint32Array.from([0xffffffff, 0xffffffff]),
+  edgeBody: Uint32Array.from([0, 0]), bodyNames: ['truss'], faceNames: [],
+};
 const viewers: Viewer[] = [];
 afterEach(() => { for (const viewer of viewers.splice(0)) viewer.dispose(); document.body.replaceChildren(); });
 function setup() {
@@ -63,4 +69,19 @@ it('keeps triangle and Sheet boundary bounds on the same once-deformed positions
     expect(geometry.boundingBox?.min.x).toBe(20); expect(geometry.boundingBox?.max.x).toBe(21);
     expect(geometry.boundingSphere?.center.x).toBe(20.5);
   }
+});
+
+it('colours line members from endpoint results and keeps body emphasis on outlines', () => {
+  const { viewer, objects } = setup();
+  viewer.setSurface(lineSurface);
+  viewer.setMode('results');
+  viewer.setField(Float32Array.from([0, 1, 0.5]), [0, 1]);
+  const colours = () => Array.from((objects.outlines.geometry.getAttribute('color') as import('three').BufferAttribute).array);
+  const resultColours = colours();
+  expect(resultColours[0]).not.toBe(resultColours[3]);
+  viewer.setSelection({ bodies: ['truss'], faces: [], sets: [] });
+  expect(colours()[0]).not.toBe(resultColours[0]);
+  viewer.setHighlight({ bodies: ['truss'] });
+  viewer.setDim(true);
+  expect(colours()[0]).toBeLessThan(resultColours[0]!);
 });

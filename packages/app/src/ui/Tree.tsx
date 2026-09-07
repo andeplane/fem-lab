@@ -3,7 +3,7 @@
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { fieldChoices, showFieldArgs } from '../fields';
+import { fieldChoices, formatNumber, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 
@@ -84,6 +84,7 @@ const GROUP_OF: Record<string, string> = {
   'model.empty': 'Geometry',
   'model.ill-posed': 'Geometry',
   'model.no-material': 'Materials',
+  'model.no-section': 'Materials',
   'model.unconstrained': 'Constraints',
   'model.unloaded': 'Loads',
   'model.no-step': 'Steps',
@@ -91,7 +92,7 @@ const GROUP_OF: Record<string, string> = {
 };
 
 type Valued = { value: number; unit: string } | undefined;
-const q = (v: Valued): string => (v ? `${Number(v.value.toPrecision(4))} ${v.unit}` : '');
+const q = (v: Valued | null | undefined): string => (v ? `${Number(v.value.toPrecision(4))} ${v.unit}` : '');
 
 export type DropEdge = 'before' | 'after';
 
@@ -118,11 +119,12 @@ export function resultItems(s: UiState): TreeItem[] {
   const extreme = (c: { field: string; component: number | null }) => r.extremes.find((e) => e.field === c.field && e.component === c.component);
   return fieldChoices(
     r.extremes.map((e) => e.field),
-    r.frequencies?.length ?? 0,
+    r,
     s.yieldStress !== null,
   ).map((c) => {
     const e = extreme(c);
     const hz = c.mode === undefined ? undefined : r.frequencies?.[c.mode - 1];
+    const factor = c.mode === undefined ? undefined : r.bucklingFactors?.[c.mode - 1];
     return {
       cmd: 'view.showField',
       args: showFieldArgs(c) as Record<string, unknown>,
@@ -131,7 +133,7 @@ export function resultItems(s: UiState): TreeItem[] {
       glyph: '◧',
       glyphClass: s.fieldKey === c.key ? 'glyph green' : 'glyph low',
       name: c.label,
-      summary: hz ? `${q(hz)} · mode shape` : c.derived ? `from σ_vM and the Material's yield` : e ? `${q(e.min)} … ${q(e.max)} on ${r.step}` : `on ${r.step}`,
+      summary: hz ? `${q(hz)} · mode shape` : factor === undefined ? c.derived ? `from σ_vM and the Material's yield` : e ? `${q(e.min)} … ${q(e.max)} on ${r.step}` : `on ${r.step}` : `λ ${formatNumber(factor)} · mode shape`,
       select: {},
       remove: null,
       active: s.fieldKey === c.key,
@@ -202,7 +204,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         glyph: '●',
         glyphClass: 'glyph mat',
         name: x.name,
-        summary: `E ${q(x.E)} · ν ${x.nu}${x.rho ? ` · ρ ${q(x.rho)}` : ''} · on ${x.assignedTo.join(', ') || 'nothing'}`,
+        summary: `${x.orthotropic ? `E1 ${q(x.orthotropic.E1)} · E2 ${q(x.orthotropic.E2)}` : `E ${q(x.E)} · ν ${x.nu}`}${x.orientation ? ` · axes ${Number(x.orientation.degrees.toPrecision(4))}°` : ''}${x.rho ? ` · ρ ${q(x.rho)}` : ''} · on ${x.assignedTo.join(', ') || 'nothing'}`,
         select: { bodies: x.assignedTo },
         remove: 'material.remove',
       })),

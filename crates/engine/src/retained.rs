@@ -1,5 +1,6 @@
 //! Immutable solve instances. Records own the context needed to interpret their fields.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::engine::Engine;
@@ -125,7 +126,11 @@ impl ResultRecord {
         let values = r.fields.values().map(|f| f.data.len()).sum::<usize>()
             + r.modes.iter().map(|f| f.data.len()).sum::<usize>()
             + r.frequencies.len()
-            + r.history.as_ref().map_or(0, |h| h.times.len() + h.values.iter().map(Vec::len).sum::<usize>());
+            + r.buckling_factors.len()
+            + r.history.as_ref().map_or(0, |h| h.times.len() + h.values.iter().map(Vec::len).sum::<usize>())
+            + r.sweep.as_ref().map_or(0, |s| {
+                s.frequencies.len() + s.amplitude.iter().chain(&s.phase).map(|f| f.data.len()).sum::<usize>()
+            });
         (values * 8) as u64
     }
 
@@ -273,6 +278,65 @@ impl Engine {
             self.current_result(step)?;
         }
         self.result_record(step, id)
+    }
+
+    pub(crate) fn query_surface(
+        &self,
+        step: Option<&str>,
+        id: Option<&str>,
+    ) -> Result<crate::query::ResultSurface, Error> {
+        let record = self.selected_record(step, id)?;
+        let built = &record.built;
+        let mesh = &built.mesh;
+        let surface = mesh.surface();
+        let mut membership: BTreeMap<femlab_geometry::Face, BTreeSet<u32>> = BTreeMap::new();
+        for (i, set) in built.sets.values().enumerate() {
+            for &face in &set.faces {
+                membership.entry(face).or_default().insert(i as u32);
+            }
+        }
+        let mut tri_set_offsets = vec![0];
+        let mut tri_sets = Vec::new();
+        for face in &surface.tri_face {
+            if let Some(members) = face.and_then(|i| membership.get(&surface.faces[i as usize])) {
+                tri_sets.extend(members.iter().copied());
+            }
+            tri_set_offsets.push(tri_sets.len() as u32);
+        }
+        Ok(crate::query::ResultSurface {
+            result_id: record.id.clone(),
+            step: record.step.clone(),
+            node_count: mesh.n_nodes(),
+            unit: "m".into(),
+            positions: surface.positions.iter().flatten().copied().collect(),
+            indices: surface.triangles.iter().flatten().copied().collect(),
+            tri_body: surface.tri_elem.iter().map(|&e| mesh.block_of(e).0 as u32).collect(),
+            tri_face: surface
+                .tri_face
+                .iter()
+                .map(|f| f.and_then(|i| surface.set_of_face[i as usize]).unwrap_or(u32::MAX))
+                .collect(),
+            face_names: surface.set_names,
+            set_names: built.sets.keys().cloned().collect(),
+            tri_set_offsets,
+            tri_sets,
+            body_names: built.body_of_block.clone(),
+            edges: surface.edges.iter().chain(&surface.lines).flatten().copied().collect(),
+            edge_face: surface
+                .set_of_face
+                .iter()
+                .take(surface.edges.len())
+                .map(|f| f.unwrap_or(u32::MAX))
+                .chain(surface.lines.iter().map(|_| u32::MAX))
+                .collect(),
+            edge_body: surface
+                .faces
+                .iter()
+                .take(surface.edges.len())
+                .map(|f| mesh.block_of(f.elem).0 as u32)
+                .chain(surface.line_elem.iter().map(|&e| mesh.block_of(e).0 as u32))
+                .collect(),
+        })
     }
 
     pub(crate) fn query_field(
@@ -430,7 +494,8 @@ mod tests {
 
     fn retain_test_temperature(engine: &mut Engine, step: &str, mesh: femlab_geometry::Mesh, value: f64) {
         let nodes = mesh.n_nodes();
-        engine.mesh = Some(BuiltMesh { mesh, body_of_block: vec!["body".into()], sets: Default::default() });
+        engine.mesh =
+            Some(BuiltMesh { mesh, body_of_block: vec!["body".into()], sets: Default::default(), points: Vec::new() });
         let mut result = crate::procedure::blank(crate::solve::SolveInfo {
             solver: "test",
             iterations: 0,

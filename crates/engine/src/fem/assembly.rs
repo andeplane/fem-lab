@@ -15,9 +15,12 @@
 use femlab_geometry::Mesh;
 
 use crate::error::{Error, ErrorCode};
-use crate::fem::element::element_for;
+use crate::fem::element::{element_for, TangentOut};
+use crate::fem::material::VOIGT;
 use crate::fem::problem::Problem;
+use crate::fem::state::GpState;
 use crate::par;
+use crate::post::{FieldData, Per};
 
 /// Rows per parallel chunk in [`Csr::spmv`]. A constant, so the partition never depends on the
 /// thread count (each row is summed sequentially anyway, so this only bounds task size).
@@ -75,6 +78,16 @@ impl Csr {
                 }
             })
             .collect()
+    }
+
+    /// Add `v` at `(row, col)`, an entry [`pattern_coupled`] promised is there. A thermal
+    /// contact adds directly into `K` rather than eliminating a row, so it needs a named entry
+    /// rather than the element scatter's slot map, which only ever names entries an element
+    /// contributed.
+    pub fn add_at(&mut self, row: u32, col: u32, v: f64) {
+        let (lo, hi) = (self.row_ptr[row as usize] as usize, self.row_ptr[row as usize + 1] as usize);
+        let at = self.col_idx[lo..hi].binary_search(&col).expect("pattern_coupled seeded this entry");
+        self.vals[lo + at] += v;
     }
 
     /// The same arrays as a faer sparse matrix. A symmetric matrix stored row-major in CSR is
@@ -190,30 +203,82 @@ pub fn pattern_coupled(mesh: &Mesh, dofs_per_node: usize, extra: &[[u32; 2]]) ->
     Pattern { csr: Csr { n, row_ptr, col_idx, vals }, slot, slot_ptr }
 }
 
-/// The assembled stiffness, the thermal load it went with, and the worst Jacobian seen.
+/// The assembled operator, the vector that went with it, and the worst Jacobian seen.
+///
+/// The linear arm fills `f_thermal`; the finite-strain arm fills `f_int`, `stress_gp`,
+/// `strain_gp` and `state` and leaves `f_thermal` empty, because thermal strain is subtracted
+/// inside the element there and is therefore already part of the internal force.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Assembled {
     pub k: Csr,
-    /// `∫ Bᵀ D α ΔT dV` per DOF; all zeros when the Problem has no temperature field.
+    /// `∫ Bᵀ D α ΔT dV` per DOF; all zeros when the Problem has no temperature field, and
+    /// empty on the finite-strain arm.
     pub f_thermal: Vec<f64>,
+    /// `∫ B_Lᵀ S dV` per DOF: the internal force at the trial displacement. Empty on the
+    /// linear arm, where the internal force is `K u` by definition.
+    pub f_int: Vec<f64>,
+    /// Cauchy stress at every Gauss point, elements in order; empty on the linear arm.
+    pub stress_gp: FieldData,
+    /// Green–Lagrange strain at every Gauss point, elements in order; empty on the linear arm.
+    pub strain_gp: FieldData,
+    /// The per-Gauss-point state the elements advanced to; empty on the linear arm.
+    pub state: GpState,
     /// The smallest Gauss-point `det J` over the mesh, reported as a Result scalar.
     pub min_det_j: f64,
 }
 
+/// What a finite-strain assembly integrates at: the total displacement and the last converged
+/// Gauss-point state. `None` in [`assemble_tangent`] is the linear arm and is what
+/// [`assemble_stiffness`] passes.
+pub struct NlInput<'a> {
+    /// Total nodal displacement, in the Problem's DOF numbering.
+    pub u: &'a [f64],
+    /// The last converged state, which every trial evaluation reads and none writes.
+    pub state: &'a GpState,
+}
+
+/// One element's contribution, computed in parallel and scattered sequentially.
+struct ElemOut {
+    ke: Vec<f64>,
+    fe: Vec<f64>,
+    stress: Vec<f64>,
+    strain: Vec<f64>,
+    state: Vec<f64>,
+    det: f64,
+}
+
 /// `K` (and the thermal load) for a linear-elastic Problem, into a fresh copy of `pat.csr`.
 ///
-/// Elements are integrated in parallel within a chunk and scattered sequentially in element
-/// order, which is what makes the result bit-identical at any thread count (module docs). The
-/// temperature field, if any, is `Problem::temperature`.
+/// The linear arm of [`assemble_tangent`], unchanged in every bit: same integrals, same chunk
+/// boundaries, same scatter order.
 pub fn assemble_stiffness(p: &Problem<'_>, pat: &Pattern) -> Result<Assembled, Error> {
+    assemble_tangent(p, pat, None)
+}
+
+/// The assembled operator for a Problem, linear (`nl = None`) or finite-strain.
+///
+/// Elements are integrated in parallel within a chunk and scattered sequentially in element
+/// order, which is what makes the result bit-identical at any thread count (module docs).
+/// There is exactly one copy of that loop, and both arms go through it, so the linear path
+/// cannot drift away from the nonlinear one — or from itself.
+///
+/// The linear arm calls [`Element::stiffness`](crate::fem::element::Element::stiffness) and
+/// [`Element::thermal_load`](crate::fem::element::Element::thermal_load); the finite-strain arm
+/// calls [`Element::tangent_and_force`](crate::fem::element::Element::tangent_and_force) at
+/// `nl.u`, which also advances the per-point state and recovers the Gauss-point fields, so a
+/// Newton iteration is one pass over the mesh rather than three.
+pub fn assemble_tangent(p: &Problem<'_>, pat: &Pattern, nl: Option<NlInput<'_>>) -> Result<Assembled, Error> {
     let dpn = p.dofs_per_node();
     let mut k = pat.csr.clone();
-    let mut f_thermal = vec![0.0; p.n_dofs()];
+    let mut f_out = vec![0.0; p.n_dofs()];
     let mut min_det_j = f64::INFINITY;
     let thermal = p.temperature.is_some();
+    let mut state = nl.as_ref().map(|_| GpState::new(p)).transpose()?;
+    let (mut stress, mut strain) = (Vec::new(), Vec::new());
     for blk in &p.mesh.blocks {
         let element = element_for(blk.kind);
         let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * dpn);
+        let n_gp = element.n_gp();
         let step = chunk_elems(nd);
         for lo in (0..blk.n_elems()).step_by(step) {
             let hi = (lo + step).min(blk.n_elems());
@@ -224,34 +289,117 @@ pub fn assemble_stiffness(p: &Problem<'_>, pat: &Pattern) -> Result<Assembled, E
                 let mut t = vec![0.0; nn];
                 p.gather_temperature(elem, &mut t);
                 let c = p.ctx(elem, &coords, &t)?;
-                let mut ke = vec![0.0; nd * nd];
-                let mut fe = vec![0.0; nd];
-                // One `?`: the stiffness and the thermal load fail on exactly the same
-                // elements and materials, so a second one would be an untestable arm.
-                let det = element
-                    .stiffness(&c, &mut ke)
-                    .and_then(|det| if thermal { element.thermal_load(&c, &mut fe).map(|()| det) } else { Ok(det) })
-                    .map_err(|e| e.at(format!("element {elem}")))?;
-                Ok::<_, Error>((ke, fe, det))
+                let mut e = ElemOut {
+                    ke: vec![0.0; nd * nd],
+                    fe: vec![0.0; nd],
+                    stress: Vec::new(),
+                    strain: Vec::new(),
+                    state: Vec::new(),
+                    det: 0.0,
+                };
+                e.det = match &nl {
+                    // One `?`: the stiffness and the thermal load fail on exactly the same
+                    // elements and materials, so a second one would be an untestable arm.
+                    None => element.stiffness(&c, &mut e.ke).and_then(|det| {
+                        if thermal {
+                            element.thermal_load(&c, &mut e.fe).map(|()| det)
+                        } else {
+                            Ok(det)
+                        }
+                    }),
+                    Some(nl) => {
+                        let mut ue = vec![0.0; nd];
+                        for (a, &node) in p.mesh.elem_nodes(elem).iter().enumerate() {
+                            let at = node as usize * dpn;
+                            ue[a * dpn..(a + 1) * dpn].copy_from_slice(&nl.u[at..at + dpn]);
+                        }
+                        e.stress = vec![0.0; n_gp * VOIGT];
+                        e.strain = vec![0.0; n_gp * VOIGT];
+                        e.state = vec![0.0; n_gp * c.material.law.n_state()];
+                        let out = TangentOut {
+                            k: &mut e.ke,
+                            f: &mut e.fe,
+                            stress: &mut e.stress,
+                            strain: &mut e.strain,
+                            state: &mut e.state,
+                        };
+                        element.tangent_and_force(&c, &ue, nl.state.of(elem), out)
+                    }
+                }
+                .map_err(|err| err.at(format!("element {elem}")))?;
+                Ok::<_, Error>(e)
             });
             for (i, part) in parts.into_iter().enumerate() {
-                let (ke, fe, det) = part?;
+                let e = part?;
                 let elem = blk.first_elem + (lo + i) as u32;
-                min_det_j = min_det_j.min(det);
+                min_det_j = min_det_j.min(e.det);
                 let slot = &pat.slot[pat.slot_ptr[elem as usize] as usize..pat.slot_ptr[elem as usize + 1] as usize];
-                for (s, v) in slot.iter().zip(ke.iter()) {
+                for (s, v) in slot.iter().zip(e.ke.iter()) {
                     k.vals[*s as usize] += v;
                 }
                 let conn = p.mesh.elem_nodes(elem);
                 for (a, &node) in conn.iter().enumerate() {
                     for c in 0..dpn {
-                        f_thermal[node as usize * dpn + c] += fe[a * dpn + c];
+                        f_out[node as usize * dpn + c] += e.fe[a * dpn + c];
                     }
+                }
+                stress.extend_from_slice(&e.stress);
+                strain.extend_from_slice(&e.strain);
+                if let Some(st) = &mut state {
+                    st.set(elem, &e.state);
                 }
             }
         }
     }
-    Ok(Assembled { k, f_thermal, min_det_j })
+    let (f_thermal, f_int) = if nl.is_some() { (Vec::new(), f_out) } else { (f_out, Vec::new()) };
+    Ok(Assembled {
+        k,
+        f_thermal,
+        f_int,
+        stress_gp: FieldData::new(Per::ElemGp, VOIGT, stress),
+        strain_gp: FieldData::new(Per::ElemGp, VOIGT, strain),
+        state: state.unwrap_or_default(),
+        min_det_j,
+    })
+}
+
+/// `∫ Bᵀ D α ΔT dV` alone, at the Problem's current `temperature` — every DOF's thermal load
+/// with no stiffness recomputed.
+///
+/// `K` never depends on temperature, only the thermal load does, so a chained static Step
+/// (#84: one solve per retained frame of a heat-transient predecessor's History) assembles and
+/// factorises `K` exactly once and calls this per frame instead of re-running
+/// [`assemble_stiffness`], which would repeat the far more expensive element stiffness integral
+/// for an answer that never changes. Sequential, like the heat matrix, because the payload is
+/// one value per DOF rather than the `dpn²` block a stiffness entry needs.
+pub fn thermal_load(p: &Problem<'_>) -> Result<Vec<f64>, Error> {
+    let dpn = p.dofs_per_node();
+    let mut f_thermal = vec![0.0; p.n_dofs()];
+    let mut coords = Vec::new();
+    let mut t = Vec::new();
+    let mut fe = Vec::new();
+    for blk in &p.mesh.blocks {
+        let element = element_for(blk.kind);
+        let nn = blk.kind.n_nodes();
+        coords.resize(nn * 3, 0.0);
+        t.resize(nn, 0.0);
+        fe.resize(nn * dpn, 0.0);
+        for i in 0..blk.n_elems() {
+            let elem = blk.first_elem + i as u32;
+            p.mesh.elem_coords(elem, &mut coords);
+            p.gather_temperature(elem, &mut t);
+            let c = p.ctx(elem, &coords, &t)?;
+            fe.iter_mut().for_each(|v| *v = 0.0);
+            element.thermal_load(&c, &mut fe).map_err(|e| e.at(format!("element {elem}")))?;
+            let conn = p.mesh.elem_nodes(elem);
+            for (a, &node) in conn.iter().enumerate() {
+                for c in 0..dpn {
+                    f_thermal[node as usize * dpn + c] += fe[a * dpn + c];
+                }
+            }
+        }
+    }
+    Ok(f_thermal)
 }
 
 /// Constraints resolved to `(dof, value)` pairs, ascending and unique, with the Constraint
@@ -271,6 +419,10 @@ pub fn resolve(p: &Problem<'_>) -> Result<ResolvedConstraints, Error> {
     for (i, c) in p.constraints.iter().enumerate() {
         let set = p.set(&c.nodes)?;
         for &node in &set.nodes {
+            // ponytail: `Constraint::dofs` is `[bool; 3]`, so `dofs_per_node` up to 3 (every
+            // idealisation through axisymmetric twist) is fully representable and `take(dpn)`
+            // only ever drops trailing `false`s. A `dofs_per_node` above 3 would silently drop
+            // a real request instead; that needs a named `constraint.fix` error, not this take.
             for (d, on) in c.dofs.iter().enumerate().take(dpn) {
                 if *on {
                     all.push((node * dpn as u32 + d as u32, c.value, i));
@@ -299,7 +451,7 @@ pub fn resolve(p: &Problem<'_>) -> Result<ResolvedConstraints, Error> {
 
 /// The `constraint.conflict` error: which node, which component, which two Constraints.
 fn conflict(p: &Problem<'_>, dof: u32, dpn: usize, first: usize, second: usize, a: f64, b: f64) -> Error {
-    let comp = ["ux", "uy", "uz"][dof as usize % dpn];
+    let comp = p.dof_labels()[dof as usize % dpn];
     let (n1, n2) = (&p.constraints[first].name, &p.constraints[second].name);
     Error::new(
         ErrorCode::ConstraintConflict,

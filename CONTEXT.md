@@ -10,7 +10,7 @@ a thing *is*; how it is implemented lives in the ADRs and the plan.
 **Session**:
 One activation of one Model in a runtime. New, open and import create a fresh identity even
 when the saved bytes or project name are identical. A producer is bound to that activation;
-its Commands cannot silently follow a later active Model. Ownership is checked by SessionOwner; see ADR 0020 and issues #380–#385.
+its Commands cannot silently follow a later active Model. Ownership is checked by SessionOwner; see [the session host contract](docs/session-host-contract.md) and issues #380–#385.
 
 **StateVersion**:
 A monotonic counter of committed observable engine state within the runtime. It advances for
