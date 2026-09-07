@@ -22,13 +22,15 @@ use crate::post::{FieldData, Per};
 /// Elements per parallel chunk, a constant so the work partition never depends on threads.
 const CHUNK: usize = 2048;
 
-/// The linear element whose shape functions span the extrapolation: the corners of `kind`.
+/// The linear element whose shape functions span the extrapolation: the corners of `kind`,
+/// which for a kind that is already linear is the kind itself.
 fn corner_kind(kind: ElementKind) -> ElementKind {
     match kind {
-        ElementKind::Hex8 | ElementKind::Hex20 => ElementKind::Hex8,
-        ElementKind::Tet4 | ElementKind::Tet10 => ElementKind::Tet4,
-        ElementKind::Quad4 | ElementKind::Quad8 => ElementKind::Quad4,
-        ElementKind::Tri3 | ElementKind::Tri6 => ElementKind::Tri3,
+        ElementKind::Hex20 => ElementKind::Hex8,
+        ElementKind::Tet10 => ElementKind::Tet4,
+        ElementKind::Quad8 => ElementKind::Quad4,
+        ElementKind::Tri6 => ElementKind::Tri3,
+        linear => linear,
     }
 }
 

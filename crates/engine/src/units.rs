@@ -94,6 +94,7 @@ const DIM_NAMES: &[(Dimension, &str)] = &[
     (Dimension([0, 0, 0, 0]), "dimensionless"),
     (Dimension([1, 0, 0, 0]), "length"),
     (Dimension([2, 0, 0, 0]), "area"),
+    (Dimension([4, 0, 0, 0]), "second moment of area"),
     (Dimension([3, 0, 0, 0]), "volume"),
     (Dimension([0, 1, 0, 0]), "mass"),
     (Dimension([0, 0, 1, 0]), "time"),
@@ -154,6 +155,8 @@ dims! {
     HeatFlux, "heat_flux", "1 kW/m^2", [0,1,-3,0];
     HeatSource, "heat_source", "1 kW/m^3", [-1,1,-3,0];
     Frequency, "frequency", "50 Hz", [0,0,-1,0];
+    Area, "area", "2000 mm^2", [2,0,0,0];
+    SecondMoment, "second_moment", "1.7e6 mm^4", [4,0,0,0];
     Dimensionless, "dimensionless", "0.3", [0,0,0,0];
 }
 

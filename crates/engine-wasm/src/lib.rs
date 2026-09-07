@@ -158,7 +158,9 @@ impl Engine {
 
     /// What the viewer draws, as fresh typed arrays: the Mesh skin once the Model has mesh
     /// settings, otherwise the Bodies' geometry triangles and tagged Sheet outlines.
-    /// `edges` contains vertex-index pairs, with `edgeSet`/`edgeBody` identifying each edge.
+    /// `edges` contains vertex-index pairs, with `edgeSet`/`edgeBody` identifying each edge:
+    /// the boundary of a 2D mesh, the outlines of a Sheet, and the line members of a truss,
+    /// which have no skin to draw and are the whole of what such a Body looks like.
     /// `triSet` indexes `setNames`
     /// (`u32::MAX` for a triangle in no Set) and `triBody` indexes `bodyNames`.
     pub fn surface(&mut self) -> Result<JsValue, JsValue> {
@@ -190,6 +192,10 @@ impl Engine {
                 edge_set.extend(s.set_of_face.iter().map(|set| set.unwrap_or(u32::MAX)));
                 edge_body.extend(s.faces.iter().map(|face| built.mesh.block_of(face.elem).0 as u32));
             }
+            // Line members ride the same channel: one segment each, in no face Set.
+            edges.extend(s.lines.iter().flatten().copied());
+            edge_set.extend(s.lines.iter().map(|_| u32::MAX));
+            edge_body.extend(s.line_elem.iter().map(|&e| built.mesh.block_of(e).0 as u32));
             set_names = s.set_names;
             body_names = built.body_of_block.clone();
             "mesh"
