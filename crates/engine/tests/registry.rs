@@ -5933,6 +5933,12 @@ fn a_harmonic_step_needs_a_current_modal_result_and_a_usable_sweep() {
     let missing = err(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
     assert_eq!((missing.code, missing.where_.as_deref()), (ErrorCode::Schema, Some("fStart")));
     assert!(missing.suggestion.expect("a way out").contains("harmonic"));
+    // Either end of the sweep may be the one that is missing.
+    let mut e = engine();
+    harmonic_bar(&mut e, r#","fStart":"800 Hz","points":9"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"modes"}"#);
+    let missing = err(&mut e, r#"{"cmd":"solve.run","step":"sweep"}"#);
+    assert_eq!((missing.code, missing.where_.as_deref()), (ErrorCode::Schema, Some("fStop")));
     // One point is not a sweep, and `query.cost` says so before anything is allocated.
     let mut e = engine();
     harmonic_bar(&mut e, r#","fStart":"800 Hz","fStop":"2400 Hz","points":1"#);
@@ -5962,6 +5968,25 @@ fn harmonic_damping_is_validated_where_it_is_written() {
         );
         assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some(field)), "{extra}");
         assert!(bad.suggestion.is_some(), "{extra}");
+    }
+    // Every quantity of the sweep is checked for its dimension where it is written, like `tEnd`.
+    for (field, value) in [("fStart", "1 m"), ("fStop", "1 m"), ("rayleighAlpha", "1 m"), ("rayleighBeta", "1 m")] {
+        let mut fields = [("fStart", "1 Hz"), ("fStop", "2 Hz"), ("rayleighAlpha", "0 Hz"), ("rayleighBeta", "0 s")];
+        for f in &mut fields {
+            if f.0 == field {
+                f.1 = value;
+            }
+        }
+        let quantities: Vec<String> = fields.iter().map(|(k, v)| format!(r#""{k}":"{v}""#)).collect();
+        let bad = err(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"step.add","name":"bad","procedure":"harmonic","constraints":[],"loads":[],
+                    "after":"modes","points":2,{}}}"#,
+                quantities.join(",")
+            ),
+        );
+        assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some(field)), "{field}");
     }
     // Zero is the boundary that must be accepted: no damping at all is a legal sweep.
     ok(

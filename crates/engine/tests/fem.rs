@@ -5776,16 +5776,21 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
             }
         }
     }
-    // A harmonic Step reports at three phases too, and only runs against a modal Result.
+    // A harmonic Step reports at three phases too, and only runs against a modal Result: the
+    // assembly (call 0), one solve call per retained frequency (1..=4 here) and the post (5).
     let modal = run_step(&solid, &Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() })
         .expect("a bar with mass has modes");
-    for at in 0..3 {
+    for at in [0, 1, 4, 5] {
         let mut go = cancel_on(at);
         let step = harmonic_step(10.0, 100.0, 4, 0.02, 1);
-        if let Err(e) = pollster::block_on(procedure::run(&solid, &step, &Pool::new(2), None, Some(&modal), &mut go)) {
-            assert_eq!(e.code, ErrorCode::Cancelled, "{}", e.cause);
-        }
+        let e = pollster::block_on(procedure::run(&solid, &step, &Pool::new(2), None, Some(&modal), &mut go))
+            .expect_err("cancelled");
+        assert_eq!(e.code, ErrorCode::Cancelled, "call {at}: {}", e.cause);
     }
+    let mut go = cancel_on(6);
+    let step = harmonic_step(10.0, 100.0, 4, 0.02, 1);
+    pollster::block_on(procedure::run(&solid, &step, &Pool::new(2), None, Some(&modal), &mut go))
+        .expect("a host that never says stop gets its sweep");
 }
 
 /// A factorization is only a candidate: verify the full original operator independently.
