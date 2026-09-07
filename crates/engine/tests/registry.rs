@@ -10854,6 +10854,11 @@ fn beam_commands_validate_summarise_and_round_trip() {
         ok(&mut e, &text);
         assert_eq!(e.model(), &before, "{name}");
     }
+    // A moment on a Set the Mesh never makes (a line Body has no faces) is the same
+    // `set.empty` every Load gets.
+    ok(&mut e, r#"{"cmd":"load.moment","name":"lost","on":"beam.side","total":["1 kN m","0 kN m","0 kN m"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"lost","procedure":"static","constraints":["root"],"loads":["lost"]}"#);
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"lost"}"#).code, ErrorCode::SetEmpty);
     // Renaming the Set or the Body a moment acts on follows it.
     ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"beam","to":"girder"}"#);
     assert_eq!(e.model().load("twist").unwrap().kind.set(), Some("girder.p1"));

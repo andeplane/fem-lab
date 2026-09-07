@@ -40,7 +40,7 @@ use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
 use femlab_engine::post::convergence::{observed_rate, richardson};
 use femlab_engine::post::probe::{path, probe, probe_checked};
-use femlab_engine::post::stress::{average_at_nodes, gp_to_nodes, principal, stress_gp, von_mises};
+use femlab_engine::post::stress::{average_at_nodes, gp_to_nodes, principal, section_fields, stress_gp, von_mises};
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
 use femlab_engine::procedure::modal::assemble_mass;
 use femlab_engine::procedure::nonlinear::{self, Converge as NlConverge, Options as NlOptions};
@@ -14384,6 +14384,11 @@ fn a_solid_next_to_a_beam_keeps_its_own_answer_and_the_beam_keeps_its_own() {
         }
     }
     assert!(!res_alone.fields.contains_key(&Field::Rotation), "no beams, no rotation field");
+    // Section forces need a Section, exactly as the stiffness does.
+    let mut bare = mixed_problem(&mixed, &sets, &bodies, 0.0, 0.0);
+    bare.section_of_block = vec![None, None];
+    let zeros = vec![0.0; bare.n_dofs()];
+    assert_eq!(section_fields(&bare, &zeros).expect_err("no section").code, ErrorCode::ModelNoSection);
     // A moment on a Set the Mesh does not have is the same `set.empty` error every Load gets.
     let mut lost = mixed_problem(&mixed, &sets, &bodies, 0.0, 0.0);
     lost.loads = vec![Load::NodalMoment { nodes: "nope".into(), m: [1.0, 0.0, 0.0] }];
