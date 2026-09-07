@@ -820,9 +820,6 @@ fn many(shapes: &[ShapeSpec], where_: &str) -> Result<Vec<Shape>, Error> {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "cmd")]
-// `step.add` carries every procedure's optional fields and is the one wide variant; Commands
-// are parsed, journaled and applied once each, never stored by the million.
-#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Start a new, empty Model and Journal with this name. Discards the current Model, its
     /// Results and the undo history; it is the first entry of every Journal, so call it once
