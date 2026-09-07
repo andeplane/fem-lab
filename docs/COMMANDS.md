@@ -3586,7 +3586,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nThe total force is the pressure times the face area and is reported by query.model.",
+      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.",
       "type": "object",
       "properties": {
         "name": {
