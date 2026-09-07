@@ -14529,6 +14529,8 @@ fn a_solid_next_to_a_beam_keeps_its_own_answer_and_the_beam_keeps_its_own() {
     let step = Step::Explicit { t_end: 1e-6, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
     let res = run_step(&dynamic, &step).expect("an explicit step over a mixed model");
     assert!(res.fields[&Field::Displacement].data.iter().all(|v| v.is_finite()));
+}
+
 // ------------------------------------------------- J2 plasticity (#60)
 //
 // Von Mises plasticity with isotropic hardening through the `MaterialLaw` Extension Point, inside

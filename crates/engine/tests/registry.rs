@@ -10987,6 +10987,8 @@ fn a_symmetry_plane_guides_a_beam_end_and_an_orientation_along_it_is_refused() {
     let er = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("element 0")));
     assert!(er.cause.contains("orientation") && er.cause.contains("parallel"), "{er:?}");
+}
+
 // ------------------------------------------------- J2 plasticity (#60)
 
 /// `material.add "steel"` with `E`, `nu` and whatever the case adds.

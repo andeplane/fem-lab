@@ -677,8 +677,11 @@ ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give
 of the two. `orientation` turns the material axes (wood grain, fibre direction, rolling
 direction) away from the global axes; without it they are the global axes. Density `rho`
 is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
-heat transfer; `source` records where the numbers came from. Re-issuing with an existing
-name edits the material in place, so an omitted `orientation` clears the previous one.
+heat transfer; `source` records where the numbers came from. `yield` is the yield
+stress the safety factor and the `plasticity` block read; `plasticity` makes the
+material elastic–plastic (J2, isotropic hardening) in `static-nonlinear` Steps. Re-issuing
+with an existing name edits the material in place, so an omitted `orientation` or
+`plasticity` clears the previous one.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -692,6 +695,7 @@ name edits the material in place, so an omitted `orientation` clears the previou
 | k | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_conductivity"},{"type":"null"}]}</code> |  |
 | cp | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_specific_heat"},{"type":"null"}]}</code> |  |
 | yield | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_stress"},{"type":"null"}]}</code> |  |
+| plasticity | no | <code>{"anyOf":[{"$ref":"#/$defs/Plasticity"},{"type":"null"}]}</code> |  |
 | source | no | <code>{"type":["string","null"]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"material.add"}</code> |  |
 
@@ -1547,7 +1551,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces.",
   "type": "string",
   "enum": [
     "displacement",
@@ -1556,6 +1560,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
     "vonMises",
     "principal",
     "strain",
+    "plasticStrain",
     "reaction",
     "temperature",
     "rotation",
@@ -1584,6 +1589,33 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "type": "string",
       "const": "full"
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>HardeningPoint</summary>
+
+```json
+{
+  "description": "One point of a hardening curve: the yield stress at an equivalent plastic strain.",
+  "type": "object",
+  "properties": {
+    "plasticStrain": {
+      "description": "Equivalent plastic strain (dimensionless, so 0.02 is 2 %).",
+      "type": "number",
+      "format": "double"
+    },
+    "stress": {
+      "$ref": "#/$defs/Q_stress"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "plasticStrain",
+    "stress"
   ]
 }
 ```
@@ -2092,6 +2124,42 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "maxItems": 3
     }
   }
+}
+```
+
+</details>
+
+<details>
+<summary>Plasticity</summary>
+
+```json
+{
+  "description": "Rate-independent von Mises (J2) plasticity with isotropic hardening, for an isotropic\nMaterial in a `static-nonlinear` Step. The initial yield stress is `yield` on `material.add`.\nGive exactly one of `H` and `table`: `H` is the plastic modulus `dσ_y/dε̄ᵖ` of linear\nhardening (the tangent modulus of a tension test is then `E_t = E H / (E + H)`; `\"0 Pa\"` is\nperfect plasticity), `table` is the tension curve as (equivalent plastic strain, yield\nstress) points, piecewise linear, starting at plastic strain 0 with `yield` and held flat\nbeyond its last point. Every other procedure uses the elastic part and warns\n`material.plasticityIgnored`. Small strain: not a finite-strain plasticity model.",
+  "type": "object",
+  "properties": {
+    "H": {
+      "description": "Linear hardening modulus, `σ_y = yield + H ε̄ᵖ`; zero is perfectly plastic.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Q_stress"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "table": {
+      "description": "Hardening curve, at least two points with plastic strain ascending from 0 and stress\nnot decreasing; the first stress is the initial yield.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/HardeningPoint"
+      }
+    }
+  },
+  "additionalProperties": false
 }
 ```
 
@@ -4523,7 +4591,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "x-execution": "modelWrite"
     },
     {
-      "description": "Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's\nratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one\nof the two. `orientation` turns the material axes (wood grain, fibre direction, rolling\ndirection) away from the global axes; without it they are the global axes. Density `rho`\nis needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for\nheat transfer; `source` records where the numbers came from. Re-issuing with an existing\nname edits the material in place, so an omitted `orientation` clears the previous one.",
+      "description": "Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's\nratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one\nof the two. `orientation` turns the material axes (wood grain, fibre direction, rolling\ndirection) away from the global axes; without it they are the global axes. Density `rho`\nis needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for\nheat transfer; `source` records where the numbers came from. `yield` is the yield\nstress the safety factor and the `plasticity` block read; `plasticity` makes the\nmaterial elastic–plastic (J2, isotropic hardening) in `static-nonlinear` Steps. Re-issuing\nwith an existing name edits the material in place, so an omitted `orientation` or\n`plasticity` clears the previous one.",
       "type": "object",
       "properties": {
         "name": {
@@ -4610,6 +4678,16 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "anyOf": [
             {
               "$ref": "#/$defs/Q_stress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plasticity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Plasticity"
             },
             {
               "type": "null"
@@ -6375,7 +6453,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element. `plasticStrain` is the\nequivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with\nan elastic–plastic Material produces.",
   "type": "string",
   "enum": [
     "displacement",
@@ -6384,6 +6462,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
     "vonMises",
     "principal",
     "strain",
+    "plasticStrain",
     "reaction",
     "temperature",
     "rotation",
@@ -6463,6 +6542,33 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "sampling"
       ]
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>HardeningPoint</summary>
+
+```json
+{
+  "description": "One point of a hardening curve: the yield stress at an equivalent plastic strain.",
+  "type": "object",
+  "properties": {
+    "plasticStrain": {
+      "description": "Equivalent plastic strain (dimensionless, so 0.02 is 2 %).",
+      "type": "number",
+      "format": "double"
+    },
+    "stress": {
+      "$ref": "#/$defs/Q_stress"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "plasticStrain",
+    "stress"
   ]
 }
 ```
@@ -7024,6 +7130,42 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "maxItems": 3
     }
   }
+}
+```
+
+</details>
+
+<details>
+<summary>Plasticity</summary>
+
+```json
+{
+  "description": "Rate-independent von Mises (J2) plasticity with isotropic hardening, for an isotropic\nMaterial in a `static-nonlinear` Step. The initial yield stress is `yield` on `material.add`.\nGive exactly one of `H` and `table`: `H` is the plastic modulus `dσ_y/dε̄ᵖ` of linear\nhardening (the tangent modulus of a tension test is then `E_t = E H / (E + H)`; `\"0 Pa\"` is\nperfect plasticity), `table` is the tension curve as (equivalent plastic strain, yield\nstress) points, piecewise linear, starting at plastic strain 0 with `yield` and held flat\nbeyond its last point. Every other procedure uses the elastic part and warns\n`material.plasticityIgnored`. Small strain: not a finite-strain plasticity model.",
+  "type": "object",
+  "properties": {
+    "H": {
+      "description": "Linear hardening modulus, `σ_y = yield + H ε̄ᵖ`; zero is perfectly plastic.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Q_stress"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "table": {
+      "description": "Hardening curve, at least two points with plastic strain ascending from 0 and stress\nnot decreasing; the first stress is the initial yield.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/HardeningPoint"
+      }
+    }
+  },
+  "additionalProperties": false
 }
 ```
 
