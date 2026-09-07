@@ -19,7 +19,10 @@ use crate::model::{ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
 use crate::post::{Extremum, FieldData};
 use crate::procedure::{self, report, StepResult};
-use crate::query::{Extreme, HistoryRow, Output, ReactionRow, ResultSummary, StudyReport, StudyRow, Valued};
+use crate::query::{
+    AssumedMaterialProperty, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary, StudyReport,
+    StudyRow, Valued,
+};
 use crate::solve::SolveOptions;
 use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Q};
 
@@ -204,6 +207,65 @@ fn thermal_field(
     Ok(Some((nodal, 0.0)))
 }
 
+/// Explain which mass-bearing path read an omitted density.
+fn rho_assumption_cause(procedure: Procedure, has_gravity: bool) -> Option<&'static str> {
+    match procedure {
+        Procedure::Static if has_gravity => Some("gravity read the omitted density as zero"),
+        Procedure::Modal => Some("modal mass assembly read the omitted density as zero"),
+        Procedure::Explicit => Some("explicit mass assembly read the omitted density as zero"),
+        _ => None,
+    }
+}
+
+/// Optional material values this exact procedure read after the Model-to-Problem boundary
+/// resolved an omission to zero. Callers attach these only after the procedure succeeds.
+fn result_assumptions(
+    model: &Model,
+    built: &BuiltMesh,
+    step: &str,
+    procedure: Procedure,
+    p: &Problem<'_>,
+) -> Vec<ResultAssumption> {
+    let rho_cause = rho_assumption_cause(procedure, p.loads.iter().any(|load| matches!(load, Load::Gravity { .. })));
+    // Static and explicit assembly both form the thermal force. Modal forms stiffness too, but
+    // discards that load vector, so alpha is not solver-used there.
+    let reads_alpha = matches!(procedure, Procedure::Static | Procedure::Explicit) && p.temperature.is_some();
+    // A BuiltMesh block always has elements. Collecting by Body and material also collapses a
+    // mapped Body made from several blocks into one assumption row per property.
+    let assigned: std::collections::BTreeMap<(&str, usize), ()> = built
+        .body_of_block
+        .iter()
+        .zip(&p.material_of_block)
+        .filter_map(|(body, material)| material.map(|index| ((body.as_str(), index), ())))
+        .collect();
+    let mut out = Vec::new();
+    for ((body, material_index), ()) in assigned {
+        let material = &model.materials[material_index];
+        let mut push = |property, unit: &str, cause: &str| {
+            out.push(ResultAssumption {
+                step: step.to_string(),
+                body: body.to_string(),
+                material: material.name.clone(),
+                property,
+                value: Valued { value: 0.0, unit: unit.to_string() },
+                source: material.source.clone(),
+                cause: cause.to_string(),
+            });
+        };
+        if let (Some(cause), None) = (rho_cause, material.rho) {
+            push(AssumedMaterialProperty::Rho, "kg/m^3", cause);
+        }
+        if reads_alpha && material.alpha.is_none() {
+            push(
+                AssumedMaterialProperty::Alpha,
+                "1/K",
+                "the resolved temperature field read the omitted thermal expansion coefficient as zero",
+            );
+        }
+    }
+    out
+}
+
 /// The wire name of a procedure, from serde's rename.
 pub fn procedure_name(p: Procedure) -> String {
     serde_json::to_string(&p).unwrap_or_default().trim_matches('"').to_string()
@@ -375,7 +437,11 @@ impl Engine {
             if matches!(&proc_step, procedure::Step::HeatTransient { .. } | procedure::Step::Explicit { .. }) {
                 planned_cost(p.mesh, Some(&p), &proc_step)?.enforce(&step.name)?;
             }
-            procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?
+            let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+            let mut result =
+                procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), prev.as_ref(), on_progress).await?;
+            result.assumptions = assumptions;
+            result
         };
         result.solver.time_ms = self.host.now_ms() - started;
         let hash = self.model_hash();
@@ -454,8 +520,12 @@ impl Engine {
             let (mut result, dofs) = {
                 let built = self.mesh.as_ref().expect("built above");
                 let p = build_problem(&self.model, built, &step)?;
-                let result = procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
-                (result, p.n_dofs() as u64)
+                let dofs = p.n_dofs() as u64;
+                let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let mut result =
+                    procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
+                result.assumptions = assumptions;
+                (result, dofs)
             };
             result.solver.time_ms = self.host.now_ms() - started;
             let built = self.mesh.as_ref().expect("built above");
@@ -656,6 +726,7 @@ impl Engine {
                 })
                 .collect(),
             applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
+            assumptions: res.assumptions.clone(),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
             history: res
                 .history
@@ -711,6 +782,22 @@ pub fn export_fields(res: &StepResult) -> Vec<(&'static str, usize, Vec<f64>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn density_assumption_causes_name_the_procedure_reading_it() {
+        assert_eq!(rho_assumption_cause(Procedure::Static, true), Some("gravity read the omitted density as zero"));
+        assert_eq!(
+            rho_assumption_cause(Procedure::Modal, false),
+            Some("modal mass assembly read the omitted density as zero")
+        );
+        assert_eq!(
+            rho_assumption_cause(Procedure::Explicit, false),
+            Some("explicit mass assembly read the omitted density as zero")
+        );
+        for procedure in [Procedure::Static, Procedure::HeatSteady, Procedure::HeatTransient] {
+            assert_eq!(rho_assumption_cause(procedure, false), None);
+        }
+    }
 
     /// Every Result field reaches a summary in the Model's own units, so every one of them
     /// needs a dimension and a name — including the ones only a later procedure produces.
