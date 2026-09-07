@@ -16,6 +16,37 @@ handoff state pixel-for-pixel. Live issue and PR state below was read on the sam
 main branch advanced after this checkpoint, so a later merge is identified explicitly instead of
 being counted as part of `09a1530`.
 
+## Delivery update — 7 September 2026
+
+The integrated source checkpoint is now main `3a3e1e40e2496ae745768ae1f6473170d32d60e0`.
+Its [deployment](https://github.com/andeplane/fem-lab/actions/runs/34074659030) passed,
+including the actual thumbnail-generation step. Its
+[CI](https://github.com/andeplane/fem-lab/actions/runs/34074659080) remains in progress at
+this audit update; Windows and native/WASM parity have passed. This is not a claim that all
+current-main gates or the complete design audit have passed.
+
+The matrix below is retained as a historical checkpoint. Its statements that #221, #223,
+#227 and #237 are open have been superseded: all four are merged into current main.
+The corresponding source changes deliver pressure area/force previews, structured simplex
+mesh selection, CodeMirror Script editing, and explicit Model saved-state semantics.
+Assistant Checks, suggestions and the drawer background from #356 are also in current main.
+These delivery facts do not close the remaining whole-screen and interaction acceptance gaps.
+
+The theory work was not merged through #199: GitHub closed that stacked PR without a merge.
+Its updated source is now [#366](https://github.com/andeplane/fem-lab/pull/366), targeting main
+and still pending fresh checks. Step dragging remains in #233, also updated against current
+main. Project-folder integration remains in #252. Full design acceptance remains open.
+
+A manual inspection of the deployed page on 7 September used a new empty audit project with
+Properties and Assistant open. At a 1600 × 1000 viewport, the order was Tree, Viewer/Bottom,
+Properties, Assistant: the Assistant was on the right, not below the workspace. It showed
+skills, suggestion shortcuts and the composer in the drawer. The 1180 × 1000 inspection
+confirmed the same placement; DOM viewport width and document scroll width were both 1180.
+This checks the original placement complaint for the empty-model state only. The viewer
+control strip was clipped at its right edge with all panels open, so complete control
+reachability and the populated Result-state comparison still need explicit acceptance.
+No Assistant request or paid evaluation was submitted during this inspection.
+
 ## Evidence key
 
 - **Merged + rendered** — the implementation is in `09a1530`, and a committed Chromium scenario
@@ -31,7 +62,7 @@ being counted as part of `09a1530`.
 Source and test paths in the matrix are relative to `packages/app/` unless they begin with
 `tools/`.
 
-## Current requirement matrix
+## Historical requirement matrix at `09a1530`
 
 | Handoff requirement | Status at `09a1530` | Source and test evidence | Rendered acceptance or remaining gap |
 | --- | --- | --- | --- |
