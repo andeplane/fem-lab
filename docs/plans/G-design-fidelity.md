@@ -188,6 +188,45 @@ Source and test paths in the matrix are relative to `packages/app/` unless they 
 | Full-screen calculation report uses real `query.report` Markdown, typeset maths, current viewer image, copy and PDF/print | **Merged + source/test** ([#14](https://github.com/andeplane/fem-lab/issues/14)) | `src/ui/Report.tsx`, `src/ui/report.css`; `test/report.test.tsx` covers Markdown, KaTeX, sanitisation, delayed image decode, copy, print readiness and no-Result/error states | PR #163 had reviewed real-Chromium paper/print evidence, but the baseline has no committed report-specific e2e scenario. The final audit should render and compare the integrated paper and exercise print once more. |
 | Tet4/Tet10 are reachable through `mesh.set`; free tetrahedral meshing is available where promised | **Pending #4 / PR #223 and #22** | `09a1530` includes simplex element infrastructure and related numerical work, but the production registry cannot yet deliver the complete handoff choice | [PR #223](https://github.com/andeplane/fem-lab/pull/223) is open with green branch checks. [#22](https://github.com/andeplane/fem-lab/issues/22) separately tracks free 3D tetrahedral meshing. Neither capability is accepted on this baseline. |
 
+## Fixed-artifact acceptance at main `6ed4922`
+
+For independent acceptance, downloaded the 4.5 MB `dist` artifact from successful
+main CI [34098537846](https://github.com/andeplane/fem-lab/actions/runs/34098537846)
+and served its unchanged files locally with cross-origin isolation headers.
+No build or CI tests were rerun. The artifact is retained at
+`/tmp/fem-audit-6ed4922-dist` for repeatable inspection.
+
+Direct Chrome observations on this exact version:
+
+- At 1600 × 1000, the empty screen rendered its local capability line, composer,
+  project creation and three cards. The solved cantilever with Properties and
+  Assistant open showed Tree → Viewer/Bottom → Properties → Assistant, with
+  document width equal to 1600 px.
+- The viewer toolbar's initially clipped Fit button became visible when Tab
+  moved focus from Top to Fit; its right edge was 882.76 px inside the viewer.
+  Enter activated Fit. At 1180 × 1000, Enter on the Assistant toggle dismissed
+  the drawer and exposed Properties and viewer controls. The prior toolbar
+  clipping observation therefore does not establish unreachable controls.
+- The report rendered the real revision-10 data and enabled Export PDF only
+  after readiness. This adds exact-artifact screen evidence, not PDF output or
+  clipboard acceptance.
+- Editing the existing tip load's z quantity to `2 m` showed the dimensional
+  error “cannot express a length in 'N' (a force)”. Replacing it with `-2 kN`
+  and applying advanced the Model to revision 11, marked the Result stale and
+  explained that the Model differs from the bundled benchmark.
+- Re-solve visibly entered “Solving 10 %” with Cancel available, then completed
+  at revision 12. Tip displacement changed from −0.1901 mm to −0.3802 mm; stale
+  status cleared, while the informative-only benchmark provenance warning
+  correctly remained.
+
+The first cancellation attempt lost its target because the short solve had
+already completed. A subsequent immediate solve/cancel attempt timed out the
+browser tool after 30 seconds; recovering that tab also timed out after 30
+seconds. Cancellation outcome is unverified. Do not treat either tool timeout
+as evidence of successful cancellation or a confirmed app defect. Report
+copy/PDF output, complete error/cancellation coverage and the remaining visual
+comparisons stay open.
+
 ## Remaining acceptance work and dependencies
 
 This separates the existing audit's independent checks from blocked external
