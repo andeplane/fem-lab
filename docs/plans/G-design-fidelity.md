@@ -80,6 +80,22 @@ This verifies the populated cantilever comparison on the deployed merge. The
 Assistant was closed in this inspection; narrow-width scrolling, other benchmark
 cards and the complete integrated state sweep remain separate acceptance work.
 
+### Deployed Gallery and populated drawer inspection
+
+A subsequent deployed-page inspection on 7 September confirmed all 22 Gallery
+preview images were decoded at their intended 320 × 180 dimensions. The Gallery
+exposed tag and difficulty filters, Command counts and benchmark references.
+This is direct image-loading evidence; keyboard filtering remains part of the
+interaction sweep.
+
+Opening the cantilever and Assistant at the browser's 1280 × 720 viewport kept
+the Assistant on the right and the document scroll width at 1280 px. The drawer
+showed seven skill shortcuts, two suggestions and its composer. The adjacent
+viewer controls and part of the Theory card were visibly clipped; horizontal
+and keyboard reachability still require acceptance. This viewport does not
+replace the required 1180 px boundary and 1600 × 1000 reference comparisons.
+No paid Assistant request was submitted.
+
 ### Current source and scenario references
 
 These references were inspected at `3a3e1e4`; scenario existence is not a substitute for
