@@ -135,7 +135,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       writeText: vi.fn(async () => undefined),
       writeBytes: vi.fn(async () => undefined),
     },
-    examples: { fetch: vi.fn(async () => JSON.stringify(MODEL_FILE)) },
+    examples: { open: vi.fn(async (name: string) => ({ name, commands: 2 })) },
     ai: { setKey: vi.fn(), setModel: vi.fn() },
     env: { webgpu: true, crossOriginIsolated: true, threads: 4, userAgent: 'test', engine: 'local' },
   };
