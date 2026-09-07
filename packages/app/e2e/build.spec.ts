@@ -120,7 +120,7 @@ test.describe('@cpu the cantilever, built through the UI', () => {
     // 8 · step.add: an enum as a segmented control and two multi-pickers.
     await page.locator('.chip-add', { hasText: '+ add step' }).click();
     await fill(page, 'name', 'static');
-    await field(page, 'procedure').locator('button', { hasText: 'static' }).click();
+    await field(page, 'procedure').locator('button', { hasText: /^static$/ }).click();
     await field(page, 'constraints').locator('.chip-cand', { hasText: 'root' }).click();
     await field(page, 'loads').locator('.chip-cand', { hasText: 'tip' }).click();
     await apply(page);
