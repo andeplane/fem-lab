@@ -13,6 +13,7 @@ import '@fontsource/ibm-plex-sans/latin-600.css';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
+import { clearsBenchmark } from './benchmark';
 import { devApiKeys } from './dev-keys';
 import { appHostCommands, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
 import { ResultsView } from './results';
@@ -127,6 +128,7 @@ async function boot(): Promise<void> {
       const ack = await registry.dispatch(cmd);
       if (REPLACES_MODEL.has(cmd.cmd) && !opensExample) forkProject();
       store.log('command', cmd.cmd);
+      if (clearsBenchmark(cmd.cmd, ack)) store.set({ benchmark: null });
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, and `file.open` / `example.open` replace the engine Model and
       // Journal outright, so the store, viewer and Results have to catch up after those too.

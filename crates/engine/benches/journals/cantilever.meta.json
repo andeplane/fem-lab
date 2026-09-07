@@ -12,9 +12,9 @@
     "quantity": "tip deflection δ",
     "value": -0.1901,
     "unit": "mm",
-    "reference": "Euler–Bernoulli δ = PL³/3EI = 0.1905 mm"
+    "reference": "Euler–Bernoulli + Timoshenko δ = PL³/3EI + PL/κGA = 0.1919619 mm"
   },
-  "theory": "A tip-loaded cantilever deflects $\\delta = \\dfrac{PL^3}{3EI}$, with $I = \\dfrac{bh^3}{12}$ for a rectangular section. Here $L = 1\\,\\mathrm{m}$, $P = 1\\,\\mathrm{kN}$, $E = 210\\,\\mathrm{GPa}$ and $b = h = 100\\,\\mathrm{mm}$, so $I = 8.333\\times10^{-6}\\,\\mathrm{m^4}$ and $\\delta = 0.1905\\,\\mathrm{mm}$.",
+  "theory": "A tip-loaded cantilever deflects $\\delta_b = \\dfrac{PL^3}{3EI}$, with $I = \\dfrac{bh^3}{12}$ for a rectangular section. Here $L = 1\\,\\mathrm{m}$, $P = 1\\,\\mathrm{kN}$, $E = 210\\,\\mathrm{GPa}$ and $b = h = 100\\,\\mathrm{mm}$, so bending gives $0.1905\\,\\mathrm{mm}$. Benchmark B1 includes the Timoshenko shear term $\\delta_s = \\dfrac{PL}{\\kappa GA}$ and uses $\\delta_b + \\delta_s = 0.1919619\\,\\mathrm{mm}$ as the independent reference.",
   "tutorial": "cantilever",
   "thumbnail": null
 }
