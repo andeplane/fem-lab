@@ -10089,7 +10089,7 @@ fn every_mesher_passes_the_patch_test_for_every_kind() {
     for (label, mesh) in &meshes {
         let sets = sets_of(mesh);
         for id in idealisations(mesh.kind_of(0)) {
-            let axi = id == Idealisation::Axisymmetric;
+            let axi = id == Idealisation::Axisymmetric { twist: false };
             for (i, e) in patch_modes(&id).into_iter().enumerate() {
                 // constant γ_rz is not an axisymmetric equilibrium state (see A1)
                 if axi && i == 2 {
@@ -10152,7 +10152,7 @@ fn harmonic(h: Harmonic, x: [f64; 3]) -> (f64, [f64; 3], [[f64; 3]; 3]) {
 fn harmonic_of(id: &Idealisation) -> Harmonic {
     match id {
         Idealisation::Solid3d => Harmonic::Solid,
-        Idealisation::Axisymmetric => Harmonic::Axi,
+        Idealisation::Axisymmetric { .. } => Harmonic::Axi,
         Idealisation::PlaneStrain | Idealisation::PlaneStress { .. } => Harmonic::Plane,
     }
 }
