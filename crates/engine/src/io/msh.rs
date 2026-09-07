@@ -23,6 +23,7 @@ use crate::error::{Error, ErrorCode};
 
 fn gmsh_type(kind: ElementKind) -> u32 {
     match kind {
+        ElementKind::Truss2 => 1,
         ElementKind::Tri3 => 2,
         ElementKind::Quad4 => 3,
         ElementKind::Tet4 => 4,
@@ -47,6 +48,7 @@ fn gmsh_face_type(kind: FaceKind) -> u32 {
 
 fn kind_of_gmsh_type(t: u32) -> Option<ElementKind> {
     Some(match t {
+        1 => ElementKind::Truss2,
         2 => ElementKind::Tri3,
         3 => ElementKind::Quad4,
         4 => ElementKind::Tet4,
@@ -137,12 +139,14 @@ const TET4_PERM: [u8; 4] = identity();
 const TET10_PERM: [u8; 10] = tet10_permutation();
 const QUAD4_PERM: [u8; 4] = identity();
 const QUAD8_PERM: [u8; 8] = identity();
+const TRUSS2_PERM: [u8; 2] = identity();
 const TRI3_PERM: [u8; 3] = identity();
 const TRI6_PERM: [u8; 6] = identity();
 
 /// Abaqus → Gmsh node permutation: `gmsh_conn[i] = abaqus_conn[table[i]]`. Identity for every
 /// linear kind and for tri6/quad8 (Gmsh and Abaqus agree there); tet10 swaps its last two nodes;
-/// hex20's twelve mid-edge nodes are reordered (derived above).
+/// hex20's twelve mid-edge nodes are reordered (derived above). A truss2 is Gmsh's own line
+/// element in the same node order.
 pub fn gmsh_permutation(kind: ElementKind) -> &'static [u8] {
     match kind {
         ElementKind::Hex8 => &HEX8_PERM,
@@ -153,6 +157,7 @@ pub fn gmsh_permutation(kind: ElementKind) -> &'static [u8] {
         ElementKind::Quad8 => &QUAD8_PERM,
         ElementKind::Tri3 => &TRI3_PERM,
         ElementKind::Tri6 => &TRI6_PERM,
+        ElementKind::Truss2 => &TRUSS2_PERM,
     }
 }
 
@@ -688,6 +693,9 @@ pub fn read_msh(text: &str) -> Result<Mesh, Error> {
     mesh.elem_sets = elem_sets;
     mesh.face_sets = face_sets;
     mesh.node_sets = node_sets;
+    // A file can name a combination this reader assembles happily but the Mesh forbids — a
+    // line element as the volume element of a 2D mesh, say. One check here covers every kind.
+    mesh.validate().map_err(|e| Error::new(ErrorCode::Schema, e.0).at("mesh"))?;
     Ok(mesh)
 }
 

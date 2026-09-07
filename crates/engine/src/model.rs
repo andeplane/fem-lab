@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::command::{Axis, Dof, Field, Formulation, ObjectKind, Procedure};
+use crate::fem::section::Section;
 use crate::units::UnitSet;
 
 /// Idealisation in SI.
@@ -29,7 +30,7 @@ impl Idealisation {
     }
 }
 
-/// A Body: one named shape with a material.
+/// A Body: one named shape with a material, and a Section when it is made of line members.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Body {
@@ -37,6 +38,17 @@ pub struct Body {
     pub shape: Shape,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<String>,
+    /// The cross-section of its line members; unused by a solid or sheet Body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+}
+
+/// A named cross-section, resolved to SI properties by the section library.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedSection {
+    pub name: String,
+    pub section: Section,
 }
 
 /// A cut out of a Body.
@@ -353,6 +365,10 @@ pub struct Model {
     pub sets: Vec<NamedSet>,
     #[serde(default)]
     pub materials: Vec<Material>,
+    /// Skipped when empty, so a Model with no line members hashes exactly as it did before
+    /// Sections existed and every committed Journal hash still holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<NamedSection>,
     #[serde(default)]
     pub constraints: Vec<Constraint>,
     #[serde(default)]
@@ -381,6 +397,7 @@ impl Model {
             cuts: vec![],
             sets: vec![],
             materials: vec![],
+            sections: vec![],
             constraints: vec![],
             loads: vec![],
             steps: vec![],
@@ -395,6 +412,9 @@ impl Model {
     }
     pub fn material(&self, name: &str) -> Option<&Material> {
         self.materials.iter().find(|m| m.name == name)
+    }
+    pub fn section(&self, name: &str) -> Option<&NamedSection> {
+        self.sections.iter().find(|s| s.name == name)
     }
     pub fn constraint(&self, name: &str) -> Option<&Constraint> {
         self.constraints.iter().find(|c| c.name == name)
@@ -441,6 +461,7 @@ impl Model {
         match kind {
             ObjectKind::Body => self.bodies.iter().map(|b| b.name.as_str()).chain(self.implicit_body()).collect(),
             ObjectKind::Material => self.materials.iter().map(|m| m.name.as_str()).collect(),
+            ObjectKind::Section => self.sections.iter().map(|s| s.name.as_str()).collect(),
             ObjectKind::Set => self.sets.iter().map(|s| s.name.as_str()).collect(),
             ObjectKind::Constraint => self.constraints.iter().map(|c| c.name.as_str()).collect(),
             ObjectKind::Load => self.loads.iter().map(|l| l.name.as_str()).collect(),
@@ -484,7 +505,12 @@ mod tests {
         assert_eq!(Idealisation::PlaneStrain.dim(), 2);
         assert_eq!(Idealisation::PlaneStress { thickness: 0.1 }.dim(), 2);
         assert_eq!(Idealisation::Axisymmetric.dim(), 2);
-        m.bodies.push(Body { name: "beam".into(), shape: Shape::Box { size: [1.0; 3] }, material: None });
+        m.bodies.push(Body {
+            name: "beam".into(),
+            shape: Shape::Box { size: [1.0; 3] },
+            material: None,
+            section: None,
+        });
         m.cuts.push(Cut { name: "hole".into(), from: "beam".into(), shape: Shape::Box { size: [0.1; 3] } });
         m.cuts.push(Cut { name: "other".into(), from: "plate".into(), shape: Shape::Box { size: [0.1; 3] } });
         let s = m.body_shape(m.body("beam").unwrap());
@@ -498,7 +524,12 @@ mod tests {
                 }),
             }
         );
-        m.bodies.push(Body { name: "plain".into(), shape: Shape::Box { size: [1.0; 3] }, material: Some("s".into()) });
+        m.bodies.push(Body {
+            name: "plain".into(),
+            shape: Shape::Box { size: [1.0; 3] },
+            material: Some("s".into()),
+            section: None,
+        });
         let s = m.body_shape(m.body("plain").unwrap());
         assert_eq!(s, Shape::Named { name: "plain".into(), shape: Box::new(Shape::Box { size: [1.0; 3] }) });
         assert!(m.body("nope").is_none());
