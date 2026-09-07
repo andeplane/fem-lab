@@ -33,9 +33,14 @@ Assistant Checks, suggestions and the drawer background from #356 are also in cu
 These delivery facts do not close the remaining whole-screen and interaction acceptance gaps.
 
 The theory work was not merged through #199: GitHub closed that stacked PR without a merge.
-Its updated source is now [#366](https://github.com/andeplane/fem-lab/pull/366), targeting main
-and still pending fresh checks. Step dragging remains in #233, also updated against current
-main. Project-folder integration remains in #252. Full design acceptance remains open.
+Its replacement [#366](https://github.com/andeplane/fem-lab/pull/366) merged at main
+`19a6f5ddb2782bbaecb3dd0d1b3d555e470518f9`. All seven checks passed on its exact
+source tree before merge; the actual merge tree matched. The subsequent
+[deployment](https://github.com/andeplane/fem-lab/actions/runs/34095869924) passed,
+including thumbnail generation. Subsequent
+[main CI](https://github.com/andeplane/fem-lab/actions/runs/34095869938) completed
+successfully with all seven checks, including CPU, service-worker and WebGPU browser scenarios.
+Step dragging remains in #233, with all seven branch checks passed. Project-folder integration remains in #252. Full design acceptance remains open.
 
 A manual inspection of the deployed page on 7 September used a new empty audit project with
 Properties and Assistant open. At a 1600 × 1000 viewport, the order was Tree, Viewer/Bottom,
@@ -60,6 +65,20 @@ Copy Markdown was invoked, but the browser tool returned an empty clipboard and 
 error feedback; its successful output is therefore unverified in this session. Subsequent
 browser control timed out, so print/PDF and the remainder of the comparison were not completed.
 The report acceptance row remains open. No API-backed Assistant request was made.
+
+### Deployed Theory inspection at `19a6f5d`
+
+A manual inspection of the newly deployed cantilever at 1600 × 1000 showed the
+Theory panel beside the real Results table in the bottom panel. The card rendered
+the bending and Timoshenko shear formula, current FEM displacement −0.1901 mm,
+reference magnitude 0.192 mm, difference 0.957 %, and the ≤ 2 % tolerance with a
+pass indication. Its source named the Euler–Bernoulli plus Timoshenko correction
+and catalogue B1. The viewer showed the solved contoured beam and deformation
+scale ×200; the Journal contained ten Commands.
+
+This verifies the populated cantilever comparison on the deployed merge. The
+Assistant was closed in this inspection; narrow-width scrolling, other benchmark
+cards and the complete integrated state sweep remain separate acceptance work.
 
 ### Current source and scenario references
 
