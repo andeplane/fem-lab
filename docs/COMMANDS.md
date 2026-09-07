@@ -4867,7 +4867,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "name",
         "on"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Prescribe a non-zero displacement of one component on a Set, for example a settlement\nof \"2 mm\" in uy. Reactions on prescribed Sets are reported like any other constraint.",
@@ -5211,7 +5212,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "on",
         "total"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Gravity (or any uniform acceleration) as a body force on every Body whose Material has\na density; Bodies without one are skipped and listed in the warnings. Explicit Steps\napply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.",

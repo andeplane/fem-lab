@@ -195,6 +195,7 @@ export type Command =
       ][];
       members?: [number, number][] | null;
       divisions?: number | null;
+      kind?: LineKind | null;
       cmd: "geometry.addLine";
     }
   | {
@@ -379,6 +380,7 @@ export type Command =
   | {
       section: string;
       bodies: string[];
+      orientation?: Axis | null;
       cmd: "section.assign";
     }
   | {
@@ -402,6 +404,11 @@ export type Command =
       on: string;
       dofs?: Dof[] | null;
       cmd: "constraint.fix";
+    }
+  | {
+      name: string;
+      on: string;
+      cmd: "constraint.pin";
     }
   | {
       name: string;
@@ -592,6 +599,40 @@ export type Command =
         )
       ];
       cmd: "load.force";
+    }
+  | {
+      name: string;
+      on: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A torque with unit, e.g. "100 N m". Any unit of the right dimension is accepted.
+       */
+      total: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      cmd: "load.moment";
     }
   | {
       name: string;
@@ -1260,6 +1301,10 @@ export type SegmentSpec =
       kind: "arc";
     };
 /**
+ * What the members of a line Body are.
+ */
+export type LineKind = "truss" | "beam";
+/**
  * The geometry file formats geometry.import reads.
  */
 export type MeshFormat = "stl";
@@ -1702,6 +1747,10 @@ export type SectionSpec =
       kind: "generic";
     };
 /**
+ * A coordinate axis.
+ */
+export type Axis = "x" | "y" | "z";
+/**
  * The mesher and its settings.
  */
 export type MesherSpec =
@@ -1893,13 +1942,11 @@ export type Formulation = "incompatible-modes" | "full";
  */
 export type ExportFormat = "vtu" | "msh" | "inp" | "stl" | "report";
 /**
- * A displacement component.
+ * A nodal degree of freedom: a displacement component, or a rotation about a global axis.
+ * Rotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);
+ * on every other node they are inert, so holding them there changes nothing.
  */
-export type Dof = "ux" | "uy" | "uz";
-/**
- * A coordinate axis.
- */
-export type Axis = "x" | "y" | "z";
+export type Dof = "ux" | "uy" | "uz" | "rx" | "ry" | "rz";
 /**
  * How two faces interact where they meet.
  */
@@ -1926,10 +1973,25 @@ export type Procedure =
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
  * display units. Transient thermal reactions include stored energy and refer to the last
- * θ-method integration stage, not an endpoint steady-state residual.
+ * θ-method integration stage, not an endpoint steady-state residual. Three fields exist only
+ * on a static Result of a Model with beams: `rotation` (every node's rotation about the
+ * global axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in
+ * tension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the
+ * member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
+ * triple at each end of every beam and zeros on every other element.
  */
 export type Field =
-  "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
+  | "displacement"
+  | "stress"
+  | "stressUnaveraged"
+  | "vonMises"
+  | "principal"
+  | "strain"
+  | "reaction"
+  | "temperature"
+  | "rotation"
+  | "sectionForce"
+  | "sectionMoment";
 /**
  * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
  * temperature of a heat-transient Step, and every Load and prescribed displacement of a
@@ -2541,6 +2603,7 @@ export type Shape =
       points: [number, number, number][];
       members: [number, number][];
       divisions: number;
+      beam?: boolean;
       kind: "polyline";
     }
   | {
@@ -2699,6 +2762,9 @@ export type Constraint1 =
       kind: "fix";
     }
   | {
+      kind: "pin";
+    }
+  | {
       dof: Dof;
       value: number;
       kind: "prescribe";
@@ -2762,6 +2828,15 @@ export type Load1 =
        */
       total: [number, number, number];
       kind: "force";
+    }
+  | {
+      on: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      total: [number, number, number];
+      kind: "moment";
     }
   | {
       /**
@@ -3018,6 +3093,7 @@ export type ModelFile_Command =
       ][];
       members?: [number, number][] | null;
       divisions?: number | null;
+      kind?: LineKind | null;
       cmd: "geometry.addLine";
     }
   | {
@@ -3202,6 +3278,7 @@ export type ModelFile_Command =
   | {
       section: string;
       bodies: string[];
+      orientation?: Axis | null;
       cmd: "section.assign";
     }
   | {
@@ -3225,6 +3302,11 @@ export type ModelFile_Command =
       on: string;
       dofs?: Dof[] | null;
       cmd: "constraint.fix";
+    }
+  | {
+      name: string;
+      on: string;
+      cmd: "constraint.pin";
     }
   | {
       name: string;
@@ -3415,6 +3497,40 @@ export type ModelFile_Command =
         )
       ];
       cmd: "load.force";
+    }
+  | {
+      name: string;
+      on: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A torque with unit, e.g. "100 N m". Any unit of the right dimension is accepted.
+       */
+      total: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      cmd: "load.moment";
     }
   | {
       name: string;
@@ -4295,6 +4411,7 @@ export type DocumentSnapshot_Command =
       ][];
       members?: [number, number][] | null;
       divisions?: number | null;
+      kind?: LineKind | null;
       cmd: "geometry.addLine";
     }
   | {
@@ -4479,6 +4596,7 @@ export type DocumentSnapshot_Command =
   | {
       section: string;
       bodies: string[];
+      orientation?: Axis | null;
       cmd: "section.assign";
     }
   | {
@@ -4502,6 +4620,11 @@ export type DocumentSnapshot_Command =
       on: string;
       dofs?: Dof[] | null;
       cmd: "constraint.fix";
+    }
+  | {
+      name: string;
+      on: string;
+      cmd: "constraint.pin";
     }
   | {
       name: string;
@@ -4692,6 +4815,40 @@ export type DocumentSnapshot_Command =
         )
       ];
       cmd: "load.force";
+    }
+  | {
+      name: string;
+      on: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A torque with unit, e.g. "100 N m". Any unit of the right dimension is accepted.
+       */
+      total: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      cmd: "load.moment";
     }
   | {
       name: string;
@@ -6832,6 +6989,11 @@ export interface Body {
    * The cross-section of its line members; unused by a solid or sheet Body.
    */
   section?: string | null;
+  /**
+   * The global axis the beams of this Body take their local z-axis from (`section.assign`
+   * `orientation`); `None` is the default rule. Unused by a truss or a solid.
+   */
+  orientation?: Axis | null;
 }
 /**
  * A closed outer loop and zero or more hole loops.

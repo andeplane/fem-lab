@@ -1358,6 +1358,7 @@ pub enum Command {
     /// the only difference from constraint.fix is the rotational restraint. On a solid's
     /// nodes it is the same as constraint.fix, because those carry no rotation.
     #[serde(rename = "constraint.pin", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintPin { name: String, on: SetRef },
 
     /// Prescribe a non-zero displacement of one component on a Set, for example a settlement
@@ -1473,6 +1474,7 @@ pub enum Command {
     /// fails with model.ill-posed naming the Load. Right-handed about each axis, in the
     /// Model's torque unit ("5 kN m").
     #[serde(rename = "load.moment", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadMoment { name: String, on: SetRef, total: [Q<Torque>; 3] },
 
     /// Gravity (or any uniform acceleration) as a body force on every Body whose Material has

@@ -236,7 +236,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.\nReplacing a Body that has cuts therefore fails without changing the Model.",
+      "description": "Add a Body made of straight line members: a truss or a frame. `points` are the joints,\nin order, and `members` are index pairs into them; the default is a chain 0-1, 1-2, and\nso on. Each member is cut into `divisions` elements of equal length (default 1). Joint\n`i` becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force\ntargets, and joints of different line Bodies that sit at the same point are welded into\none node when the Mesh is built. `kind` is `truss` (the default: pin-jointed bars that\ncarry axial force only, so hold enough joints that none can drift sideways — an\nunder-braced truss is singular and fails in the solver, not here) or `beam` (Timoshenko\nbeams carrying axial force, shear, bending and torsion; every joint then has three\nrotations rx, ry, rz as well as ux, uy, uz, so constraint.fix clamps it and\nconstraint.pin pins it, and load.moment can act on it). Either way give the Body a\nSection with section.assign as well as a Material. Line Bodies need the 3D\nidealisation and are not cut, meshed or previewed as solids. Replacing a Body that has\ncuts therefore fails without changing the Model.",
       "type": "object",
       "properties": {
         "name": {
@@ -276,6 +276,16 @@ const commands = {
           ],
           "format": "uint32",
           "minimum": 0
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cmd": {
           "type": "string",
@@ -657,7 +667,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry.",
+      "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry. `orientation` names the global\naxis the section's local z (its `height` direction, the one `iY` resists bending along)\nfollows for the beams of these Bodies: local z is that axis made perpendicular to each\nmember, and local y completes the right-handed triad (y = z × x). It may not lie along\na member. Without it the rule is: local z follows global Z, so a horizontal beam has\nits height vertical; a member within 1e-6 of vertical follows global X instead, so a\ncolumn's local z points along +X. `iZ` then resists bending along local y. Trusses\nignore it.",
       "type": "object",
       "properties": {
         "section": {
@@ -668,6 +678,16 @@ const commands = {
           "items": {
             "type": "string"
           }
+        },
+        "orientation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Axis"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "cmd": {
           "type": "string",
@@ -767,7 +787,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Fix displacement components to zero on a Set (default: all components, a clamped\nsupport). For a roller give only the normal component. Fixing every node of a Body\nmakes the solve trivial; fix faces, not bodies.",
+      "description": "Fix degrees of freedom to zero on a Set (default: all displacement components, a\nclamped support). A fix that holds all three displacements and names no rotation is a\nclamp: on a beam joint it holds the three rotations rx, ry, rz as well, so a beam's\nfixed end is what `constraint.fix` without `dofs` means. For a pinned beam support use\nconstraint.pin; for a roller give only the normal component; name rx, ry or rz to hold\na rotation on its own. Rotations are inert on every node that is not a beam joint.\nFixing every node of a Body makes the solve trivial; fix faces, not bodies.",
       "type": "object",
       "properties": {
         "name": {
@@ -788,6 +808,28 @@ const commands = {
         "cmd": {
           "type": "string",
           "const": "constraint.fix"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "on"
+      ],
+      "x-execution": "modelWrite"
+    },
+    {
+      "description": "Pin a Set: fix its three displacements and leave every rotation free. On a beam joint\nthis is the pinned support of a simply supported beam or a portal frame's base hinge;\nthe only difference from constraint.fix is the rotational restraint. On a solid's\nnodes it is the same as constraint.fix, because those carry no rotation.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "on": {
+          "type": "string"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "constraint.pin"
         }
       },
       "required": [
@@ -828,7 +870,7 @@ const commands = {
       "x-execution": "modelWrite"
     },
     {
-      "description": "Symmetry plane: fixes the displacement component along `normal` on the Set (the cut\nface of a half or quarter model). Model a half and say so in the report; loads on the\nsymmetry plane itself must be halved by you.",
+      "description": "Symmetry plane: fixes the displacement component along `normal` on the Set (the cut\nface of a half or quarter model), and on beam joints the two rotations about the axes\nin the plane. Model a half and say so in the report; loads on the symmetry plane\nitself must be halved by you.",
       "type": "object",
       "properties": {
         "name": {
@@ -1101,6 +1143,37 @@ const commands = {
         "cmd": {
           "type": "string",
           "const": "load.force"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "on",
+        "total"
+      ],
+      "x-execution": "modelWrite"
+    },
+    {
+      "description": "A concentrated moment, as a total vector about the global axes, split equally over the\nnodes of a node Set. It acts on the rotational degrees of freedom, which only the\njoints of beam Bodies have: on any other node it has nothing to act on and the Step\nfails with model.ill-posed naming the Load. Right-handed about each axis, in the\nModel's torque unit (\"5 kN m\").",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "on": {
+          "type": "string"
+        },
+        "total": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Q_torque"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "cmd": {
+          "type": "string",
+          "const": "load.moment"
         }
       },
       "required": [
@@ -2394,6 +2467,21 @@ const commands = {
         }
       }
     },
+    "LineKind": {
+      "description": "What the members of a line Body are.",
+      "oneOf": [
+        {
+          "description": "Pin-jointed bars carrying axial force only (the default).",
+          "type": "string",
+          "const": "truss"
+        },
+        {
+          "description": "Timoshenko beams carrying axial force, shear, bending and torsion; their joints gain\nthree rotational degrees of freedom.",
+          "type": "string",
+          "const": "beam"
+        }
+      ]
+    },
     "MeshFormat": {
       "description": "The geometry file formats geometry.import reads.",
       "oneOf": [
@@ -2970,6 +3058,15 @@ const commands = {
       "$ref": "#/$defs/Quantity",
       "x-dimension": "second_moment"
     },
+    "Axis": {
+      "description": "A coordinate axis.",
+      "type": "string",
+      "enum": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
     "MesherSpec": {
       "description": "The mesher and its settings.",
       "oneOf": [
@@ -3407,21 +3504,15 @@ const commands = {
       ]
     },
     "Dof": {
-      "description": "A displacement component.",
+      "description": "A nodal degree of freedom: a displacement component, or a rotation about a global axis.\nRotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);\non every other node they are inert, so holding them there changes nothing.",
       "type": "string",
       "enum": [
         "ux",
         "uy",
-        "uz"
-      ]
-    },
-    "Axis": {
-      "description": "A coordinate axis.",
-      "type": "string",
-      "enum": [
-        "x",
-        "y",
-        "z"
+        "uz",
+        "rx",
+        "ry",
+        "rz"
       ]
     },
     "Q_temperature": {
@@ -3459,6 +3550,11 @@ const commands = {
       "$ref": "#/$defs/Quantity",
       "x-dimension": "force"
     },
+    "Q_torque": {
+      "description": "A torque with unit, e.g. \"100 N m\". Any unit of the right dimension is accepted.",
+      "$ref": "#/$defs/Quantity",
+      "x-dimension": "torque"
+    },
     "Q_acceleration": {
       "description": "A acceleration with unit, e.g. \"9.81 m/s^2\". Any unit of the right dimension is accepted.",
       "$ref": "#/$defs/Quantity",
@@ -3478,11 +3574,6 @@ const commands = {
       "description": "A heat source with unit, e.g. \"1 kW/m^3\". Any unit of the right dimension is accepted.",
       "$ref": "#/$defs/Quantity",
       "x-dimension": "heat_source"
-    },
-    "Q_torque": {
-      "description": "A torque with unit, e.g. \"100 N m\". Any unit of the right dimension is accepted.",
-      "$ref": "#/$defs/Quantity",
-      "x-dimension": "torque"
     },
     "Procedure": {
       "description": "Analysis procedures.",
@@ -3535,7 +3626,7 @@ const commands = {
       ]
     },
     "Field": {
-      "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
+      "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual. Three fields exist only\non a static Result of a Model with beams: `rotation` (every node's rotation about the\nglobal axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in\ntension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the\nmember axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one\ntriple at each end of every beam and zeros on every other element.",
       "type": "string",
       "enum": [
         "displacement",
@@ -3545,7 +3636,10 @@ const commands = {
         "principal",
         "strain",
         "reaction",
-        "temperature"
+        "temperature",
+        "rotation",
+        "sectionForce",
+        "sectionMoment"
       ]
     },
     "Q_time": {
@@ -4562,6 +4656,7 @@ const queries = {
     "SketchSpec": commands.$defs["SketchSpec"],
     "SegmentSpec": commands.$defs["SegmentSpec"],
     "Placement": commands.$defs["Placement"],
+    "LineKind": commands.$defs["LineKind"],
     "MeshFormat": commands.$defs["MeshFormat"],
     "DataEncoding": commands.$defs["DataEncoding"],
     "FacePredicate": commands.$defs["FacePredicate"],
@@ -4578,6 +4673,7 @@ const queries = {
     "SectionSpec": commands.$defs["SectionSpec"],
     "Q_area": commands.$defs["Q_area"],
     "Q_second_moment": commands.$defs["Q_second_moment"],
+    "Axis": commands.$defs["Axis"],
     "MesherSpec": commands.$defs["MesherSpec"],
     "LatticeSize": commands.$defs["LatticeSize"],
     "QuadBlockSpec": commands.$defs["QuadBlockSpec"],
@@ -4587,16 +4683,15 @@ const queries = {
     "Formulation": commands.$defs["Formulation"],
     "ExportFormat": commands.$defs["ExportFormat"],
     "Dof": commands.$defs["Dof"],
-    "Axis": commands.$defs["Axis"],
     "Q_temperature": commands.$defs["Q_temperature"],
     "ContactKind": commands.$defs["ContactKind"],
     "CoupleKind": commands.$defs["CoupleKind"],
     "Q_force": commands.$defs["Q_force"],
+    "Q_torque": commands.$defs["Q_torque"],
     "Q_acceleration": commands.$defs["Q_acceleration"],
     "Q_heat_transfer_coefficient": commands.$defs["Q_heat_transfer_coefficient"],
     "Q_heat_flux": commands.$defs["Q_heat_flux"],
     "Q_heat_source": commands.$defs["Q_heat_source"],
-    "Q_torque": commands.$defs["Q_torque"],
     "Procedure": commands.$defs["Procedure"],
     "AmplitudeSpec": commands.$defs["AmplitudeSpec"],
     "Q_frequency": commands.$defs["Q_frequency"],
