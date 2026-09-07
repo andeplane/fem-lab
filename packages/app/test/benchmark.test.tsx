@@ -24,7 +24,7 @@ import { waitFor } from './wait-for';
 const journals = path.resolve(import.meta.dirname, '../../../crates/engine/benches/journals');
 const mm = (value: number): Valued => ({ value, unit: 'mm' });
 const result = (extremes: ResultSummary['extremes'] = []): ResultSummary =>
-  ({ step: 'static', revision: 9, stale: false, solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 1, extremes, reactions: [], reactionQuantity: 'force', appliedTotal: [mm(0), mm(0), mm(0)], balance: 0 }) as ResultSummary;
+  ({ resultId: 'result-1', step: 'static', revision: 9, stale: false, solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 1, extremes, reactions: [], reactionQuantity: 'force', appliedTotal: [mm(0), mm(0), mm(0)], balance: 0 }) as ResultSummary;
 const example = (name = 'cantilever'): ExampleEntry => ({
   name,
   commands: 10,
