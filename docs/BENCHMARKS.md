@@ -112,8 +112,30 @@ is within 1e-12 m and stress component within 1e-3 Pa of the closed form on all 
 Reversing disjoint Load order is bit-identical; equal overlapping increments are idempotent,
 while unequal increments are rejected with both Load names and the Body. A8's numerics half is
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
-`StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
-`LLᵀ` included.
+`StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, including
+faer factorization/triangular solution under the platform policy documented below.
+
+The same-machine Windows follow-up (`tools/replay-le10-266`) runs the immutable
+unguarded CLI with default/1/4 threads and replays the verified 15,432-equation
+LE10 Hex20 operator in faer Seq/Rayon1/Rayon4. Its 3.54 MB lossless fixture retains
+the complete CSR matrix, RHS and ARM solution, with checked SHA256 provenance.
+The capture reproduces the independent LE10 stress and force balance and has
+original-operator residual 1.19e-12; replay requires residual below 1e-10. All
+variants run on one machine with CPU/SIMD capabilities logged, and any failed
+variant fails the diagnostic job. This distinguishes platform factorization
+from assembly without weakening the physical Benchmark. The first same-machine
+Windows run reproduced residual 0.489816 in standalone Rayon4 while Seq/Rayon1
+passed near 1e-12. Mixed Seq-factor/Rayon4-solve and Rayon4-factor/Seq-solve
+controls now distinguish the two phases without changing the captured operator,
+acceptance thresholds or original CLI baseline. Stage-isolation run 34034891628
+identified parallel numeric factorization: Rayon4-factor/Seq-solve failed at
+1.250237705 residual, while Seq-factor/Rayon4-solve passed at 1.1248e-12. Windows
+therefore uses per-call sequential numeric factorization, retaining parallel
+assembly/triangular solve ([ADR0019](adr/0019-windows-direct-factorization-parallelism.md)).
+The exact discrete harmonic Dirichlet solution `x_i=(i+1)/(n+1)` independently
+checks reusable factors at 65/129/257 unknowns, two right-hand sides, one/four-thread
+construction and concurrent callers; no solve may mutate faer's global setting.
+The unchanged Windows Hex20/Tet10 stress and force-balance checks still gate the fix.
 
 Direct-solver acceptance (#266) is also checked independently of factorization success.
 `a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer` supplies a full operator whose
@@ -339,6 +361,13 @@ at 12 × 12 × 4 (−5.400396 MPa), not an independent stress oracle. The bundle
 its existing `nafems-le10-plate` identifier for compatibility, but its visible title and
 reference explicitly identify the full-face variant. Correction: #183; command-reachable
 Tet10 validation follows under #4.
+
+The command-reachable Tet10 row (#4) uses the same full-face variant and the unchanged
+2% tolerance. Splitting 6 × 6 × 4, 12 × 12 × 8 and 18 × 18 × 8 parent cells gives
+−5.014643, −5.101429 and −5.163953 MPa respectively; reference error decreases to 1.64%.
+The fixture also gates reaction balance and Result freshness. Separate simplex tests verify
+the exact linear heat profile at both orders over three refinements, body-scoped face areas,
+and named edge preservation and deterministic replay for Tri3/Tri6.
 
 ## E. Heat transfer (phase 2)
 

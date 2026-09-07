@@ -80,6 +80,17 @@ describe('SchemaForm', () => {
     expect(sent.at(-1)).toEqual({ cmd: 'mesh.set', ...values, order: 2 });
   });
 
+  it('preserves simplex conversion when previewing the quadratic accuracy fix', () => {
+    const values = { mesher: { kind: 'lattice', size: '10 mm' }, simplices: true, order: 1 };
+    const { root, sent } = mount('mesh.set', values);
+    expect(field(root, 'order').querySelector('[role="status"]')!.textContent).toContain('Linear tetrahedra');
+    root.querySelector<HTMLButtonElement>('[role="status"] button')!.click();
+    expect(sent).toEqual([{ cmd: 'form.open', command: 'mesh.set', args: { ...values, order: 2 }, keepInitial: true }]);
+    expect(root.querySelector('[role="status"]')).toBeNull();
+    root.querySelector<HTMLButtonElement>('.apply')!.click();
+    expect(sent.at(-1)).toEqual({ cmd: 'mesh.set', ...values, order: 2 });
+  });
+
   it('warns for full linear quad/hex formulations, not quadratic or incompatible modes', () => {
     for (const kind of ['lattice', 'mapped', 'sweep']) {
       const { root } = mount('mesh.set', { mesher: { kind }, order: 1, formulation: 'full' });
