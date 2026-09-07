@@ -281,6 +281,14 @@ export interface Fem {
      * between Bodies that share no element, which query.cost does not count.
      */
     add(args: Omit<Extract<Command, { cmd: 'contact.add' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the
+     * interface per unit area, so the two sides are no longer at the same temperature.
+     * Assembled into the heat operator exactly as load.convection is, except that it couples
+     * two temperature fields instead of one field to tInf. Naming a contact here replaces its
+     * perfect thermal tie; the mechanical tie is unaffected.
+     */
+    thermal(args: Omit<Extract<Command, { cmd: 'contact.thermal' }>, 'cmd'>): Promise<Ack>;
   };
   load: {
     /**

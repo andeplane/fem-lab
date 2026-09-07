@@ -2,6 +2,8 @@
 //! descriptions, so they say what, when, the effect on names and Sets, and the common mistake.
 //! Physical values are `Q<D>` (unit strings); lengths inside shapes too.
 
+use std::collections::BTreeMap;
+
 use femlab_geometry::{
     Affine3, FacePredicate as GeoFacePredicate, RegionPredicate as GeoRegionPredicate, Segment, Shape, Sketch,
 };
@@ -354,7 +356,17 @@ pub enum SweepSpec {
 pub enum MesherSpec {
     /// Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering
     /// every Body; exact for box geometry, stair-stepped for curved bodies.
-    Lattice { size: LatticeSize },
+    Lattice {
+        size: LatticeSize,
+        /// Optional positive element lengths keyed by existing Body name. Each entry overrides
+        /// `size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave
+        /// size to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions
+        /// and cannot have size overrides. Names follow model.rename; remove an override before
+        /// removing its Body. A new mesh.set replaces all overrides; convergence studies scale
+        /// them with the global size, preserving the refinement ratio.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        sizes: BTreeMap<String, Q<Length>>,
+    },
     /// Structured quadrilaterals on one or more mapped blocks, merged where they touch. The
     /// blocks *are* the geometry: no geometry.add is needed, and the Body they make is named by
     /// `body` (default "sheet"), so each block edge tag becomes the face Set `<body>.<tag>`.
@@ -1233,6 +1245,14 @@ pub enum Command {
     /// for a plane-stress Sheet, the volume includes its specified thickness.
     #[serde(rename = "load.heatSource", rename_all = "camelCase")]
     LoadHeatSource { name: String, bodies: Vec<String>, q: Q<HeatSource> },
+
+    /// A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the
+    /// interface per unit area, so the two sides are no longer at the same temperature.
+    /// Assembled into the heat operator exactly as load.convection is, except that it couples
+    /// two temperature fields instead of one field to tInf. Naming a contact here replaces its
+    /// perfect thermal tie; the mechanical tie is unaffected.
+    #[serde(rename = "contact.thermal", rename_all = "camelCase")]
+    ContactThermal { name: String, of: String, conductance: Q<HeatTransfer> },
 
     /// Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it
     /// first. Removing a load makes existing Results of that Step stale.

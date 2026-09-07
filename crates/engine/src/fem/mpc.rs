@@ -27,7 +27,7 @@ use femlab_geometry::Mesh;
 use crate::command::CoupleKind;
 use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::assembly::Csr;
-use crate::fem::heat::face_integrals;
+use crate::fem::heat::{face_integrals, HeatLoad};
 use crate::fem::problem::{Coupling, Problem};
 use crate::fem::shape::{face_dshape_of, face_shape_of};
 use crate::mesh::ResolvedSet;
@@ -60,6 +60,12 @@ pub struct Mpc {
     pub rows: Vec<Row>,
     /// The same slaves, ascending: the `eliminated` list [`crate::fem::assembly::reduce`] wants.
     pub slaves: Vec<u32>,
+    /// The rows of a bonded contact a `contact.thermal` names, ascending by `slave`. These are
+    /// the tie [`build`] built and then *excluded* from `rows`/`slaves`: a `contact.thermal`
+    /// replaces the perfect thermal tie with a finite conductance, so its node stays a free
+    /// unknown rather than an eliminated one, and `heat::assemble` reads these rows directly to
+    /// add that conductance to `K` (plan B §5). Empty for every Problem without one.
+    pub contact: Vec<Row>,
     pub warnings: Vec<Warning>,
 }
 
@@ -91,6 +97,26 @@ impl Mpc {
         out
     }
 
+    /// Every node pair a thermal contact's excluded rows put an entry of `K` at directly: the
+    /// slave with each master, and every master with every other, since the added fill is the
+    /// full outer product `w(eₙ − Σaₖeₖ)(eₙ − Σaₖeₖ)ᵀ`. Heat has one DOF per node, so this is
+    /// already node-indexed — what [`crate::fem::assembly::pattern_coupled`] needs to make room
+    /// for the entries [`transform`] would otherwise have built for free.
+    pub fn contact_pairs(&self) -> Vec<[u32; 2]> {
+        let mut out = Vec::new();
+        for row in &self.contact {
+            let nodes: Vec<u32> = std::iter::once(row.slave).chain(row.masters.iter().map(|&(m, _)| m)).collect();
+            for (i, &a) in nodes.iter().enumerate() {
+                for &b in &nodes[i + 1..] {
+                    out.push([a.min(b), a.max(b)]);
+                }
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// The row that eliminates `dof`, if any.
     fn row_of(&self, dof: u32) -> Option<&Row> {
         self.slaves.binary_search(&dof).ok().map(|i| &self.rows[i])
@@ -102,22 +128,51 @@ impl Mpc {
 /// Pure: it reads the Problem and its Mesh and caches nothing, so a Newton loop may call it
 /// once per iteration.
 pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
+    // A heat Problem's temperature tie is one row per node (`dofs_per_node() == 1`); a
+    // `contact.thermal` names the Coupling whose row that is and asks for it to stay a free
+    // unknown instead. A structural Problem never sees this: its `heat_loads` are always empty,
+    // so the mechanical tie of the very same Coupling is unaffected, exactly as the doc string
+    // for `contact.thermal` says.
+    let thermal_of: BTreeSet<&str> = if p.heat {
+        p.heat_loads
+            .iter()
+            .filter_map(|l| match l {
+                HeatLoad::Contact { of, .. } => Some(of.as_str()),
+                HeatLoad::Convection { .. }
+                | HeatLoad::Flux { .. }
+                | HeatLoad::Source { .. }
+                | HeatLoad::Radiation { .. } => None,
+            })
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
     let mut rows: Vec<Row> = Vec::new();
+    let mut contact: Vec<Row> = Vec::new();
     let mut warnings: Vec<Warning> = Vec::new();
     for (owner, c) in p.couplings.iter().enumerate() {
+        let mut produced: Vec<Row> = Vec::new();
         match c {
             Coupling::Bonded { name, master, slave, tol } => {
-                bonded_rows(p, name, master, slave, *tol, owner, &mut rows, &mut warnings)?;
+                bonded_rows(p, name, master, slave, *tol, owner, &mut produced, &mut warnings)?;
             }
             Coupling::Cyclic { name, from, to, axis, through, angle, tol } => {
                 cyclic_rows(p, name, from, to, *axis, *through, *angle, *tol, owner, &mut rows)?;
             }
             Coupling::Couple { name, node, faces, kind, .. } => {
-                couple_rows(p, name, *node, faces, *kind, owner, &mut rows)?;
+                couple_rows(p, name, *node, faces, *kind, owner, &mut produced)?;
             }
+        }
+        // `contact.thermal` only ever names a bonded contact (the Command checks), so a
+        // coupling's rows always stay mechanical ties.
+        if thermal_of.contains(c.name()) {
+            contact.extend(produced);
+        } else {
+            rows.extend(produced);
         }
     }
     rows.sort_by_key(|r| r.slave);
+    contact.sort_by_key(|r| r.slave);
     let dpn = p.dofs_per_node();
     let mut slaves: Vec<u32> = Vec::with_capacity(rows.len());
     for (i, row) in rows.iter().enumerate() {
@@ -135,7 +190,7 @@ pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
             }
         }
     }
-    Ok(Mpc { rows, slaves, warnings })
+    Ok(Mpc { rows, slaves, contact, warnings })
 }
 
 /// The `constraint.dependent` error: a DOF that two couplings both eliminate, or that one
