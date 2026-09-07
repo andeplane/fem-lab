@@ -25,6 +25,14 @@
 //! residual. Snap-through needs arc-length control, which is #75 and is why the increment
 //! control lives in [`next_increment`] with `λ` an explicit variable rather than inline.
 //!
+//! **Why not [`iterate`](super::iterate).** The shared fixed-point loop advances a state
+//! vector and converges on its relative change, which is exactly right for a radiating heat
+//! Step. A Newton increment is a different shape: it has a load factor, a residual criterion
+//! measured against a force rather than a state, a per-point material state that is committed
+//! or rolled back, an increment size that halves, and an `await` on the linear solve. It reads
+//! the same `nonlinearTolerance` and `nonlinearMaxIterations` from `step.add`, because a user
+//! should not have to learn two names for one idea.
+//!
 //! **What is not here.** Follower loads: the external force is deformation-independent, so a
 //! pressure keeps the direction and the area it had on the reference mesh. A temperature field
 //! is applied in full at every increment rather than ramped with `λ`, because the Problem's
@@ -60,6 +68,13 @@ const NO_SOLVE: SolveInfo = SolveInfo { solver: "none", iterations: 0, rel_resid
 /// Floor under the reference force and displacement of the convergence tests, so an increment
 /// that asks for nothing converges instead of dividing by zero.
 const FLOOR: f64 = 1e-30;
+
+/// How exactly a Newton correction has to be solved. Inexact on purpose: a correction is a
+/// *direction*, the next residual measures how far it actually got, and near convergence its
+/// right-hand side is itself round-off — so a linear solve held to the accuracy of the answer
+/// would refuse a correction that is perfectly good to iterate on. The nonlinear tolerance is
+/// the gate; a Step that asks for something looser than this keeps what it asked for.
+const CORRECTION_TOL: f64 = 1e-6;
 
 /// When a Newton iteration is finished. Both criteria are relative and both must hold.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -317,7 +332,8 @@ impl Newton<'_> {
                 &format!("increment {number}, iteration {iteration}, relative residual {relative:.2e}"),
             )?;
             let red = assembly::reduce(&a.k, &r, self.rc_zero);
-            let (du_f, solved) = solve(&red.k_ff, &red.f_f, &o.solver, self.pool, self.gpu, progress).await?;
+            let inexact = SolveOptions { rel_tol: o.solver.rel_tol.max(CORRECTION_TOL), ..o.solver };
+            let (du_f, solved) = solve(&red.k_ff, &red.f_f, &inexact, self.pool, self.gpu, progress).await?;
             let du = assembly::expand(&red, &du_f);
             for (ui, d) in u.iter_mut().zip(&du) {
                 *ui += d;

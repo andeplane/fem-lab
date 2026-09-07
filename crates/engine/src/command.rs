@@ -106,7 +106,9 @@ pub enum Procedure {
     Explicit,
 }
 
-/// A scalar `g(t)` that scales every prescribed temperature of a transient Step.
+/// A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
+/// temperature of a heat-transient Step, and every Load and prescribed displacement of a
+/// static one.
 ///
 /// Commands are replayed from the Journal, so a time function is data, never a closure: it is
 /// either a sine or a piecewise-linear table, and nothing else.
@@ -970,13 +972,21 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit, and `increments`, `maxCutbacks`,
-    /// `nonlinearTolerance`, `nonlinearMaxIterations`, `tEnd` and `amplitude` to
-    /// static-nonlinear. Heat-steady requires a finite positive material
-    /// conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
-    /// `theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any
-    /// Step whose system depends on its own answer — today a radiation load — and are ignored by
-    /// a Step that is linear.
+    /// `dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and
+    /// `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
+    /// `amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and
+    /// prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
+    /// defaulting to the whole of it, so a table written in step fraction works unchanged) and
+    /// keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
+    /// scaled, so its thermal strain is present in full at every increment. Without an
+    /// `amplitude` a static Step is the single solve it has always been and retains nothing.
+    /// A static-nonlinear Step always steps, over `increments` equal pieces of the same
+    /// pseudo-time, and keeps every converged one.
+    /// Heat-steady requires a finite positive material conductivity `k`; heat-transient also
+    /// requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
+    /// `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
+    /// on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
+    /// Step that is linear.
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -991,8 +1001,9 @@ pub enum Command {
         n_modes: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shift: Option<f64>,
-        /// Maximum heat-transient time increment. A uniform increment no larger than dt is
-        /// chosen to finish exactly at tEnd; the Result reports the increment actually used.
+        /// Maximum time increment of a heat-transient Step, or of a static Step with an
+        /// amplitude. A uniform increment no larger than dt is chosen to finish exactly at
+        /// tEnd; the Result reports the increment actually used.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt: Option<Q<Time>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1050,6 +1061,12 @@ pub enum Command {
     /// check that reactions balance the applied loads before trusting a stress. A Step with
     /// `after` requires its predecessor's Result to match the current Model state; after an edit,
     /// solve the predecessor again before continuing the chain.
+    /// Direct linear solves verify their residual too: nonfinite or excessive residuals return
+    /// solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
+    /// (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
+    /// direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+    /// On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
+    /// assembly and triangular solves retain the engine thread count.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,
