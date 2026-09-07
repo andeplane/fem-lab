@@ -46,35 +46,6 @@ function retarget(node, rename) {
  * file's SI predicates vs the Command's unit-string predicates) are prefixed with their table's
  * type name, e.g. `ModelFile_FacePredicate`, and their `$ref`s rewritten.
  */
-/**
- * `json-schema-to-typescript` treats a `$ref` alongside sibling keywords as "ignore everything
- * but the ref", which is what schemars emits for an internally tagged enum's newtype variant:
- * the tag's `const` sits in `properties`/`required` beside a `$ref` to the wrapped struct
- * (`MesherSpec::Tet(TetSpec)` → `{ properties: { kind: {...} }, $ref: '#/$defs/TetSpec' }`).
- * Both halves are meant to apply — merge the referenced schema's `properties`/`required` into
- * the node and drop the `$ref`, so the generated type carries the wrapped struct's own fields
- * as well as the tag.
- */
-function inlineRefSiblings(node, defs) {
-  if (Array.isArray(node)) return node.map((n) => inlineRefSiblings(n, defs));
-  if (!node || typeof node !== 'object') return node;
-  const out = {};
-  for (const [k, v] of Object.entries(node)) out[k] = inlineRefSiblings(v, defs);
-  if (typeof out.$ref === 'string' && out.$ref.startsWith('#/$defs/') && Object.keys(out).length > 1) {
-    const target = defs[out.$ref.slice('#/$defs/'.length)];
-    if (target) {
-      const { $ref, properties, required, ...siblings } = out;
-      return {
-        ...target,
-        ...siblings,
-        properties: { ...(target.properties ?? {}), ...properties },
-        required: [...new Set([...(target.required ?? []), ...(required ?? [])])],
-      };
-    }
-  }
-  return out;
-}
-
 export function mergeSchema(doc) {
   const defs = {};
   const properties = {};
@@ -94,16 +65,15 @@ export function mergeSchema(doc) {
     defs[name] = fixed;
     properties[key] = { $ref: `#/$defs/${name}` };
   }
-  const inlinedDefs = Object.fromEntries(Object.entries(defs).map(([k, v]) => [k, inlineRefSiblings(v, defs)]));
   return {
     $schema: doc.commands.$schema,
     title: 'Engine',
     description: `Every wire type of the FEM Lab engine, schema version ${doc.schemaVersion}.`,
     type: 'object',
-    properties: inlineRefSiblings(properties, defs),
+    properties,
     required: Object.keys(properties),
     additionalProperties: false,
-    $defs: inlinedDefs,
+    $defs: defs,
   };
 }
 

@@ -4780,8 +4780,7 @@ fn the_tet_mesher_fills_a_bored_block_with_named_faces_and_dihedral_quality() {
         let lo = q.min_dihedral_deg.expect("a 3D mesh has a dihedral range");
         let hi = q.max_dihedral_deg.expect("a 3D mesh has a dihedral range");
         assert!(lo >= 10.7 && hi <= 164.8, "order {order}: dihedral angles {lo}..{hi} degrees");
-        for name in ["block.xmin", "block.xmax", "block.ymin", "block.ymax", "block.zmin", "block.zmax", "bore.side"]
-        {
+        for name in ["block.xmin", "block.xmax", "block.ymin", "block.ymax", "block.zmin", "block.zmax", "bore.side"] {
             assert!(set_info(&mut e, name).count > 0, "{name} is empty at order {order}");
         }
         // replay is deterministic: the same Journal builds the identical Mesh

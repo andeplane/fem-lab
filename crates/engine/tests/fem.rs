@@ -2951,15 +2951,9 @@ fn the_free_tet_mesher_passes_the_patch_test_on_a_csg_box_with_a_bore() {
             let exact = patch_mesh_field(&mesh, &id, &e);
             let rc = boundary_constraints(&mesh, &exact);
             let red = reduce(&a.k, &vec![0.0; a.k.n], &rc, &[]);
-            let (u_f, info) = pollster::block_on(solve(
-                &red.k_ff,
-                &red.f_f,
-                &SolveOptions::default(),
-                &Pool::new(2),
-                None,
-                &mut nop,
-            ))
-            .expect("the patch system is positive definite");
+            let (u_f, info) =
+                pollster::block_on(solve(&red.k_ff, &red.f_f, &SolveOptions::default(), &Pool::new(2), None, &mut nop))
+                    .expect("the patch system is positive definite");
             assert!(info.rel_residual < 1e-10, "{kind:?}: residual {}", info.rel_residual);
             let u = expand(&red, &u_f);
             let scale = exact.iter().fold(1.0f64, |m, x| m.max(x.abs()));

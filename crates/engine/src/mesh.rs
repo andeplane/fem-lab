@@ -5,12 +5,12 @@
 
 use std::collections::BTreeMap;
 
+use femlab_geometry::GeomError;
 use femlab_geometry::{
     extrude, face_centroid_normal, free_sheet, lattice, line, mapped, merge_coincident, nearest_boundary_face,
     resolve_face_set, resolve_region, revolve, split_to_simplices, tet, Curve, ElementBlock, ElementKind, Face, Mesh,
     QuadBlock, RefineBox, Shape, Solid,
 };
-use femlab_geometry::GeomError;
 
 use crate::command::ObjectKind;
 use crate::command::{CurveSpec, LatticeSize, MesherSpec, QuadBlockSpec, SweepSpec};
@@ -578,4 +578,3 @@ fn set_empty(model: &Model, mesh: &Mesh, name: &str, probe: Option<[f64; 3]>) ->
         .at(format!("set '{name}'"))
         .suggest("geometry.nameFace with a plane through that point, or a larger tol")
 }
-

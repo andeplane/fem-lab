@@ -384,8 +384,15 @@ pub enum MesherSpec {
 /// pattern that triggers it). Wrapping the payload as a newtype variant over a type with its own
 /// `Deserialize` — a plain `MapAccess` loop, none of `serde_derive`'s struct-variant codegen —
 /// sidesteps it, confirmed against the same minimal reproduction.
+///
+/// `#[schemars(inline)]` keeps the schema shaped like the other variants: a newtype variant of
+/// an internally tagged enum otherwise comes out as a `$ref` to `TetSpec` beside the tag's
+/// `properties`/`required`, and both zod's `fromJSONSchema` and json-schema-to-typescript read
+/// a `$ref` with siblings as the `$ref` alone, so `mesh.set { mesher: tet }` would validate as
+/// a tag-less object and every other mesher would match the variant too.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(inline)]
 pub struct TetSpec {
     pub size: Q<Length>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
