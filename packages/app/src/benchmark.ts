@@ -151,6 +151,13 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
   'plate-with-hole-2d': null,
   'simply-supported-beam': null,
   'slab-strip': null,
+  'steel-roof-truss': {
+    locator: { kind: 'probe', field: 'displacement', component: 1, at: ['6 m', '0 mm', '0 mm'] },
+    reference: { values: [7.0427], unit: 'mm', label: '|uʸ| at the mid-span bottom-chord joint' },
+    tolerance: { kind: 'percent', value: 0.5 },
+    magnitude: true,
+    source: 'Unit-load virtual work δ = Σ N n L / EA over the 21 members of the determinate truss',
+  },
   'thermal-stress-plate': {
     locator: { kind: 'probe', field: 'stress', component: 0, at: ['0.5 m', '0.5 m', '0 m'] },
     reference: { values: [-150], unit: 'MPa', label: 'σₓₓ at mid-height' },
