@@ -387,6 +387,34 @@ describe('the shell', () => {
     expect(root.querySelector('.bottom-body')!.textContent).toContain('model.new');
   });
 
+  it('keeps an intentional Script draft while showing the live Journal script', async () => {
+    const { registry, store } = mount({ tab: 'script' });
+    await registry.dispatch({ cmd: 'script.setSource', code: '// draft' });
+    expect(store.state).toMatchObject({ tab: 'script', scriptDraft: '// draft', scriptEditing: true });
+    await registry.dispatch({ cmd: 'script.setSource', code: '\n// inserted Journal', append: true });
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+
+    store.set({ script: '// live Journal' });
+    await registry.dispatch({ cmd: 'script.setEditing', editing: false });
+    expect(store.state.scriptEditing).toBe(false);
+    expect(store.state.scriptDraft).toBe('// draft\n// inserted Journal');
+    expect(store.state.script).toBe('// live Journal');
+    await registry.dispatch({ cmd: 'script.setEditing', editing: true });
+    expect(store.state).toMatchObject({ tab: 'script', scriptEditing: true, scriptDraft: '// draft\n// inserted Journal' });
+  });
+
+  it('recognises the fields that own editing shortcuts', () => {
+    const { root } = mount();
+    const input = root.querySelector<HTMLInputElement>('input')!;
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+    const token = document.createElement('span');
+    editor.append(token);
+    expect(isEditableTarget(input)).toBe(true);
+    expect(isEditableTarget(token)).toBe(true);
+    expect(isEditableTarget(root)).toBe(false);
+  });
+
   // plan E — the tutorial spotlight finds "the + add material chip" from a Command id alone by
   // reading `data-opens`, so that attribute is under the same invariant as `data-cmd`.
   it('names only Commands the registry has on every data-opens, and puts it only on form.open', () => {
