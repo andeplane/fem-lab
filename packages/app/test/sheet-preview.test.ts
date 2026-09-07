@@ -114,3 +114,25 @@ it('does not attach 2D edge metadata to a solid mesh surface', async () => {
   expect(s.edgeSet).toHaveLength(0);
   expect(s.edgeBody).toHaveLength(0);
 });
+
+it('transfers each two-bar member as a pickable line with its owning Body', async () => {
+  const engine = new wasm.Engine(1);
+  const journal = [
+    { cmd: 'model.new', name: 'two-bar' },
+    { cmd: 'geometry.addLine', name: 'truss', points: [['0 m', '0 m', '0 m'], ['2 m', '0 m', '0 m'], ['1 m', '1 m', '0 m']], members: [[0, 2], [1, 2]], divisions: 1 },
+    { cmd: 'material.add', name: 'steel', E: '200 GPa', nu: 0.3, rho: '7850 kg/m^3' },
+    { cmd: 'material.assign', material: 'steel', bodies: ['truss'] },
+    { cmd: 'section.add', name: 'rod', shape: { kind: 'circle', radius: '20 mm' } },
+    { cmd: 'section.assign', section: 'rod', bodies: ['truss'] },
+    { cmd: 'mesh.set', mesher: { kind: 'lattice', size: '1 m' }, order: 1 },
+  ];
+  await engine.replay_hashes(JSON.stringify(journal.map((cmd, seq) => ({ seq, cmd, hashAfter: '' }))), true, false);
+  const s = engine.surface() as WasmSurface;
+  expect(s.source).toBe('mesh');
+  expect(s.indices).toHaveLength(0);
+  expect(s.edges).toHaveLength(4);
+  expect(s.edgeSet).toEqual(new Uint32Array([0xffffffff, 0xffffffff]));
+  expect(s.edgeBody).toEqual(new Uint32Array([0, 0]));
+  expect(s.bodyNames).toEqual(['truss']);
+  expect(Array.from(s.edges)).toEqual([0, 2, 1, 2]);
+});
