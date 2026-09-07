@@ -48,7 +48,9 @@ export interface Fem {
     /**
      * Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its
      * six faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used
-     * directly in constraints and loads. Re-issuing with an existing name replaces the body.
+     * directly in constraints and loads. Re-issuing with an existing name replaces the Body
+     * while preserving its material, section and cuts; incompatible or consuming cuts reject
+     * the replacement without changing the Model.
      */
     addBox(args: Omit<Extract<Command, { cmd: 'geometry.addBox' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -62,6 +64,8 @@ export interface Fem {
      * Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a
      * 2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape
      * (`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.
+     * Replacing an existing Body preserves its material, section and cuts, and validates the
+     * resulting shape before changing the Model.
      */
     add(args: Omit<Extract<Command, { cmd: 'geometry.add' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -74,6 +78,7 @@ export interface Fem {
      * with section.assign as well as a Material, and hold enough joints that none of them can
      * drift sideways — an under-braced truss is singular and fails in the solver, not here.
      * Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
+     * Replacing a Body that has cuts therefore fails without changing the Model.
      */
     addLine(args: Omit<Extract<Command, { cmd: 'geometry.addLine' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -95,7 +100,9 @@ export interface Fem {
      * geometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every
      * remesh and survive a re-import. `simplifyBelow` collapses features smaller than the
      * given length, which is the honest half of defeaturing; there is no fillet, chamfer or
-     * shell. Give `sha256` to have the engine verify the data is the file you meant.
+     * shell. Re-import preserves the Body's material, section and cuts, and validates the
+     * resulting shape before changing the Model. Give `sha256` to have the engine verify the
+     * data is the file you meant.
      */
     import(args: Omit<Extract<Command, { cmd: 'geometry.import' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -348,9 +355,20 @@ export interface Fem {
      * temperature field and turns it into thermal stress. The remaining fields belong to one
      * procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-     * `dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and
-     * `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
-     * `amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and
+     * `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
+     * `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
+     * implicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and
+     * `increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An
+     * implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
+     * (default 0, Newmark average acceleration: second order, unconditionally stable and
+     * energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
+     * Rayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal
+     * damping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).
+     * Its `amplitude` scales the Loads only and is refused with a non-zero prescribed
+     * displacement; its initial acceleration is solved from the loads at t = 0, so a suddenly
+     * applied load is exactly that. Its reactions include the inertia and damping forces and
+     * its applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the
+     * scalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and
      * prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
      * defaulting to the whole of it, so a table written in step fraction works unchanged) and
      * keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
