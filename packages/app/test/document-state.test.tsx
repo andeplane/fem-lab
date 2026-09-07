@@ -1,6 +1,7 @@
 import { render } from 'preact';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appHostCommands } from '../src/host';
+import type { ExampleEntry } from '../src/benchmark';
 import { Store, journalIdentity, unsaved } from '../src/store';
 import { ModelName } from '../src/ui/ModelName';
 import type { WorkerTransport } from '../src/worker-transport';
@@ -8,6 +9,20 @@ import type { WorkerTransport } from '../src/worker-transport';
 beforeEach(() => {
   document.body.innerHTML = '';
 });
+afterEach(() => vi.unstubAllGlobals());
+const example: ExampleEntry = {
+  name: 'cantilever', commands: 2, summary: 'Beam example', title: 'Cantilever',
+  tag: 'static', tags: ['static'], difficulty: 1, thumbnail: null,
+  theory: 'Beam theory',
+  expected: { quantity: 'tip deflection', value: 0.1919619, unit: 'mm', reference: 'Timoshenko' },
+};
+function mockExampleFetch(journal: unknown) {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url.endsWith('examples/index.json')) return Response.json({ examples: [example] });
+    if (url.endsWith('cantilever.json')) return Response.json(journal);
+    throw new Error(`Unexpected example request: ${url}`);
+  }));
+}
 const entries = [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'beam' }, hashAfter: 'h' }];
 it('tracks complete Journal content, ignores view changes, and clears when undo returns to the saved content', () => {
   const store = new Store();
@@ -73,17 +88,17 @@ it('establishes an exact saved baseline only after a bundled example opens compl
   const dispatch = vi.fn(async () => ({ output: { type: 'none' } }));
   const transport = { dispatch } as unknown as WorkerTransport;
   const refresh = vi.fn(async () => store.set({ journal: { entries: [first, second], revision: 2, hash: 'journal', canUndo: true, canRedo: false } }));
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => JSON.stringify([{ cmd: first.cmd }, { cmd: second.cmd }]) })));
+  mockExampleFetch([{ cmd: first.cmd }, { cmd: second.cmd }]);
   const open = appHostCommands(store, transport, { current: null }, refresh).find((def) => def.name === 'file.openExample')!;
 
-  await open.run({ name: 'example' }, {} as never);
+  await open.run({ name: 'cantilever' }, {} as never);
   expect(dispatch).toHaveBeenCalledTimes(2);
   expect(store.state.savedJournal).toBe(journalIdentity([first, second]));
 
   store.set({ savedJournal: 'still previous' });
   dispatch.mockResolvedValueOnce({ output: { type: 'none' } });
   dispatch.mockRejectedValueOnce(new Error('second command failed'));
-  await expect(open.run({ name: 'broken' }, {} as never)).rejects.toThrow('second command failed');
+  await expect(open.run({ name: 'cantilever' }, {} as never)).rejects.toThrow('second command failed');
   expect(store.state.savedJournal).toBe('still previous');
 });
 
@@ -96,13 +111,10 @@ it('does not include an edit made while an opened example restores its Result', 
   const refresh = vi.fn(async () => store.set({ journal: { entries: opened, revision: 1, hash: 'opened', canUndo: true, canRedo: false } }));
   let finishResult!: () => void;
   const onAck = vi.fn(() => new Promise<void>((resolve) => { finishResult = resolve; }));
-  vi.stubGlobal('fetch', vi.fn(async () => ({
-    ok: true,
-    text: async () => JSON.stringify([{ cmd: opened[0]!.cmd }, { cmd: { cmd: 'solve.run', step: 'static' } }]),
-  })));
+  mockExampleFetch([{ cmd: opened[0]!.cmd }, { cmd: { cmd: 'solve.run', step: 'static' } }]);
   const open = appHostCommands(store, transport, { current: null }, refresh, { onAck } as never).find((def) => def.name === 'file.openExample')!;
 
-  const pending = open.run({ name: 'solved-example' }, {} as never);
+  const pending = open.run({ name: 'cantilever' }, {} as never);
   await vi.waitFor(() => expect(onAck).toHaveBeenCalledOnce());
   store.set({ journal: { entries: edited, revision: 2, hash: 'edited', canUndo: true, canRedo: false } });
   finishResult();
