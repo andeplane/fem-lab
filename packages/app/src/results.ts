@@ -6,7 +6,7 @@
 // viewer colours by is converted once, here, with the scale and offset `query.convert` gives; the deformed
 // shape stays in SI because the mesh coordinates are.
 import { FemError, type FrameResult, type FramesResult, type ResultSummary, type StudyReport, type Warning } from '@femlab/registry';
-import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
+import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, modeCount, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
 import type { Store } from './store';
 import type { WorkerTransport } from './worker-transport';
@@ -42,17 +42,17 @@ export function derivedRange(kind: 'safety' | 'utilisation', max: number): [numb
 
 /**
  * The picker key to contour a Result by: the one already chosen when this Result has it, the
- * first mode shape when it is a modal Step, and otherwise the first field it did compute. A
+ * first mode shape when it is a modal or buckling Step, and otherwise the first field it did compute. A
  * Result is not obliged to carry the field the previous one did.
  */
 export function available(current: string, result: ResultSummary, hasYield: boolean): string {
   const choices = fieldChoices(
     result.extremes.map((e) => e.field),
-    result.frequencies?.length ?? 0,
+    result,
     hasYield,
   );
   if (choices.some((c) => c.key === current)) return current;
-  return (result.frequencies?.length ?? 0) > 0 ? 'mode:1' : (choices[0]?.key ?? 'vonMises');
+  return modeCount(result) > 0 ? 'mode:1' : (choices[0]?.key ?? 'vonMises');
 }
 
 export class ResultsView {
@@ -295,7 +295,7 @@ export class ResultsView {
     const key = fieldKeyOf(f.field, f.component ?? null);
     const result = this.store.state.result;
     const choices = result
-      ? fieldChoices(result.extremes.map((e) => e.field), result.frequencies?.length ?? 0, this.store.state.yieldStress !== null)
+      ? fieldChoices(result.extremes.map((e) => e.field), result, this.store.state.yieldStress !== null)
       : [];
     if (!result || !choices.some((c) => c.key === key)) throw unavailableField(f.field, f.component ?? null);
     if (this.store.state.transient && choiceOf(key).field !== this.store.state.transient.catalogue.field)
@@ -333,9 +333,9 @@ export class ResultsView {
     const hadTransient = this.store.state.transient !== null;
     const result = await this.transport.query({ query: 'query.result', step: a.step }) as ResultSummary;
     if (epoch !== this.displayEpoch) return;
-    if (a.mode !== undefined && a.mode > (result.frequencies?.length ?? 0))
+    if (a.mode !== undefined && a.mode > modeCount(result))
       throw new FemError('not-found', `Step '${a.step}' has no mode ${a.mode}`, 'view.animate.mode', 'query.result for the available modes');
-    if (a.mode === undefined && !result.extremes.some((e) => e.field === 'displacement') && !result.frequencies?.length)
+    if (a.mode === undefined && !result.extremes.some((e) => e.field === 'displacement') && !modeCount(result))
       throw new FemError('unsupported', `Step '${a.step}' has no displacement to animate`, 'view.animate', 'view.showField to inspect its static field');
     this.invalidateTransient();
     const fieldKey = a.mode === undefined ? available(this.store.state.fieldKey, result, this.store.state.yieldStress !== null) : `mode:${a.mode}`;
@@ -357,7 +357,7 @@ export class ResultsView {
     const { legend, fieldKey, colormap, viewMode } = this.store.state;
     if (!legend || viewMode !== 'results') return null;
     const sample = this.store.state.transient?.frame;
-    return { title: `${choiceOf(fieldKey).label}${sample ? ` · ${sample.time.value} ${sample.time.unit}` : ''}`, unit: legend.unit, min: legend.min, max: legend.max, colormap };
+    return { title: `${choiceOf(fieldKey, this.store.state.result).label}${sample ? ` · ${sample.time.value} ${sample.time.unit}` : ''}`, unit: legend.unit, min: legend.min, max: legend.max, colormap };
   }
 
   /**
