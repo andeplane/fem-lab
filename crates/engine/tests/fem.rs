@@ -4775,6 +4775,21 @@ fn harmonic_step(f_start: f64, f_stop: f64, points: usize, zeta: f64, output_eve
         points,
         spacing: SweepSpacing::Linear,
         damping_ratio: Some(zeta),
+        damping_ratios: None,
+        rayleigh: (0.0, 0.0),
+        output_every,
+    }
+}
+
+/// A linearly spaced harmonic sweep with a per-mode damping ratio list.
+fn harmonic_step_per_mode(f_start: f64, f_stop: f64, points: usize, zeta: &[f64], output_every: usize) -> Step {
+    Step::Harmonic {
+        f_start,
+        f_stop,
+        points,
+        spacing: SweepSpacing::Linear,
+        damping_ratio: None,
+        damping_ratios: Some(zeta.to_vec()),
         rayleigh: (0.0, 0.0),
         output_every,
     }
@@ -8707,6 +8722,7 @@ fn rayleigh_damping_matches_the_constant_ratio_it_reproduces() {
         points: 3,
         spacing: SweepSpacing::Linear,
         damping_ratio: None,
+        damping_ratios: None,
         rayleigh: (0.0, beta),
         output_every: 1,
     };
@@ -8725,11 +8741,53 @@ fn rayleigh_damping_matches_the_constant_ratio_it_reproduces() {
         points: 3,
         spacing: SweepSpacing::Linear,
         damping_ratio: None,
+        damping_ratios: None,
         rayleigh: (0.1 * w, 0.0),
         output_every: 1,
     };
     let res = run_after(&p, &mass_damped, Some(&modal)).expect("a mass-proportional sweep");
     assert!(libm::fabs(res.scalars["zeta_1"] - 0.05) < 1e-15, "{}", res.scalars["zeta_1"]);
+}
+
+/// #346, half-power bandwidth: `dampingRatios` (the per-mode list) reaches the same modal
+/// damping a scalar `dampingRatio` would, and the resulting curve's half-power bandwidth
+/// `Δf = f₂ − f₁` (the two frequencies either side of resonance where `|u| = |u_max|/√2`) is the
+/// standard SDOF approximation `Δf ≈ 2ζf_n`, an oracle independent of F14's own magnification
+/// closed form (both come from the same physics, neither from the engine's own code).
+#[test]
+fn a_harmonic_dampingratios_list_matches_the_half_power_bandwidth() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = sdof_bar(&mesh, &sets, &bodies);
+    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
+        .expect("a bar with mass has modes");
+    let f_n = modal.frequencies[0];
+    let zeta = 0.02;
+    let tip = sets["xmax"].nodes[0] as usize * 3;
+
+    let step = harmonic_step_per_mode(0.5 * f_n, 1.5 * f_n, 401, &[zeta], 1);
+    let res = run_after(&p, &step, Some(&modal)).expect("a per-mode damped sweep");
+    assert!(libm::fabs(res.scalars["zeta_1"] - zeta) < 1e-15, "{}", res.scalars["zeta_1"]);
+    let sweep = res.sweep.as_ref().expect("a harmonic Step keeps its sweep");
+    let amplitude: Vec<f64> = sweep.amplitude.iter().map(|fd| fd.data[tip]).collect();
+
+    let (peak_i, &u_max) = amplitude.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).expect("a sweep has a peak");
+    let target = u_max / libm::sqrt(2.0);
+    // Linear interpolation between the two grid points bracketing each crossing.
+    let crossing = |range: std::ops::Range<usize>| -> f64 {
+        let i = range
+            .clone()
+            .find(|&i| (amplitude[i] - target) * (amplitude[i + 1] - target) <= 0.0)
+            .expect("a half-power crossing on each side of resonance");
+        let s = (target - amplitude[i]) / (amplitude[i + 1] - amplitude[i]);
+        sweep.frequencies[i] + s * (sweep.frequencies[i + 1] - sweep.frequencies[i])
+    };
+    let f1 = crossing(0..peak_i);
+    let f2 = crossing(peak_i..sweep.frequencies.len() - 1);
+    let observed = f2 - f1;
+    let want = 2.0 * zeta * f_n;
+    assert!((observed - want).abs() <= 0.02 * want, "half-power bandwidth {observed} vs {want} at zeta = {zeta}");
 }
 
 /// A harmonic Step without a solved modal Step behind it says so, whether `after` named
@@ -12253,6 +12311,70 @@ fn a_single_degree_of_freedom_under_a_step_load_matches_the_closed_form_and_the_
         assert!((x - oracle[n].0).abs() <= 1e-12 * u_static, "step {n}: {x} vs {}", oracle[n].0);
     }
     assert_eq!((res.scalars["alpha"], res.scalars["beta"], res.scalars["gamma"]), (-0.05, 1.05f64 * 1.05 / 4.0, 0.55));
+}
+
+/// The peak nearest a target time, refined by a parabolic fit through it and its two
+/// neighbours (uniform spacing assumed): the standard three-point vertex correction,
+/// `Δ = ½(a − c) / (a − 2b + c)` samples either side of the retained-frame spacing.
+fn parabolic_peak(times: &[f64], values: &[f64], near: f64) -> (f64, f64) {
+    let i = (1..values.len() - 1)
+        .filter(|&i| values[i - 1] < values[i] && values[i] > values[i + 1])
+        .min_by(|&a, &b| (times[a] - near).abs().total_cmp(&(times[b] - near).abs()))
+        .expect("a local maximum near the target time");
+    let dt = times[i] - times[i - 1];
+    let (a, b, c) = (values[i - 1], values[i], values[i + 1]);
+    let denom = a - 2.0 * b + c;
+    let delta = 0.5 * (a - c) / denom;
+    (times[i] + delta * dt, b - 0.25 * (a - c) * delta)
+}
+
+/// #346, logarithmic decrement. Free vibration from an initial velocity kick (no load) is
+/// `u(t) = (v₀/ω_d) e^{−ζωt} sin(ω_d t)`, an oracle independent of F3's step-load closed form:
+/// successive peaks of that envelope, one damped period `T_d = 2π/ω_d` apart, shrink by
+/// `e^{−ζωT_d} = e^{−δ}` with `δ = 2πζ/√(1−ζ²)` the logarithmic decrement — so `ln(peak_n /
+/// peak_{n+k}) / k` measures ζ however the damping got there. Rayleigh's own pair `α = ζω,
+/// β = ζ/ω` splits the ratio evenly (`ζ = α/(2ω) + βω/2 = ζ/2 + ζ/2`), exactly as `dampingRatio`
+/// would give a harmonic Step at this ω.
+#[test]
+fn implicit_free_decay_matches_the_logarithmic_decrement() {
+    let side = 0.1;
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([side; 3]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = axial_sdof(&mesh, &sets, &bodies, 0.0);
+    let area = side * side;
+    let (k, m) = (p_wave_modulus() * area / side, DENSITY * area * side / 3.0);
+    let omega = (k / m).sqrt();
+    let period = 2.0 * PI / omega;
+    let zeta = 0.05f64;
+    let omega_d = omega * (1.0 - zeta * zeta).sqrt();
+    let period_d = 2.0 * PI / omega_d;
+    let tip: Vec<usize> = (0..mesh.n_nodes()).filter(|&n| mesh.node(n as u32)[0] > 0.5 * side).collect();
+    let face = |frame: &[f64]| -> f64 { tip.iter().map(|&node| frame[node * 3]).sum::<f64>() / tip.len() as f64 };
+
+    let v0 = 1.0;
+    let kick = Some([v0, 0.0, 0.0].repeat(mesh.n_nodes()));
+    // ζω = mass-proportional, ζ/ω = stiffness-proportional: the pair the issue asks for.
+    let rayleigh = (zeta * omega, zeta / omega);
+    let n_periods = 6.0;
+    let res = run_step(&p, &implicit_step(period / 400.0, n_periods * period_d, 0.0, rayleigh, kick, 1))
+        .expect("a free body with an initial velocity integrates");
+    let h = res.history.as_ref().expect("a history");
+    let values: Vec<f64> = h.values.iter().map(|frame| face(frame)).collect();
+
+    // The first peak sits near a quarter damped period; each later one a further T_d on.
+    let (t0, u0) = parabolic_peak(&h.times, &values, 0.25 * period_d);
+    let k_periods = 4;
+    let (tk, uk) = parabolic_peak(&h.times, &values, t0 + k_periods as f64 * period_d);
+    assert!((tk - t0 - k_periods as f64 * period_d).abs() <= 0.02 * period_d, "{tk} vs {t0} + {k_periods} T_d");
+    assert!(u0 > 0.0 && uk > 0.0, "both peaks are positive lobes: {u0}, {uk}");
+
+    let observed_delta = libm::log(u0 / uk) / k_periods as f64;
+    let want_delta = 2.0 * PI * zeta / (1.0 - zeta * zeta).sqrt();
+    assert!(
+        (observed_delta - want_delta).abs() <= 0.01 * want_delta,
+        "logarithmic decrement {observed_delta} vs {want_delta} at zeta = {zeta}"
+    );
 }
 
 /// Benchmark F3, energy: `½vᵀMv + ½uᵀKu` is conserved by average acceleration to round-off,

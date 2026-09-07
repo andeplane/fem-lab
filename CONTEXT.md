@@ -110,6 +110,14 @@ Constraints, Loads and output requests active in it. Steps run in order and may 
 state.
 _Avoid_: study, case, stage, load case, job
 
+**Damping ratio**:
+The fraction ζ of critical damping a mode carries, applied as Rayleigh damping
+`C = αM + βK` under the hood: an implicit Step's `rayleighAlpha`/`rayleighBeta` read directly
+as α and β, and a harmonic Step's `dampingRatio` (one value, every mode) or `dampingRatios`
+(one value per mode, the last held for any mode past the end) convert to `ζ_k = α/(2ω_k) +
+βω_k/2` and add to it. ζ = 1 is critical damping; the schema refuses ζ ≥ 1.
+_Avoid_: damping factor, loss factor, Q, viscosity
+
 **Result**:
 The fields (displacement, stress, temperature, mode shapes) a Step produced, tied to the
 Mesh it ran on and to the Model revision it came from.

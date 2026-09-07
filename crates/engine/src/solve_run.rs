@@ -453,6 +453,7 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
             points: step.points.unwrap_or(0) as usize,
             spacing: step.sweep.unwrap_or_default(),
             damping_ratio: step.damping_ratio,
+            damping_ratios: step.damping_ratios.clone(),
             rayleigh: (step.rayleigh_alpha.unwrap_or(0.0), step.rayleigh_beta.unwrap_or(0.0)),
             output_every: step.output_every.unwrap_or(1) as usize,
         },

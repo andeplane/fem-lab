@@ -415,8 +415,8 @@ export interface Fem {
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
      * `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
      * `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
-     * implicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `rayleighAlpha`,
-     * `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and
+     * implicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `dampingRatios`,
+     * `rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and
      * `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
      * `amplitude` to static-nonlinear. An
      * implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]

@@ -19,9 +19,10 @@ describe('fieldsOf', () => {
       const fields = fieldsOf(v, DEFS);
       expect(fields.every((f) => f.path.length === 1), name).toBe(true);
       // `plugin.load`'s `manifest` is deliberately free-form JSON, and `geometry.addLine`'s
-      // joint list and member wiring are tables of numbers rather than form fields, as is
-      // `step.add`'s per-Set initial-velocity list; nothing else may be.
-      const json: Record<string, string[]> = { 'plugin.load': ['plugin.load.manifest'], 'geometry.addLine': ['geometry.addLine.points', 'geometry.addLine.members'], 'step.add': ['step.add.initialVelocity'] };
+      // joint list and member wiring are tables of numbers rather than form fields, as are
+      // `step.add`'s per-Set initial-velocity list and its per-mode `dampingRatios` list.
+      // Nothing else may be.
+      const json: Record<string, string[]> = { 'plugin.load': ['plugin.load.manifest'], 'geometry.addLine': ['geometry.addLine.points', 'geometry.addLine.members'], 'step.add': ['step.add.initialVelocity', 'step.add.dampingRatios'] };
       expect(fields.filter((f) => f.kind === 'json').map((f) => `${name}.${f.path.join('.')}`)).toEqual(json[name] ?? []);
     }
   });

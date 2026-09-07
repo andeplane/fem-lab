@@ -938,9 +938,18 @@ export type Command =
       sweep?: SweepSpacing | null;
       /**
        * Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
-       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused
+       * together with `dampingRatios` on the same Step.
        */
       dampingRatio?: number | null;
+      /**
+       * Per-mode modal damping ratios `[ζ₁, ζ₂, …]` of a harmonic Step, e.g. `[0.01, 0.02]`
+       * for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past
+       * the end of the list holds the last entry, so a two-entry list on a five-mode basis
+       * gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly
+       * like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
+       */
+      dampingRatios?: number[] | null;
       cmd: "step.add";
     }
   | {
@@ -3836,9 +3845,18 @@ export type ModelFile_Command =
       sweep?: SweepSpacing | null;
       /**
        * Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
-       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused
+       * together with `dampingRatios` on the same Step.
        */
       dampingRatio?: number | null;
+      /**
+       * Per-mode modal damping ratios `[ζ₁, ζ₂, …]` of a harmonic Step, e.g. `[0.01, 0.02]`
+       * for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past
+       * the end of the list holds the last entry, so a two-entry list on a five-mode basis
+       * gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly
+       * like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
+       */
+      dampingRatios?: number[] | null;
       cmd: "step.add";
     }
   | {
@@ -5154,9 +5172,18 @@ export type DocumentSnapshot_Command =
       sweep?: SweepSpacing | null;
       /**
        * Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
-       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused
+       * together with `dampingRatios` on the same Step.
        */
       dampingRatio?: number | null;
+      /**
+       * Per-mode modal damping ratios `[ζ₁, ζ₂, …]` of a harmonic Step, e.g. `[0.01, 0.02]`
+       * for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past
+       * the end of the list holds the last entry, so a two-entry list on a five-mode basis
+       * gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly
+       * like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
+       */
+      dampingRatios?: number[] | null;
       cmd: "step.add";
     }
   | {
@@ -7182,6 +7209,7 @@ export interface Step {
   points?: number | null;
   sweep?: SweepSpacing | null;
   dampingRatio?: number | null;
+  dampingRatios?: number[] | null;
   alpha?: number | null;
   rayleighAlpha?: number | null;
   rayleighBeta?: number | null;

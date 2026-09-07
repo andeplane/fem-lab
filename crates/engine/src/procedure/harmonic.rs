@@ -115,7 +115,7 @@ pub fn run(
     f_stop: f64,
     points: usize,
     spacing: SweepSpacing,
-    damping_ratio: Option<f64>,
+    damping_ratio: &[f64],
     rayleigh: (f64, f64),
     output_every: usize,
     pool: &Pool,

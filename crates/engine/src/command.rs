@@ -1570,8 +1570,8 @@ pub enum Command {
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
     /// `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
     /// `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
-    /// implicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `rayleighAlpha`,
-    /// `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and
+    /// implicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `dampingRatios`,
+    /// `rayleighAlpha`, `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and
     /// `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
     /// `amplitude` to static-nonlinear. An
     /// implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
@@ -1696,9 +1696,17 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sweep: Option<SweepSpacing>,
         /// Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
-        /// for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+        /// for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give. Refused
+        /// together with `dampingRatios` on the same Step.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         damping_ratio: Option<f64>,
+        /// Per-mode modal damping ratios `[ζ₁, ζ₂, …]` of a harmonic Step, e.g. `[0.01, 0.02]`
+        /// for 1 % on the first mode and 2 % on the second. Each entry is in [0, 1); a mode past
+        /// the end of the list holds the last entry, so a two-entry list on a five-mode basis
+        /// gives modes 3-5 the second value. Added to whatever the Rayleigh terms give, exactly
+        /// like `dampingRatio`. Refused together with `dampingRatio` on the same Step.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        damping_ratios: Option<Vec<f64>>,
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced
