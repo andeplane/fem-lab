@@ -103,6 +103,21 @@ drawer or split. Overlap alone therefore does not establish a placement defect;
 verify that closing the drawer restores the covered controls and that the
 intended keyboard paths remain usable before filing a new layout defect.
 
+### Chrome keyboard inspection at the 1180 px boundary
+
+With the browser viewport override set to 1180 × 1000, keyboard selection of
+`beam` in the Gallery tag filter reduced the list to four of 22 examples. Enter
+on the cantilever card opened the real solved model at revision 10 with its
+Theory comparison. Enter on the Assistant toggle opened the right drawer.
+After a subsequent Enter attempt timed out in browser automation, fresh
+accessibility state confirmed the toggle was off and the drawer absent.
+The viewer Fit control and Properties were exposed again.
+
+The browser then repeatedly timed out dispatching further interactions, so
+activation of Fit, the remaining keyboard paths and report copy/print were not
+verified. The browser viewport override was reset and the temporary tab closed.
+No model edit or paid Assistant request was made.
+
 ### Current source and scenario references
 
 These references were inspected at `3a3e1e4`; scenario existence is not a substitute for
