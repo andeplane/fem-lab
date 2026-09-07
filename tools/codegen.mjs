@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // engine.schema.json (the output of `femlab schema`) → TypeScript for packages/registry.
 //   node tools/codegen.mjs [--from <engine.schema.json>] [--check]
-// Writes packages/registry/src/generated/engine.ts (types) and fem.d.ts (script API).
-// --check regenerates in memory and exits 1 if either committed file differs.
+// Writes engine.ts (types), fem.d.ts (script API), and runtime-schema.ts (shared browser data).
+// --check regenerates in memory and exits 1 if any committed output differs.
 // Node only, no shell, no Rust toolchain: the schema document is committed.
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -119,7 +119,24 @@ export async function generate(doc) {
     bannerComment: BANNER,
     strictIndexSignatures: true,
   });
-  return { 'engine.ts': engine, 'fem.d.ts': femDts(doc) };
+  return { 'engine.ts': engine, 'fem.d.ts': femDts(doc), 'runtime-schema.ts': runtimeSchema(doc) };
+}
+
+/** Share identical Command definitions in the browser without changing the canonical schemas. */
+export function runtimeSchema(doc) {
+  const { $defs = {}, ...queries } = doc.queries;
+  const json = (value) => JSON.stringify(value, null, 2);
+  const definitions = Object.entries($defs).map(([name, value]) => {
+    let source = json(value);
+    if (JSON.stringify(value) === JSON.stringify(doc.commands.$defs?.[name])) {
+      source = `commands.$defs[${JSON.stringify(name)}]`;
+    } else if (name === 'Command' && JSON.stringify(value.oneOf) === JSON.stringify(doc.commands.oneOf)) {
+      const { oneOf, ...metadata } = value;
+      source = `{ ...${json(metadata)}, oneOf: commands.oneOf }`;
+    }
+    return `    ${JSON.stringify(name)}: ${source}`;
+  });
+  return `${BANNER}\n// The registry's two schema roots share repeated definitions instead of bundling them twice.\nconst commands = ${json(doc.commands)};\nconst queries = {\n  ...${json(queries)},\n  $defs: {\n${definitions.join(',\n')}\n  },\n};\nexport default { schemaVersion: ${json(doc.schemaVersion)}, commands, queries };\n`;
 }
 
 async function main(argv) {

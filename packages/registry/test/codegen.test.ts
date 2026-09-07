@@ -3,12 +3,23 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { femDts, mergeSchema } from '../../../tools/codegen.mjs';
+import { femDts, mergeSchema, runtimeSchema } from '../../../tools/codegen.mjs';
 import schema from '../src/generated/engine.schema.json';
+import runtime from '../src/generated/runtime-schema';
 
 const root = path.resolve(import.meta.dirname, '../../..');
 
 describe('codegen', () => {
+  it('preserves both runtime schema roots while sharing identical Command definitions', () => {
+    expect(runtime).toEqual({ schemaVersion: schema.schemaVersion, commands: schema.commands, queries: schema.queries });
+    expect(runtime.queries.$defs.Command.oneOf).toBe(runtime.commands.oneOf);
+    expect(runtime.queries.$defs.Quantity).toBe(runtime.commands.$defs.Quantity);
+    const changed = structuredClone(schema);
+    changed.queries.$defs.Command.oneOf.pop();
+    // A future query-specific Command must not accidentally reuse the different root.
+    expect(runtimeSchema(changed)).not.toContain('oneOf: commands.oneOf');
+  });
+
   it('--check passes on the committed output', () => {
     expect(() => execFileSync(process.execPath, [path.join(root, 'tools/codegen.mjs'), '--check'], { stdio: 'pipe' })).not.toThrow();
   });
