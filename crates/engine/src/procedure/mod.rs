@@ -3,14 +3,15 @@
 //! `Step::Static` is the linear static procedure ([`static_`]); [`nonlinear`] is its
 //! finite-deformation counterpart; [`modal`] finds natural frequencies by subspace iteration,
 //! [`harmonic`] superposes those modes into a frequency response,
-//! [`heat`] solves steady and transient conduction, and
-//! [`explicit`] integrates the equations of motion by central differences. Each one takes the
-//! same resolved [`Problem`] and answers the same [`StepResult`], so `solve.run` and every
-//! host read one shape whatever the physics.
+//! [`heat`] solves steady and transient conduction, [`explicit`] integrates the equations of
+//! motion by central differences and [`implicit`] by the HHT-α method. Each one takes the same
+//! resolved [`Problem`] and answers the same [`StepResult`], so `solve.run` and every host read
+//! one shape whatever the physics.
 
 pub mod explicit;
 pub mod harmonic;
 pub mod heat;
+pub mod implicit;
 pub mod modal;
 pub mod nonlinear;
 pub mod static_;
@@ -146,6 +147,7 @@ pub(crate) fn iterate(
 }
 
 /// One analysis step.
+#[derive(Debug, Clone)]
 pub enum Step {
     /// Linear static equilibrium: `K u = f`.
     ///
@@ -202,6 +204,22 @@ pub enum Step {
         initial_velocity: Option<Vec<f64>>,
         output_every: usize,
     },
+    /// Implicit dynamics by the HHT-α method on the consistent mass, one factorisation reused
+    /// for every time step ([`implicit`]).
+    Implicit {
+        dt: f64,
+        t_end: f64,
+        /// `α ∈ [−1/3, 0]`; 0 is Newmark average acceleration, below it HHT numerical damping.
+        alpha: f64,
+        /// Rayleigh damping `C = rayleigh_alpha·M + rayleigh_beta·K`.
+        rayleigh_alpha: f64,
+        rayleigh_beta: f64,
+        /// Initial velocity per DOF; `None` starts from rest.
+        initial_velocity: Option<Vec<f64>>,
+        output_every: usize,
+        /// Scales the Loads; prescribed displacements never move.
+        amplitude: Option<Amplitude>,
+    },
 }
 
 impl Step {
@@ -215,6 +233,7 @@ impl Step {
             Step::HeatTransient { .. } => "heat-transient",
             Step::Harmonic { .. } => "harmonic",
             Step::Explicit { .. } => "explicit",
+            Step::Implicit { .. } => "implicit",
         }
     }
 }
@@ -369,6 +388,27 @@ pub async fn run(
         Step::Explicit { t_end, dt_factor, initial_velocity, output_every } => {
             explicit::run(p, *t_end, *dt_factor, initial_velocity.as_deref(), *output_every, pool, progress)
         }
+        Step::Implicit {
+            dt,
+            t_end,
+            alpha,
+            rayleigh_alpha,
+            rayleigh_beta,
+            initial_velocity,
+            output_every,
+            amplitude,
+        } => implicit::run(
+            p,
+            *dt,
+            *t_end,
+            *alpha,
+            (*rayleigh_alpha, *rayleigh_beta),
+            initial_velocity.as_deref(),
+            *output_every,
+            amplitude.as_ref(),
+            pool,
+            progress,
+        ),
     }
 }
 

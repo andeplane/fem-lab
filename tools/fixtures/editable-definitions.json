@@ -885,6 +885,32 @@
     "command": {
       "cmd": "step.add",
       "name": "editable",
+      "procedure": "implicit",
+      "constraints": [],
+      "loads": [],
+      "dt": "0.1 ms",
+      "tEnd": "2 ms",
+      "alpha": -0.05,
+      "rayleighAlpha": "12 Hz",
+      "rayleighBeta": "3e-6 s",
+      "outputEvery": 2,
+      "initialVelocity": [
+        {
+          "on": "base.xmax",
+          "value": [
+            "1 m/s",
+            "0 m/s",
+            "-2 mm/s"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "kind": "step",
+    "command": {
+      "cmd": "step.add",
+      "name": "editable",
       "procedure": "harmonic",
       "constraints": [],
       "loads": [],

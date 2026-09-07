@@ -1,0 +1,149 @@
+{
+  "name": "implicit-sdof-damped",
+  "reference": "Benchmark F3 at a damping ratio of 0.05: the same single degree of freedom with Rayleigh damping split evenly between its two terms, rayleighAlpha = zeta omega = 5213.63 Hz and rayleighBeta = zeta/omega = 4.7951e-7 s, so zeta = rayleighAlpha/(2 omega) + rayleighBeta omega/2 = 0.05 exactly. The closed form is u(t) = u_static [1 - e^(-zeta omega t)(cos omega_d t + (zeta omega/omega_d) sin omega_d t)] with omega_d = omega sqrt(1 - zeta^2), T_d = 60.333 us: 1.8544 u_static at the first peak T_d/2, 0.46692 u_static at the trough 2 T_d.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "sdof-damped"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "cube",
+      "size": [
+        "100 mm",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "cube"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 1,
+          "ny": 1,
+          "nz": 1
+        }
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "cube.xmin"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "guide",
+      "on": "cube.xmax",
+      "dofs": [
+        "uy",
+        "uz"
+      ]
+    },
+    {
+      "cmd": "load.traction",
+      "name": "pull",
+      "on": "cube.xmax",
+      "total": [
+        "1 kN",
+        "0 N",
+        "0 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "ring",
+      "procedure": "implicit",
+      "constraints": [
+        "root",
+        "guide"
+      ],
+      "loads": [
+        "pull"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "dt": "3.012864e-7 s",
+      "tEnd": "1.2066550e-4 s",
+      "alpha": 0,
+      "rayleighAlpha": "5213.631428 Hz",
+      "rayleighBeta": "4.795122e-7 s",
+      "outputEvery": 1
+    },
+    {
+      "cmd": "solve.run",
+      "step": "ring"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "100 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "3.0166375e-5 s",
+          "sampling": "nearest"
+        }
+      },
+      "path": "/value/value",
+      "expect": 6.560022e-05,
+      "tol": 0.01,
+      "rel": true,
+      "note": "first peak at T_d/2: 1.8544 u_static"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "100 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 0
+      },
+      "path": "/value/value",
+      "expect": 1.651731e-05,
+      "tol": 0.01,
+      "rel": true,
+      "note": "the trough at 2 T_d, the end of the run: 0.46692 u_static"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/solver",
+      "expect": "cpu-direct",
+      "note": "one factorisation, back-substituted every step"
+    }
+  ]
+}

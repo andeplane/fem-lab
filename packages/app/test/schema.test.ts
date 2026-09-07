@@ -19,9 +19,9 @@ describe('fieldsOf', () => {
       const fields = fieldsOf(v, DEFS);
       expect(fields.every((f) => f.path.length === 1), name).toBe(true);
       // `plugin.load`'s `manifest` is deliberately free-form JSON, and `geometry.addLine`'s
-      // joint list and member wiring are tables of numbers rather than form fields; nothing
-      // else may be.
-      const json: Record<string, string[]> = { 'plugin.load': ['plugin.load.manifest'], 'geometry.addLine': ['geometry.addLine.points', 'geometry.addLine.members'] };
+      // joint list and member wiring are tables of numbers rather than form fields, as is
+      // `step.add`'s per-Set initial-velocity list; nothing else may be.
+      const json: Record<string, string[]> = { 'plugin.load': ['plugin.load.manifest'], 'geometry.addLine': ['geometry.addLine.points', 'geometry.addLine.members'], 'step.add': ['step.add.initialVelocity'] };
       expect(fields.filter((f) => f.kind === 'json').map((f) => `${name}.${f.path.join('.')}`)).toEqual(json[name] ?? []);
     }
   });
@@ -49,7 +49,7 @@ describe('fieldsOf', () => {
 
   it('reads an enum as options and a list of names as a multi picker', () => {
     const fields = fieldsOf(byName('step.add'), DEFS);
-    expect(fields.find((f) => f.path[0] === 'procedure')).toMatchObject({ kind: 'enum', options: ['static', 'static-nonlinear', 'modal', 'heat-steady', 'heat-transient', 'explicit', 'harmonic'], multi: false });
+    expect(fields.find((f) => f.path[0] === 'procedure')).toMatchObject({ kind: 'enum', options: ['static', 'static-nonlinear', 'modal', 'heat-steady', 'heat-transient', 'explicit', 'implicit', 'harmonic'], multi: false });
     expect(fields.find((f) => f.path[0] === 'constraints')).toMatchObject({ kind: 'ref', refKind: 'constraint', multi: true });
     expect(fields.find((f) => f.path[0] === 'output')).toMatchObject({ kind: 'enum', multi: true });
   });

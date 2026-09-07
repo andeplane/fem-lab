@@ -87,6 +87,7 @@ pub struct Converge {
 }
 
 /// Everything a nonlinear Step is driven by.
+#[derive(Debug, Clone)]
 pub struct Options {
     /// Equal increments of pseudo-time over `[0, t_end]` before any cutback.
     pub increments: usize,
