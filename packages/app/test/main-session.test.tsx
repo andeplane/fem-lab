@@ -42,7 +42,7 @@ it('boots the real session host, saves and reopens projects, and revokes retaine
   expect(saved.commands).toBe(2);
   await initial.dispatch({ cmd: 'project.rename', id: first.id, name: 'renamed' });
   expect(mounted.props!.store.state.project?.name).toBe('renamed');
-  await expect(originalUi.query({ query: 'query.model' })).rejects.toMatchObject({ code: 'session.expired' });
+  await expect(originalUi.query!({ query: 'query.model' })).rejects.toMatchObject({ code: 'session.expired' });
   const firstUi = mounted.props!;
   await firstUi.dispatch({ cmd: 'view.setMode', mode: 'mesh' });
   expect(firstUi.store.state.viewMode).toBe('mesh');
