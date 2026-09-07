@@ -96,11 +96,19 @@ export class ProjectRepository {
   async claim(meta: ProjectMeta, snapshot: DocumentSnapshot, expected: ProjectRecord | null): Promise<ProjectBinding> {
     const generation = this.generation();
     const captured = clone(snapshot);
-    await this.storage.update(meta.id, previous => {
+    let previousClaim: ProjectRecord | null = null;
+    const claimed = await this.storage.update(meta.id, previous => {
       if (expected === null ? previous !== null : !previous?.meta || previous.generation !== expected.generation || previous.version !== expected.version || identity(previous.cmds) !== identity(expected.cmds)) throw conflict();
+      previousClaim = clone(previous);
       return { id: meta.id, generation, version: captured.stamp.stateVersion, meta: { ...clone(meta), commands: captured.file.journal.entries.length, hash: captured.model.hash }, cmds: captured.file.journal.entries.map(entry => entry.cmd as ShareCommand) };
     });
-    return new ProjectBinding(this, clone(meta), generation, captured.stamp.session);
+    return new ProjectBinding(this, clone(meta), generation, captured.stamp.session, async () => {
+      const tombstoneGeneration = this.generation();
+      await this.storage.update(meta.id, current => {
+        if (identity(current) !== identity(claimed)) throw conflict();
+        return previousClaim ?? { id: meta.id, generation: tombstoneGeneration, version: claimed.version, meta: null, cmds: [] };
+      });
+    });
   }
   async save(job: SaveJob): Promise<ProjectMeta> {
     const captured = clone(job);
@@ -128,7 +136,9 @@ export class ProjectRepository {
 }
 /** The binding has no pointer to a current project, so late saves cannot choose a new target. */
 export class ProjectBinding {
-  constructor(private readonly repository: ProjectRepository, readonly meta: ProjectMeta, readonly generation: string, private readonly session: SessionRef) {}
+  constructor(private readonly repository: ProjectRepository, readonly meta: ProjectMeta, readonly generation: string, private readonly session: SessionRef, private readonly rollbackClaim: () => Promise<void>) {}
+  /** Only an unpublished activation may give its durable ownership back. */
+  abandon(): Promise<void> { return this.rollbackClaim(); }
   capture(snapshot: DocumentSnapshot, at: number, thumbnail: string | null = this.meta.thumbnail): SaveJob {
     if (snapshot.stamp.session.backendEpoch !== this.session.backendEpoch || snapshot.stamp.session.sessionId !== this.session.sessionId) throw conflict();
     return clone({ id: this.meta.id, generation: this.generation, version: snapshot.stamp.stateVersion,

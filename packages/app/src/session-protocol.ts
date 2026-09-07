@@ -5,7 +5,7 @@ import type { BufferSpec, ProjectMeta, Command, DocumentSnapshot, EngineError, E
 export interface SessionOptions { gpu: boolean; threads: number }
 export type ReplacementSource = (
   | { kind: 'commands'; commands: Command[] }
-  | { kind: 'journal'; entries: JournalEntry[]; skipSolves: boolean }
+  | { kind: 'journal'; entries: JournalEntry[]; skipSolves: boolean; revision?: number }
   | { kind: 'file'; file: ModelFile }) & { project?: { meta: ProjectMeta; expected: ProjectRecord | null }; benchmark?: ActiveBenchmark };
 export type SessionRequest = { id: number } & (
   | { op: 'create'; epoch: string; options: SessionOptions }

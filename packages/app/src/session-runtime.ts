@@ -66,7 +66,12 @@ const need = (): SessionEngine => {
         const source = req.source;
         switch (source.kind) {
           case 'commands': await candidate.commands(json(source.commands)); break;
-          case 'journal': await candidate.journal(json(source.entries), source.skipSolves); break;
+          case 'journal':
+            await candidate.journal(json(source.entries), source.skipSolves);
+            if (source.revision !== undefined && source.revision < source.entries.length) {
+              await candidate.commands(json([{ cmd: 'journal.undo', steps: source.entries.length - source.revision }]));
+            }
+            break;
           case 'file': await candidate.file(json(source.file)); break;
         }
         candidate.finish();

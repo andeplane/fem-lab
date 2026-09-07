@@ -44,6 +44,24 @@ test.describe('@cpu session ownership', () => {
     await expect(page.locator('.banner')).not.toContainText('brick_shaft');
     await expect(page.locator('.props')).not.toContainText('brick_shaft');
   });
+  test('cancellation recovers acknowledged edits and redo without reviving retained handles', async ({ page }) => {
+    await ready(page);
+    await page.evaluate(async () => {
+      await window.fem.model.new({ name: 'recover' });
+      await window.fem.geometry.addBox({ name: 'shared', size: ['1 m', '1 m', '1 m'] });
+      await window.fem.journal.undo({ steps: 1 });
+      (window as unknown as { retained: typeof window.fem }).retained = window.fem;
+      await window.fem.dispatch({ cmd: 'solve.cancel' });
+    });
+    expect((await page.evaluate(() => window.fem.query.model())).bodies).toHaveLength(0);
+    await page.evaluate(() => window.fem.journal.redo({ steps: 1 }));
+    expect((await page.evaluate(() => window.fem.query.model())).bodies).toHaveLength(1);
+    const code = await page.evaluate(async () => {
+      try { await (window as unknown as { retained: typeof window.fem }).retained.geometry.remove({ name: 'shared' }); return 'accepted'; }
+      catch (error) { return (error as { code: string }).code; }
+    });
+    expect(code).toBe('session.expired');
+  });
   test('an initiating script can create its own model and continue, while a failed import preserves it', async ({ page }) => {
     await ready(page);
     const result = await page.evaluate(() => window.fem.dispatch({ cmd: 'script.run', code: 'await fem.model.new({name:"script-owned"}); await fem.geometry.addBox({name:"shared",size:["1 m","1 m","1 m"]});' })) as { error: string | null };

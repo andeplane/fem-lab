@@ -1,5 +1,5 @@
 // A channel never changes Workers. A producer never acquires a different session implicitly.
-import { decodeBulk, FemError, type Ack, type Command, type DocumentSnapshot, type EngineTransport, type ExecutionContext, type ExportedFile, type ExportSpec, type Field, type FieldData, type ImportAck, type ModelFile, type Progress, type Query, type QueryResult, type ResultField, type RunLease, type SessionRef, type Stamp } from '@femlab/registry';
+import { decodeBulk, FemError, type Ack, type Command, type DocumentSnapshot, type EngineTransport, type ExecutionContext, type ExportedFile, type ExportSpec, type Field, type FieldData, type ImportAck, type JournalEntry, type ModelFile, type Progress, type Query, type QueryResult, type ResultField, type RunLease, type SessionRef, type Stamp } from '@femlab/registry';
 import type { AppSurface } from './worker-transport';
 import type { ReplacementSource, SessionMessage, SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 
@@ -10,6 +10,7 @@ const sameContext = (a: ExecutionContext | null, b: ExecutionContext | null): bo
 interface Answer { stamp: Stamp; value: unknown }
 interface Pending {
   context: ExecutionContext | null;
+  message: SessionMessage;
   resolve(reply: Answer): void;
   reject(error: unknown): void;
   progress?: (p: Progress) => void;
@@ -19,8 +20,9 @@ interface Pending {
 export class SessionChannel {
   private nextId = 0;
   private closed = false;
+  private history: { stamp: Stamp; entries: JournalEntry[]; revision: number } | undefined;
   private readonly pending = new Map<number, Pending>();
-  constructor(private readonly worker: Worker) {
+  constructor(private readonly worker: Worker, private readonly onFailure?: (error: unknown) => void) {
     worker.onmessage = (event: MessageEvent<SessionResponse>) => {
       if (this.closed) return;
       const message = event.data;
@@ -33,21 +35,48 @@ export class SessionChannel {
       }
       if ('progress' in message) { pending.progress?.(message.progress); return; }
       this.pending.delete(message.id);
-      if (!message.ok) { pending.reject(Object.assign(new FemError(message.error.code, message.error.cause, message.error.where, message.error.suggestion), { context: message.context })); return; }
-      try { pending.resolve({ stamp: message.stamp, value: message.raw ? decodeBulk(message, message.raw) : message.value }); }
+      if (!message.ok) {
+        const error = Object.assign(new FemError(message.error.code, message.error.cause, message.error.where, message.error.suggestion), { context: message.context });
+        pending.reject(error);
+        if (/recursive use of an object|unreachable/.test(message.error.cause)) this.failed(error);
+        return;
+      }
+      try {
+        if (pending.message.op === 'dispatch') this.record(pending.message.command, message.value as Ack, message.stamp);
+        pending.resolve({ stamp: message.stamp, value: message.raw ? decodeBulk(message, message.raw) : message.value });
+      }
       catch (error) { pending.reject(error); }
     };
-    worker.onerror = (event: ErrorEvent) => this.close(new FemError('internal', `session Worker failed: ${event.message}`, 'engine.worker'));
+    worker.onerror = (event: ErrorEvent) => this.failed(new FemError('internal', `session Worker failed: ${event.message}`, 'engine.worker'));
   }
   request(message: SessionMessage, progress?: (p: Progress) => void): Promise<Answer> {
     if (this.closed) return Promise.reject(expired());
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { context: 'context' in message ? message.context : null, resolve, reject, ...(progress ? { progress } : {}) });
+      this.pending.set(id, { context: 'context' in message ? message.context : null, message: structuredClone(message), resolve, reject, ...(progress ? { progress } : {}) });
       try { this.worker.postMessage({ ...message, id } satisfies SessionRequest); }
       catch (error) { this.pending.delete(id); reject(error); }
     });
   }
+  seed(snapshot: DocumentSnapshot, source?: ReplacementSource): void {
+    if (this.history && !source) return;
+    this.history = { stamp: structuredClone(snapshot.stamp),
+      entries: structuredClone(source?.kind === 'journal' ? source.entries : snapshot.journal.entries), revision: snapshot.model.revision };
+  }
+  recoveryJournal(): ReplacementSource {
+    if (!this.history) throw new FemError('internal', 'no acknowledged journal is available for recovery');
+    return structuredClone({ kind: 'journal', entries: this.history.entries, revision: this.history.revision, skipSolves: true });
+  }
+  private record(command: Command, ack: Ack, stamp: Stamp): void {
+    if (this.history && BigInt(stamp.stateVersion) <= BigInt(this.history.stamp.stateVersion)) return;
+    const entries = this.history?.entries ?? [];
+    if (command.cmd !== 'journal.undo' && command.cmd !== 'journal.redo') {
+      entries.length = ack.seq;
+      entries.push({ seq: ack.seq, cmd: structuredClone(command), hashAfter: ack.hash });
+    }
+    this.history = { stamp: structuredClone(stamp), entries, revision: ack.revision };
+  }
+  private failed(error: unknown): void { this.close(error); this.onFailure?.(error); }
   close(error: unknown = expired()): void {
     if (this.closed) return;
     this.closed = true;
@@ -64,7 +93,7 @@ export class SessionTransport implements EngineTransport {
   private tail: Promise<unknown> = Promise.resolve();
   private replacementListener: ((next: SessionTransport) => void) | undefined;
   private sink: ((p: Progress) => void) | undefined;
-  constructor(readonly channel: SessionChannel, private lease: RunLease, private readonly replace: Replace) {}
+  constructor(readonly channel: SessionChannel, private lease: RunLease, private readonly replace: Replace, private readonly recover: (origin: SessionTransport) => Promise<void> = async origin => origin.release()) {}
   onReplacement(listener: (next: SessionTransport) => void): void { this.replacementListener = listener; }
   async replaceWith(source: ReplacementSource): Promise<SessionTransport> {
     const next = await this.replace(this, source);
@@ -94,13 +123,17 @@ export class SessionTransport implements EngineTransport {
     const reply = await this.channel.request({ op: 'forkRun', context: this.context() });
     const lease = reply.value as RunLease;
     if (!sameSession(lease.stamp.session, this.stamp.session)) throw expired();
-    return new SessionTransport(this.channel, lease, this.replace);
+    return new SessionTransport(this.channel, lease, this.replace, this.recover);
   }
   async release(): Promise<void> {
     await this.channel.request({ op: 'cancelRun', context: this.context() });
   }
   async snapshot(): Promise<DocumentSnapshot> {
-    return this.ordered(async () => this.accept(await this.channel.request({ op: 'snapshot', context: this.context() })) as DocumentSnapshot);
+    return this.ordered(async () => {
+      const snapshot = this.accept(await this.channel.request({ op: 'snapshot', context: this.context() })) as DocumentSnapshot;
+      this.channel.seed(snapshot);
+      return snapshot;
+    });
   }
   dispatch(command: Command, onProgress?: (p: Progress) => void): Promise<Ack> {
     if (command.cmd === 'model.new') return this.replaceWith({ kind: 'commands', commands: [structuredClone(command)] }).then(async (next) => {
@@ -150,7 +183,8 @@ export class SessionTransport implements EngineTransport {
   async prepare(source: ReplacementSource, options: SessionOptions): Promise<DocumentSnapshot> {
     const reply = await this.channel.request({ op: 'prepare', context: this.context(), expectedVersion: this.stamp.stateVersion, source, options });
     this.lease.stamp = structuredClone(reply.stamp); // This private candidate initiated the transition.
+    this.channel.seed(reply.value as DocumentSnapshot, source);
     return reply.value as DocumentSnapshot;
   }
-  cancel(): Promise<void> { return this.release(); }
+  cancel(): Promise<void> { return this.recover(this); }
 }

@@ -55,6 +55,24 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`project owners
     expect(tombstone?.meta).toBeNull();
     a.close(); b.close();
   });
+  it('restores the previous save owner when an unpublished activation is abandoned', async () => {
+    const { repo } = setup(); const a = document('a'); const b = document('b');
+    const original = await repo.claim(meta('a'), a.snapshot(), null);
+    const before = await repo.read('a');
+    const candidate = await repo.claim(meta('a'), b.snapshot(), before);
+    await candidate.abandon();
+    expect(await repo.read('a')).toEqual(before);
+    await original.save(original.capture(a.snapshot(), 5));
+    await expect(candidate.save(candidate.capture(b.snapshot(), 6))).rejects.toMatchObject({ code: 'session.conflict' });
+    const newProject = await repo.claim(meta('new'), b.snapshot(), null);
+    await newProject.abandon();
+    expect((await repo.list()).map(row => row.id)).toEqual(['a']);
+    const replacing = await repo.claim(meta('a'), b.snapshot(), await repo.read('a'));
+    await repo.delete('a');
+    await expect(replacing.abandon()).rejects.toMatchObject({ code: 'session.conflict' });
+    expect(await repo.list()).toEqual([]);
+    a.close(); b.close();
+  });
   it('captures immutable input and destination before any asynchronous save work', async () => {
     const { repo } = setup(); const a = document('a'); const b = document('b');
     const snapshot = a.snapshot();

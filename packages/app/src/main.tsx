@@ -109,6 +109,14 @@ class Bundle {
     this.latest = this.binding.capture(snapshot, Date.now());
     await this.save();
   }
+  async recoverySource(source: ReplacementSource): Promise<ReplacementSource> {
+    if (this.projectDeleted || !this.binding) return source;
+    if (this.autosave) await this.save();
+    await this.saving;
+    const expected = await repository.read(this.binding.meta.id);
+    return { ...source, project: { meta: expected.meta!, expected } };
+  }
+  recoveryFailed(error: unknown): void { this.store.set({ ready: false }); this.fail(error); }
   async primeProjects(): Promise<ProjectMeta[]> {
     this.projects = await repository.list();
     if (this.savedMeta) this.savedMeta = this.projects.find(meta => meta.id === this.savedMeta!.id) ?? null;
@@ -162,6 +170,7 @@ class Bundle {
       enabled: () => this.autosave, flush: async () => { await this.save(); await this.saving; },
     };
   }
+  async abandon(): Promise<void> { await this.binding?.abandon(); }
   fail(error: unknown): void { if (!this.disposed) this.store.fail(error); }
   dispose(): void {
     this.disposed = true;
@@ -215,7 +224,7 @@ class Producer {
     const before = this.bundle; const native = this.native; const transport = this.transport;
     const definition = native.describe(command.cmd);
     if (before.disposed) throw expired();
-    if (definition.provider === 'host') await transport.assertActive();
+    if (definition.provider === 'host' && definition.execution !== 'control') await transport.assertActive();
     before.store.set({ lastError: null });
     const long = command.cmd === 'solve.run' || command.cmd === 'study.converge';
     if (long) before.store.set({ solving: String(command['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
@@ -246,10 +255,11 @@ class Producer {
 const workspace = new SessionWorkspace<Bundle>({
   spawn: () => new Worker(new URL('./session.worker.ts', import.meta.url), { type: 'module' }),
   epoch: () => crypto.randomUUID(), engine: engineOptions,
-  build: async (transport, snapshot, source) => { const bundle = new Bundle(await transport.fork()); await bundle.initialize(snapshot, source); bundles.set(transport.channel, bundle); return bundle; },
+  build: async (transport, snapshot, source) => { const bundle = new Bundle(await transport.fork()); try { await bundle.initialize(snapshot, source); } catch (error) { try { await bundle.abandon(); } finally { bundle.dispose(); } throw error; } bundles.set(transport.channel, bundle); return bundle; },
   publish: ({ resources: bundle }) => {
     const ui = new Producer(bundle, bundle.uiTransport);
     const dispatch: Registry['dispatch'] = async command => {
+      if (ui.registry.describe(command.cmd).execution === 'control') return ui.registry.dispatch(command);
       const producer = new Producer(bundle, await bundle.transport.fork());
       try { return await producer.registry.dispatch(command); }
       finally { await producer.transport.release().catch(() => undefined); }

@@ -99,6 +99,44 @@ describe('session workspace using the checked WASM runtime', () => {
     b.channel.close();
   });
 
+  it('recovers acknowledged history with a fresh endpoint and preserves the redo tail', async () => {
+    const { workspace } = setup();
+    const a = (await workspace.start()).transport;
+    await a.dispatch(body);
+    await a.dispatch({ cmd: 'journal.undo', steps: 1 });
+    const before = await a.snapshot();
+    expect(before.canRedo).toBe(true);
+    await workspace.recover(a);
+    const b = workspace.active.transport;
+    const recovered = await b.snapshot();
+    expect(recovered.file).toEqual(before.file);
+    expect(recovered.canRedo).toBe(true);
+    expect(recovered.stamp.session.backendEpoch).not.toBe(before.stamp.session.backendEpoch);
+    await expect(a.dispatch(body)).rejects.toMatchObject({ code: 'session.expired' });
+    await b.dispatch({ cmd: 'journal.redo', steps: 1 });
+    expect((await b.snapshot()).file.model.bodies).toHaveLength(1);
+    b.channel.close();
+  });
+
+  it('cancels blocked posted work without allowing its eventual reply into the recovered session', async () => {
+    const { workspace, workers } = setup();
+    const a = (await workspace.start()).transport;
+    await a.dispatch(body);
+    const before = await a.snapshot();
+    const gate = deferred(); workers[0]!.pause = gate.promise;
+    const posted = a.dispatch(remove);
+    const rejected = expect(posted).rejects.toMatchObject({ code: 'cancelled' });
+    await Promise.resolve();
+    await workspace.recover(a);
+    await rejected;
+    const b = workspace.active.transport;
+    expect((await b.snapshot()).file).toEqual(before.file);
+    gate.resolve();
+    await workers[0]!.runtime.accept({ id: 999, op: 'snapshot', context: { session: before.stamp.session, runId: a.runId, operationId: '999' } }, () => undefined);
+    expect((await b.snapshot()).file).toEqual(before.file);
+    b.channel.close();
+  });
+
   it('cannot publish a prepared candidate after the initiating run was cancelled', async () => {
     const entered = deferred(); const finish = deferred();
     let built = 0; let epoch = 0;
