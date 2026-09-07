@@ -414,15 +414,7 @@ impl SessionEngine {
     }
 
     pub async fn create(opts: JsValue, backend_epoch: String) -> Result<SessionEngine, JsValue> {
-        let want_gpu = js_sys::Reflect::get(&opts, &"gpu".into()).map(|v| v.is_truthy()).unwrap_or(false);
-        let threads =
-            js_sys::Reflect::get(&opts, &"threads".into()).ok().and_then(|v| v.as_f64()).unwrap_or(1.0).max(1.0)
-                as usize;
-        let gpu = if want_gpu {
-            femlab_engine::Gpu::request(femlab_engine::Gpu::default_backends()).await.ok()
-        } else {
-            None
-        };
+        let (gpu, threads) = session_device(opts).await?;
         let inner = femlab_engine::session_owner::SessionOwner::new(gpu, Box::new(JsHost), threads, backend_epoch)
             .map_err(|e| throw(&e))?;
         Ok(Self { inner })
@@ -478,4 +470,103 @@ impl SessionEngine {
         let snapshot = self.inner.snapshot(&context).map_err(|e| throw(&e))?;
         serde_json::to_string(&snapshot).map_err(schema_err)
     }
+}
+
+/// A replacement builder has exactly one state; failed preparation cannot leave a committable
+/// partial engine. Hosts must still abandon the owner's ticket in their failure/cancel cleanup.
+enum CandidateState {
+    Building(femlab_engine::replacement::Candidate),
+    Ready(femlab_engine::replacement::PreparedCandidate),
+    Consumed,
+}
+
+#[wasm_bindgen]
+pub struct PreparedEngine {
+    state: CandidateState,
+}
+impl PreparedEngine {
+    fn take_building(&mut self) -> Result<femlab_engine::replacement::Candidate, JsValue> {
+        match std::mem::replace(&mut self.state, CandidateState::Consumed) {
+            CandidateState::Building(candidate) => Ok(candidate),
+            _ => Err(throw(&femlab_engine::Error::schema("candidate is no longer being prepared"))),
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl PreparedEngine {
+    pub async fn create(ticket_json: String, opts: JsValue) -> Result<Self, JsValue> {
+        let ticket = serde_json::from_str(&ticket_json).map_err(schema_err)?;
+        let (gpu, threads) = session_device(opts).await?;
+        let candidate = femlab_engine::replacement::Candidate::new(ticket, gpu, Box::new(JsHost), threads);
+        Ok(Self { state: CandidateState::Building(candidate) })
+    }
+
+    pub async fn commands(&mut self, commands_json: String) -> Result<(), JsValue> {
+        let candidate = self.take_building()?;
+        let commands = serde_json::from_str(&commands_json).map_err(schema_err)?;
+        let prepared = candidate.commands(commands, &mut |_| true).await.map_err(|e| throw(&e))?;
+        self.state = CandidateState::Building(prepared);
+        Ok(())
+    }
+
+    pub async fn journal(&mut self, entries_json: String, skip_solves: bool) -> Result<(), JsValue> {
+        let candidate = self.take_building()?;
+        let entries = serde_json::from_str(&entries_json).map_err(schema_err)?;
+        let prepared = candidate.journal(entries, skip_solves).await.map_err(|e| throw(&e))?;
+        self.state = CandidateState::Building(prepared);
+        Ok(())
+    }
+
+    pub async fn file(&mut self, file_json: String) -> Result<(), JsValue> {
+        let candidate = self.take_building()?;
+        let file = serde_json::from_str(&file_json).map_err(schema_err)?;
+        let prepared = candidate.file(file).await.map_err(|e| throw(&e))?;
+        self.state = CandidateState::Building(prepared);
+        Ok(())
+    }
+
+    pub fn finish(&mut self) -> Result<String, JsValue> {
+        let ready = self.take_building()?.finish().map_err(|e| throw(&e))?;
+        let json = serde_json::to_string(ready.snapshot()).map_err(schema_err)?;
+        self.state = CandidateState::Ready(ready);
+        Ok(json)
+    }
+}
+
+#[wasm_bindgen]
+impl SessionEngine {
+    pub fn begin_replacement(&mut self, context_json: String, expected_version: String) -> Result<String, JsValue> {
+        let context = serde_json::from_str(&context_json).map_err(schema_err)?;
+        let version = femlab_engine::session::StateVersion::try_from(expected_version)
+            .map_err(|e| throw(&femlab_engine::Error::schema(e)))?;
+        let ticket = self.inner.begin_replacement(context, version).map_err(|e| throw(&e))?;
+        serde_json::to_string(&ticket).map_err(schema_err)
+    }
+
+    pub fn abandon_replacement(&mut self, ticket_json: String) -> Result<(), JsValue> {
+        let ticket = serde_json::from_str(&ticket_json).map_err(schema_err)?;
+        self.inner.abandon_replacement(&ticket).map_err(|e| throw(&e))
+    }
+
+    pub fn commit_candidate(&mut self, candidate: PreparedEngine) -> Result<String, JsValue> {
+        let CandidateState::Ready(prepared) = candidate.state else {
+            return Err(throw(&femlab_engine::Error::schema("candidate has not finished validation")));
+        };
+        let snapshot = self.inner.commit_replacement(prepared).map_err(|e| throw(&e))?;
+        serde_json::to_string(&snapshot).map_err(schema_err)
+    }
+}
+
+/// A requested device failure aborts preparation; it never silently changes the backend.
+async fn session_device(opts: JsValue) -> Result<(Option<femlab_engine::Gpu>, usize), JsValue> {
+    let want_gpu = js_sys::Reflect::get(&opts, &"gpu".into()).map(|v| v.is_truthy()).unwrap_or(false);
+    let threads =
+        js_sys::Reflect::get(&opts, &"threads".into()).ok().and_then(|v| v.as_f64()).unwrap_or(1.0).max(1.0) as usize;
+    let gpu = if want_gpu {
+        Some(femlab_engine::Gpu::request(femlab_engine::Gpu::default_backends()).await.map_err(|e| throw(&e))?)
+    } else {
+        None
+    };
+    Ok((gpu, threads))
 }

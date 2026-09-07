@@ -23,6 +23,7 @@ pub mod post;
 pub mod procedure;
 pub mod queries;
 pub mod query;
+pub mod replacement;
 pub mod report;
 mod retained;
 pub mod session;

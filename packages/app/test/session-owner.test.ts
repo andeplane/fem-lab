@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import type { Command, DocumentSnapshot, ExecutionContext, RunLease, Stamp, WriteReply, WriteRequest } from '@femlab/registry';
 
-const { SessionEngine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm');
+const { SessionEngine, PreparedEngine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm');
 type Owner = InstanceType<typeof SessionEngine>;
 
 class Client {
@@ -70,5 +70,71 @@ describe('checked WASM owner', () => {
       expect(reply.value.bodies).toHaveLength(0);
       expect(reply.stamp.stateVersion).not.toBe(before.stamp.stateVersion);
     } finally { owner.free(); }
+  });
+});
+
+
+describe('prepared WASM replacement', () => {
+  it('keeps the active model after replay or parse failure and refuses a partial commit', async () => {
+    const owner = new SessionEngine(1, 'wasm-candidate-failure');
+    const ui = new Client(owner);
+    await ui.write(fresh); await ui.write(box);
+    const before = ui.snapshot();
+    const request = ui.prepare(fresh);
+    const ticket = owner.begin_replacement(JSON.stringify(request.context), request.expectedVersion);
+    const failed = await PreparedEngine.create(ticket, { gpu: false, threads: 1 });
+    await expect(failed.commands(JSON.stringify([fresh, box, { cmd: 'geometry.remove', name: 'missing' }]))).rejects.toMatchObject({ code: 'not-found' });
+    expect(() => failed.finish()).toThrow();
+    expect(ui.snapshot()).toEqual(before);
+    failed.free();
+    const malformed = await PreparedEngine.create(ticket, { gpu: false, threads: 1 });
+    await malformed.commands(JSON.stringify([fresh]));
+    await expect(malformed.file('{bad json')).rejects.toMatchObject({ code: 'schema' });
+    expect(() => malformed.finish()).toThrow();
+    expect(() => owner.commit_candidate(malformed)).toThrow();
+    owner.abandon_replacement(ticket);
+    expect(ui.snapshot()).toEqual(before);
+    owner.free();
+  });
+
+  it('publishes a validated file as one fresh session and rejects mismatched snapshots', async () => {
+    const owner = new SessionEngine(1, 'wasm-candidate-success');
+    const ui = new Client(owner);
+    await ui.write(fresh); await ui.write(box);
+    const old = new Client(owner);
+    const saved = ui.snapshot().file;
+    const request = ui.prepare(fresh);
+    const ticket = owner.begin_replacement(JSON.stringify(request.context), request.expectedVersion);
+    const wrong = await PreparedEngine.create(ticket, { gpu: false, threads: 1 });
+    await expect(wrong.file(JSON.stringify({ ...saved, model: { ...saved.model, name: 'unrecorded change' } }))).rejects.toMatchObject({ code: 'schema' });
+    wrong.free();
+    const candidate = await PreparedEngine.create(ticket, { gpu: false, threads: 1 });
+    await candidate.file(JSON.stringify(saved));
+    const ready = JSON.parse(candidate.finish()) as DocumentSnapshot;
+    expect(ui.snapshot().stamp).not.toEqual(ready.stamp);
+    const published = JSON.parse(owner.commit_candidate(candidate)) as DocumentSnapshot;
+    expect(published).toEqual(ready);
+    expect(published.file).toEqual(saved);
+    expect(() => old.snapshot()).toThrow();
+    ui.lease.stamp = published.stamp;
+    await ui.write(remove);
+    expect(ui.snapshot().file.model.bodies).toHaveLength(0);
+    owner.free();
+  });
+
+  it('rejects a ready candidate after cancellation and preserves the old session', async () => {
+    const owner = new SessionEngine(1, 'wasm-candidate-cancel');
+    const ui = new Client(owner);
+    await ui.write(box);
+    const before = ui.snapshot();
+    const request = ui.prepare(fresh);
+    const ticket = owner.begin_replacement(JSON.stringify(request.context), request.expectedVersion);
+    const candidate = await PreparedEngine.create(ticket, { gpu: false, threads: 1 });
+    await candidate.journal(JSON.stringify(before.file.journal.entries), true);
+    candidate.finish();
+    owner.cancel_run(JSON.stringify(ui.lease.stamp.session), ui.lease.runId);
+    expect(() => owner.commit_candidate(candidate)).toThrow();
+    expect(new Client(owner).snapshot()).toEqual(before);
+    owner.free();
   });
 });

@@ -3949,6 +3949,7 @@ export interface Engine {
   readReply: ReadReply;
   runLease: RunLease;
   documentSnapshot: DocumentSnapshot;
+  replacementTicket: ReplacementTicket;
 }
 /**
  * Display units, all optional; SI defaults.
@@ -5421,4 +5422,10 @@ export interface DocumentSnapshot_JournalEntry {
   seq: number;
   cmd: DocumentSnapshot_Command;
   hashAfter: string;
+}
+export interface ReplacementTicket {
+  context: ExecutionContext;
+  expected: Stamp;
+  target: Stamp;
+  nonce: StateVersion;
 }

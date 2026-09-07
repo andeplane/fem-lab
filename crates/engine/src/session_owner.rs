@@ -64,6 +64,8 @@ pub struct SessionOwner {
     runs: BTreeMap<String, StateVersion>,
     outcomes: BTreeMap<OperationKey, Outcome>,
     outcome_order: VecDeque<OperationKey>,
+    pending: Option<crate::replacement::ReplacementTicket>,
+    next_ticket: StateVersion,
 }
 
 impl SessionOwner {
@@ -79,6 +81,8 @@ impl SessionOwner {
             runs: BTreeMap::new(),
             outcomes: BTreeMap::new(),
             outcome_order: VecDeque::new(),
+            pending: None,
+            next_ticket: StateVersion::default(),
         })
     }
 
@@ -102,6 +106,9 @@ impl SessionOwner {
     pub fn cancel_run(&mut self, session: &SessionRef, run_id: &str) -> Result<(), Error> {
         self.check_session(session)?;
         self.runs.remove(run_id);
+        if self.pending.as_ref().is_some_and(|ticket| ticket.context.run_id == run_id) {
+            self.pending = None;
+        }
         Ok(())
     }
 
@@ -134,16 +141,76 @@ impl SessionOwner {
 
     pub fn snapshot(&mut self, context: &ExecutionContext) -> Result<DocumentSnapshot, Error> {
         self.check_context(context)?;
-        Ok(DocumentSnapshot {
-            stamp: self.stamp(),
-            model: self.inner.query_model()?,
-            file: self.inner.export_file(),
-            objects: self.inner.query_objects(None),
-            results: self.inner.query_results(),
-            script: self.inner.journal().as_script(crate::version()),
-            can_undo: self.inner.can_undo(),
-            can_redo: self.inner.can_redo(),
-        })
+        document_snapshot(&mut self.inner, self.stamp.clone())
+    }
+
+    /// Reserve one replacement against the captured active stamp. Old reads remain available.
+    pub fn begin_replacement(
+        &mut self,
+        context: ExecutionContext,
+        expected_version: StateVersion,
+    ) -> Result<crate::replacement::ReplacementTicket, Error> {
+        self.check_context(&context)?;
+        if self.pending.is_some() {
+            return Err(transitioning());
+        }
+        if expected_version != self.stamp.state_version {
+            return Err(Error::new(ErrorCode::SessionConflict, "model changed before replacement preparation")
+                .at("expectedVersion"));
+        }
+        let sequence = StateVersion::try_from(context.operation_id.clone()).map_err(Error::schema)?;
+        let last = self.runs.get_mut(&context.run_id).expect("validated run");
+        if !sequence.is_after(last) {
+            return Err(Error::new(
+                ErrorCode::OperationUnknown,
+                "replacement operation already admitted; inspect its outcome",
+            )
+            .at("operationId"));
+        }
+        *last = sequence;
+        self.next_ticket.advance();
+        self.next_session.advance();
+        let mut target = self.stamp.clone();
+        target.session.session_id = String::from(self.next_session.clone());
+        target.state_version.advance();
+        let ticket = crate::replacement::ReplacementTicket {
+            context,
+            expected: self.stamp(),
+            target,
+            nonce: self.next_ticket.clone(),
+        };
+        self.pending = Some(ticket.clone());
+        Ok(ticket)
+    }
+
+    pub fn abandon_replacement(&mut self, ticket: &crate::replacement::ReplacementTicket) -> Result<(), Error> {
+        if self.pending.as_ref() != Some(ticket) {
+            return Err(
+                Error::new(ErrorCode::SessionConflict, "replacement no longer owns preparation").at("replacement")
+            );
+        }
+        self.pending = None;
+        Ok(())
+    }
+
+    /// Synchronous activation: there is no await between compare, swap, revocation and snapshot.
+    pub fn commit_replacement(
+        &mut self,
+        prepared: crate::replacement::PreparedCandidate,
+    ) -> Result<DocumentSnapshot, Error> {
+        if self.pending.as_ref() != Some(&prepared.ticket) || prepared.ticket.expected != self.stamp {
+            return Err(Error::new(ErrorCode::SessionConflict, "prepared candidate no longer owns activation")
+                .at("replacement"));
+        }
+        // A matching private ticket proves admission: cancelling its run clears pending.
+        let run_id = prepared.ticket.context.run_id;
+        let sequence = self.runs.remove(&run_id).expect("admitted run");
+        self.inner = prepared.engine;
+        self.stamp = prepared.ticket.target;
+        self.runs.clear();
+        self.runs.insert(run_id, sequence);
+        self.pending = None;
+        Ok(prepared.snapshot)
     }
 
     /// A run uses strictly increasing canonical decimal operation ids, starting at 1.
@@ -193,6 +260,9 @@ impl SessionOwner {
     }
 
     async fn execute(&mut self, request: WriteRequest, progress: OnProgress<'_>) -> Result<WriteReply, Error> {
+        if self.pending.is_some() {
+            return Err(transitioning());
+        }
         if request.expected_version != self.stamp.state_version {
             return Err(Error::new(
                 ErrorCode::SessionConflict,
@@ -229,4 +299,21 @@ impl std::fmt::Write for RetentionBudget {
 }
 fn small_enough(value: &dyn std::fmt::Debug) -> bool {
     std::fmt::write(&mut RetentionBudget(64 * 1024), format_args!("{value:?}")).is_ok()
+}
+
+fn transitioning() -> Error {
+    Error::new(ErrorCode::SessionTransitioning, "a replacement is being prepared; wait or cancel it").at("session")
+}
+
+pub(crate) fn document_snapshot(inner: &mut Engine, stamp: Stamp) -> Result<DocumentSnapshot, Error> {
+    Ok(DocumentSnapshot {
+        stamp,
+        model: inner.query_model()?,
+        file: inner.export_file(),
+        objects: inner.query_objects(None),
+        results: inner.query_results(),
+        script: inner.journal().as_script(crate::version()),
+        can_undo: inner.can_undo(),
+        can_redo: inner.can_redo(),
+    })
 }

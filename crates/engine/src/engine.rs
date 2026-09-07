@@ -243,7 +243,8 @@ impl Engine {
     /// Replay entries onto a fresh Model; returns the recomputed hash after each entry and
     /// fails on the first entry whose hash differs from the recorded one when `verify`.
     /// With `skip_solves`, numerical work is omitted while every Command still has an undo
-    /// snapshot. A non-restoring study applies its final mesh settings without computing Results.
+    /// snapshot. Exports are recorded without regenerating derived files or Results.
+    /// A non-restoring study applies its final mesh settings without computing Results.
     pub async fn replay(
         &mut self,
         entries: &[JournalEntry],
@@ -260,7 +261,11 @@ impl Engine {
         let mut hashes = Vec::with_capacity(entries.len());
         let mut nop = |_p: Progress| true;
         for e in entries {
-            let skip = skip_solves && matches!(e.cmd, Command::SolveRun { .. } | Command::StudyConverge { .. });
+            let skip = skip_solves
+                && matches!(
+                    e.cmd,
+                    Command::SolveRun { .. } | Command::StudyConverge { .. } | Command::MeshExport { .. }
+                );
             let hash = if skip {
                 let before = self.model.clone();
                 if let Command::StudyConverge { sizes, restore: Some(false), .. } = &e.cmd {
