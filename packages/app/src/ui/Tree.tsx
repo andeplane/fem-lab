@@ -3,7 +3,7 @@
 // a context menu. Clicking a row opens the Command that made the object in the Properties form —
 // re-issuing a create Command is how an edit works (brief §2.1), so there is no second code path.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { fieldChoices, showFieldArgs } from '../fields';
+import { fieldChoices, formatNumber, showFieldArgs } from '../fields';
 import type { UiState } from '../store';
 import { Cmd, type Dispatch } from './cmd';
 
@@ -119,11 +119,12 @@ export function resultItems(s: UiState): TreeItem[] {
   const extreme = (c: { field: string; component: number | null }) => r.extremes.find((e) => e.field === c.field && e.component === c.component);
   return fieldChoices(
     r.extremes.map((e) => e.field),
-    r.frequencies?.length ?? 0,
+    r,
     s.yieldStress !== null,
   ).map((c) => {
     const e = extreme(c);
     const hz = c.mode === undefined ? undefined : r.frequencies?.[c.mode - 1];
+    const factor = c.mode === undefined ? undefined : r.bucklingFactors?.[c.mode - 1];
     return {
       cmd: 'view.showField',
       args: showFieldArgs(c) as Record<string, unknown>,
@@ -132,7 +133,7 @@ export function resultItems(s: UiState): TreeItem[] {
       glyph: '◧',
       glyphClass: s.fieldKey === c.key ? 'glyph green' : 'glyph low',
       name: c.label,
-      summary: hz ? `${q(hz)} · mode shape` : c.derived ? `from σ_vM and the Material's yield` : e ? `${q(e.min)} … ${q(e.max)} on ${r.step}` : `on ${r.step}`,
+      summary: hz ? `${q(hz)} · mode shape` : factor === undefined ? c.derived ? `from σ_vM and the Material's yield` : e ? `${q(e.min)} … ${q(e.max)} on ${r.step}` : `on ${r.step}` : `λ ${formatNumber(factor)} · mode shape`,
       select: {},
       remove: null,
       active: s.fieldKey === c.key,

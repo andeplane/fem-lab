@@ -11,7 +11,7 @@ import { SAFETY_CAP, available, derive, derivedRange, extent, fieldKeyOf, magnit
 import { Store, initialState, type UiState } from '../src/store';
 import { App } from '../src/ui/App';
 import type { Dispatch } from '../src/ui/cmd';
-import { Frequencies, History, LineChart, axisTicks, extremeLabel } from '../src/ui/Results';
+import { BucklingFactors, Frequencies, History, LineChart, axisTicks, extremeLabel } from '../src/ui/Results';
 import { resultItems } from '../src/ui/Tree';
 
 const v = (value: number, unit: string) => ({ value, unit });
@@ -31,6 +31,7 @@ const RESULT = {
 } as unknown as ResultSummary;
 
 const modal = { ...RESULT, frequencies: [v(41.2, 'Hz'), v(258.1, 'Hz'), v(0, 'Hz')] } as ResultSummary;
+const buckling = { ...RESULT, step: 'buckle', bucklingFactors: [17.3996, 17.3996] } as ResultSummary;
 const transient = {
   ...RESULT,
   step: 'heat',
@@ -48,6 +49,9 @@ describe('the field table, once a Result has modes and a yield', () => {
   it('names a mode shape by the wire name Engine::field_named takes', () => {
     expect(modeChoice(3)).toMatchObject({ key: 'mode:3', field: 'mode:3', label: 'mode 3', magnitude: true, mode: 3 });
     expect(choiceOf('mode:3')).toEqual(modeChoice(3));
+    expect(modeChoice(1, buckling)).toMatchObject({ key: 'mode:1', label: 'Mode 1 · λ 17.4', mode: 1 });
+    expect(fieldChoices(['vonMises'], buckling).map((c) => c.label)).toEqual(['σ_vM', 'Mode 1 · λ 17.4', 'Mode 2 · λ 17.4']);
+    expect(choiceOf('mode:2', buckling).label).toBe('Mode 2 · λ 17.4');
     expect(choiceOf('nonsense').key).toBe('vonMises');
   });
 
@@ -194,6 +198,15 @@ describe('the history and the frequencies', () => {
     expect(root.querySelector('tr.peak')!.textContent).toContain('258.1');
   });
 
+  it('lists a buckling Step\'s load factors and mode Commands', () => {
+    const root = document.createElement('div');
+    render(<BucklingFactors s={state({ result: buckling, fieldKey: 'mode:1' })} dispatch={async () => undefined} />, root);
+    expect(root.textContent).toContain('Buckling factors');
+    const cells = [...root.querySelectorAll('tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent!.trim()));
+    expect(cells).toEqual([['1', 'λ 17.4', 'show'], ['2', 'λ 17.4', 'show']]);
+    expect(root.querySelector('tr.peak')!.textContent).toContain('λ 17.4');
+  });
+
   it('shows nothing for a Step that found no frequencies', () => {
     const root = document.createElement('div');
     render(<Frequencies s={state({ result: RESULT })} dispatch={async () => undefined} />, root);
@@ -218,6 +231,12 @@ describe('the Results group of the tree', () => {
     // A Result is not edited by re-issuing a Command, so its rows run rather than fill the form.
     expect(rows.every((r) => r.run === true)).toBe(true);
     expect(rows[4]!.args).toEqual({ field: 'safety' });
+  });
+
+  it('shows buckling factors as labelled mode rows in the Results tree', () => {
+    const rows = resultItems(state({ result: buckling, fieldKey: 'mode:1' }));
+    expect(rows.map((r) => r.name)).toEqual(['σ_vM', 'Mode 1 · λ 17.4', 'Mode 2 · λ 17.4']);
+    expect(rows[1]).toMatchObject({ args: { field: 'mode:1' }, active: true, summary: 'λ 17.4 · mode shape' });
   });
 
   it('does not lend one component\'s extremes to a magnitude that has none', () => {

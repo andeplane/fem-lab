@@ -408,6 +408,42 @@ export function Frequencies({ s, dispatch }: { s: UiState; dispatch: Dispatch })
   );
 }
 
+/** A buckling Step's critical load factors, with the Command that puts each mode shape on screen. */
+export function BucklingFactors({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  const factors = s.result?.bucklingFactors ?? [];
+  if (factors.length === 0) return null;
+  return (
+    <>
+      <div class="section-label">Buckling factors</div>
+      <div class="rtable-wrap">
+        <table class="rtable">
+          <thead>
+            <tr>
+              <th>mode</th>
+              <th>load factor λ</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {factors.map((factor, i) => (
+              <tr key={i} class={s.fieldKey === `mode:${i + 1}` ? 'peak' : ''}>
+                <td class="mono">{i + 1}</td>
+                <td class="mono n">λ {formatNumber(factor)}</td>
+                <td>
+                  <Cmd dispatch={dispatch} cmd="view.showField" class="chip-add" args={{ field: `mode:${i + 1}` }} pressed={s.fieldKey === `mode:${i + 1}`} title={`view.showField mode:${i + 1}`}>
+                    show
+                  </Cmd>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div class="rule-note">A mode shape has no amplitude of its own: ▶ on the deformation bar sweeps it.</div>
+    </>
+  );
+}
+
 /**
  * What was solved, above the two columns (#42): a Result *exists*, this is the Step and the
  * procedure it came from, and the shape in the viewer is drawn exaggerated — said here too, so
@@ -456,6 +492,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
         <div class="section-label">Extremes</div>
         <Extremes s={s} dispatch={dispatch} />
         <Frequencies s={s} dispatch={dispatch} />
+        <BucklingFactors s={s} dispatch={dispatch} />
         <Sample s={s} query={query} />
       </div>
       <div class="rcol">

@@ -8,7 +8,7 @@ import { attachComparison, benchmarkProvenance, type ActiveBenchmark, type Examp
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
-import { choiceOf } from './fields';
+import { choiceOf, modeCount } from './fields';
 import { indexedDbProjects, makeProjects, memoryProjects, type Projects } from './projects';
 import type { ResultsView } from './results';
 import type { ScriptHost } from './script-host';
@@ -248,9 +248,9 @@ export function makeHostContext(
         capture.run(async (record) => {
           const s = store.state;
           const mode = choiceOf(s.fieldKey).mode;
-          const modes = s.result?.frequencies?.length ?? 0;
+          const modes = modeCount(s.result);
           if (mode === undefined || mode < 1 || mode > modes) {
-            throw new FemError('export.unavailable', 'the selected field is not a mode in the current modal Result', 'file.export', 'solve a modal Step and select one of its mode fields');
+            throw new FemError('export.unavailable', 'the selected field is not a mode in the current Result', 'file.export', 'solve a modal or buckling Step and select one of its mode fields');
           }
           const target = v();
           const before = target.animationState();
