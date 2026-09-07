@@ -32,10 +32,16 @@ describe('codegen', () => {
 
   it('merges the six schemas into one $defs table, renaming only the conflicting defs', () => {
     const merged = mergeSchema(schema) as { $defs: Record<string, unknown>; required: string[] };
-    expect(merged.required).toEqual(['commands', 'queries', 'queryResult', 'ack', 'error', 'modelFile', 'writeRequest', 'readRequest', 'stamp', 'executionPolicy']);
+    expect(merged.required).toEqual(['commands', 'queries', 'queryResult', 'ack', 'error', 'modelFile', 'writeRequest', 'readRequest', 'stamp', 'executionPolicy', 'writeReply', 'readReply', 'runLease', 'documentSnapshot']);
     for (const t of ['Command', 'Query', 'QueryResult', 'Ack', 'EngineError', 'ModelFile', 'Quantity', 'ModelSummary']) expect(merged.$defs).toHaveProperty(t);
-    expect(Object.keys(merged.$defs).filter((k) => /^[A-Z]\w+_[A-Z]/.test(k)).sort()).toEqual(['ModelFile_Command', 'ModelFile_FacePredicate', 'ModelFile_RegionPredicate', 'ReadRequest_JournalEntry']);
-    expect(merged.$defs['JournalEntry']).toMatchObject({ properties: { cmd: { $ref: '#/$defs/ModelFile_Command' } } });
+    expect(Object.keys(merged.$defs)).toEqual(expect.arrayContaining(['ModelFile_Command', 'ModelFile_FacePredicate', 'ModelFile_RegionPredicate']));
+    // Adding envelope schemas cannot change a previously merged definition through an
+    // indirect renamed dependency (Journal -> JournalEntry -> Command -> ShapeSpec).
+    const minimal = { ...schema, writeRequest: { type: 'null' }, readRequest: { type: 'null' }, stamp: { type: 'null' }, executionPolicy: { type: 'null' }, writeReply: { type: 'null' }, readReply: { type: 'null' }, runLease: { type: 'null' }, documentSnapshot: { type: 'null' } };
+    const baseline = mergeSchema(minimal) as { $defs: Record<string, unknown> };
+    for (const key of ['Journal', 'JournalEntry', 'Command', 'ModelFile', 'Query', 'Model']) expect(merged.$defs[key], key).toEqual(baseline.$defs[key]);
+    expect(merged.$defs['JournalEntry']).toMatchObject({ properties: { cmd: { $ref: '#/$defs/Command' } } });
+    expect(merged.$defs['ModelFile_JournalEntry']).toMatchObject({ properties: { cmd: { $ref: '#/$defs/ModelFile_Command' } } });
     expect(Object.keys(merged.$defs).filter((k) => k === 'Error')).toEqual([]);
     // a table's own $defs entry named like the table's type is a real collision
     expect(() => mergeSchema({ ...schema, commands: { ...schema.commands, $defs: { ...schema.commands.$defs, Command: { type: 'null' } } } })).toThrow(/collides/);

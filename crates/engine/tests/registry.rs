@@ -8065,3 +8065,6 @@ fn an_import_that_is_not_a_solid_is_refused_without_touching_the_model() {
     // a name a Body cannot have
     assert_eq!(err(&mut e, &import_cmd("a.b", open, "")).code, ErrorCode::Schema);
 }
+
+#[path = "registry/session_owner.rs"]
+mod session_owner;

@@ -5,6 +5,22 @@ named, typed command, so a script or an AI can do anything a person can. This gl
 the vocabulary the docs, the code and the AI's tool descriptions share. Definitions say what
 a thing *is*; how it is implemented lives in the ADRs and the plan.
 
+## Execution ownership
+
+**Session**:
+One activation of one Model in a runtime. New, open and import create a fresh identity even
+when the saved bytes or project name are identical. A producer is bound to that activation;
+its Commands cannot silently follow a later active Model. Migration: ADR 0020 and issues #380–#385.
+
+**StateVersion**:
+A monotonic counter of committed observable engine state within the runtime. It advances for
+undo, redo and repeated solves, independently of Journal length and Model/Result hashes.
+
+**Run**:
+One revocable producer of operations, such as a Script or Assistant turn, bound to a Session.
+Child operations inherit its identity. An intentional successful replacement may advance only
+the initiating Run to the new Session.
+
 ## The model
 
 **Model**:

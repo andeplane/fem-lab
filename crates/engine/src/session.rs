@@ -44,6 +44,11 @@ impl Default for StateVersion {
     }
 }
 impl StateVersion {
+    /// Canonical decimals compare by digit count, then lexicographically, without precision loss.
+    pub fn is_after(&self, other: &Self) -> bool {
+        (self.0.len(), &self.0) > (other.0.len(), &other.0)
+    }
+
     /// Never wraps or reuses a version, including beyond the JavaScript safe integer range.
     pub fn advance(&mut self) {
         let mut digits = self.0.as_bytes().to_vec();

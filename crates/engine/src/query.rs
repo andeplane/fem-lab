@@ -934,6 +934,10 @@ pub fn schema_document() -> serde_json::Value {
         "readRequest": schemars::schema_for!(crate::session::ReadRequest),
         "stamp": schemars::schema_for!(crate::session::Stamp),
         "executionPolicy": schemars::schema_for!(crate::session::ExecutionPolicy),
+        "writeReply": schemars::schema_for!(crate::session_owner::WriteReply),
+        "readReply": schemars::schema_for!(crate::session_owner::ReadReply),
+        "runLease": schemars::schema_for!(crate::session_owner::RunLease),
+        "documentSnapshot": schemars::schema_for!(crate::session_owner::DocumentSnapshot),
     })
 }
 

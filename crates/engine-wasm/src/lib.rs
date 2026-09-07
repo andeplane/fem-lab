@@ -391,3 +391,91 @@ pub fn version() -> String {
 fn start() {
     console_error_panic_hook::set_once();
 }
+
+/// Checked session surface. Hosts must capture a RunLease and send its context on every call.
+/// The older Engine export is a migration adapter and must be removed before isolation rollout.
+#[wasm_bindgen]
+pub struct SessionEngine {
+    inner: femlab_engine::session_owner::SessionOwner,
+}
+
+#[wasm_bindgen]
+impl SessionEngine {
+    #[wasm_bindgen(constructor)]
+    pub fn new(threads: u32, backend_epoch: String) -> Result<SessionEngine, JsValue> {
+        let inner = femlab_engine::session_owner::SessionOwner::new(
+            None,
+            Box::new(JsHost),
+            threads.max(1) as usize,
+            backend_epoch,
+        )
+        .map_err(|e| throw(&e))?;
+        Ok(Self { inner })
+    }
+
+    pub async fn create(opts: JsValue, backend_epoch: String) -> Result<SessionEngine, JsValue> {
+        let want_gpu = js_sys::Reflect::get(&opts, &"gpu".into()).map(|v| v.is_truthy()).unwrap_or(false);
+        let threads =
+            js_sys::Reflect::get(&opts, &"threads".into()).ok().and_then(|v| v.as_f64()).unwrap_or(1.0).max(1.0)
+                as usize;
+        let gpu = if want_gpu {
+            femlab_engine::Gpu::request(femlab_engine::Gpu::default_backends()).await.ok()
+        } else {
+            None
+        };
+        let inner = femlab_engine::session_owner::SessionOwner::new(gpu, Box::new(JsHost), threads, backend_epoch)
+            .map_err(|e| throw(&e))?;
+        Ok(Self { inner })
+    }
+
+    pub fn stamp(&self) -> Result<String, JsValue> {
+        serde_json::to_string(&self.inner.stamp()).map_err(schema_err)
+    }
+
+    pub fn begin_run(&mut self, session_json: String) -> Result<String, JsValue> {
+        let session = serde_json::from_str(&session_json).map_err(schema_err)?;
+        let lease = self.inner.begin_run(&session).map_err(|e| throw(&e))?;
+        serde_json::to_string(&lease).map_err(schema_err)
+    }
+
+    pub fn cancel_run(&mut self, session_json: String, run_id: String) -> Result<(), JsValue> {
+        let session = serde_json::from_str(&session_json).map_err(schema_err)?;
+        self.inner.cancel_run(&session, &run_id).map_err(|e| throw(&e))
+    }
+
+    pub async fn dispatch(
+        &mut self,
+        request_json: String,
+        on_progress: Option<js_sys::Function>,
+    ) -> Result<String, JsValue> {
+        let request = serde_json::from_str(&request_json).map_err(schema_err)?;
+        let mut cb = |p: Progress| -> bool {
+            match &on_progress {
+                Some(f) => {
+                    let r = f.call3(
+                        &JsValue::NULL,
+                        &JsValue::from_str(p.phase),
+                        &JsValue::from_f64(p.fraction),
+                        &JsValue::from_str(&p.message),
+                    );
+                    !matches!(r, Ok(v) if v.is_falsy() && !v.is_undefined())
+                }
+                None => true,
+            }
+        };
+        let reply = self.inner.dispatch(request, &mut cb).await.map_err(|e| throw(&e))?;
+        serde_json::to_string(&reply).map_err(schema_err)
+    }
+
+    pub fn query(&mut self, request_json: String) -> Result<String, JsValue> {
+        let request = serde_json::from_str(&request_json).map_err(schema_err)?;
+        let reply = self.inner.query(request).map_err(|e| throw(&e))?;
+        serde_json::to_string(&reply).map_err(schema_err)
+    }
+
+    pub fn snapshot(&mut self, context_json: String) -> Result<String, JsValue> {
+        let context = serde_json::from_str(&context_json).map_err(schema_err)?;
+        let snapshot = self.inner.snapshot(&context).map_err(|e| throw(&e))?;
+        serde_json::to_string(&snapshot).map_err(schema_err)
+    }
+}
