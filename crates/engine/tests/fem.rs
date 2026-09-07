@@ -7735,6 +7735,27 @@ fn a_cyclic_tie_that_shares_a_node_with_itself_is_ill_posed() {
     assert!(e.cause.contains("to itself"), "{}", e.cause);
 }
 
+/// A Set the tie names but the Problem does not have is `set.empty` located at the tie, on
+/// either side, exactly as a bonded contact reports an unknown master or slave; the Coupling
+/// itself carries its name, its two Sets, its label and no point mass.
+#[test]
+fn a_cyclic_tie_names_its_sets_when_one_is_missing() {
+    let c = cyclic(2, 0.0);
+    assert_eq!(c.clone(), c);
+    assert!(format!("{c:?}").starts_with("Cyclic"), "{c:?}");
+    assert_eq!((c.name(), c.sets(), c.label(), c.point()), ("cyc", ["from", "to"], "cyclic", None));
+    let mesh = two_node_mesh([0.1, 0.0, 0.0], [0.1, 0.0, 0.0]);
+    let body = one_body();
+    for missing in ["from", "to"] {
+        let mut sets = from_to_sets();
+        sets.remove(missing);
+        let mut p = problem(&mesh, &sets, &body, Idealisation::Solid3d, Formulation::Full, Vec::new());
+        p.couplings = vec![cyclic(2, 0.0)];
+        let e = mpc::build(&p).expect_err("an unknown Set");
+        assert_eq!((e.code, e.where_.as_deref()), (ErrorCode::SetEmpty, Some("cyclic 'cyc'")), "{missing}");
+    }
+}
+
 /// The `(r, z)` cross-section of Benchmark C2's thick cylinder as the mapped block the revolve
 /// mesher needs: `a` = 0.1 m, `b` = 0.2 m, height 0.1 m.
 fn annulus_strip(kind: ElementKind, n: [usize; 2]) -> Mesh {
