@@ -1041,7 +1041,7 @@
         ]
       },
       {
-        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.",
+        "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
         "type": "object",
         "properties": {
           "name": {
@@ -1204,7 +1204,7 @@
         ]
       },
       {
-        "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+        "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
         "type": "object",
         "properties": {
           "order": {
@@ -2820,7 +2820,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
         "type": "string",
         "enum": [
           "displacement",
@@ -3192,6 +3192,32 @@
           "field"
         ],
         "x-returns": "ResultField"
+      },
+      {
+        "description": "Subtract two explicitly retained nodal fields as `left - right` on either Result's\nMesh. Unequal meshes use finite-element interpolation and report uncovered nodes as\nnull values; nonfinite arithmetic is a structured error. No current Result, display\nconversion, or node-number pairing is implied.",
+        "type": "object",
+        "properties": {
+          "left": {
+            "$ref": "#/$defs/DifferenceOperand"
+          },
+          "right": {
+            "$ref": "#/$defs/DifferenceOperand"
+          },
+          "onto": {
+            "$ref": "#/$defs/DifferenceOnto"
+          },
+          "query": {
+            "type": "string",
+            "const": "query.difference"
+          }
+        },
+        "required": [
+          "query",
+          "left",
+          "right",
+          "onto"
+        ],
+        "x-returns": "DifferenceField"
       },
       {
         "description": "Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).\nIndex 0 is the initial state; indices count retained frames, not integration steps.\nMetadata remains available for stale Results. No nodal values are copied by this Query.",
@@ -3602,6 +3628,39 @@
           "step"
         ]
       },
+      "DifferenceOperand": {
+        "description": "One explicit retained field used by `query.difference`.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "component": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "required": [
+          "resultId",
+          "field"
+        ]
+      },
+      "DifferenceOnto": {
+        "description": "The retained Result whose Mesh receives the difference values.",
+        "type": "string",
+        "enum": [
+          "left",
+          "right"
+        ]
+      },
       "FrameSample": {
         "description": "How to select retained output; there is no temporal interpolation or extrapolation.",
         "oneOf": [
@@ -3685,7 +3744,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
         "type": "string",
         "enum": [
           "displacement",
@@ -4779,7 +4838,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
             "type": "object",
             "properties": {
               "name": {
@@ -4942,7 +5001,7 @@
             ]
           },
           {
-            "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+            "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
             "type": "object",
             "properties": {
               "order": {
@@ -6800,6 +6859,9 @@
       },
       {
         "$ref": "#/$defs/ResultField"
+      },
+      {
+        "$ref": "#/$defs/DifferenceField"
       },
       {
         "$ref": "#/$defs/FramesResult"
@@ -8791,7 +8853,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
             "type": "object",
             "properties": {
               "name": {
@@ -8954,7 +9016,7 @@
             ]
           },
           {
-            "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+            "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
             "type": "object",
             "properties": {
               "order": {
@@ -10494,7 +10556,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
         "type": "string",
         "enum": [
           "displacement",
@@ -10944,13 +11006,24 @@
             }
           },
           "appliedTotal": {
-            "description": "Applied force vector or thermal power in component 0 (remaining components zero).",
+            "description": "Applied force vector or net thermal power (flux/source plus incoming minus outgoing\nconvection and radiation) in component 0, with remaining thermal components zero.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
             },
             "minItems": 3,
             "maxItems": 3
+          },
+          "storagePower": {
+            "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "assumptions": {
             "description": "Optional material properties the successful procedure actually read as zero because the\nMaterial omitted them. Empty when every solver-used property was explicit.",
@@ -10974,7 +11047,7 @@
             }
           },
           "balance": {
-            "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
+            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           },
@@ -11285,6 +11358,132 @@
           "nodeCount",
           "unit",
           "values"
+        ]
+      },
+      "DifferenceField": {
+        "description": "`query.difference` response. Values are retained f64 SI, component-fastest by target node.",
+        "type": "object",
+        "properties": {
+          "left": {
+            "$ref": "#/$defs/ResolvedDifferenceOperand"
+          },
+          "right": {
+            "$ref": "#/$defs/ResolvedDifferenceOperand"
+          },
+          "comparisonResultId": {
+            "type": "string"
+          },
+          "components": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
+          "interpolated": {
+            "type": "boolean"
+          },
+          "coverage": {
+            "$ref": "#/$defs/DifferenceCoverage"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Warning"
+            }
+          }
+        },
+        "required": [
+          "left",
+          "right",
+          "comparisonResultId",
+          "components",
+          "nodeCount",
+          "unit",
+          "values",
+          "interpolated",
+          "coverage",
+          "warnings"
+        ]
+      },
+      "ResolvedDifferenceOperand": {
+        "description": "The resolved identity and layout of one difference operand.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "component": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "sourceComponents": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "resultId",
+          "step",
+          "field",
+          "sourceComponents"
+        ]
+      },
+      "DifferenceCoverage": {
+        "description": "Nodewise coverage of the selected comparison Mesh by the other Mesh.",
+        "type": "object",
+        "properties": {
+          "insideNodes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "totalNodes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "outsideNodes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "insideNodes",
+          "totalNodes",
+          "outsideNodes"
         ]
       },
       "FramesResult": {
@@ -12416,13 +12615,24 @@
             }
           },
           "appliedTotal": {
-            "description": "Applied force vector or thermal power in component 0 (remaining components zero).",
+            "description": "Applied force vector or net thermal power (flux/source plus incoming minus outgoing\nconvection and radiation) in component 0, with remaining thermal components zero.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Valued"
             },
             "minItems": 3,
             "maxItems": 3
+          },
+          "storagePower": {
+            "description": "Thermal stored-energy rate in power display units (zero for steady heat). Transient\npower totals/reactions use the last θ-method integration stage; the temperature field\nitself is at the final time. Positive reactions remove heat: applied − removed = storage.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Valued"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "assumptions": {
             "description": "Optional material properties the successful procedure actually read as zero because the\nMaterial omitted them. Empty when every solver-used property was explicit.",
@@ -12446,7 +12656,7 @@
             }
           },
           "balance": {
-            "description": "|Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven\nby a prescribed displacement — where both totals are zero — still reports a meaningful\nnumber. Zero is perfect balance; anything above 1e-9 means the solve did not converge.",
+            "description": "Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal\nconservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +\nΣ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.\nZero is perfect balance; values above 1e-9 fail the report's conservation check.",
             "type": "number",
             "format": "double"
           },
@@ -14534,7 +14744,7 @@
         ]
       },
       "Field": {
-        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+        "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
         "type": "string",
         "enum": [
           "displacement",
@@ -16074,7 +16284,7 @@
             ]
           },
           {
-            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.",
+            "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
             "type": "object",
             "properties": {
               "name": {
@@ -16237,7 +16447,7 @@
             ]
           },
           {
-            "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+            "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
             "type": "object",
             "properties": {
               "order": {

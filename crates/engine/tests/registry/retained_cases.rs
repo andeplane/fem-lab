@@ -39,6 +39,414 @@ fn retained_close(actual: &Value, expected: f64) {
     assert!((actual - expected).abs() < 1e-8, "{actual} versus independent value {expected}");
 }
 
+fn difference(e: &mut Engine, left: Value, right: Value, onto: &str) -> femlab_engine::query::DifferenceField {
+    let query: Query =
+        serde_json::from_value(json!({"query":"query.difference","left":left,"right":right,"onto":onto})).unwrap();
+    let QueryResult::Difference(field) = e.query(query).unwrap() else { panic!("a difference field") };
+    field
+}
+
+fn conductivity_solve(e: &mut Engine, nx: u32, order: u32, conductivity: u32) -> (String, Vec<f64>) {
+    let material = format!("difference-k{conductivity}");
+    ok(
+        e,
+        &json!({"cmd":"material.add","name":material,"E":"210 GPa","nu":0.3,
+        "rho":"10 kg/m^3","cp":"2 J/(kg K)","k":format!("{conductivity} W/(m K)")})
+        .to_string(),
+    );
+    ok(e, &json!({"cmd":"material.assign","material":material,"bodies":["bar"]}).to_string());
+    ok(
+        e,
+        &json!({"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":nx,"ny":1,"nz":1}},"order":order}).to_string(),
+    );
+    let id = retained_solve(e, "conduct");
+    (id, e.mesh().unwrap().mesh.coords.clone())
+}
+
+#[test]
+fn difference_fields_project_closed_form_temperature_between_unequal_linear_and_quadratic_meshes() {
+    let mut e = engine();
+    retained_conductor(&mut e);
+    let (left_id, left_coords) = conductivity_solve(&mut e, 2, 1, 45);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"in","temperature":"K"}}"#);
+    let (right_id, right_coords) = conductivity_solve(&mut e, 4, 2, 90);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"10 degC"}"#);
+    let (offset_id, _) = conductivity_solve(&mut e, 4, 2, 45);
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    let retained_before = retained_query(&mut e, json!({"query":"query.results"}));
+    for (onto, coords) in [("left", &left_coords), ("right", &right_coords)] {
+        let field = difference(
+            &mut e,
+            json!({"resultId":left_id,"field":"temperature"}),
+            json!({"resultId":right_id,"field":"temperature"}),
+            onto,
+        );
+        assert!(field.interpolated);
+        assert_eq!(field.unit, "K");
+        assert_eq!(field.components, 3);
+        assert_eq!(field.node_count * 3, field.values.len());
+        assert_eq!((field.coverage.inside_nodes, field.coverage.total_nodes), (field.node_count, field.node_count));
+        assert!(field.coverage.outside_nodes.is_empty());
+        assert_eq!(field.comparison_result_id, if onto == "left" { left_id.as_str() } else { right_id.as_str() });
+        assert_eq!((field.left.field.as_str(), field.right.field.as_str()), ("temperature", "temperature"));
+        assert_eq!((field.left.source_components, field.right.source_components), (3, 3));
+        for (point, value) in coords.chunks_exact(3).zip(field.values.chunks_exact(3)) {
+            assert!((value[0].unwrap() - 10.0 * point[0]).abs() < 1e-8);
+            assert_eq!(&value[1..], &[Some(0.0), Some(0.0)]);
+        }
+    }
+    let constant = difference(
+        &mut e,
+        json!({"resultId":offset_id,"field":"temperature","component":0}),
+        json!({"resultId":left_id,"field":"temperature","component":0}),
+        "right",
+    );
+    assert!(constant.interpolated);
+    assert!(constant.values.iter().all(|value| value.is_some_and(|value| (value - 10.0).abs() < 1e-8)));
+    let reversed = difference(
+        &mut e,
+        json!({"resultId":right_id,"field":"temperature","component":0}),
+        json!({"resultId":left_id,"field":"temperature","component":0}),
+        "left",
+    );
+    for (point, value) in right_coords.chunks_exact(3).zip(&reversed.values) {
+        assert!((value.unwrap() + 10.0 * point[0]).abs() < 1e-8);
+    }
+    assert_eq!(
+        reversed,
+        difference(
+            &mut e,
+            json!({"resultId":right_id,"field":"temperature","component":0}),
+            json!({"resultId":left_id,"field":"temperature","component":0}),
+            "left",
+        )
+    );
+    let zero = difference(
+        &mut e,
+        json!({"resultId":right_id,"field":"temperature"}),
+        json!({"resultId":right_id,"field":"temperature"}),
+        "right",
+    );
+    assert!(!zero.interpolated);
+    assert!(zero.values.iter().all(|value| *value == Some(0.0)));
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    assert_eq!(retained_query(&mut e, json!({"query":"query.results"})), retained_before);
+}
+
+#[test]
+fn difference_fields_report_partial_and_zero_coverage_without_filling_outside_nodes() {
+    let mut e = engine();
+    retained_conductor(&mut e);
+    let (left_id, left_coords) = conductivity_solve(&mut e, 2, 1, 45);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"],"at":["500 mm","0 m","0 m"]}"#,
+    );
+    let (right_id, right_coords) = conductivity_solve(&mut e, 2, 1, 45);
+    for (onto, coords, outside) in [
+        (
+            "left",
+            &left_coords,
+            left_coords
+                .chunks_exact(3)
+                .enumerate()
+                .filter(|(_, p)| p[0] < 0.5)
+                .map(|(i, _)| i as u32)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "right",
+            &right_coords,
+            right_coords
+                .chunks_exact(3)
+                .enumerate()
+                .filter(|(_, p)| p[0] > 1.0)
+                .map(|(i, _)| i as u32)
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        let field = difference(
+            &mut e,
+            json!({"resultId":left_id,"field":"temperature","component":0}),
+            json!({"resultId":right_id,"field":"temperature","component":0}),
+            onto,
+        );
+        assert_eq!(field.coverage.outside_nodes, outside);
+        assert_eq!(field.coverage.inside_nodes + outside.len(), coords.len() / 3);
+        for (node, value) in field.values.iter().enumerate() {
+            assert_eq!(value.is_none(), outside.contains(&(node as u32)));
+            if let Some(value) = value {
+                assert!((value - 10.0).abs() < 1e-8, "covered node {node}: {value} K versus 10 K");
+            }
+        }
+    }
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"],"at":["2 m","0 m","0 m"]}"#);
+    let (far_id, far_coords) = conductivity_solve(&mut e, 1, 2, 45);
+    let none = difference(
+        &mut e,
+        json!({"resultId":left_id,"field":"temperature","component":0}),
+        json!({"resultId":far_id,"field":"temperature","component":0}),
+        "right",
+    );
+    assert_eq!(none.coverage.inside_nodes, 0);
+    assert_eq!(none.coverage.outside_nodes, (0..far_coords.len() as u32 / 3).collect::<Vec<_>>());
+    assert!(none.values.iter().all(Option::is_none));
+}
+
+#[test]
+fn difference_reactions_require_the_same_physical_quantity_and_keep_thermal_power_in_watts() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}},"order":1}"#);
+    let mechanical_id = retained_solve(&mut e, "static");
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"beam.xmin","value":"0 degC"}"#);
+    ok(&mut e, r#"{"cmd":"load.heatFlux","name":"heater","on":"beam.xmax","q":"900 W/m^2"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold"],"loads":["heater"],"output":["temperature"]}"#,
+    );
+    let thermal_left = retained_solve(&mut e, "conduct");
+    let thermal_right = retained_solve(&mut e, "conduct");
+
+    let mismatch = retained_error(
+        &mut e,
+        json!({"query":"query.difference",
+          "left":{"resultId":mechanical_id,"field":"reaction"},
+          "right":{"resultId":thermal_left,"field":"reaction"},"onto":"left"}),
+    );
+    assert_eq!((mismatch.code, mismatch.where_.as_deref()), (ErrorCode::UnitDimension, Some("right.field")));
+
+    let thermal = difference(
+        &mut e,
+        json!({"resultId":thermal_left,"field":"reaction"}),
+        json!({"resultId":thermal_right,"field":"reaction"}),
+        "left",
+    );
+    assert_eq!(thermal.unit, "W");
+    assert!(!thermal.interpolated);
+    assert_eq!(thermal.coverage.inside_nodes, thermal.node_count);
+    assert!(thermal.values.iter().all(|value| *value == Some(0.0)));
+}
+
+#[test]
+fn difference_query_rejects_a_finite_temperature_difference_that_overflows() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"material.add","name":"thermal","E":"1 GPa","nu":0.3,"k":"1 W/(m K)"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"thermal","bodies":["bar"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":"1 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":"1 K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"held","procedure":"heat-steady","constraints":["cold","right"],"loads":[],"output":["temperature"]}"#,
+    );
+    let mut ids = Vec::new();
+    for value in [f64::MAX, -f64::MAX] {
+        let quantity = format!("{value} K");
+        ok(&mut e, &json!({"cmd":"constraint.temperature","name":"cold","on":"bar.xmin","value":quantity}).to_string());
+        ok(
+            &mut e,
+            &json!({"cmd":"constraint.temperature","name":"right","on":"bar.xmax","value":quantity}).to_string(),
+        );
+        ids.push(retained_solve(&mut e, "held"));
+    }
+    let error = retained_error(
+        &mut e,
+        json!({"query":"query.difference",
+          "left":{"resultId":ids[0],"field":"temperature","component":0},
+          "right":{"resultId":ids[1],"field":"temperature","component":0},"onto":"left"}),
+    );
+    assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::Unsupported, Some("values[0][0]")));
+    assert!(error.cause.contains("nonfinite"));
+}
+
+#[test]
+fn difference_fields_keep_two_dimensional_holes_outside_and_all_components_null() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"holed sheet"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"10 mm"}}"#);
+    let full = r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+      {"kind":"line","to":["1 m","0 m"],"tag":"bottom"},{"kind":"line","to":["1 m","1 m"],"tag":"right"},
+      {"kind":"line","to":["0 m","1 m"],"tag":"top"},{"kind":"line","to":["0 m","0 m"],"tag":"left"}]}}}"#;
+    ok(&mut e, full);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["plate"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":4,"ny":4,"nz":1}},"order":1}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"root-edge","where":{"kind":"bbox","min":["-1 mm","-1 mm","-1 mm"],"max":["1 mm","1001 mm","1 mm"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"root-edge"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"zero","procedure":"static","constraints":["root"],"loads":[]}"#);
+    let full_id = retained_solve(&mut e, "zero");
+    let full_coords = e.mesh().unwrap().mesh.coords.clone();
+    let holed = r#"{"cmd":"geometry.add","name":"plate","shape":{"kind":"sheet","sketch":{"outer":[
+      {"kind":"line","to":["1 m","0 m"],"tag":"bottom"},{"kind":"line","to":["1 m","1 m"],"tag":"right"},
+      {"kind":"line","to":["0 m","1 m"],"tag":"top"},{"kind":"line","to":["0 m","0 m"],"tag":"left"}],
+      "holes":[[{"kind":"line","to":["0.7 m","0.3 m"],"tag":"hole"},{"kind":"line","to":["0.7 m","0.7 m"],"tag":"hole"},
+      {"kind":"line","to":["0.3 m","0.7 m"],"tag":"hole"},{"kind":"line","to":["0.3 m","0.3 m"],"tag":"hole"}]]}}}"#;
+    ok(&mut e, holed);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":4,"ny":4,"nz":1}},"order":2}"#);
+    let holed_id = retained_solve(&mut e, "zero");
+    let onto_full = difference(
+        &mut e,
+        json!({"resultId":full_id,"field":"displacement"}),
+        json!({"resultId":holed_id,"field":"displacement"}),
+        "left",
+    );
+    let expected: Vec<u32> = full_coords
+        .chunks_exact(3)
+        .enumerate()
+        .filter(|(_, point)| (0.3..0.7).contains(&point[0]) && (0.3..0.7).contains(&point[1]))
+        .map(|(node, _)| node as u32)
+        .collect();
+    assert!(!expected.is_empty());
+    assert_eq!(onto_full.coverage.outside_nodes, expected);
+    for (node, values) in onto_full.values.chunks_exact(3).enumerate() {
+        assert_eq!(values.iter().all(Option::is_none), expected.contains(&(node as u32)));
+        assert!(values.iter().all(|value| value.is_none_or(|value| value.abs() < 1e-14)));
+    }
+    let onto_hole = difference(
+        &mut e,
+        json!({"resultId":full_id,"field":"displacement"}),
+        json!({"resultId":holed_id,"field":"displacement"}),
+        "right",
+    );
+    assert_eq!(onto_hole.coverage.inside_nodes, onto_hole.node_count);
+    assert!(onto_hole.coverage.outside_nodes.is_empty());
+    assert!(onto_hole.values.iter().all(|value| value.is_some_and(|value| value.abs() < 1e-14)));
+}
+
+#[test]
+fn difference_field_rejects_ambiguous_layout_dimensions_geometry_and_missing_operands() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}},"order":1}"#);
+    let static_id = retained_solve(&mut e, "static");
+    ok(&mut e, r#"{"cmd":"step.add","name":"modes","procedure":"modal","constraints":["root"],"loads":[],"nModes":2}"#);
+    let modal_id = retained_solve(&mut e, "modes");
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"10 mm"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.add","name":"beam","shape":{"kind":"sheet","sketch":{"outer":[
+          {"kind":"line","to":["1 m","0 m"],"tag":"ymin"},{"kind":"line","to":["1 m","100 mm"],"tag":"xmax"},
+          {"kind":"line","to":["0 m","100 mm"],"tag":"ymax"},{"kind":"line","to":["0 m","0 m"],"tag":"xmin"}]}}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"zero-2d","procedure":"static","constraints":["root"],"loads":[]}"#);
+    let two_dimensional_id = retained_solve(&mut e, "zero-2d");
+    let before = e.export_file();
+    for (left, right, code, where_) in [
+        (
+            json!({"resultId":"absent","field":"displacement"}),
+            json!({"resultId":modal_id,"field":"mode:1"}),
+            ErrorCode::NotFound,
+            "left.resultId",
+        ),
+        (
+            json!({"resultId":static_id,"field":"displacement"}),
+            json!({"resultId":"absent","field":"mode:1"}),
+            ErrorCode::NotFound,
+            "right.resultId",
+        ),
+        (
+            json!({"resultId":static_id,"field":"typo"}),
+            json!({"resultId":modal_id,"field":"mode:1"}),
+            ErrorCode::Schema,
+            "left.field",
+        ),
+        (
+            json!({"resultId":static_id,"field":"temperature"}),
+            json!({"resultId":modal_id,"field":"mode:1"}),
+            ErrorCode::NotFound,
+            "left.field",
+        ),
+        (
+            json!({"resultId":static_id,"field":"displacement"}),
+            json!({"resultId":static_id,"field":"temperature"}),
+            ErrorCode::NotFound,
+            "right.field",
+        ),
+        (
+            json!({"resultId":static_id,"field":"stressUnaveraged"}),
+            json!({"resultId":static_id,"field":"stressUnaveraged"}),
+            ErrorCode::Unsupported,
+            "left.field",
+        ),
+        (
+            json!({"resultId":static_id,"field":"displacement","component":3}),
+            json!({"resultId":modal_id,"field":"mode:1","component":0}),
+            ErrorCode::Schema,
+            "left.component",
+        ),
+        (
+            json!({"resultId":static_id,"field":"displacement","component":0}),
+            json!({"resultId":modal_id,"field":"mode:1"}),
+            ErrorCode::Schema,
+            "right.component",
+        ),
+        (
+            json!({"resultId":static_id,"field":"displacement"}),
+            json!({"resultId":modal_id,"field":"mode:1","component":0}),
+            ErrorCode::Schema,
+            "left.component",
+        ),
+        (
+            json!({"resultId":static_id,"field":"displacement"}),
+            json!({"resultId":static_id,"field":"stress"}),
+            ErrorCode::Unsupported,
+            "right.field",
+        ),
+        (
+            json!({"resultId":static_id,"field":"displacement","component":0}),
+            json!({"resultId":static_id,"field":"stress","component":0}),
+            ErrorCode::UnitDimension,
+            "right.field",
+        ),
+        (
+            json!({"resultId":static_id,"field":"displacement"}),
+            json!({"resultId":two_dimensional_id,"field":"displacement"}),
+            ErrorCode::Unsupported,
+            "onto",
+        ),
+    ] {
+        let error = retained_error(&mut e, json!({"query":"query.difference","left":left,"right":right,"onto":"left"}));
+        assert_eq!((error.code, error.where_.as_deref()), (code, Some(where_)));
+        assert!(error.suggestion.is_some());
+    }
+    let raw = difference(
+        &mut e,
+        json!({"resultId":modal_id,"field":"mode:1","component":0}),
+        json!({"resultId":modal_id,"field":"mode:2","component":0}),
+        "left",
+    );
+    let mode_1 = retained_query(&mut e, json!({"query":"query.field","resultId":modal_id,"field":"mode:1"}));
+    let mode_2 = retained_query(&mut e, json!({"query":"query.field","resultId":modal_id,"field":"mode:2"}));
+    assert!(
+        mode_1["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(mode_2["values"].as_array().unwrap())
+            .enumerate()
+            .any(|(component, (left, right))| component % 3 == 0
+                && left.as_f64().unwrap() * right.as_f64().unwrap() < 0.0)
+    );
+    for (node, value) in raw.values.iter().enumerate() {
+        retained_close(
+            &json!(value.unwrap()),
+            mode_1["values"][node * 3].as_f64().unwrap() - mode_2["values"][node * 3].as_f64().unwrap(),
+        );
+    }
+    assert_eq!(raw.warnings[0].code, "result.mode-uncorrelated");
+    assert_eq!(serde_json::to_value(e.export_file()).unwrap(), serde_json::to_value(before).unwrap());
+}
+
 #[test]
 fn retained_conduction_fields_keep_each_solved_mesh_material_and_display_units() {
     let mut e = engine();

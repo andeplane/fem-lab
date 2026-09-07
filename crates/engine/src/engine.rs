@@ -989,6 +989,27 @@ impl Engine {
                     ))
                     .at("order"));
                 }
+                for step in &self.model.steps {
+                    let Some(after) = &step.after else { continue };
+                    let mut prerequisite_seen = false;
+                    for name in order {
+                        if name == &step.name {
+                            if !prerequisite_seen {
+                                return Err(Error::schema(format!(
+                                    "step '{}' must run after its prerequisite '{after}'",
+                                    step.name
+                                ))
+                                .at("order")
+                                .suggest(format!(
+                                    "step.reorder {{ order: {:?} }}",
+                                    self.model.steps.iter().map(|step| &step.name).collect::<Vec<_>>()
+                                )));
+                            }
+                            break;
+                        }
+                        prerequisite_seen |= name == after;
+                    }
+                }
                 let mut steps = Vec::with_capacity(order.len());
                 for n in order {
                     steps.push(self.model.step(n).expect("checked").clone());

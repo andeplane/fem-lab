@@ -257,7 +257,7 @@ test.describe('@cpu the shell', () => {
     await expect(solve).toHaveAttribute('title', /Solved · rev 10 — solve\.run static/);
 
     // Include both sides of each responsive transition as well as the four acceptance widths.
-    const widths = [1180, 1199, 1200, 1280, 1299, 1300, 1440, 1599, 1600, 1640, 1699, 1700, 1800];
+    const widths = [1180, 1199, 1200, 1280, 1299, 1300, 1399, 1400, 1440, 1599, 1600, 1640, 1699, 1700, 1800];
     for (const width of widths) {
       await page.setViewportSize({ width, height: 900 });
       const layout = await page.locator('.topbar').evaluate((header) => {

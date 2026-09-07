@@ -84,6 +84,14 @@ pub enum Query {
         field: String,
     },
 
+    /// Subtract two explicitly retained nodal fields as `left - right` on either Result's
+    /// Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
+    /// null values; nonfinite arithmetic is a structured error. No current Result, display
+    /// conversion, or node-number pairing is implied.
+    #[serde(rename = "query.difference", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "DifferenceField"))]
+    Difference { left: DifferenceOperand, right: DifferenceOperand, onto: DifferenceOnto },
+
     /// Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).
     /// Index 0 is the initial state; indices count retained frames, not integration steps.
     /// Metadata remains available for stale Results. No nodal values are copied by this Query.
@@ -565,8 +573,14 @@ pub struct ResultSummary {
     /// Force for structural Results; power for thermal Results, retained with the solved state.
     pub reaction_quantity: crate::units::ReactionQuantity,
     pub reactions: Vec<ReactionRow>,
-    /// Applied force vector or thermal power in component 0 (remaining components zero).
+    /// Applied force vector or net thermal power (flux/source plus incoming minus outgoing
+    /// convection and radiation) in component 0, with remaining thermal components zero.
     pub applied_total: [Valued; 3],
+    /// Thermal stored-energy rate in power display units (zero for steady heat). Transient
+    /// power totals/reactions use the last θ-method integration stage; the temperature field
+    /// itself is at the final time. Positive reactions remove heat: applied − removed = storage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_power: Option<Valued>,
     /// Optional material properties the successful procedure actually read as zero because the
     /// Material omitted them. Empty when every solver-used property was explicit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -578,9 +592,10 @@ pub struct ResultSummary {
     /// One row per retained output time: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
-    /// |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
-    /// by a prescribed displacement — where both totals are zero — still reports a meaningful
-    /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
+    /// Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
+    /// conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
+    /// Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
+    /// Zero is perfect balance; values above 1e-9 fail the report's conservation check.
     pub balance: f64,
     /// What the solve wanted the user to know but would not stop for: a bonded contact tied
     /// across a gap, a slave face coarser than its master. Retained with the Result.
@@ -831,6 +846,7 @@ pub enum QueryResult {
     Result(ResultSummary),
     Results(RetainedResults),
     Field(ResultField),
+    Difference(DifferenceField),
     Frames(FramesResult),
     Frame(FrameResult),
     Probe(ProbeResult),
@@ -1011,4 +1027,59 @@ pub struct ResultField {
     pub node_count: usize,
     pub unit: String,
     pub values: Vec<f64>,
+}
+
+/// One explicit retained field used by `query.difference`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferenceOperand {
+    pub result_id: String,
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<u8>,
+}
+
+/// The retained Result whose Mesh receives the difference values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DifferenceOnto {
+    Left,
+    Right,
+}
+
+/// The resolved identity and layout of one difference operand.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedDifferenceOperand {
+    pub result_id: String,
+    pub step: String,
+    pub field: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<u8>,
+    pub source_components: usize,
+}
+
+/// Nodewise coverage of the selected comparison Mesh by the other Mesh.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferenceCoverage {
+    pub inside_nodes: usize,
+    pub total_nodes: usize,
+    pub outside_nodes: Vec<u32>,
+}
+
+/// `query.difference` response. Values are retained f64 SI, component-fastest by target node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferenceField {
+    pub left: ResolvedDifferenceOperand,
+    pub right: ResolvedDifferenceOperand,
+    pub comparison_result_id: String,
+    pub components: usize,
+    pub node_count: usize,
+    pub unit: String,
+    pub values: Vec<Option<f64>>,
+    pub interpolated: bool,
+    pub coverage: DifferenceCoverage,
+    pub warnings: Vec<Warning>,
 }

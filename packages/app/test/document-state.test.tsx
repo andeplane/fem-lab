@@ -44,6 +44,41 @@ it('tracks complete Journal content, ignores view changes, and clears when undo 
   store.set({ journal: { ...store.state.journal!, entries: edited } });
   store.markSaved({ entries });
   expect(unsaved(store.state)).toBe(true);
+  expect(store.state.savedBaseline).toEqual(entries);
+});
+
+it('compares an imported file through journalDiff without importing or changing the active Journal', async () => {
+  const current = entries[0]!;
+  const imported = { ...current, cmd: { cmd: 'model.new' as const, name: 'imported' } };
+  const store = new Store({ ...new Store().state, journal: { entries: [current], revision: 1, hash: 'active', canUndo: true, canRedo: false } });
+  const query = vi.fn(async () => ({ baseHash: 'base', currentHash: 'active', sharedEntries: 0, removed: [imported], added: [current] }));
+  const importFile = vi.fn();
+  const transport = { query, importFile } as unknown as WorkerTransport;
+  const compare = appHostCommands(store, transport, { current: null }, async () => undefined).find((def) => def.name === 'file.compare')!;
+  const result = await compare.run({ json: JSON.stringify({ format: 'femlab/1', journal: { entries: [imported] } }) }, {} as never);
+
+  expect(result).toMatchObject({ sharedEntries: 0, removed: [imported], added: [current] });
+  expect(query).toHaveBeenCalledWith({ query: 'query.journalDiff', base: { entries: [imported] } });
+  expect(importFile).not.toHaveBeenCalled();
+  expect(store.state.journal?.entries).toEqual([current]);
+  expect(store.state.comparisonSource).toBe('imported');
+});
+
+it('rejects malformed comparison files as structured schema errors', async () => {
+  const compare = appHostCommands(new Store(), { query: vi.fn() } as unknown as WorkerTransport, { current: null }, async () => undefined).find((def) => def.name === 'file.compare')!;
+  await expect(compare.run({ json: 'null' }, {} as never)).rejects.toMatchObject({ code: 'schema', where: 'file' });
+});
+
+it('keeps an explicit baseline normalized while undo and redo update the causal diff', () => {
+  const first = entries[0]!;
+  const second = { seq: 1, cmd: { cmd: 'model.setName' as const, name: 'girder' }, hashAfter: 'h2' };
+  const store = new Store();
+  store.markSaved({ entries: [first] });
+  store.set({ journal: { entries: [first, second], revision: 2, hash: 'h2', canUndo: true, canRedo: false } });
+  expect(store.state.savedBaseline).toEqual([first]);
+  expect(unsaved(store.state)).toBe(true);
+  store.set({ journal: { entries: [first], revision: 1, hash: 'h', canUndo: false, canRedo: true } });
+  expect(unsaved(store.state)).toBe(false);
 });
 
 it('commits the name exactly once on Enter or blur, cancels Escape, and rejects blank drafts', async () => {
@@ -110,6 +145,7 @@ it('does not include an edit made while an opened example restores its Result', 
   const opened = [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'solved example' }, hashAfter: 'opened' }];
   const edited = [...opened, { seq: 1, cmd: { cmd: 'model.setName' as const, name: 'later edit' }, hashAfter: 'edited' }];
   const store = new Store();
+  const finishOldSave = store.beginSave();
   const dispatch = vi.fn(async () => ({ output: { kind: 'solve' } }));
   const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: opened } })) } as unknown as WorkerTransport;
   const refresh = vi.fn(async () => store.set({ journal: { entries: opened, revision: 1, hash: 'opened', canUndo: true, canRedo: false } }));
@@ -124,6 +160,7 @@ it('does not include an edit made while an opened example restores its Result', 
   store.set({ journal: { entries: edited, revision: 2, hash: 'edited', canUndo: true, canRedo: false } });
   finishResult();
   await pending;
+  finishOldSave({ entries: edited });
 
   expect(store.state.savedJournal).toBe(journalIdentity(opened));
   expect(store.state.benchmark?.journalHash).toBe(completeJournalHash({ entries: opened, hash: 'opened', revision: 1, canUndo: true, canRedo: false }));
@@ -163,4 +200,19 @@ it('opens a browser project against its captured Journal without marking a later
   await expect(ctx.projects.open(project.id)).rejects.toThrow('replay failed');
   expect(store.state.savedJournal).toBe('previous failed-open baseline');
   vi.unstubAllGlobals();
+});
+
+
+it('a new Model has no saved baseline and rejects completions captured for the old document', () => {
+  const store = new Store();
+  store.markSaved({ entries });
+  const complete = store.beginSave();
+  store.newDocument();
+  complete({ entries });
+  expect(store.state.savedBaseline).toBeNull();
+  expect(store.state.savedJournal).toBeNull();
+  expect(store.state.comparisonSource).toBeNull();
+  const fresh = store.beginSave();
+  fresh({ entries });
+  expect(store.state.savedBaseline).toEqual(entries);
 });
