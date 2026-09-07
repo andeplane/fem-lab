@@ -79,7 +79,7 @@ jobs:
       # precisely rather than guessed from rounded percentages. This does not rebuild or retest.
       - name: export failed GPU coverage detail
         if: ${{ failure() && steps.gpu_coverage.outcome == 'failure' }}
-        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov report -p femlab-engine -p femlab-geometry --features gpu-tests --json --output-path gpu-coverage.json
+        run: CARGO_PROFILE_TEST_OPT_LEVEL=0 cargo llvm-cov report -p femlab-engine -p femlab-geometry --json --output-path gpu-coverage.json
       - uses: actions/upload-artifact@v4
         if: ${{ failure() && steps.gpu_coverage.outcome == 'failure' }}
         with:
