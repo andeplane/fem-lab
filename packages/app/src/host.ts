@@ -1,7 +1,8 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type Journal, type JournalDiff, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+
 import { z } from 'zod';
 import { attachComparison, benchmarkProvenance, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
@@ -163,14 +164,17 @@ export function makeHostContext(
     // Capture normalized replay output before Result restoration yields to another edit.
     const opened = await transport.exportFile();
     if (solved) await results?.onAck(solved);
-    store.markSaved(opened.journal);
+    store.markOpened(opened.journal);
   };
   const own = makeProjects({
     // A browser with IndexedDB blocked (private mode, or a headless harness) keeps working:
     // projects are then per-session, the start screen says so, and file.save is still there.
     store: typeof indexedDB === 'undefined' ? memoryProjects() : indexedDbProjects(indexedDB),
     replay,
-    reset: async (name) => void (await transport.dispatch({ cmd: 'model.new', name } as never)),
+    reset: async (name) => {
+      await transport.dispatch({ cmd: 'model.new', name } as never);
+      store.newDocument();
+    },
     thumbnail: () => thumbnailOf(viewer),
     initiallyOn: localStorage.getItem('femlab.autosave') !== 'off',
     onError: (e) => console.warn('the project save failed', e),
@@ -337,7 +341,8 @@ export function makeHostContext(
     skills: () => store.state.skills,
     clipboard: { writeText: (text) => navigator.clipboard.writeText(text) },
     files: {
-      markSaved: (journal) => store.markSaved(journal),
+      beginSave: () => store.beginSave(),
+      markSaved: (journal) => store.markOpened(journal),
       pick: () =>
         new Promise<string>((resolve, reject) => {
           const input = document.createElement('input');
@@ -486,7 +491,7 @@ export async function openExample(name: string, store: Store, transport: EngineT
   store.set({ benchmark: { ...benchmark, ...provenance } });
   // An example is an explicit open. Use the normalized Journal captured from the engine
   // before UI hydration, and establish the baseline only after the whole open succeeded.
-  store.markSaved(opened.journal);
+  store.markOpened(opened.journal);
   return { name, commands: entries.length };
 }
 
@@ -518,6 +523,7 @@ async function editDefinition(store: Store, transport: EngineTransport, target: 
  */
 export function appHostCommands(store: Store, transport: EngineTransport, viewer: ViewerRef, _refresh: () => Promise<void>, _results?: ResultsView, registry?: () => Registry): HostDef[] {
   let intentRun = 0;
+  store.setJournalDiffQuery(async (base) => (await transport.query({ query: 'query.journalDiff', base })) as JournalDiff);
   return [
     {
       name: 'palette.resolve',
@@ -612,5 +618,51 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
         return ctx.examples.open(name);
       },
     },
+    {
+      name: 'file.compare',
+      description: 'Select a saved femlab/1 file as the Journal comparison baseline without opening it or changing the current Model. Returns ordered added and removed Command entries; the imported file is never replayed. The imported baseline remains selected until the next successful explicit save/open or new Model.',
+      schema: z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) })]),
+      tool: true,
+      run: async (input) => {
+        const current = store.beginJournalComparison();
+        const how = input as { json?: string; picker?: true };
+        const text = how.json ?? await new Promise<string>((resolve, reject) => {
+          const picker = document.createElement('input');
+          picker.type = 'file';
+          picker.accept = '.json,application/json';
+          picker.onchange = () => {
+            const file = picker.files?.[0];
+            if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            file.text().then(resolve, reject);
+          };
+          picker.addEventListener('cancel', () => reject(new FemError('file.not-found', 'no file was chosen', 'picker')), { once: true });
+          picker.click();
+        });
+        let file: { format?: unknown; journal?: unknown } | null;
+        try {
+          file = JSON.parse(text) as { format?: unknown; journal?: unknown };
+        } catch (e) {
+          throw new FemError('schema', `not a femlab/1 JSON file: ${(e as Error).message}`, 'json', 'use file.save to write a comparable Model file');
+        }
+        if (!file || typeof file !== 'object' || file.format !== 'femlab/1' || !file.journal || typeof file.journal !== 'object' || !Array.isArray((file.journal as { entries?: unknown }).entries)) {
+          throw new FemError('schema', 'the comparison file is not a femlab/1 file with a Journal', 'file', 'use file.save to write a comparable Model file');
+        }
+        const importedJournal = file.journal as Journal;
+        const diff = (await transport.query({ query: 'query.journalDiff', base: importedJournal })) as JournalDiff;
+        if (current(diff)) store.set({ journalComparison: diff, comparisonSource: 'imported', comparisonBaseline: structuredClone(importedJournal.entries) });
+        return diff;
+      },
+    },
   ] as HostDef[];
+}
+
+/** The current causal Journal comparison, exposed to the AI without exposing Store internals. */
+export function appHostQueries(store: Store): HostDef[] {
+  return [{
+    name: 'query.journalComparison',
+    description: 'Compare the current Journal with the selected imported file, or with the last successful explicit save/open when no imported comparison is selected. Returns ordered added and removed entries, or null when no baseline exists or a newer request/state supersedes this query. file.compare selects an imported baseline; a successful explicit save/open resets it to the saved baseline, and a new Model clears it. Autosave does not select a baseline.',
+    schema: z.object({}),
+    tool: true,
+    run: () => store.refreshJournalComparison(),
+  }];
 }

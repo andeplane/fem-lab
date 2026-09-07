@@ -25,6 +25,7 @@ use crate::command::Formulation;
 use crate::error::{Error, ErrorCode};
 use crate::fem::material::{plane_stress_condense, MaterialBatch, MaterialLaw, MaterialOut, VOIGT};
 use crate::fem::quadrature::Rule;
+use crate::fem::section::Section;
 use crate::fem::shape::{
     centre_xi, dshape_of, face_dshape_of, face_rule_of, face_shape_of, in_reference, product_rule_of, rule_of,
     shape_of, Hex20, Hex8, Quad4, Quad8, RefElement, Tet10, Tet4, Tri3, Tri6,
@@ -50,6 +51,8 @@ pub struct ElementCtx<'a> {
     pub material: &'a Material,
     pub idealisation: Idealisation,
     pub formulation: Formulation,
+    /// The cross-section of a line member; `None` for a solid, which has its own geometry.
+    pub section: Option<&'a Section>,
     /// Nodal temperature; `None` → no thermal strain.
     pub temperature: Option<&'a [f64]>,
     pub t_ref: f64,
@@ -60,6 +63,15 @@ pub struct ElementCtx<'a> {
 pub enum FaceLoad {
     Pressure(f64),
     Traction([f64; 3]),
+}
+
+/// Outcome of isoparametric point location. `Outside` is a converged reference coordinate
+/// outside the element; `Failed` means the map could not be inverted numerically.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InverseMap {
+    Inside([f64; 3]),
+    Outside,
+    Failed,
 }
 
 /// One element formulation. Every matrix is row-major and every vector is node-major
@@ -86,9 +98,14 @@ pub trait Element: Send + Sync {
     /// Parametric coordinates of Gauss point `i`, for extrapolation and probes.
     fn gp_xi(&self, i: usize) -> [f64; 3];
     fn shape_at(&self, xi: [f64; 3], n: &mut [f64]);
-    /// Newton inversion of the isoparametric map, at most 20 iterations; `None` when `x` is
-    /// outside the element (tolerance 1e-8 in reference coordinates) or the map is degenerate.
+    /// Newton inversion of the isoparametric map.
     fn inverse_map(&self, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]>;
+    /// Rich point-location status. Existing implementations that only provide `inverse_map`
+    /// conservatively classify a missing reference point as a failure; implementations must
+    /// override this method before they can report positive outside coverage.
+    fn inverse_map_status(&self, coords: &[f64], x: [f64; 3]) -> InverseMap {
+        self.inverse_map(coords, x).map_or(InverseMap::Failed, InverseMap::Inside)
+    }
     /// `√λ_max` of `M_lumped⁻¹ K_e`: the element bound on the global `ω_max` for `Δt_crit`.
     fn omega_max(&self, c: &ElementCtx<'_>) -> Result<f64, Error>;
 }
@@ -102,6 +119,24 @@ const B_MAP: [(usize, usize, usize); 9] =
 const PLANE: [usize; 3] = [0, 1, 3];
 /// Dimensionless determinant tolerance after scaling the active Jacobian by its largest entry.
 const DET_TOL: f64 = 1e-14;
+
+/// The material's density, or the `model.ill-posed` error every mass integral reports.
+pub(crate) fn density(c: &ElementCtx<'_>) -> Result<f64, Error> {
+    if c.material.rho.is_finite() && c.material.rho >= 0.0 {
+        Ok(c.material.rho)
+    } else {
+        Err(Error::new(ErrorCode::ModelIllPosed, "material density must be finite and non-negative")
+            .at("material.rho")
+            .suggest("material.add with rho >= \"0 kg/m^3\""))
+    }
+}
+
+/// The `model.ill-posed` error a frequency bound reports for a weightless element.
+pub(crate) fn no_density() -> Error {
+    Error::new(ErrorCode::ModelIllPosed, "an element with zero density has no natural frequency")
+        .at("material.rho")
+        .suggest("material.add with rho, e.g. \"7850 kg/m^3\"")
+}
 
 pub(crate) fn inverted() -> Error {
     Error::new(ErrorCode::MeshInverted, "the element Jacobian is inverted, numerically singular or nonfinite")
@@ -364,7 +399,7 @@ fn constitutive(
 
 /// The tangent at zero strain: what the stiffness, the thermal load and the mode condensation
 /// all integrate against for a linear law.
-fn tangent_at_zero(c: &ElementCtx<'_>, n: usize) -> Result<Vec<f64>, Error> {
+pub(crate) fn tangent_at_zero(c: &ElementCtx<'_>, n: usize) -> Result<Vec<f64>, Error> {
     let zeros = vec![0.0; n * VOIGT];
     let (mut s, mut d) = (vec![0.0; n * VOIGT], vec![0.0; n * VOIGT * VOIGT]);
     constitutive(c, n, &zeros, &mut s, &mut d)?;
@@ -498,14 +533,9 @@ fn mass_of(kind: ElementKind, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -
     let kin = kinematics_with_rule(kind, c, product_rule_of(kind))?;
     let (nn, dim, nd) = (kin.n_nodes, kin.dim, kin.n_dof);
     m.fill(0.0);
-    if !c.material.rho.is_finite() || c.material.rho < 0.0 {
-        return Err(Error::new(ErrorCode::ModelIllPosed, "material density must be finite and non-negative")
-            .at("material.rho")
-            .suggest("material.add with rho >= \"0 kg/m^3\""));
-    }
     // A material without `rho` resolves to zero density. Its consistent and lumped element
     // masses are both the exact zero matrix; in particular HRZ must not evaluate 0 / 0.
-    if c.material.rho == 0.0 {
+    if density(c)? == 0.0 {
         return Ok(());
     }
     for g in 0..kin.n_gp {
@@ -690,6 +720,11 @@ fn recover_of(
 /// is folded at one of them. The well-posedness check screens a whole Mesh with this before
 /// any material is looked at, and it is the same Jacobian the integrals use.
 pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
+    // A line member is embedded in the mesh's space, so its Jacobian is the length of
+    // `dx/dξ` rather than a determinant of the coordinate directions.
+    if kind == ElementKind::Truss2 {
+        return crate::fem::truss::axis(coords).map(|(_, half)| half);
+    }
     let (nn, dim) = (kind.n_nodes(), kind.dim());
     let rule = rule_of(kind);
     let mut dn = vec![[0.0; 3]; nn];
@@ -701,28 +736,66 @@ pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
     Some(min)
 }
 
-fn inverse_map_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]> {
+fn inverse_map_status_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> InverseMap {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
+    let mut scaled_span = 0.0f64;
+    let mut magnitude = 0.0f64;
+    for k in 0..dim {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for point in coords.chunks_exact(3) {
+            lo = lo.min(point[k]);
+            hi = hi.max(point[k]);
+        }
+        if !(lo.is_finite() && hi.is_finite() && x[k].is_finite()) {
+            return InverseMap::Failed;
+        }
+        // Scale before subtracting: finite opposite-sign extrema can make `hi - lo`
+        // overflow even though the physical-coordinate tolerance remains representable.
+        scaled_span = scaled_span.max(1e-12 * hi - 1e-12 * lo);
+        magnitude = magnitude.max(lo.abs()).max(hi.abs()).max(x[k].abs());
+    }
+    // The relative term follows the physical element size; the epsilon term covers subtraction
+    // when a small element is far from the origin. Both are physical-coordinate tolerances.
+    let residual_tolerance = scaled_span + 64.0 * f64::EPSILON * magnitude;
     let mut xi = centre_xi(kind);
     let mut sh = vec![0.0; nn];
     let mut dn = vec![[0.0; 3]; nn];
-    for _ in 0..20 {
+    for iteration in 0..=20 {
         shape_of(kind, xi, &mut sh);
         dshape_of(kind, xi, &mut dn);
-        let (inv, _) = jac_inv(dim, coords, &dn)?;
+        let Some((inv, _)) = jac_inv(dim, coords, &dn) else {
+            return InverseMap::Failed;
+        };
         let mut r = [0.0; 3];
         for (i, ri) in r.iter_mut().enumerate().take(dim) {
             *ri = x[i] - (0..nn).map(|a| sh[a] * coords[3 * a + i]).sum::<f64>();
         }
-        for k in 0..dim {
-            xi[k] += (0..dim).map(|i| inv[k][i] * r[i]).sum::<f64>();
+        if r.iter().take(dim).all(|value| value.abs() <= residual_tolerance) {
+            return if in_reference(kind, xi, 1e-8) { InverseMap::Inside(xi) } else { InverseMap::Outside };
+        }
+        if iteration < 20 {
+            let mut delta = [0.0; 3];
+            for k in 0..dim {
+                delta[k] = (0..dim).map(|i| inv[k][i] * r[i]).sum::<f64>();
+            }
+            // A bounded step keeps Newton inside the locally valid neighbourhood of a curved
+            // quadratic map. Linear maps retain their exact one-step inversion, including far
+            // outside points.
+            let trust = if kind.n_nodes() > kind.n_corners() {
+                let largest = delta.iter().take(dim).fold(0.0f64, |value, component| value.max(component.abs()));
+                (0.5 / largest).min(1.0)
+            } else {
+                1.0
+            };
+            for k in 0..dim {
+                xi[k] += trust * delta[k];
+            }
+            if xi.iter().take(dim).any(|value| !value.is_finite()) {
+                return InverseMap::Failed;
+            }
         }
     }
-    if in_reference(kind, xi, 1e-8) {
-        Some(xi)
-    } else {
-        None
-    }
+    InverseMap::Failed
 }
 
 fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
@@ -732,11 +805,16 @@ fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
     // One `?`: the two integrals fail on exactly the same elements and materials.
     stiffness_of(kind, c, &mut k).and_then(|_| mass_of(kind, c, &mut mm, true))?;
     if c.material.rho == 0.0 {
-        return Err(Error::new(ErrorCode::ModelIllPosed, "an element with zero density has no natural frequency")
-            .at("material.rho")
-            .suggest("material.add with rho, e.g. \"7850 kg/m^3\""));
+        return Err(no_density());
     }
-    let minv: Vec<f64> = (0..n).map(|i| 1.0 / mm[i * n + i]).collect();
+    Ok(omega_max_power(&k, &mm, n))
+}
+
+/// `√λ_max` of `M_lumped⁻¹ K` by fifty power iterations from a fixed deterministic start, then
+/// the Rayleigh quotient. `k` is `n × n` row-major and `m` holds the lumped mass on its
+/// diagonal; every element kind's `omega_max` ends here.
+pub(crate) fn omega_max_power(k: &[f64], m: &[f64], n: usize) -> f64 {
+    let minv: Vec<f64> = (0..n).map(|i| 1.0 / m[i * n + i]).collect();
     let mut v: Vec<f64> = (0..n).map(|i| libm::sin(i as f64 + 1.0)).collect();
     for _ in 0..50 {
         let w: Vec<f64> = (0..n).map(|i| minv[i] * (0..n).map(|j| k[i * n + j] * v[j]).sum::<f64>()).collect();
@@ -745,7 +823,7 @@ fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
     }
     let num: f64 = (0..n).map(|i| v[i] * (0..n).map(|j| k[i * n + j] * v[j]).sum::<f64>()).sum();
     let den: f64 = (0..n).map(|i| v[i] * v[i] / minv[i]).sum();
-    Ok((num / den).sqrt())
+    (num / den).sqrt()
 }
 
 // ------------------------------------------------------------------ the built-in
@@ -791,13 +869,20 @@ impl<R: RefElement> Element for Iso<R> {
         shape_of(R::KIND, xi, n)
     }
     fn inverse_map(&self, coords: &[f64], x: [f64; 3]) -> Option<[f64; 3]> {
-        inverse_map_of(R::KIND, coords, x)
+        match inverse_map_status_of(R::KIND, coords, x) {
+            InverseMap::Inside(xi) => Some(xi),
+            InverseMap::Outside | InverseMap::Failed => None,
+        }
+    }
+    fn inverse_map_status(&self, coords: &[f64], x: [f64; 3]) -> InverseMap {
+        inverse_map_status_of(R::KIND, coords, x)
     }
     fn omega_max(&self, c: &ElementCtx<'_>) -> Result<f64, Error> {
         omega_max_of(R::KIND, c)
     }
 }
 
+static TRUSS2: crate::fem::truss::Truss2 = crate::fem::truss::Truss2;
 static ISO_HEX8: Iso<Hex8> = Iso(PhantomData);
 static ISO_HEX20: Iso<Hex20> = Iso(PhantomData);
 static ISO_TET4: Iso<Tet4> = Iso(PhantomData);
@@ -818,5 +903,6 @@ pub fn element_for(kind: ElementKind) -> &'static dyn Element {
         ElementKind::Quad8 => &ISO_QUAD8,
         ElementKind::Tri3 => &ISO_TRI3,
         ElementKind::Tri6 => &ISO_TRI6,
+        ElementKind::Truss2 => &TRUSS2,
     }
 }

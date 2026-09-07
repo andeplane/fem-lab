@@ -145,7 +145,7 @@ describe('the Results tab', () => {
     expect(displayUnitOf('reaction', { force: 'N', power: 'kW' }, 'power')).toBe('kW');
     expect(displayUnitOf('reaction', { force: 'kN', power: 'W' }, 'force')).toBe('kN');
     const kw = (value: number): Valued => ({ value, unit: 'kW' });
-    const result: ResultSummary = { ...RESULT, reactionQuantity: 'power',
+    const result: ResultSummary = { ...RESULT, reactionQuantity: 'power', storagePower: kw(0.005),
       reactions: [{ constraint: 'cold', total: [kw(0.01), kw(0), kw(0)] }],
       appliedTotal: [kw(0.01), kw(0), kw(0)], extremes: [] };
     const root = document.createElement('div');
@@ -153,8 +153,12 @@ describe('the Results tab', () => {
     expect(root.textContent).toContain('Power kW');
     expect(root.textContent).not.toContain('Fx');
     const table = [...root.querySelectorAll('table')].find((t) => t.textContent?.includes('Power kW'))!;
-    expect([...table.querySelectorAll('tbody tr')].map((r) => r.children.length)).toEqual([2, 2, 2]);
+    expect([...table.querySelectorAll('tbody tr')].map((r) => r.children.length)).toEqual([2, 2, 2, 2]);
     expect(table.textContent).toContain('cold0.01');
+    expect(table.textContent).toContain('Storage rate0.005');
+    expect(root.textContent).toContain('Net applied = removed + storage');
+    expect(balanceLine({ ...result, balance: 1e-9 }).pass).toBe(true);
+    expect(balanceLine({ ...result, balance: 2e-9 }).pass).toBe(false);
   });
 
   it('leads with the extreme of the largest magnitude', () => {

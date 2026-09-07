@@ -18,8 +18,11 @@ describe('fieldsOf', () => {
       const name = (v['properties'] as Record<string, { const?: string }>)['cmd']!.const!;
       const fields = fieldsOf(v, DEFS);
       expect(fields.every((f) => f.path.length === 1), name).toBe(true);
-      // `plugin.load`'s `manifest` is deliberately free-form JSON; nothing else may be.
-      expect(fields.filter((f) => f.kind === 'json').map((f) => `${name}.${f.path.join('.')}`)).toEqual(name === 'plugin.load' ? ['plugin.load.manifest'] : []);
+      // `plugin.load`'s `manifest` is deliberately free-form JSON, and `geometry.addLine`'s
+      // joint list and member wiring are tables of numbers rather than form fields; nothing
+      // else may be.
+      const json: Record<string, string[]> = { 'plugin.load': ['plugin.load.manifest'], 'geometry.addLine': ['geometry.addLine.points', 'geometry.addLine.members'] };
+      expect(fields.filter((f) => f.kind === 'json').map((f) => `${name}.${f.path.join('.')}`)).toEqual(json[name] ?? []);
     }
   });
 

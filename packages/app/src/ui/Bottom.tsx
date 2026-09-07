@@ -84,59 +84,66 @@ export function solveBoundary(entries: JournalEntry[], result: Pick<ResultSummar
   return producesResult && cmd.step === result.step ? entry.seq : -1;
 }
 
+function JournalRow({ s, dispatch, entry, className = '', removed = false }: { s: UiState; dispatch: Dispatch; entry: JournalEntry; className?: string; removed?: boolean }) {
+  const e = entry;
+  const cmd = e.cmd as unknown as Record<string, unknown> & { cmd: string };
+  const meta = removed ? undefined : s.journalWho[e.seq];
+  const boundary = removed ? -1 : solveBoundary(s.journal?.entries ?? [], s.result);
+  const stale = s.result?.stale === true && boundary >= 0 && e.seq > boundary;
+  const target = removed ? null : journalTarget(cmd, s.model, s.objects);
+  const highlight = (on: boolean) => void dispatch({ cmd: 'view.highlight', ...(on && target?.highlight ? target.highlight : {}) }).catch(() => undefined);
+  return (
+    <div class={className}>
+      <div
+        class={stale ? 'jrow stale' : 'jrow'}
+        data-target-ref={target?.ref}
+        onMouseEnter={() => target?.highlight && highlight(true)}
+        onMouseLeave={(event) => target?.highlight && !event.currentTarget.contains(document.activeElement) && highlight(false)}
+      >
+        <Cmd
+          dispatch={dispatch}
+          cmd="selection.set"
+          class="jrow-main"
+          args={target ? { refs: [target.ref] } : undefined}
+          disabled={!target}
+          title={target ? `Select ${target.ref}` : 'This Command has no object in the current Model'}
+          onFocus={() => target?.highlight && highlight(true)}
+          onBlur={() => target?.highlight && highlight(false)}
+        >
+          <span class="no">{e.seq}</span>
+          <span class={cmd.cmd.startsWith('solve.') ? 'jcmd solve' : 'jcmd'}>{cmd.cmd}</span>
+          <span class="jargs">{argText(cmd)}</span>
+          <span class="jwho">{meta?.who ?? (removed ? 'unknown' : 'you')}</span>
+          <span class="jtime">{clock(meta?.at)}</span>
+        </Cmd>
+        <Cmd dispatch={dispatch} cmd="clipboard.copy" class="jcopy" args={{ what: { kind: 'text', text: commandLine(cmd) } }} title={`Copy ${cmd.cmd} as script`}>
+          Copy
+        </Cmd>
+      </div>
+      {e.seq === boundary ? (
+        <div class="boundary">
+          <span class="rule" />
+          <span class="section-label">Result produced here · undo boundary</span>
+          <span class="rule" />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   const entries = s.journal?.entries ?? [];
   useLayoutEffect(() => () => void dispatch({ cmd: 'view.highlight' }).catch(() => undefined), [dispatch, s.model?.revision]);
-  const boundary = solveBoundary(entries, s.result);
-  // Rows after the solve are only "stale" once the engine says the Result is: an export or a
-  // camera move after a solve changes nothing the Result depends on.
-  const staleBoundary = s.result?.stale === true ? boundary : -1;
   return (
     <div class="rows">
-      {entries.map((e) => {
-        const cmd = e.cmd as unknown as Record<string, unknown> & { cmd: string };
-        const meta = s.journalWho[e.seq];
-        const stale = staleBoundary >= 0 && e.seq > staleBoundary;
-        const target = journalTarget(cmd, s.model, s.objects);
-        const highlight = (on: boolean) => void dispatch({ cmd: 'view.highlight', ...(on && target?.highlight ? target.highlight : {}) }).catch(() => undefined);
-        return (
-          <div key={e.seq}>
-            <div
-              class={stale ? 'jrow stale' : 'jrow'}
-              data-target-ref={target?.ref}
-              onMouseEnter={() => target?.highlight && highlight(true)}
-              onMouseLeave={(event) => target?.highlight && !event.currentTarget.contains(document.activeElement) && highlight(false)}
-            >
-              <Cmd
-                dispatch={dispatch}
-                cmd="selection.set"
-                class="jrow-main"
-                args={target ? { refs: [target.ref] } : undefined}
-                disabled={!target}
-                title={target ? `Select ${target.ref}` : 'This Command has no object in the current Model'}
-                onFocus={() => target?.highlight && highlight(true)}
-                onBlur={() => target?.highlight && highlight(false)}
-              >
-                <span class="no">{e.seq}</span>
-                <span class={cmd.cmd.startsWith('solve.') ? 'jcmd solve' : 'jcmd'}>{cmd.cmd}</span>
-                <span class="jargs">{argText(cmd)}</span>
-                <span class="jwho">{meta?.who ?? 'you'}</span>
-                <span class="jtime">{clock(meta?.at)}</span>
-              </Cmd>
-              <Cmd dispatch={dispatch} cmd="clipboard.copy" class="jcopy" args={{ what: { kind: 'text', text: commandLine(cmd) } }} title={`Copy ${cmd.cmd} as script`}>
-                Copy
-              </Cmd>
-            </div>
-            {e.seq === boundary ? (
-              <div class="boundary">
-                <span class="rule" />
-                <span class="section-label">Result produced here · undo boundary</span>
-                <span class="rule" />
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
+      {s.journalComparison ? <div class="section-label comparison-label">{s.comparisonSource === 'imported' ? 'Compared file' : 'Since last explicit save/open'}</div> : null}
+      {entries.map((e, index) => <JournalRow key={index} s={s} dispatch={dispatch} entry={e} className={s.journalComparison && index >= s.journalComparison.sharedEntries ? 'comparison-added' : ''} />)}
+      {s.journalComparison && s.journalComparison.removed.length > 0 ? (
+        <>
+          <div class="section-label comparison-removed-label">Removed from comparison baseline</div>
+          {s.journalComparison.removed.map((e, index) => <JournalRow key={`removed-${index}`} s={s} dispatch={dispatch} entry={e} className="comparison-removed" removed />)}
+        </>
+      ) : null}
       {entries.length === 0 ? <div class="empty-note">The Journal is empty. Every Command you apply lands here, and the Script tab shows the same thing as TypeScript.</div> : null}
     </div>
   );

@@ -72,6 +72,7 @@ export function fakeTransport(): EngineTransport {
 export function fakeHost(transport = fakeTransport(), folderOpen = false): HostContext {
   // The background save is on by default, as in the app; turning it off keeps what is saved.
   let autosaveOn = true;
+  const markSaved = vi.fn();
   // One project, opened or not, so `query.project` has both answers and rename/delete are seen.
   let open: ProjectMeta | null = PROJECT;
   const current = (): OpenProject | null => (open === null ? null : { ...open, saving: false, autosave: autosaveOn });
@@ -108,7 +109,8 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       pick: vi.fn(async () => JSON.stringify(MODEL_FILE)),
       pickBytes: vi.fn(async () => new TextEncoder().encode(TETRA_STL)),
       download: vi.fn(),
-      markSaved: vi.fn(),
+      beginSave: vi.fn(() => markSaved),
+      markSaved,
       shareLink: vi.fn(async () => ({ url: 'https://x/#j' })),
       restore: vi.fn(async (id?: string) => id === undefined ? SAVED : AUTOSAVES.find(x => x.id === id) ?? null),
       autosave: vi.fn(() => ({ enabled: autosaveOn, saved: SAVED })),

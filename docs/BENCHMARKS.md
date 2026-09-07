@@ -82,6 +82,10 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 | tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
 | tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
+| truss-axial-patch | green | 8/8 | 1 | 1 | 0.00 % |
+| truss-space-determinate | green | 5/5 | -0.390625 | -0.390625 | 0.00 % |
+| truss-thermal-restrained | green | 5/5 | -240 | -240 | 0.00 % |
+| truss-two-bar-planar | green | 5/5 | -0.1 | -0.1 | 0.00 % |
 
 <!-- bench:end -->
 
@@ -137,6 +141,10 @@ The exact discrete harmonic Dirichlet solution `x_i=(i+1)/(n+1)` independently
 checks reusable factors at 65/129/257 unknowns, two right-hand sides, one/four-thread
 construction and concurrent callers; no solve may mutate faer's global setting.
 The unchanged Windows Hex20/Tet10 stress and force-balance checks still gate the fix.
+
+The Result-validity integration check also holds probe/path values and independently parsed
+VTU datasets identical across a display-only Model rename; a subsequent physics edit still
+refuses all three consumers as stale, including after another rename (#123, #133).
 
 Direct-solver acceptance (#266) is also checked independently of factorization success.
 `a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer` supplies a full operator whose
@@ -231,6 +239,12 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
 | B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
+| B9 | Truss axial patch: three collinear bars at 1, 2 and 5 elements | u(x) = F x / (E A) at every node; 1 mm at the tip with E = 200 GPa, A = 1000 mm², L = 2 m, F = 100 kN | 1e-12 rel, identical at all three meshes | the bar element reproduces its own exact field, whatever the subdivision | green |
+| B10 | Symmetric two-bar planar truss, 30° apex, load P | N = P/(2 sin 30) = P; δ = 2 P L / (E A) by unit-load virtual work | 1e-10 rel | joint equilibrium and axial recovery in a plane | green |
+| B11 | Determinate three-legged space truss (tripod), skew members | N = −P L / (3 H) from statics; δ = P L³ / (3 H² E A) by virtual work | 1e-10 rel | 3D direction cosines | green |
+| B12 | Bar held at both ends, ΔT = 100 K | σ = −E α ΔT = −240 MPa; reaction σA = 240 kN | 1e-12 rel | the thermal load and the restrained-stress path on a line element | green |
+| B13 | Fixed–free bar's axial modes, 4/8/16 truss elements, consistent mass | f_n = (2n−1)/(4L)·√(E/ρ) | 1 % at 16 elements, observed rate > 1.9, every discrete frequency above the exact one | consistent mass and modal convergence of the line element | engine test |
+| B20 | Section library: A, I_y, I_z, J of every `section.add` shape | closed forms (Roark for the rectangle's J), and the I-section against the IPE 200 datasheet A = 2850 mm², I_y = 19.43e6 mm⁴, I_z = 1.424e6 mm⁴ | exact against the closed forms (1e-12 rel); within 6 % *below* the datasheet | the section library a line member integrates with | engine test |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
 motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
@@ -251,6 +265,49 @@ a temperature Load present, the frame at g = 0 must equal a pure thermal solve �
 and reactions — and the frame at g = 1 the un-amplituded answer. The exactness of the scaling
 itself is what a linear procedure guarantees; when a nonlinear material, contact or large
 deflection lands, the increments become real solves and this benchmark becomes their gate.
+
+B9 to B12 are Journals through the registry, so they check `geometry.addLine`, the line
+mesher, the Section library and the truss element together. Each one is gated against a closed
+form nobody had to look up: the bar equation, joint equilibrium with unit-load virtual work,
+and `σ = −E α ΔT`. Two things about them are worth knowing.
+
+**A truss needs bracing the checks do not ask for.** `checks::rigid_modes` looks for *global*
+rigid motion. A pin-jointed member carries no transverse stiffness, so a node that only two
+collinear members reach — every interior node of a subdivided bar — is a local mechanism that
+the checks cannot see and the factorisation reports as `solve.not-positive-definite`. B9
+therefore holds every node across the bar axis with one `geometry.nameRegion` box, and B10's
+and B11's joints are braced by members that are not collinear. A named `constraint.mechanism`
+check is a separate issue.
+
+**Stress is averaged at a joint.** `average_at_nodes` smooths across elements of the same
+material, and at a truss joint that means averaging the axial stresses of members pointing in
+different directions. B10 and B11 are symmetric, so every member meeting at the probed joint
+carries the same force and the average is exact; `stressUnaveraged` is what a mixed joint
+wants until per-member section forces land with the beam (#65).
+
+B13 (`truss_axial_modes_converge_to_the_closed_form_bar_frequency`) is an engine test, like
+B7, because the rate needs three meshes of one bar rather than one Model. With E = ρ = L = 1
+the exact frequencies are (2n−1)/4 Hz; the consistent mass gives 0.644 %, 0.161 % and 0.0402 %
+error in the first mode at 4, 8 and 16 elements, an observed rate of 2.00, and every discrete
+frequency above the continuum's, which is what a conforming displacement element must do.
+
+B20 (`section_properties_match_their_closed_forms_and_a_datasheet`) checks every
+`SectionSpec` arm against an oracle written from the geometry rather than from the
+library: the rectangle and the circle against their textbook formulas, the square's
+torsion constant against Roark's 0.1406 s⁴ (the library's fit gives 0.14083, and the
+exact Saint-Venant series 0.140577, so the gate is 3e-4 on that ratio), the tube as the
+solid circle minus its bore, the I-section as two flange rectangles plus a web by the
+parallel-axis theorem, and the channel through the vanishing first moment about its own
+centroid. The I-section is then cross-checked against the **IPE 200** datasheet
+(A = 2850 mm², I_y = 19.43e6 mm⁴, I_z = 1.424e6 mm⁴). The library models square corners
+and a rolled profile has root fillets, which only ever add material, so the gate is
+*signed*: the computed value must be below the datasheet and by less than 6 %. It comes
+out 4.4 % low on A, 5.0 % on I_y and 0.3 % on I_z. The shear factors are the classical
+Timoshenko–Reissner values (5/6 rectangle, 0.9 circle, 0.5 thin tube, area ratios for the
+I and the channel), **not** Cowper's ν-dependent ones, which at ν = 0.3 are 0.850 and
+0.886; `section.add`'s doc string says which convention it is. The shear centre and
+warping torsion are not modelled, so an open section gets the thin-strip St Venant
+torsion constant only.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
@@ -401,6 +458,15 @@ L = 0.1 m, 1000 K held, ε = 0.98 into a 300 K surrounding. Bisecting the flux b
 and this catalogue only hard-codes numbers somebody has read from a source: E4 therefore stays
 **resolve**, and E6 — whose oracle is a scalar equation this repository solves itself — is the
 row that gates the feature.
+
+**Radiation and the reported heat balance (#208 × #360).** E6 also checks that the reported
+net applied power and hot-face reaction both equal minus the physical radiated power, with
+zero storage. A transient companion uses 1, 2 and 4 longitudinal Quad4 cells at θ = 0.5 and 1:
+its reported applied power equals `−σεA[(1−θ)Told⁴ + θTnew⁴]`, while direct rectangular
+integration of the nodal temperature increment gives `ρcp∫(Tnew−Told)dV/dt`. These agree to
+1e-6 relative without a temperature constraint. Full and endpoint-only Histories yield identical
+final fields and power scalars. Radiation is evaluated at both endpoints, not at the averaged
+temperature, and its Newton tangent RHS is never counted as an external heat input.
 
 **E6 and E7 are the two halves of a radiation gate.** E6 fixes the steady answer against an
 oracle that never touches a finite element, and adds a conservation check: at convergence the
@@ -889,9 +955,43 @@ power values to `1e-9 W`; positive reaction retains the current removed-heat con
 Result totals/extremes, probes and paths report W independently of force=N/kN and convert
 to kW when the power display unit changes. The raw field stays SI, the VTU array is labelled
 `ReactionPower_W`, and the report/viewer label its scalar as power. Mechanical reactions
-retain force units and their vector components. [Issue #208](https://github.com/andeplane/fem-lab/issues/208)
-separately tracks the existing balance diagnostic sign, net-convection and transient-storage
-defects; the physical reaction checks here do not treat that diagnostic as an oracle.
+retain force units and their vector components. The conservation cases below (#208) also
+verify the corrected signs, net convection and stored-energy rate against physical oracles.
+
+
+### Steady and transient heat conservation (#208)
+
+For all eight element families, two- and four-cell bars with `q_surface=1000 W/m²` and
+`q_volume=500 W/m³` remove `q_surface*A + q_volume*V` at the held end. A second case has
+no held temperature and convects at the opposite end: the film removes all input, net
+applied power is zero, and its face is exactly `T_inf + q_surface/h`. Two overlapping
+films with equal coefficients and different ambient temperatures check additive assembly
+against their weighted effective ambient. With zero flux it
+settles to `T_inf` and still reports a small conservation residual, not a spurious failure
+caused by dividing roundoff by zero net heat flow. Absolute-zero equilibrium separately
+checks a zero assembled-power scale. Power errors stay below `1e-8 W`.
+
+The independent transient field `T(x,t)=(10+4x)(1+t)` on a unit-long `0.1×0.1 m` bar with
+`rho=cp=1` has exactly `dU/dt=0.12 W`. Tests prescribe that field on two meshes for
+`theta=0.5,0.75,1`, with and without an end film. Requested `(dt,tEnd)` pairs `(1,2)`
+and `(0.4,0.9)` s use known effective increments `1` and `0.3` s. The final-step
+conduction gradient is `4*(1+tEnd-(1-theta)*effectiveDt)`; the cold-end storage contribution is the exact basis integral
+`0.01*dx*(30+4*dx)/6`. These give independent cold-end reaction and net-film powers to
+`1e-10 W`. Saving only the initial/final history rows proves that the last internal state,
+not the last saved output, defines the final-step powers. A source-driven uniform ramp
+with free interior DOFs separately checks `dT/dt=q/(rho*cp)=1 K/s`, zero support heat flow
+and `dU/dt=36.11 kW` through the registry, on two meshes and two theta values with both
+endpoint schedules. This detects dividing the storage increment by the nominal `0.4 s`
+instead of the actual `0.3 s` interval.
+
+Positive thermal reaction is removed power. The conservation equation is
+`net applied − removed − storage = 0`, with net convection `integral h*(T_inf−T) dA`.
+Transient powers use `T_theta=(1−theta)T_old+theta*T_new` and
+`C*(T_new−T_old)/dt`, matching the discrete integration equation; temperature fields and
+history remain endpoint values. The reported relative residual uses the assembled-power
+(backward-error) scale `sum|Kij*T_theta_j| + sum|f_i| + sum|(C*dT/dt)_i|`. This remains
+meaningful at zero net flow. Tests independently assert absolute physical powers as well
+as this normalized residual, so an oversized denominator cannot stand in for conservation.
 
 ### Automatic hand-reference applicability (#149)
 
@@ -931,7 +1031,45 @@ mesh forces the bounded fallback; its known graph count lies within the returned
 the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
 1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
 These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.
+### Retained Result difference fields (#281)
 
+`difference_fields_project_closed_form_temperature_between_unequal_linear_and_quadratic_meshes`
+uses the E1 Fourier bar with the same 900 W/m² boundary flux on two independently retained
+meshes. The left Result has two linear elements and `k = 45 W/(m K)`, hence
+`T_left = 273.15 + 20x` K. The right Result has four quadratic elements and
+`k = 90 W/(m K)`, hence `T_right = 273.15 + 10x` K. Projection in either direction must
+therefore give the closed form
+
+```text
+T_left - T_right = 10x K
+```
+
+at every comparison node within 1e-8 K. Reversing the operands gives `-10x` K, comparing a
+Result with itself gives exact zero, and the two stored zero components remain exactly zero.
+The live Model changes temperature display units from Celsius to kelvin between solves; the
+difference remains the retained f64 SI delta in K without an absolute-temperature offset.
+A third quadratic Result uses `k = 45 W/(m K)` and raises the cold boundary from 0 °C to 10 °C,
+so its field minus the first linear Result is the nonzero constant `10 K` at every target node.
+
+This is an exact polynomial-reproduction benchmark rather than an asymptotic convergence
+study. Degree-one and degree-two isoparametric elements both reproduce constants and affine
+fields exactly: partition of unity conserves the constant component, and linear completeness
+reproduces `10x` on both the 2/4-element pair and every refinement of it up to floating-point
+roundoff. The interpolation error is already zero to the stated tolerance, so an observed
+log-error convergence rate is undefined and would not be a meaningful gate.
+
+Coverage cases translate one bar by 0.5 m and compute the analytically known intersection in
+both directions: nodes outside the other physical domain are the exact sorted set selected by
+`x < 0.5 m` or `x > 1 m`, every component at those nodes is null, and every covered value is
+the closed-form `10 K`. Moving an order-two bar to start at 2 m gives zero overlap, zero inside
+nodes, and an all-null field; it must not turn ordinary distance into a locator error. A plane-stress square
+with the exact hole `(0.3, 0.7) × (0.3, 0.7) m²` independently checks that full-sheet nodes
+strictly inside that open square are the outside set when projected onto the holed quadratic
+mesh. These cases verify no extrapolation or zero filling across missing material. A positively
+oriented curved Quad8 additionally places an interior edge point beyond every nodal x bound;
+Bernstein control-hull rejection must retain that point while positively rejecting a distant
+point. Structured failures separately cover incompatible dimensions, layouts, components,
+singular/nonconvergent maps, and finite operands whose subtraction overflows f64.
 ### Transient retention and peak phases (#244)
 
 For `S` integration steps and normalized stride `E = max(outputEvery, 1)`, the retained-frame
@@ -944,10 +1082,25 @@ Vec headers, spare capacity and allocator overhead are deliberately separate; Hi
 the exact outer frame count and remains the only full-series allocation.
 
 The cost Query reports two phases. The integration phase counts the #122 assembly lower bound,
-the retained payload and a conservative full-field f64 working allowance: `5 × nodes × 8` bytes
+the retained payload and a conservative full-field f64 working allowance: `9 × nodes × 8` bytes
 for heat and `6 × nodes × storedComponents × 8` bytes for explicit dynamics. Heat's free-DOF
-vectors are charged at the full nodal length; the five-field allowance covers the temporary old
-and new temperature vectors during `expand`. The frame-read phase counts retained payload plus one
+vectors are charged at the full nodal length; the original five-field allowance covers the temporary old
+and new temperature vectors during `expand`. Heat balance recovery (#208) adds four nodal
+buffers at its capacity-multiplication peak: film weights, θ-stage temperature, the previous
+temperature reused in place as its rate, and capacity times that rate. The rate is dropped before
+final field recovery. These nine vectors extend the existing counted allowance, not the
+excluded assembly/solver allocations or final derived fields. Radiating heat uses `13 × nodes × 8`
+bytes as a conservative allowance. With contact, the seven outer vectors are film weights,
+zero RHS, temperature, previous temperature, full RHS, free RHS and free solution. The old
+radiation residual and next iterate add two. The film RHS becomes the full original load;
+its transposed replacement is dropped before solving. Reduced RHS, solution and expanded
+replacement add three at expansion (twelve total, within thirteen). The temporary zero RHS
+from the contact operator transform does not overlap those three. Linear heat drops its
+transposed load before expansion and adds no persistent contact work vector.
+The old radiation tangent/RHS are released before Newton; iteration scratch is released before
+balance recovery. The two endpoint radiation systems are assembled sequentially, never retained
+together. Reduction metadata and tangent/factor matrices remain within the stated exclusions.
+The frame-read phase counts retained payload plus one
 normalized three-component f64 response (`24 × nodes` bytes) for a native Query. WASM/Worker transport has two
 normalized numeric payloads alive at once: the current JSON path's parsed source and structured
 clone, or #245's transferred `Float64Array` and final schema-owned `number[]`. Its separately
@@ -962,6 +1115,28 @@ unknown.
 An end-to-end heat regression first stores a valid Result, then requests 1,000,000,001 frames.
 `query.cost` reports the exact count and an over-budget peak; `solve.run` returns structured
 `solve.too-large` before History allocation, suggests a larger `outputEvery`, and leaves the prior
-Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
+Result intact. The same regression also chooses the largest History admitted by the old five-vector
+heat allowance and verifies that the additional balance buffers now cause preallocation rejection
+without changing the Journal. Restoring the original Step makes that Result current and a later
+solve succeeds.
 An explicit regression independently checks that the pre-solve count equals the history rows
 produced by its element-frequency-derived integration schedule.
+
+### Thermal balance across bonded contact (#208 × #61)
+
+Two Hex8 blocks use one, two and four cells per half with both θ=1/2 and θ=1.
+A source of 40 W/m³ in a 0.01 m³ assembly with ρc_p=20 J/(m³ K) gives the
+independent uniform ramp T=300+2t K. Its held, tied interface supplies zero power,
+while net input and storage both equal 0.4 W. This checks that slave capacity
+residuals transfer to held masters along with conductivity and applied loads.
+A deliberately different free-node initial temperature also checks that the first
+History frame already recovers tied slave temperatures from the held master;
+subsequent stored energy is integrated as cell volume times the eight-corner mean.
+
+A 0.1 m radiating slab split into two blocks uses the same three refinements.
+Steady input and support reaction both equal minus the outgoing surface power from
+the independent scalar conduction/radiation bisection. With no held temperature,
+transient net input equals minus the θ-weighted endpoint fourth-power radiation,
+and equals the change in the two bodies' integrated thermal energy divided by the
+last increment. Interface flux is internal and never appears as a support reaction.
+These are integration oracles; they must pass before this combined change is accepted.

@@ -21,7 +21,9 @@ const fieldUnit = (field: string, v: Valued): string => (dimensionOf(field) === 
 /** `balance` is a dimensionless ratio; the design writes it as a percentage with four decimals. */
 export function balanceLine(r: ResultSummary): { pass: boolean; text: string } {
   const percent = r.balance * 100;
-  return { pass: Math.abs(r.balance) < 1e-6, text: `Σ reactions = −Σ loads · ${percent.toFixed(4)} %` };
+  const power = r.reactionQuantity === 'power';
+  const equation = power ? 'Net applied = removed + storage' : 'Σ reactions = −Σ loads';
+  return { pass: power ? r.balance <= 1e-9 : Math.abs(r.balance) < 1e-6, text: `${equation} · ${percent.toFixed(4)} %` };
 }
 
 /** The extreme whose largest magnitude leads the table: the number the engineer reads first. */
@@ -141,6 +143,7 @@ function Reactions({ s }: { s: UiState }) {
               </td>
             ))}
           </tr>
+          {r.storagePower && <tr class="total"><td>Storage rate</td><td class="mono n">{num(r.storagePower)}</td></tr>}
         </tbody>
       </table>
       <div class={balance.pass ? 'surface pass' : 'surface warn'} data-balance={r.balance}>
