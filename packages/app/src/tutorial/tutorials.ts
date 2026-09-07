@@ -3,6 +3,7 @@
 // there is no fetch and no build step, unlike the Examples gallery's Journals.
 import cantilever from '../../tutorials/cantilever.json';
 import heatConduction from '../../tutorials/heat-conduction.json';
+import journalAsProgram from '../../tutorials/journal-as-program.json';
 import meshConvergence from '../../tutorials/mesh-convergence.json';
 import modalAnalysis from '../../tutorials/modal-analysis.json';
 import plateWithHole from '../../tutorials/plate-with-hole.json';
@@ -25,6 +26,7 @@ export const TUTORIALS: Tutorial[] = [
   transientHeat,
   meshConvergence,
   symmetryAnd2d,
+  journalAsProgram,
   solveCostAndSolvers,
 ] as Tutorial[];
 

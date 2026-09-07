@@ -25,9 +25,10 @@ satisfying the steps of a tutorial you are only now beginning.
 | [`transient-heat`](../packages/app/tutorials/transient-heat.json) | 9 | NAFEMS T3 twice: once with Crank–Nicolson, once with backward Euler at the same Δt. | The θ-method, order vs damping, and why Crank–Nicolson rings |
 | [`mesh-convergence`](../packages/app/tutorials/mesh-convergence.json) | 7 | The cantilever plus one `study.converge` over three sizes. | Observed rate p, Richardson extrapolation, and when to stop |
 | [`symmetry-and-2d`](../packages/app/tutorials/symmetry-and-2d.json) | 9 | The `kirsch-quarter-plate` example: plane stress, two symmetry planes, mapped blocks on the hole. | Kirsch's field, plane stress vs plane strain, what symmetry costs you |
+| [`journal-as-program`](../packages/app/tutorials/journal-as-program.json) | 8 | The `cantilever` example again, then exported, edited and replayed as a script instead of clicked. | L³ scaling of a doubled beam, and the CLI `--verify` check against the committed fixture |
 | [`solve-cost-and-solvers`](../packages/app/tutorials/solve-cost-and-solvers.json) | 8 | The cantilever at two mesh sizes, `query.cost` before each solve, `cpu-direct` and `cpu-pcg` forced on the same model. | The auto solver threshold (200 000 / 100 000 dofs), and `solve.stalled` on issue #3's 780 300-dof case |
 
-The first four are the phase-1 set. The last six each own one procedure or one piece of method
+The first four are the phase-1 set. The last seven each own one procedure or one piece of method
 that the Commands alone do not explain.
 
 ## The file format
