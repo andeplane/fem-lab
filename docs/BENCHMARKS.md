@@ -729,6 +729,82 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
 
+### Immutable solve records (#280)
+
+`retained_cases` uses independent Fourier conduction `T(x)=273.15+q*x/k` on a one-metre
+bar at 2, 4 and 8 divisions with conductivity 45, 90 and 180 W/(m K). The same engine retains
+each solve, changes the live mesh and display units, then reads every old nodal field, probe
+and path against its own analytical solution and saved Celsius metadata. Exact mesh counts
+and numeric payload dimensions prevent attaching an old array to a newer mesh.
+
+A second three-mesh series uses `rho*cp*dT/dt=q`, giving uniform `T=300+2*t` K with
+rho=10 kg/m³, cp=2 J/(kg K), q=40 W/m³ and a matching prescribed-temperature ramp.
+Every retained index and exact physical-time selection carries the same solve identity,
+mesh and temperature, including Celsius scientific probes after the live Model switches to
+Kelvin. These fields are exactly representable on all three meshes, so no mesh-dependent
+reference is substituted for the conservation law.
+
+Lifecycle checks retain equal-input solves as distinct instances, verify FIFO eviction at
+eight records, reject absent or mismatched selectors, preserve records on failed solves,
+and prove Model new/import/replay do not recycle old ids or change Journal hashes.
+
+## Cost-query memory benchmark (#122)
+
+The estimator is tested against every small element-family assembly pattern at one, two and
+three DOFs per node, including shared nodes and unused nodes. Its mandatory-storage lower
+bound equals the actual lengths of two CSR arrays, element slots and their offsets, and one
+RHS; it makes no claim about unknown factor fill or solver workspace.
+
+A synthetic 50 × 50 × 100 Hex8 grid (250,000 elements) has exactly
+`9 × (3×50+1) × (3×50+1) × (3×100+1) = 61,767,909` directed scalar matrix entries at three
+DOFs per node. The independent tensor-neighbour graph formula checks the count while a
+per-thread allocator measures peak live scratch **after** mesh construction: at most 16 MiB,
+compared with 576 MB for element slots alone. A 750,000-element repeated overlapping-clique
+mesh forces the bounded fallback; its known graph count lies within the returned interval,
+the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
+1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
+These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.
+
+### Transient retention and peak phases (#244)
+
+For `S` integration steps and normalized stride `E = max(outputEvery, 1)`, the retained-frame
+count is exactly `1 + floor(S/E) + (S mod E != 0)`: the initial state, every requested stride,
+and one final endpoint only when the endpoint is not already a stride. Tests cover divisible and
+non-divisible schedules, `outputEvery` beyond the step count, zero's established normalization,
+and checked count/byte overflow. The logical retained payload matches `query.frames`:
+`8 × frames × (1 + nodes × storedComponents)` bytes for f64 times and raw primary values.
+Vec headers, spare capacity and allocator overhead are deliberately separate; History reserves
+the exact outer frame count and remains the only full-series allocation.
+
+The cost Query reports two phases. The integration phase counts the #122 assembly lower bound,
+the retained payload and a conservative full-field f64 working allowance: `5 × nodes × 8` bytes
+for heat and `6 × nodes × storedComponents × 8` bytes for explicit dynamics. Heat's free-DOF
+vectors are charged at the full nodal length; the five-field allowance covers the temporary old
+and new temperature vectors during `expand`. The frame-read phase counts retained payload plus one
+normalized three-component f64 response (`24 × nodes` bytes) for a native Query. WASM/Worker transport has two
+normalized numeric payloads alive at once: the current JSON path's parsed source and structured
+clone, or #245's transferred `Float64Array` and final schema-owned `number[]`. Its separately
+reported known numeric staging is therefore at least `48 × nodes` bytes. Rust/JavaScript strings,
+array/object headers and engine-specific number storage remain value- and runtime-dependent; the
+schema marks the WASM staging estimate incomplete and `bytes` remains a counted conservative
+estimate rather than a complete host-memory claim. #245 measures those copies when it changes the browser route. Solver
+factor fill/workspace, final derived fields, the resident Mesh/Model and allocator overhead also
+remain excluded, so a counted peak below the fixed 1.5 GiB planning budget is still feasibility
+unknown.
+
+An end-to-end heat regression first stores a valid Result, then requests 1,000,000,001 frames.
+`query.cost` reports the exact count and an over-budget peak; `solve.run` returns structured
+`solve.too-large` before History allocation, suggests a larger `outputEvery`, and leaves the prior
+Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
+An explicit regression independently checks that the pre-solve count equals the history rows
+produced by its element-frequency-derived integration schedule.
+
+Retained-Result budget checks (#280) run 2-, 4- and 8-division conduction meshes through
+nine successful solves. After each solve, `query.cost` includes every live record's numeric
+field and Mesh payload, plus the new Mesh snapshot. At the eight-record limit the oldest
+record remains charged during preparation; reads and rejected solves cannot advance eviction.
+These are payload accounting checks, not estimates of allocator or serialized Model overhead.
+
 ### Loaded boundary area (Properties pressure preview)
 
 `query.set.pressureArea` uses the same boundary quadrature as pressure and traction, without
@@ -833,6 +909,11 @@ mapped geometry. The hook only recognizes uncut, axis-aligned 3D lattice boxes
 with one fully fixed end and one single-component force at the opposite end.
 Other geometries and boundary conditions explicitly report no applicable
 automatic reference; their verification belongs to a dedicated Benchmark.
+
+The retained thermal-reaction case (#280 with #120) applies 900 W/m² over 0.01 m²:
+all retained SI reaction values sum to 9 W, and each cold corner carries 2.25 W at
+2, 4 and 8 axial divisions. After the live Model changes to kW and a different mesh,
+explicit Result fields, summaries, probes and paths still use the solved watt convention.
 
 ## Cost-query memory benchmark (#122)
 

@@ -2994,6 +2994,13 @@
         "description": "Summary of a Step's Result: solver info, extremes of every field with their location,\nreactions per constraint, applied totals, solver-used omitted material assumptions, and\nwhether the Result is stale (the Model changed after it was solved). Check the reaction\nbalance and assumptions first.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -3011,9 +3018,60 @@
         "x-returns": "ResultSummary"
       },
       {
-        "description": "Catalogue of retained transient primary-field frames (default: last solved Step).\nIndex 0 is the initial state; indices count retained frames, not integration steps.\nMetadata remains available for stale Results. No nodal values are copied by this Query.",
+        "description": "Catalogue of the eight most recent successful solve instances, oldest first. Reads do\nnot extend retention. Evicted ids are unavailable; Model import/new clears records.",
         "type": "object",
         "properties": {
+          "query": {
+            "type": "string",
+            "const": "query.results"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "x-returns": "RetainedResults"
+      },
+      {
+        "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resultId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "const": "query.field"
+          }
+        },
+        "required": [
+          "query",
+          "field"
+        ],
+        "x-returns": "ResultField"
+      },
+      {
+        "description": "Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).\nIndex 0 is the initial state; indices count retained frames, not integration steps.\nMetadata remains available for stale Results. No nodal values are copied by this Query.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -3031,9 +3089,16 @@
         "x-returns": "FramesResult"
       },
       {
-        "description": "One retained transient primary field. Supply exactly one of zero-based retained index\nor sample (retained index / physical time with exact or nearest selection). Time\nselection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation\npolicy as sampled probe/path. Values are SI,\ncomponent-fastest, with three components per node, matching final FieldData: a 2D\ndisplacement has zero z; temperature occupies x with zero y/z. Defaults to the retained\nprimary field. Derived fields were not retained and are refused. Refuses result.stale.",
+        "description": "One retained primary field from a heat-transient, explicit or amplitude-driven static Step. Supply exactly one of zero-based retained index\nor sample (retained index / physical time with exact or nearest selection). Time\nselection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation\npolicy as sampled probe/path. Values are SI,\ncomponent-fastest, with three components per node, matching final FieldData: a 2D\ndisplacement has zero z; temperature occupies x with zero y/z. Defaults to the retained\nprimary field. Derived fields were not retained and are refused. Omitted resultId refuses result.stale.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -3079,9 +3144,16 @@
         "x-returns": "FrameResult"
       },
       {
-        "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nRefuses `result.stale` if the Model changed after solving; re-run `solve.run` first.",
+        "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -3131,9 +3203,16 @@
         "x-returns": "ProbeResult"
       },
       {
-        "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nRefuses `result.stale` if the Model changed after solving; re-run `solve.run` first.",
+        "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -6451,6 +6530,12 @@
       },
       {
         "$ref": "#/$defs/ResultSummary"
+      },
+      {
+        "$ref": "#/$defs/RetainedResults"
+      },
+      {
+        "$ref": "#/$defs/ResultField"
       },
       {
         "$ref": "#/$defs/FramesResult"
@@ -10313,6 +10398,10 @@
         "description": "`query.result` response.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
           "step": {
             "type": "string"
           },
@@ -10381,7 +10470,7 @@
             }
           },
           "history": {
-            "description": "One row per output time of a transient Step: when, and the range the field covered.",
+            "description": "One row per retained output time: when, and the range the field covered.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/HistoryRow"
@@ -10401,6 +10490,7 @@
           }
         },
         "required": [
+          "resultId",
           "step",
           "revision",
           "stale",
@@ -10536,7 +10626,7 @@
         ]
       },
       "HistoryRow": {
-        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
+        "description": "One retained output time in a Step's history: the extremes of the field at that instant.",
         "type": "object",
         "properties": {
           "time": {
@@ -10555,10 +10645,159 @@
           "max"
         ]
       },
+      "RetainedResults": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/RetainedResult"
+            }
+          }
+        },
+        "required": [
+          "limit",
+          "records"
+        ]
+      },
+      "RetainedResult": {
+        "description": "One immutable solve instance. Byte counts describe payloads, not allocator or peak memory.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "solvedRevision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "modelName": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "inputHash": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "nodes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "elements": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "fieldBytes": {
+            "description": "f64 arrays in final fields, modes, frequencies and retained History.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "meshBytes": {
+            "description": "Numeric coordinates, connectivity and resolved geometry Sets; excludes container overhead.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "modelJsonBytes": {
+            "description": "Serialized solved Model metadata size, not its in-memory allocation size.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "step",
+          "solvedRevision",
+          "modelName",
+          "modelHash",
+          "inputHash",
+          "stale",
+          "nodes",
+          "elements",
+          "fieldBytes",
+          "meshBytes",
+          "modelJsonBytes"
+        ]
+      },
+      "ResultField": {
+        "description": "Final scientific values are f64 SI in component-fastest entity order.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "components": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "per": {
+            "type": "string"
+          },
+          "entityCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "required": [
+          "resultId",
+          "step",
+          "field",
+          "components",
+          "per",
+          "entityCount",
+          "nodeCount",
+          "unit",
+          "values"
+        ]
+      },
       "FramesResult": {
         "description": "`query.frames` response; stored components describe the unpadded History storage.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
           "step": {
             "type": "string"
           },
@@ -10601,6 +10840,7 @@
           }
         },
         "required": [
+          "resultId",
           "step",
           "modelHash",
           "stale",
@@ -10680,6 +10920,10 @@
         "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
           "step": {
             "type": "string"
           },
@@ -10691,6 +10935,7 @@
           }
         },
         "required": [
+          "resultId",
           "step",
           "modelHash",
           "frame"
@@ -10802,6 +11047,18 @@
             "format": "uint64",
             "minimum": 0
           },
+          "residentResultBytes": {
+            "description": "Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "resultMeshBytes": {
+            "description": "Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "retainedFrames": {
             "description": "Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.",
             "type": "integer",
@@ -10859,6 +11116,8 @@
           "nnzLower",
           "bytes",
           "assemblyBytes",
+          "residentResultBytes",
+          "resultMeshBytes",
           "retainedFrames",
           "retainedBytes",
           "transientWorkBytes",
@@ -11616,6 +11875,10 @@
         "description": "`query.result` response.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
           "step": {
             "type": "string"
           },
@@ -11684,7 +11947,7 @@
             }
           },
           "history": {
-            "description": "One row per output time of a transient Step: when, and the range the field covered.",
+            "description": "One row per retained output time: when, and the range the field covered.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/HistoryRow"
@@ -11704,6 +11967,7 @@
           }
         },
         "required": [
+          "resultId",
           "step",
           "revision",
           "stale",
@@ -11856,7 +12120,7 @@
         ]
       },
       "HistoryRow": {
-        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
+        "description": "One retained output time in a Step's history: the extremes of the field at that instant.",
         "type": "object",
         "properties": {
           "time": {

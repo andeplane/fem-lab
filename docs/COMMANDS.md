@@ -2718,6 +2718,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.convert](#queries-query-convert)
 - [query.cost](#queries-query-cost)
 - [query.definition](#queries-query-definition)
+- [query.field](#queries-query-field)
 - [query.frame](#queries-query-frame)
 - [query.frames](#queries-query-frames)
 - [query.journal](#queries-query-journal)
@@ -2730,6 +2731,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.probe](#queries-query-probe)
 - [query.report](#queries-query-report)
 - [query.result](#queries-query-result)
+- [query.results](#queries-query-results)
 - [query.script](#queries-query-script)
 - [query.set](#queries-query-set)
 
@@ -2795,22 +2797,40 @@ Returns: `ObjectDefinition`.
 | name | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.definition"}</code> |  |
 
+<a id="queries-query-field"></a>
+
+### query.field
+
+A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
+Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
+omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
+
+Returns: `ResultField`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| step | no | <code>{"type":["string","null"]}</code> |  |
+| resultId | no | <code>{"type":["string","null"]}</code> |  |
+| field | yes | <code>{"type":"string"}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.field"}</code> |  |
+
 <a id="queries-query-frame"></a>
 
 ### query.frame
 
-One retained transient primary field. Supply exactly one of zero-based retained index
+One retained primary field from a heat-transient, explicit or amplitude-driven static Step. Supply exactly one of zero-based retained index
 or sample (retained index / physical time with exact or nearest selection). Time
 selection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation
 policy as sampled probe/path. Values are SI,
 component-fastest, with three components per node, matching final FieldData: a 2D
 displacement has zero z; temperature occupies x with zero y/z. Defaults to the retained
-primary field. Derived fields were not retained and are refused. Refuses result.stale.
+primary field. Derived fields were not retained and are refused. Omitted resultId refuses result.stale.
 
 Returns: `FrameResult`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | index | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
 | sample | no | <code>{"anyOf":[{"$ref":"#/$defs/FrameSample"},{"type":"null"}]}</code> |  |
@@ -2821,7 +2841,7 @@ Returns: `FrameResult`.
 
 ### query.frames
 
-Catalogue of retained transient primary-field frames (default: last solved Step).
+Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).
 Index 0 is the initial state; indices count retained frames, not integration steps.
 Metadata remains available for stale Results. No nodal values are copied by this Query.
 
@@ -2829,6 +2849,7 @@ Returns: `FramesResult`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.frames"}</code> |  |
 
@@ -2927,12 +2948,13 @@ Returns: `ObjectList`.
 
 A field sampled at `n` points along the line from `from` to `to`, for a line plot.
 Optional sample selects a retained primary-field frame; omitted means the final field.
-Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
+Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
 
 Returns: `PathResult`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | field | yes | <code>{"$ref":"#/$defs/Field"}</code> |  |
 | component | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
@@ -2949,12 +2971,13 @@ Returns: `PathResult`.
 A field value interpolated at a point (default: the last solved Step). Component
 indices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.
 Optional sample selects a retained primary-field frame; omitted means the final field.
-Refuses `result.stale` if the Model changed after solving; re-run `solve.run` first.
+Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
 
 Returns: `ProbeResult`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | field | yes | <code>{"$ref":"#/$defs/Field"}</code> |  |
 | component | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
@@ -2996,8 +3019,22 @@ Returns: `ResultSummary`.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
+| resultId | no | <code>{"type":["string","null"]}</code> | Omit for the current per-Step selection; an explicit id uses its solved context. |
 | step | no | <code>{"type":["string","null"]}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.result"}</code> |  |
+
+<a id="queries-query-results"></a>
+
+### query.results
+
+Catalogue of the eight most recent successful solve instances, oldest first. Reads do
+not extend retention. Evicted ids are unavailable; Model import/new clears records.
+
+Returns: `RetainedResults`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| query | yes | <code>{"type":"string","const":"query.results"}</code> |  |
 
 <a id="queries-query-script"></a>
 

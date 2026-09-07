@@ -42,6 +42,7 @@ const MODEL: ModelSummary = {
 };
 
 const RESULT: ResultSummary = {
+  resultId: 'result-1',
   reactionQuantity: 'force',
   step: 'static',
   revision: 10,
@@ -58,6 +59,7 @@ const RESULT: ResultSummary = {
   appliedTotal: [kN(0), kN(0), kN(-1)],
   balance: 0,
 };
+
 
 describe('the solve state machine', () => {
   const base = { solving: null, result: null, lastError: null } as Parameters<typeof stageOf>[0];
@@ -603,7 +605,7 @@ it.each([null, false] as const)('shows honest cost bounds and %s feasibility in 
   const { waitForText } = await import('./wait-for');
   const root = document.createElement('div');
   const cost: CostEstimate = {
-    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000,
+    dofs: 36, nnzLower: 576, nnz: 1296, bytes: 1_728_000_000, assemblyBytes: 1_727_000_000, residentResultBytes: 0, resultMeshBytes: 0,
     retainedFrames: 3, retainedBytes: 900_000, transientWorkBytes: 50_000, transportStagingBytes: 864,
     wasmTransportStagingBytes: 1728, wasmTransportStagingComplete: false,
     budgetBytes: 1_610_612_736,

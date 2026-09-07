@@ -59,7 +59,10 @@ fn changing_the_model_name_preserves_results_history_and_replay_identity() {
     ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
     let before = e.export_file();
     let before_hash = e.model_hash();
-    let QueryResult::Result(solved) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
+    let QueryResult::Result(solved) = e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap()
+    else {
+        panic!()
+    };
     let displacement = e.field(Some("static"), Field::Displacement).expect("displacement before rename").clone();
     ok(&mut e, r#"{"cmd":"model.setName","name":"renamed cantilever"}"#);
     let after = e.export_file();
@@ -68,7 +71,8 @@ fn changing_the_model_name_preserves_results_history_and_replay_identity() {
     assert_eq!(after.model.bodies, before.model.bodies);
     assert_eq!(after.journal.entries.len(), before.journal.entries.len() + 1);
     assert_eq!(&after.journal.entries[..before.journal.entries.len()], &before.journal.entries);
-    let QueryResult::Result(renamed) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else {
+    let QueryResult::Result(renamed) = e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap()
+    else {
         panic!()
     };
     assert!(!renamed.stale);
@@ -77,7 +81,10 @@ fn changing_the_model_name_preserves_results_history_and_replay_identity() {
     assert_eq!(renamed.reactions, solved.reactions);
     ok(&mut e, r#"{"cmd":"journal.undo"}"#);
     assert_eq!(e.export_file(), before);
-    let QueryResult::Result(undone) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
+    let QueryResult::Result(undone) = e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap()
+    else {
+        panic!()
+    };
     assert!(!undone.stale);
     ok(&mut e, r#"{"cmd":"journal.redo"}"#);
     assert_eq!(e.export_file(), after);
@@ -91,7 +98,10 @@ fn changing_the_model_name_preserves_results_history_and_replay_identity() {
     // Renaming must never turn an already stale physics result current.
     ok(&mut e, r#"{"cmd":"load.pressure","name":"new-pressure","on":"beam.zmax","value":"1 Pa"}"#);
     ok(&mut e, r#"{"cmd":"model.setName","name":"still stale"}"#);
-    let QueryResult::Result(stale) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
+    let QueryResult::Result(stale) = e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap()
+    else {
+        panic!()
+    };
     assert!(stale.stale);
 }
 
@@ -336,8 +346,9 @@ fn transactional_dispatch_and_structured_errors() {
     assert_eq!(run(&mut e, r#"{"cmd":"nonsense"}"#).unwrap_err().code, ErrorCode::Schema);
     // every Result Query needs a Result, and says so rather than guessing
     for q in [
-        Query::Result { step: None },
+        Query::Result { result_id: None, step: None },
         Query::Probe {
+            result_id: None,
             sample: None,
             step: None,
             field: Field::VonMises,
@@ -345,6 +356,7 @@ fn transactional_dispatch_and_structured_errors() {
             at: [Q::text("0 m"), Q::text("0 m"), Q::text("0 m")],
         },
         Query::Path {
+            result_id: None,
             sample: None,
             step: None,
             field: Field::VonMises,
@@ -753,7 +765,7 @@ fn skipped_replay_keeps_every_undo_and_redo_aligned_with_the_journal() {
     let entries = source.journal().entries.clone();
     let mut replayed = engine();
     pollster::block_on(replayed.replay(&entries, true, true)).unwrap();
-    assert_eq!(replayed.query(Query::Result { step: None }).unwrap_err().code, ErrorCode::NotFound);
+    assert_eq!(replayed.query(Query::Result { step: None, result_id: None }).unwrap_err().code, ErrorCode::NotFound);
     assert_replay_prefix(&mut replayed, &entries);
     ok(&mut replayed, r#"{"cmd":"journal.undo"}"#);
     assert_eq!(replayed.model().steps.len(), 1, "undoing the skipped solve must keep step.add's Step");
@@ -768,7 +780,7 @@ fn skipped_replay_keeps_every_undo_and_redo_aligned_with_the_journal() {
         assert_replay_prefix(&mut replayed, &entries[..end]);
     }
     assert!(!replayed.can_redo());
-    assert_eq!(replayed.query(Query::Result { step: None }).unwrap_err().code, ErrorCode::NotFound);
+    assert_eq!(replayed.query(Query::Result { step: None, result_id: None }).unwrap_err().code, ErrorCode::NotFound);
 }
 
 #[test]
@@ -790,7 +802,10 @@ fn skipped_studies_preserve_their_mesh_mutation_and_history() {
         assert_replay_prefix(&mut replayed, &entries);
         let expected_elements = if restore { 2 } else { 16 };
         assert_eq!(replayed.mesh().unwrap().mesh.n_elems(), expected_elements, "halving h doubles each division count");
-        assert_eq!(replayed.query(Query::Result { step: None }).unwrap_err().code, ErrorCode::NotFound);
+        assert_eq!(
+            replayed.query(Query::Result { step: None, result_id: None }).unwrap_err().code,
+            ErrorCode::NotFound
+        );
         ok(&mut replayed, r#"{"cmd":"journal.undo"}"#);
         assert_eq!(replayed.model(), &original);
         assert_replay_prefix(&mut replayed, &entries[..entries.len() - 1]);
@@ -832,7 +847,7 @@ fn empty_replay_clears_existing_mesh_and_history() {
     let mut fresh = engine();
     assert_eq!(e.export_file(), fresh.export_file());
     assert!(!e.can_undo() && !e.can_redo());
-    assert_eq!(e.query(Query::Result { step: None }).unwrap_err().code, ErrorCode::NotFound);
+    assert_eq!(e.query(Query::Result { step: None, result_id: None }).unwrap_err().code, ErrorCode::NotFound);
     assert_eq!(e.query(Query::Mesh {}).unwrap_err(), fresh.query(Query::Mesh {}).unwrap_err());
 }
 
@@ -2226,7 +2241,9 @@ fn solved_cantilever(e: &mut Engine, mesh: &str) {
 }
 
 fn result(e: &mut Engine) -> femlab_engine::query::ResultSummary {
-    let QueryResult::Result(r) = e.query(Query::Result { step: None }).unwrap_or_else(|e| panic!("{e:?}")) else {
+    let QueryResult::Result(r) =
+        e.query(Query::Result { result_id: None, step: None }).unwrap_or_else(|e| panic!("{e:?}"))
+    else {
         panic!("query.result returns a ResultSummary")
     };
     r
@@ -2234,6 +2251,7 @@ fn result(e: &mut Engine) -> femlab_engine::query::ResultSummary {
 
 fn tip_uz(e: &mut Engine) -> f64 {
     let q = Query::Probe {
+        result_id: None,
         sample: None,
         step: None,
         field: Field::Displacement,
@@ -2353,9 +2371,12 @@ fn a_solve_refuses_a_model_it_cannot_answer_for() {
     assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"nope"}"#), ErrorCode::NotFound);
     // a Result Query before any solve, and for a Step that has none
     let mut fresh = engine();
-    assert_eq!(fresh.query(Query::Result { step: None }).expect_err("nothing solved").code, ErrorCode::NotFound);
     assert_eq!(
-        e.query(Query::Result { step: Some("loose".into()) }).expect_err("never solved").code,
+        fresh.query(Query::Result { result_id: None, step: None }).expect_err("nothing solved").code,
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        e.query(Query::Result { result_id: None, step: Some("loose".into()) }).expect_err("never solved").code,
         ErrorCode::NotFound
     );
 }
@@ -2389,14 +2410,20 @@ fn a_result_goes_stale_when_the_model_changes_and_undo_orphans_it() {
     // undoing past the solve orphans the Result: it survives, and says it is stale
     ok(&mut e, r#"{"cmd":"journal.undo","steps":3}"#);
     // the Step is gone from the Model, so only its name reaches the Result it orphaned
-    assert_eq!(e.query(Query::Result { step: None }).expect_err("no Step to default to").code, ErrorCode::NotFound);
-    let QueryResult::Result(r) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
+    assert_eq!(
+        e.query(Query::Result { result_id: None, step: None }).expect_err("no Step to default to").code,
+        ErrorCode::NotFound
+    );
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: Some("static".into()) }).unwrap()
+    else {
+        panic!()
+    };
     assert!(r.stale, "the Step it belongs to is gone");
     assert_eq!(r.step, "static");
     assert_eq!(r.revision, second_solve);
     // model.new throws Results away entirely
     ok(&mut e, r#"{"cmd":"model.new","name":"other"}"#);
-    assert_eq!(e.query(Query::Result { step: None }).expect_err("cleared").code, ErrorCode::NotFound);
+    assert_eq!(e.query(Query::Result { result_id: None, step: None }).expect_err("cleared").code, ErrorCode::NotFound);
 }
 
 #[test]
@@ -2530,6 +2557,7 @@ fn probing_and_walking_a_solved_field() {
     solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
     // the magnitude when no component is named
     let q = Query::Probe {
+        result_id: None,
         sample: None,
         step: Some("static".into()),
         field: Field::Displacement,
@@ -2540,6 +2568,7 @@ fn probing_and_walking_a_solved_field() {
     assert!(p.value.value > 0.0, "a magnitude is positive: {}", p.value.value);
     // off the mesh
     let off = Query::Probe {
+        result_id: None,
         sample: None,
         step: None,
         field: Field::Displacement,
@@ -2549,6 +2578,7 @@ fn probing_and_walking_a_solved_field() {
     assert_eq!(e.query(off).expect_err("outside").code, ErrorCode::NotFound);
     // an unaveraged field is not nodal, so it cannot be sampled at a point
     let per_elem = Query::Probe {
+        result_id: None,
         sample: None,
         step: None,
         field: Field::StressUnaveraged,
@@ -2558,6 +2588,7 @@ fn probing_and_walking_a_solved_field() {
     assert_eq!(e.query(per_elem).expect_err("per element node").code, ErrorCode::Unsupported);
     // a path down the axis rises monotonically to the tip
     let path = Query::Path {
+        result_id: None,
         sample: None,
         step: None,
         field: Field::Displacement,
@@ -2573,6 +2604,7 @@ fn probing_and_walking_a_solved_field() {
     assert!(v.windows(2).all(|w| w[1] < w[0]), "{v:?}");
     // a path that misses the mesh reports the gaps
     let miss = Query::Path {
+        result_id: None,
         sample: None,
         step: None,
         field: Field::Displacement,
@@ -2586,6 +2618,7 @@ fn probing_and_walking_a_solved_field() {
     // re-meshing under the Result makes it unsamplable, and says why
     ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"25 mm"},"order":1}"#);
     let q = Query::Probe {
+        result_id: None,
         sample: None,
         step: None,
         field: Field::Displacement,
@@ -2689,7 +2722,7 @@ fn the_cost_of_a_step_is_the_sparsity_of_its_mesh() {
     assert!(c.bytes > c.nnz * 12 + c.dofs * 32);
     assert_eq!(c.nnz_lower, c.nnz);
     assert_eq!((c.retained_frames, c.retained_bytes, c.transient_work_bytes, c.transport_staging_bytes), (0, 0, 0, 0));
-    assert_eq!(c.bytes, c.assembly_bytes);
+    assert_eq!(c.bytes, c.assembly_bytes + c.resident_result_bytes + c.result_mesh_bytes);
     assert_eq!(c.feasible, None);
     assert_eq!(c.budget_bytes, 1_610_612_736);
     assert!(c.note.starts_with("cpu-direct"), "{}", c.note);
@@ -2710,7 +2743,14 @@ fn the_cost_of_a_step_is_the_sparsity_of_its_mesh() {
             assert_eq!(heat.retained_bytes, 11 * (1025 + 1) * 8);
             assert_eq!(heat.transient_work_bytes, 1025 * 5 * 8);
             assert_eq!(heat.transport_staging_bytes, 1025 * 3 * 8);
-            assert_eq!(heat.bytes, heat.assembly_bytes + heat.retained_bytes + heat.transient_work_bytes);
+            assert_eq!(
+                heat.bytes,
+                heat.assembly_bytes
+                    + heat.retained_bytes
+                    + heat.transient_work_bytes
+                    + heat.resident_result_bytes
+                    + heat.result_mesh_bytes
+            );
         } else {
             assert_eq!(heat.retained_frames, 0);
         }
@@ -2912,6 +2952,7 @@ fn a_host_reads_a_field_straight_off_the_result() {
     let before = e.revision();
     let unavailable = e
         .query(Query::Probe {
+            result_id: None,
             sample: None,
             step: None,
             field: Field::Temperature,
@@ -2939,7 +2980,10 @@ fn a_cancelled_solve_changes_nothing() {
     let err = pollster::block_on(e.dispatch(cmd, &mut stop)).expect_err("cancelled");
     assert_eq!(err.code, ErrorCode::Cancelled);
     assert_eq!(e.revision(), before, "a cancelled Command is not journaled");
-    assert_eq!(e.query(Query::Result { step: None }).expect_err("nothing stored").code, ErrorCode::NotFound);
+    assert_eq!(
+        e.query(Query::Result { result_id: None, step: None }).expect_err("nothing stored").code,
+        ErrorCode::NotFound
+    );
 }
 
 #[test]
@@ -3107,7 +3151,7 @@ fn conflicting_temperature_loads_report_both_names_and_the_body() {
         assert_eq!(error.where_.as_deref(), Some("step 's'"));
         assert!(error.suggestion.as_deref().unwrap().contains("load.temperature"));
         assert_eq!(e.export_file(), before);
-        assert_eq!(e.query(Query::Result { step: None }).unwrap_err().code, ErrorCode::NotFound);
+        assert_eq!(e.query(Query::Result { step: None, result_id: None }).unwrap_err().code, ErrorCode::NotFound);
     }
 }
 
@@ -3216,6 +3260,7 @@ fn result_queries_refuse_what_they_cannot_answer() {
     let mut bad = |q: Query| e.query(q).expect_err("a mass is not a length").code;
     assert_eq!(
         bad(Query::Probe {
+            result_id: None,
             sample: None,
             step: None,
             field: Field::Displacement,
@@ -3225,6 +3270,7 @@ fn result_queries_refuse_what_they_cannot_answer() {
         ErrorCode::UnitDimension
     );
     let line = |from: [Q<femlab_engine::units::Length>; 3], to: [Q<femlab_engine::units::Length>; 3]| Query::Path {
+        result_id: None,
         sample: None,
         step: None,
         field: Field::Displacement,
@@ -3240,6 +3286,7 @@ fn result_queries_refuse_what_they_cannot_answer() {
     // and a Model that stops meshing under a Result
     ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
     let q = Query::Probe {
+        result_id: None,
         sample: None,
         step: None,
         field: Field::Displacement,
@@ -3266,7 +3313,8 @@ fn heat_bar(e: &mut Engine) {
 }
 
 fn result_of(e: &mut Engine, step: Option<&str>) -> femlab_engine::query::ResultSummary {
-    let QueryResult::Result(r) = e.query(Query::Result { step: step.map(str::to_string) }).unwrap() else {
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: step.map(str::to_string) }).unwrap()
+    else {
         panic!("a Result summary")
     };
     r
@@ -3274,6 +3322,7 @@ fn result_of(e: &mut Engine, step: Option<&str>) -> femlab_engine::query::Result
 
 fn probe_at(e: &mut Engine, step: &str, field: Field, component: Option<u8>, at: [&str; 3]) -> f64 {
     let q = Query::Probe {
+        result_id: None,
         sample: None,
         step: Some(step.to_string()),
         field,
@@ -3384,6 +3433,7 @@ fn thermal_reactions_keep_power_units_in_every_result_view() {
                 let probe = e
                     .query(Query::Probe {
                         step: None,
+                        result_id: None,
                         field: Field::Reaction,
                         component: Some(0),
                         sample: None,
@@ -3396,6 +3446,7 @@ fn thermal_reactions_keep_power_units_in_every_result_view() {
                 let path = e
                     .query(Query::Path {
                         step: None,
+                        result_id: None,
                         field: Field::Reaction,
                         component: Some(0),
                         sample: None,
@@ -4167,6 +4218,7 @@ fn the_heat_commands_validate_their_names_sets_and_units() {
 /// One component of a nodal field at a point of the last solved Step, in display units.
 fn probe_value(e: &mut Engine, field: Field, component: u8, at: [&str; 3]) -> f64 {
     let q = Query::Probe {
+        result_id: None,
         sample: None,
         step: None,
         field,
@@ -4801,7 +4853,10 @@ fn a_convergence_study_reports_a_rate_and_restores_the_mesh() {
     // the Model's own mesh settings are back, and no Result was left behind
     let QueryResult::Mesh(m) = e.query(Query::Mesh {}).expect("meshed") else { panic!("a MeshSummary") };
     assert_eq!(m.nodes, 1025);
-    assert_eq!(e.query(Query::Result { step: None }).expect_err("no Result").code, ErrorCode::NotFound);
+    assert_eq!(
+        e.query(Query::Result { result_id: None, step: None }).expect_err("no Result").code,
+        ErrorCode::NotFound
+    );
 }
 
 /// A mapped block counts divisions rather than measuring elements, so the study scales its `n`
@@ -6902,6 +6957,9 @@ fn frame_payload_time_selection_uses_the_same_resolver_as_sampled_probes() {
     assert_eq!(e.journal(), &before);
 }
 
+#[path = "registry/retained_cases.rs"]
+mod retained_cases;
+
 const IMPLICIT_TEMPERATURE: &str =
     r#"{"cmd":"load.temperature","name":"heated","bodies":["sheet"],"value":"343.15 K","reference":"293.15 K"}"#;
 const IMPLICIT_SOURCE: &str = r#"{"cmd":"load.heatSource","name":"power","bodies":["sheet"],"q":"100 W/m^3"}"#;
@@ -7429,7 +7487,7 @@ fn a_step_that_lists_a_tie_solves_the_assembly_as_one_part() {
         r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root","symy","symz","weld"],"loads":["pull"]}"#,
     );
     ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
-    let QueryResult::Result(r) = e.query(Query::Result { step: None }).unwrap() else { panic!() };
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: None }).unwrap() else { panic!() };
     assert!(r.balance.abs() < 1e-9, "the reactions balance: {}", r.balance);
     // Three supports report; the tie is not one of them, however much force it carries.
     assert_eq!(r.reactions.len(), 3);
@@ -7450,7 +7508,7 @@ fn a_step_that_lists_a_tie_solves_the_assembly_as_one_part() {
     // solve runs and says so, in the Result the user reads.
     ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"],"at":["1.00005 m","0 m","0 m"]}"#);
     ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
-    let QueryResult::Result(r) = e.query(Query::Result { step: None }).unwrap() else { panic!() };
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: None }).unwrap() else { panic!() };
     assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
     assert_eq!(r.warnings[0].code, "contact.gap");
     assert_eq!(r.warnings[0].where_.as_deref(), Some("contact 'weld'"));
@@ -7606,7 +7664,10 @@ fn radiating_heat_with_unrepresentable_temperature(procedure: &str) {
     assert_eq!(error.where_.as_deref(), Some("solve"));
     assert!(error.cause.contains("relative residual"));
     assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
-    assert_eq!(e.query(Query::Result { step: Some("heat".into()) }).unwrap_err().code, ErrorCode::NotFound);
+    assert_eq!(
+        e.query(Query::Result { result_id: None, step: Some("heat".into()) }).unwrap_err().code,
+        ErrorCode::NotFound
+    );
 }
 
 #[test]

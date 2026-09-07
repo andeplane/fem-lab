@@ -1539,14 +1539,35 @@ export type Query =
       query: "query.set";
     }
   | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       query: "query.result";
     }
   | {
+      query: "query.results";
+    }
+  | {
+      step?: string | null;
+      resultId?: string | null;
+      field: string;
+      query: "query.field";
+    }
+  | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       query: "query.frames";
     }
   | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       index?: number | null;
       sample?: FrameSample | null;
@@ -1554,6 +1575,10 @@ export type Query =
       query: "query.frame";
     }
   | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       field: Field;
       component?: number | null;
@@ -1590,6 +1615,10 @@ export type Query =
       query: "query.probe";
     }
   | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       field: Field;
       component?: number | null;
@@ -2653,6 +2682,8 @@ export type QueryResult =
   | MeshSummary
   | SetInfo
   | ResultSummary
+  | RetainedResults
+  | ResultField
   | FramesResult
   | FrameResult
   | ProbeResult
@@ -3603,6 +3634,10 @@ export interface SetInfo {
  * `query.result` response.
  */
 export interface ResultSummary {
+  /**
+   * Opaque identity scoped to the Engine instance that produced this solve.
+   */
+  resultId: string;
   step: string;
   /**
    * The Journal revision after the Command that produced this Result. It stays fixed while
@@ -3638,7 +3673,7 @@ export interface ResultSummary {
    */
   frequencies?: Valued[];
   /**
-   * One row per output time of a transient Step: when, and the range the field covered.
+   * One row per retained output time: when, and the range the field covered.
    */
   history?: HistoryRow[];
   /**
@@ -3696,17 +3731,65 @@ export interface ResultAssumption {
   cause: string;
 }
 /**
- * One time of a transient Step's history: the extremes of the field at that instant.
+ * One retained output time in a Step's history: the extremes of the field at that instant.
  */
 export interface HistoryRow {
   time: Valued;
   min: Valued;
   max: Valued;
 }
+export interface RetainedResults {
+  limit: number;
+  records: RetainedResult[];
+}
+/**
+ * One immutable solve instance. Byte counts describe payloads, not allocator or peak memory.
+ */
+export interface RetainedResult {
+  id: string;
+  step: string;
+  solvedRevision: number;
+  modelName: string;
+  modelHash: string;
+  inputHash: string;
+  stale: boolean;
+  nodes: number;
+  elements: number;
+  /**
+   * f64 arrays in final fields, modes, frequencies and retained History.
+   */
+  fieldBytes: number;
+  /**
+   * Numeric coordinates, connectivity and resolved geometry Sets; excludes container overhead.
+   */
+  meshBytes: number;
+  /**
+   * Serialized solved Model metadata size, not its in-memory allocation size.
+   */
+  modelJsonBytes: number;
+}
+/**
+ * Final scientific values are f64 SI in component-fastest entity order.
+ */
+export interface ResultField {
+  resultId: string;
+  step: string;
+  field: string;
+  components: number;
+  per: string;
+  entityCount: number;
+  nodeCount: number;
+  unit: string;
+  values: number[];
+}
 /**
  * `query.frames` response; stored components describe the unpadded History storage.
  */
 export interface FramesResult {
+  /**
+   * Opaque identity scoped to the Engine instance that produced this solve.
+   */
+  resultId: string;
   step: string;
   modelHash: string;
   stale: boolean;
@@ -3751,6 +3834,10 @@ export interface FrameResult {
  * counter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.
  */
 export interface ResolvedFrame {
+  /**
+   * Opaque identity scoped to the Engine instance that produced this solve.
+   */
+  resultId: string;
   step: string;
   modelHash: string;
   frame: FrameStamp;
@@ -3797,6 +3884,14 @@ export interface CostEstimate {
    * Mandatory assembly storage before transient-specific values are added.
    */
   assemblyBytes: number;
+  /**
+   * Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.
+   */
+  residentResultBytes: number;
+  /**
+   * Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.
+   */
+  resultMeshBytes: number;
   /**
    * Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
    */
