@@ -195,6 +195,8 @@ between Bodies that share no element, which query.cost does not count.
 Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a
 2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape
 (`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.
+Replacing an existing Body preserves its material, section and cuts, and validates the
+resulting shape before changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -208,7 +210,9 @@ Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch
 
 Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its
 six faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used
-directly in constraints and loads. Re-issuing with an existing name replaces the body.
+directly in constraints and loads. Re-issuing with an existing name replaces the Body
+while preserving its material, section and cuts; incompatible or consuming cuts reject
+the replacement without changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -230,6 +234,7 @@ when the Mesh is built. A member carries axial force only, so give the Body a Se
 with section.assign as well as a Material, and hold enough joints that none of them can
 drift sideways — an under-braced truss is singular and fails in the solver, not here.
 Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
+Replacing a Body that has cuts therefore fails without changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -274,7 +279,9 @@ file changes, so for anything you will re-import, name the faces you need with
 geometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every
 remesh and survive a re-import. `simplifyBelow` collapses features smaller than the
 given length, which is the honest half of defeaturing; there is no fillet, chamfer or
-shell. Give `sha256` to have the engine verify the data is the file you meant.
+shell. Re-import preserves the Body's material, section and cuts, and validates the
+resulting shape before changing the Model. Give `sha256` to have the engine verify the
+data is the file you meant.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -3687,7 +3694,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the body.",
+      "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the Body\nwhile preserving its material, section and cuts; incompatible or consuming cuts reject\nthe replacement without changing the Model.",
       "type": "object",
       "properties": {
         "name": {
@@ -3763,7 +3770,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.",
+      "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.\nReplacing an existing Body preserves its material, section and cuts, and validates the\nresulting shape before changing the Model.",
       "type": "object",
       "properties": {
         "name": {
@@ -3784,7 +3791,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.",
+      "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.\nReplacing a Body that has cuts therefore fails without changing the Model.",
       "type": "object",
       "properties": {
         "name": {
@@ -3862,7 +3869,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Give `sha256` to have the engine verify the data is the file you meant.",
+      "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Re-import preserves the Body's material, section and cuts, and validates the\nresulting shape before changing the Model. Give `sha256` to have the engine verify the\ndata is the file you meant.",
       "type": "object",
       "properties": {
         "name": {
