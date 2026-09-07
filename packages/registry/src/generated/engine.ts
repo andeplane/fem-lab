@@ -1420,7 +1420,8 @@ export type Procedure = "static" | "static-nonlinear" | "modal" | "heat-steady" 
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
- * display units.
+ * display units. Transient thermal reactions include stored energy and refer to the last
+ * θ-method integration stage, not an endpoint steady-state residual.
  */
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
@@ -1570,6 +1571,12 @@ export type Query =
       resultId?: string | null;
       field: string;
       query: "query.field";
+    }
+  | {
+      left: DifferenceOperand;
+      right: DifferenceOperand;
+      onto: DifferenceOnto;
+      query: "query.difference";
     }
   | {
       /**
@@ -1736,6 +1743,10 @@ export type Query =
   | {
       query: "query.capabilities";
     };
+/**
+ * The retained Result whose Mesh receives the difference values.
+ */
+export type DifferenceOnto = "left" | "right";
 /**
  * How to select retained output; there is no temporal interpolation or extrapolation.
  */
@@ -2716,6 +2727,7 @@ export type QueryResult =
   | ResultSummary
   | RetainedResults
   | ResultField
+  | DifferenceField
   | FramesResult
   | FrameResult
   | ProbeResult
@@ -3412,6 +3424,14 @@ export interface RefineBoxSpec {
       };
 }
 /**
+ * One explicit retained field used by `query.difference`.
+ */
+export interface DifferenceOperand {
+  resultId: string;
+  field: string;
+  component?: number | null;
+}
+/**
  * Append-only list of applied Commands (undo truncates it).
  */
 export interface Journal {
@@ -3688,12 +3708,19 @@ export interface ResultSummary {
   reactionQuantity: "force" | "power";
   reactions: ReactionRow[];
   /**
-   * Applied force vector or thermal power in component 0 (remaining components zero).
+   * Applied force vector or net thermal power (flux/source plus incoming minus outgoing
+   * convection and radiation) in component 0, with remaining thermal components zero.
    *
    * @minItems 3
    * @maxItems 3
    */
   appliedTotal: [Valued, Valued, Valued];
+  /**
+   * Thermal stored-energy rate in power display units (zero for steady heat). Transient
+   * power totals/reactions use the last θ-method integration stage; the temperature field
+   * itself is at the final time. Positive reactions remove heat: applied − removed = storage.
+   */
+  storagePower?: Valued | null;
   /**
    * Optional material properties the successful procedure actually read as zero because the
    * Material omitted them. Empty when every solver-used property was explicit.
@@ -3709,9 +3736,10 @@ export interface ResultSummary {
    */
   history?: HistoryRow[];
   /**
-   * |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
-   * by a prescribed displacement — where both totals are zero — still reports a meaningful
-   * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
+   * Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
+   * conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
+   * Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
+   * Zero is perfect balance; values above 1e-9 fail the report's conservation check.
    */
   balance: number;
   /**
@@ -3813,6 +3841,39 @@ export interface ResultField {
   nodeCount: number;
   unit: string;
   values: number[];
+}
+/**
+ * `query.difference` response. Values are retained f64 SI, component-fastest by target node.
+ */
+export interface DifferenceField {
+  left: ResolvedDifferenceOperand;
+  right: ResolvedDifferenceOperand;
+  comparisonResultId: string;
+  components: number;
+  nodeCount: number;
+  unit: string;
+  values: (number | null)[];
+  interpolated: boolean;
+  coverage: DifferenceCoverage;
+  warnings: Warning[];
+}
+/**
+ * The resolved identity and layout of one difference operand.
+ */
+export interface ResolvedDifferenceOperand {
+  resultId: string;
+  step: string;
+  field: string;
+  component?: number | null;
+  sourceComponents: number;
+}
+/**
+ * Nodewise coverage of the selected comparison Mesh by the other Mesh.
+ */
+export interface DifferenceCoverage {
+  insideNodes: number;
+  totalNodes: number;
+  outsideNodes: number[];
 }
 /**
  * `query.frames` response; stored components describe the unpadded History storage.

@@ -726,6 +726,9 @@ requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
 `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
 on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
 Step that is linear.
+Heat Results report net applied power, positive removed heat and stored-energy rate;
+transient powers belong to the last θ-method integration stage (radiation uses weighted
+endpoint fluxes), while temperature fields belong to its endpoint.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -767,8 +770,9 @@ Step names it in `after`; re-issue that dependent Step without the reference fir
 
 ### step.reorder
 
-Set the run order of Steps; `order` must list every Step name exactly once. Steps run in
-this order and a later Step may inherit state (a temperature field) from an earlier one.
+Set the run order of Steps; `order` must list every Step name exactly once and keep each
+Step after the prerequisite named by its `after` field. Steps run in this order and a
+later Step may inherit state (a temperature field) from an earlier one.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -1244,7 +1248,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
   "type": "string",
   "enum": [
     "displacement",
@@ -2729,6 +2733,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.convert](#queries-query-convert)
 - [query.cost](#queries-query-cost)
 - [query.definition](#queries-query-definition)
+- [query.difference](#queries-query-difference)
 - [query.field](#queries-query-field)
 - [query.frame](#queries-query-frame)
 - [query.frames](#queries-query-frames)
@@ -2807,6 +2812,24 @@ Returns: `ObjectDefinition`.
 | kind | yes | <code>{"$ref":"#/$defs/ObjectKind"}</code> |  |
 | name | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.definition"}</code> |  |
+
+<a id="queries-query-difference"></a>
+
+### query.difference
+
+Subtract two explicitly retained nodal fields as `left - right` on either Result's
+Mesh. Unequal meshes use finite-element interpolation and report uncovered nodes as
+null values; nonfinite arithmetic is a structured error. No current Result, display
+conversion, or node-number pairing is implied.
+
+Returns: `DifferenceField`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| left | yes | <code>{"$ref":"#/$defs/DifferenceOperand"}</code> |  |
+| right | yes | <code>{"$ref":"#/$defs/DifferenceOperand"}</code> |  |
+| onto | yes | <code>{"$ref":"#/$defs/DifferenceOnto"}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.difference"}</code> |  |
 
 <a id="queries-query-field"></a>
 
@@ -4175,7 +4198,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
       "type": "object",
       "properties": {
         "name": {
@@ -4356,7 +4379,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+      "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
       "type": "object",
       "properties": {
         "order": {
@@ -4661,6 +4684,55 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>DifferenceOnto</summary>
+
+```json
+{
+  "description": "The retained Result whose Mesh receives the difference values.",
+  "type": "string",
+  "enum": [
+    "left",
+    "right"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>DifferenceOperand</summary>
+
+```json
+{
+  "description": "One explicit retained field used by `query.difference`.",
+  "type": "object",
+  "properties": {
+    "resultId": {
+      "type": "string"
+    },
+    "field": {
+      "type": "string"
+    },
+    "component": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255
+    }
+  },
+  "required": [
+    "resultId",
+    "field"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>Dof</summary>
 
 ```json
@@ -4897,7 +4969,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 
 ```json
 {
-  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units.",
+  "description": "Result fields. Reaction is support force in N for structural Results and removed heat\npower in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model\ndisplay units. Transient thermal reactions include stored energy and refer to the last\nθ-method integration stage, not an endpoint steady-state residual.",
   "type": "string",
   "enum": [
     "displacement",

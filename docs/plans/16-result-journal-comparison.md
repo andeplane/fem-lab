@@ -77,7 +77,16 @@ undo/redo or caches.
 successful explicit open/save and exposes current-versus-saved or imported-file comparison through
 the host registry and UI. Autosave and failed I/O do not establish that baseline. The second Model
 is parsed for comparison without replacing the open Model. The Journal and assistant views render
-the ordered changes so a colleague can review what was done step by step.
+the ordered changes so a colleague can review what was done step by step. An imported baseline
+stays selected until the next successful explicit save/open or new Model; otherwise the saved baseline is
+selected. `query.journalComparison` recomputes against that selected baseline and returns `null`
+when no baseline exists or a newer request/state supersedes the reply. Comparison replies cannot
+replace a newer current Journal or baseline selection. Save completion is also fenced by
+Model-document identity: opening or creating another Model invalidates older pending save
+callbacks, while ordinary edits preserve their exact captured normalized receipt. A late save
+still writes its original payload, but cannot replace the new document's saved or imported
+comparison baseline. Failed opens do not invalidate saves of the unchanged document. Added rows are positions in the causal
+tail, even when Command contents/hashAfter repeat or imported `seq` labels are noncanonical.
 
 ## Completion gates
 
