@@ -234,6 +234,20 @@ pub enum ConstraintKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tol: Option<f64>,
     },
+    /// A cyclic symmetry tie: the Constraint's own Set is `to`, `from` names the other sector
+    /// face, and `u(to) = R·u(from)` for the rotation `angleDeg` about `axis` through `through`
+    /// (metres, `None` the origin). `tol` is the largest pairing gap in metres (`None` scales
+    /// with the Mesh).
+    Cyclic {
+        from: String,
+        axis: Axis,
+        #[serde(rename = "angleDeg")]
+        angle_deg: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
     /// A point mass attached to the Constraint's own face Set: `distributed` makes the point
     /// follow the face's weighted mean displacement, `rigid` makes every node of the face
     /// follow the point. `point` names a [`PointMass`]; the field is not called `kind` because
@@ -261,6 +275,7 @@ impl Constraint {
         let mut out = vec![self.on.as_str()];
         match &self.kind {
             ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }
             | ConstraintKind::Prescribe { .. }
@@ -275,6 +290,7 @@ impl Constraint {
         let mut out = vec![&mut self.on];
         match &mut self.kind {
             ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }
             | ConstraintKind::Prescribe { .. }
@@ -494,6 +510,8 @@ pub enum MesherSettings {
     Free { of: String, size: f64, refine: Vec<RefineBox> },
     /// A 2D mesher swept into 3D.
     Sweep { base: Box<MesherSettings>, sweep: Sweep },
+    /// Free tetrahedra filling every 3D Body of the Model.
+    Tet { size: f64, max_elements: u32 },
 }
 
 /// How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
@@ -519,6 +537,7 @@ impl MesherSettings {
                     sizes.insert(to.into(), size);
                 }
             }
+            Self::Tet { .. } => {}
         }
     }
 
@@ -536,7 +555,7 @@ impl MesherSettings {
         match self {
             Self::Free { of, .. } => Some(of),
             Self::Sweep { base, .. } => base.source_body(),
-            Self::Mapped { .. } | Self::Lattice { .. } => None,
+            Self::Mapped { .. } | Self::Lattice { .. } | Self::Tet { .. } => None,
         }
     }
 
@@ -545,7 +564,7 @@ impl MesherSettings {
         match self {
             MesherSettings::Lattice { .. } => None,
             MesherSettings::Mapped { body, .. } => Some(body),
-            MesherSettings::Free { .. } => None,
+            MesherSettings::Free { .. } | MesherSettings::Tet { .. } => None,
             MesherSettings::Sweep { base, .. } => base.implicit_body(),
         }
     }

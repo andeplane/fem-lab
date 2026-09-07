@@ -42,7 +42,7 @@ describe('fieldsOf', () => {
     const mesher = fieldsOf(byName('mesh.set'), DEFS).find((f) => f.path[0] === 'mesher')!;
     expect(mesher.kind).toBe('union');
     if (mesher.kind !== 'union') throw new Error('unreachable');
-    expect(mesher.variants.map((v) => v.kind)).toEqual(['lattice', 'mapped', 'free', 'sweep']);
+    expect(mesher.variants.map((v) => v.kind)).toEqual(['lattice', 'mapped', 'free', 'sweep', 'tet']);
     // `LatticeSize` is a length or three counts; the form offers the length.
     expect(mesher.variants[0]!.fields[0]).toMatchObject({ kind: 'quantity', dimension: 'length', path: ['mesher', 'size'] });
   });

@@ -456,6 +456,52 @@ export type Command =
     }
   | {
       name: string;
+      from: string;
+      to: string;
+      axis: Axis;
+      angleDeg: number;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      through?:
+        | [
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          ]
+        | null;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "constraint.cyclic";
+    }
+  | {
+      name: string;
       point: string;
       on: string;
       kind: CoupleKind;
@@ -1706,6 +1752,19 @@ export type MesherSpec =
       base: MesherSpec;
       sweep: SweepSpec;
       kind: "sweep";
+    }
+  | {
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      size:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      maxElements?: number | null;
+      kind: "tet";
     };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -2686,6 +2745,52 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      from: string;
+      to: string;
+      axis: Axis;
+      angleDeg: number;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      through?:
+        | [
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          ]
+        | null;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "constraint.cyclic";
+    }
+  | {
+      name: string;
       point: string;
       on: string;
       kind: CoupleKind;
@@ -3433,6 +3538,11 @@ export type MesherSettings =
       base: MesherSettings;
       sweep: Sweep;
       kind: "sweep";
+    }
+  | {
+      size: number;
+      max_elements: number;
+      kind: "tet";
     };
 /**
  * The shape of one block edge between its two corners.
@@ -3783,6 +3893,18 @@ export type Constraint1 =
       master: string;
       tol?: number | null;
       kind: "bonded";
+    }
+  | {
+      from: string;
+      axis: Axis;
+      angleDeg: number;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      through?: [number, number, number] | null;
+      tol?: number | null;
+      kind: "cyclic";
     }
   | {
       point: string;
@@ -4941,6 +5063,18 @@ export interface QualitySummary {
    * Smallest angle at any element corner, in degrees.
    */
   minAngleDeg: number;
+  /**
+   * Smallest interior angle between two faces meeting at an element edge, in degrees. Absent
+   * for a 2D mesh. This is the number that judges a tetrahedral mesh: `minDetJRatio` is
+   * identically 1 for a simplex whatever its shape. The free tet mesher holds it inside
+   * [10.7, 164.8]; below about 10 degrees the element stiffness is badly conditioned.
+   */
+  minDihedralDeg?: number | null;
+  /**
+   * Largest interior angle between two faces meeting at an element edge, in degrees. Absent
+   * for a 2D mesh; 180 is a flat sliver.
+   */
+  maxDihedralDeg?: number | null;
   worst: QualityRow[];
 }
 export interface QualityRow {

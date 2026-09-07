@@ -860,6 +860,33 @@ impl Engine {
                 };
                 Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
             }
+            Command::ConstraintCyclic { name, from, to, axis, angle_deg, through, tol } => {
+                check_name(name)?;
+                self.check_set(from).map_err(|e| e.at("from"))?;
+                self.check_set(to).map_err(|e| e.at("to"))?;
+                if from == to {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("cyclic '{name}' ties set '{from}' to itself"),
+                    )
+                    .at("to")
+                    .suggest("constraint.cyclic between the two sector faces of one revolved Body"));
+                }
+                let t = tol.as_ref().map(|q| q.si().map_err(|e| e.at("tol"))).transpose()?;
+                let th = through.as_ref().map(|q| crate::queries::si3(q).map_err(|e| e.at("through"))).transpose()?;
+                let c = Constraint {
+                    name: name.clone(),
+                    on: to.clone(),
+                    kind: ConstraintKind::Cyclic {
+                        from: from.clone(),
+                        axis: *axis,
+                        angle_deg: *angle_deg,
+                        through: th,
+                        tol: t,
+                    },
+                };
+                Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
+            }
             Command::ConstraintCouple { name, point, on, kind } => {
                 check_name(name)?;
                 if self.model.point(point).is_none() {

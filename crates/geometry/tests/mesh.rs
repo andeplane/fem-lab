@@ -2247,3 +2247,199 @@ proptest! {
         }
     }
 }
+
+// ---- the free tet mesher (isosurface stuffing) ------------------------------------------------
+
+use femlab_geometry::tet;
+
+/// The four bodies the dihedral gate is measured on, with the **closed-form** volume of each.
+///
+/// The reference is the analytic volume, never `Solid::volume()`: the mesher cuts against
+/// `Shape::contains`, which is an exact circle, while the Solid's own volume comes from its
+/// 32-segment facets and is 0.6 % (cylinder) to 2.2 % (sphere) short of it.
+fn tet_bodies() -> Vec<(&'static str, Solid, f64)> {
+    vec![
+        ("box", solid(Shape::Box { size: [1.0, 0.8, 0.6] }), 1.0 * 0.8 * 0.6),
+        ("cylinder", solid(Shape::Cylinder { radius: 0.4, height: 1.0, segments: Some(32) }), PI * 0.16),
+        ("sphere", solid(Shape::Sphere { radius: 0.5, segments: Some(32) }), 4.0 / 3.0 * PI * 0.125),
+        (
+            "box-minus-cylinder",
+            solid(Shape::Subtract {
+                from: Box::new(Shape::Box { size: [1.0, 1.0, 1.0] }),
+                cut: vec![Shape::Named {
+                    name: "bore".into(),
+                    shape: Box::new(Shape::Transform {
+                        shape: Box::new(Shape::Cylinder { radius: 0.25, height: 3.0, segments: Some(32) }),
+                        at: femlab_geometry::Affine3 { translate: [0.5, 0.5, -1.0], ..Default::default() },
+                    }),
+                }],
+            }),
+            1.0 - PI * 0.0625,
+        ),
+    ]
+}
+
+/// A closed surface's oriented face areas cancel. A tet mesh that did not conform — a
+/// quadrilateral split one way by one element and the other way by its neighbour — leaves a
+/// crack whose rim shows up here, so this is the conformity check.
+fn boundary_is_closed(m: &Mesh) -> f64 {
+    let mut sum = [0.0; 3];
+    for f in m.boundary_faces() {
+        let c: Vec<[f64; 3]> = m.face_nodes(f).take(3).map(|n| m.node(n)).collect();
+        let a = cross(sub(c[1], c[0]), sub(c[2], c[0]));
+        for k in 0..3 {
+            sum[k] += 0.5 * a[k];
+        }
+    }
+    libm::sqrt(dot(sum, sum))
+}
+
+#[test]
+fn tet_meshes_hold_their_dihedral_angles_volume_and_sets_at_two_sizes() {
+    for (name, body, exact) in tet_bodies() {
+        let mut previous = f64::INFINITY;
+        for (size, tol) in [(0.25, 0.07), (0.125, 0.02)] {
+            let m = tet(&body, size, false, 2_000_000).unwrap();
+            m.validate().unwrap();
+            assert_eq!(m.kind_of(0), ElementKind::Tet4, "{name}");
+            assert_eq!(m.elem_sets["all"].len(), m.n_elems());
+            // The isosurface-stuffing angle bound, measured rather than claimed.
+            let q = quality(&m, 1);
+            let lo = q.min_dihedral_deg.unwrap_or_default();
+            let hi = q.max_dihedral_deg.unwrap_or_default();
+            assert!(lo >= 10.7 && hi <= 164.8, "{name} at {size}: dihedral angles {lo}..{hi} degrees");
+            assert!(q.min_det_j_ratio > 0.0, "{name} at {size}: an element is inverted or degenerate");
+            // Conforming, so the skin closes.
+            assert!(boundary_is_closed(&m) < 1e-9, "{name} at {size}: the boundary is not closed");
+            // Volume against the closed form, and closer at the finer size.
+            let error = (measure(&m) - exact).abs() / exact;
+            assert!(error < tol, "{name} at {size}: volume error {error} against {exact}");
+            assert!(error < previous, "{name} at {size}: refining did not reduce the volume error");
+            previous = error;
+            // Every named CSG face resolves to a non-empty face Set at both sizes.
+            assert_eq!(m.face_sets.keys().cloned().collect::<Vec<_>>(), body.tags(), "{name} at {size}");
+            for tag in body.tags() {
+                assert!(set_len(&m, &tag) > 0, "{name} at {size}: face set '{tag}' is empty");
+            }
+        }
+    }
+}
+
+#[test]
+fn tet_meshes_are_exact_on_a_lattice_aligned_box_and_reproducible() {
+    let box_ = solid(Shape::Box { size: [1.0, 1.0, 1.0] });
+    let m = tet(&box_, 0.25, false, 100_000).unwrap();
+    // The lattice lands on every face of an aligned box, so the twelve tetrahedra per cell
+    // survive whole: 4 x 4 x 4 cells x 12, and the volume is exact.
+    assert_eq!(m.n_elems(), 960);
+    assert!((measure(&m) - 1.0).abs() < 1e-12, "{}", measure(&m));
+    let q = quality(&m, 1);
+    assert!((q.min_dihedral_deg.unwrap_or_default() - 45.0).abs() < 1e-9);
+    assert!((q.max_dihedral_deg.unwrap_or_default() - 90.0).abs() < 1e-9);
+    assert_eq!(m.face_sets.keys().cloned().collect::<Vec<_>>(), ["xmax", "xmin", "ymax", "ymin", "zmax", "zmin"]);
+    // Nothing in the mesher reads a clock, a thread count or a hash order.
+    assert_eq!(tet(&box_, 0.25, false, 100_000).unwrap(), m);
+}
+
+#[test]
+fn tet10_puts_its_mid_edge_nodes_on_the_curved_face() {
+    let r = 0.5;
+    let ball = solid(Shape::Sphere { radius: r, segments: Some(32) });
+    let m = tet(&ball, 0.2, true, 500_000).unwrap();
+    m.validate().unwrap();
+    assert_eq!(m.kind_of(0), ElementKind::Tet10);
+    assert!(quality(&m, 1).min_det_j_ratio > 0.0);
+    // On a boundary face the corners lie on the exact sphere and so, after projection, do the
+    // mid-edge nodes; the straight chord midpoint would sit a sagitta inside it.
+    let mut worst_node = 0.0f64;
+    let mut worst_chord = 0.0f64;
+    for f in m.boundary_faces() {
+        let n: Vec<u32> = m.face_nodes(f).collect();
+        for k in 0..3 {
+            let mid = m.node(n[3 + k]);
+            worst_node = worst_node.max((radius3(mid) - r).abs());
+            let chord = mean(&[m.node(n[k]), m.node(n[(k + 1) % 3])]);
+            worst_chord = worst_chord.max((radius3(chord) - r).abs());
+        }
+    }
+    assert!(worst_node < 1e-9, "mid-edge node off the sphere by {worst_node}");
+    assert!(worst_chord > 1e-3, "the chord midpoints were already on the sphere ({worst_chord})");
+    // Interior mid-edge nodes stay at the straight midpoint.
+    let e = m.elem_nodes(0);
+    let straight = mean(&[m.node(e[0]), m.node(e[1])]);
+    let moved = (0..3).map(|k| (m.node(e[4])[k] - straight[k]).abs()).fold(0.0f64, f64::max);
+    assert!(moved < 0.2 * 0.25, "a mid-edge node moved more than a quarter of its edge");
+}
+
+fn radius3(p: [f64; 3]) -> f64 {
+    libm::sqrt(dot(p, p))
+}
+
+#[test]
+fn the_tet_mesher_refuses_what_it_cannot_mesh_and_says_why() {
+    let ball = solid(Shape::Sphere { radius: 0.5, segments: Some(16) });
+    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(tet(&ball, bad, false, 100_000).unwrap_err().0.contains("positive, finite element size"));
+    }
+    // A denormal size is positive and finite, and is caught by the element-count estimate
+    // instead of overflowing the lattice.
+    assert!(tet(&ball, f64::MIN_POSITIVE / 2.0, false, 100_000).unwrap_err().0.contains("above the limit"));
+    assert!(tet(&annulus_sheet(), 0.1, false, 100_000).unwrap_err().0.contains("meshes 3D solids"));
+    assert!(tet(&ball, 0.01, false, 1_000).unwrap_err().0.contains("above the limit of 1000"));
+    // At an element size far larger than the body no lattice vertex lands inside it.
+    assert!(tet(&ball, 10.0, false, 100_000).unwrap_err().0.contains("no lattice vertex"));
+    // A body one element size across is seen, but too coarsely to keep its volume.
+    let bore = solid(Shape::Subtract {
+        from: Box::new(Shape::Box { size: [1.0, 1.0, 0.2] }),
+        cut: vec![Shape::Transform {
+            shape: Box::new(Shape::Cylinder { radius: 0.45, height: 1.0, segments: Some(32) }),
+            at: femlab_geometry::Affine3 { translate: [0.5, 0.5, -0.4], ..Default::default() },
+        }],
+    });
+    assert!(tet(&bore, 0.34, false, 100_000).unwrap_err().0.contains("differs from the body's own"));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+    /// A mesher takes free-form geometry, so whatever the CSG tree and the element size say,
+    /// the tet mesher returns. Any `Err` is a pass here; a panic is the failure.
+    #[test]
+    fn a_random_csg_tree_never_panics_the_tet_mesher(
+        shape in any_shape(3),
+        size in prop_oneof![Just(0.0), Just(-1.0), Just(f64::NAN), Just(f64::INFINITY), Just(1e-300), 0.05f64..2.0],
+        quadratic in any::<bool>(),
+    ) {
+        // The property is that these calls return at all.
+        if let Ok(s) = Solid::evaluate(&shape) {
+            let _ = tet(&s, size, quadratic, 200_000);
+        }
+    }
+}
+
+/// Random CSG to `depth`: leaves that are degenerate as often as they are valid, transforms
+/// that collapse an axis, and all three booleans over them.
+fn any_shape(depth: u32) -> BoxedStrategy<Shape> {
+    let leaf = prop_oneof![
+        (-1.0f64..2.0, -1.0f64..2.0, -1.0f64..2.0).prop_map(|(x, y, z)| Shape::Box { size: [x, y, z] }),
+        (-1.0f64..2.0, -1.0f64..2.0).prop_map(|(r, h)| Shape::Cylinder { radius: r, height: h, segments: Some(8) }),
+        (-1.0f64..2.0).prop_map(|r| Shape::Sphere { radius: r, segments: Some(8) }),
+        (-1.0f64..2.0).prop_map(|h| Shape::Extrude { sketch: Sketch::rect(1.0, 0.5), height: h }),
+    ];
+    if depth == 0 {
+        return leaf.boxed();
+    }
+    let inner = any_shape(depth - 1);
+    prop_oneof![
+        leaf,
+        (inner.clone(), -1.0f64..2.0).prop_map(|(s, k)| Shape::Transform {
+            shape: Box::new(s),
+            at: femlab_geometry::Affine3 { scale: [k, 1.0, 1.0], translate: [0.2, 0.0, 0.0], ..Default::default() },
+        }),
+        inner.clone().prop_map(|s| Shape::Named { name: "part".into(), shape: Box::new(s) }),
+        prop::collection::vec(inner.clone(), 0..3).prop_map(|shapes| Shape::Union { shapes }),
+        prop::collection::vec(inner.clone(), 0..3).prop_map(|shapes| Shape::Intersect { shapes }),
+        (inner.clone(), prop::collection::vec(inner, 0..2))
+            .prop_map(|(from, cut)| Shape::Subtract { from: Box::new(from), cut }),
+    ]
+    .boxed()
+}

@@ -279,6 +279,13 @@ fn quality_rows(q: &crate::query::QualitySummary) -> Vec<Vec<String>> {
         vec!["min det J ratio (1 perfect, ≤ 0 inverted)".into(), fmt_sig(q.min_det_j_ratio, 4)],
         vec!["max edge aspect ratio".into(), fmt_sig(q.max_aspect, 4)],
         vec!["min corner angle (degrees)".into(), fmt_sig(q.min_angle_deg, 4)],
+        vec![
+            "dihedral angle range (degrees)".into(),
+            match (q.min_dihedral_deg, q.max_dihedral_deg) {
+                (Some(lo), Some(hi)) => format!("{} to {}", fmt_sig(lo, 4), fmt_sig(hi, 4)),
+                _ => "—".into(),
+            },
+        ],
         vec!["worst elements".into(), q.worst.iter().map(|w| w.element.to_string()).collect::<Vec<_>>().join(", ")],
     ]
 }

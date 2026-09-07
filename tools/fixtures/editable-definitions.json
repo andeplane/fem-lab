@@ -707,6 +707,30 @@
     }
   },
   {
+    "kind": "constraint",
+    "command": {
+      "cmd": "constraint.cyclic",
+      "name": "editable",
+      "from": "base.xmax",
+      "to": "base.xmin",
+      "axis": "z",
+      "angleDeg": 60
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
+      "cmd": "constraint.cyclic",
+      "name": "editable",
+      "from": "base.xmax",
+      "to": "base.xmin",
+      "axis": "z",
+      "angleDeg": 60,
+      "through": ["0 m", "0 m", "1 m"],
+      "tol": "0.25 mm"
+    }
+  },
+  {
     "kind": "load",
     "command": {
       "cmd": "load.pressure",
