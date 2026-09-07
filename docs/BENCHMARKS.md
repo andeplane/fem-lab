@@ -45,6 +45,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 
 | Benchmark | Status | Checks | Measured | Reference | Error |
 |---|---|---|---|---|---|
+| amplitude-ramped-cantilever | green | 9/9 | -0.190407 | -0.191962 | 0.81 % |
 | axisymmetric-thermal-stress | green | 4/4 | 1 | 1 | 0.00 % |
 | cantilever-hex20 | green | 6/6 | -0.190407 | -0.191962 | 0.81 % |
 | cantilever-hex8-full | green | 6/6 | -0.18378 | -0.18378 | 0.00 % |
@@ -68,13 +69,15 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | macneal-harder-trapezoid-quad8 | green | 3/3 | 0.097152 | 0.097152 | 0.00 % |
 | nafems-le1-quad4 | green | 3/3 | 92.480463 | 92.7 | 0.24 % |
 | nafems-le1-quad8 | green | 3/3 | 92.582436 | 92.7 | 0.13 % |
-| nafems-le10-hex20 | green | 3/3 | -5.347745 | -5.38 | 0.60 % |
-| nafems-le10-hex8 | green | 3/3 | -5.400396 | -5.400396 | 0.00 % |
+| le10-full-face-hex20 | green | 3/3 | -5.234137 | -5.25 | 0.30 % |
+| le10-full-face-hex8 | green | 3/3 | -5.400396 | -5.400396 | 0.00 % |
 | nafems-t3-transient | green | 4/4 | 36.792975 | 36.6 | 0.53 % |
 | nafems-t4-conduction | green | 2/2 | 18.254191 | 18.3 | 0.25 % |
 | near-incompressible-049 | green | 4/4 | 5.9894e-5 | 5.9898e-5 | 0.01 % |
 | near-incompressible-0499 | green | 4/4 | 5.9951e-5 | 5.9990e-5 | 0.07 % |
 | near-incompressible-04999 | green | 4/4 | 5.9609e-5 | 5.9999e-5 | 0.65 % |
+| radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
+| radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 | tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
 | tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
@@ -183,10 +186,27 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
+| B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
 motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
 refinements n=4,8,16 give rates about 2.00 for tri3/tet4 and 4.02/4.05 for tri6/tet10.
+
+B8 (`amplitude-ramped-cantilever`) is B1's hex20 cantilever with a triangular amplitude,
+t = [0, 1, 2] s and g = [0, 1, 0] at dt = 0.25 s: eight increments, nine retained frames. The
+fully loaded frame measures 0.1904070 mm, the same value the un-amplituded `cantilever-hex20`
+case reports, and the half-loaded frames on the way up and the way down are exactly half of it.
+
+**Linear static is affine in the amplitude, not proportional.** `u(t) = u_th + g(t)·u_L`: the
+amplitude scales the Loads and the prescribed displacements, and never the temperature, because
+the thermal strain an element subtracts in `recover` belongs to the temperature field rather
+than to the load history. So a whole schedule costs at most two solves against one reduced
+system, and `an_amplitude_is_affine_in_the_loads_and_never_scales_the_temperature` in
+`tests/fem.rs` is what fails if that is ever "simplified" back into a scaling of one solve: with
+a temperature Load present, the frame at g = 0 must equal a pure thermal solve — fields, stress
+and reactions — and the frame at g = 1 the un-amplituded answer. The exactness of the scaling
+itself is what a linear procedure guarantees; when a nonlinear material, contact or large
+deflection lands, the increments become real solves and this benchmark becomes their gate.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
@@ -275,21 +295,29 @@ checked beyond aggregate counts.
 
 | # | Case | Reference | Tolerance | Proves | Status |
 |---|---|---|---|---|---|
-| D1 | NAFEMS LE10 thick plate under pressure | σyy(D) = −5.38 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark | green |
+| D1 | LE10 full-face support variant (ESRD) | σyy(D) = −5.25 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark; original NAFEMS line support is a different problem | green |
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
 | D4 | Manufactured solution, elasticity and Poisson, hex/tet p=1,2 | prescribed u(x); L2 rate p+1, H1 rate p | rate ± 0.1 | convergence machinery, body loads | |
 | D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale | green |
 
-**D1's support is approximated, and the layer count matters more than the mesh.** LE10 holds the
-outer face's *mid-plane line* vertically, and no Set predicate in the registry can name a line
-where a box cannot: a box at the mid-plane catches the whole mid-surface, which suppresses the
-bending and gives −0.72 MPa. This model holds u_z on the whole outer face instead, which is the
-same support once u_x = u_y = 0 has already clamped it in plane. Through-thickness resolution
-dominates the answer: at 12 × 12 in plane, two hex20 layers give −5.576 MPa and four give
-−5.348 MPa (0.6 % from −5.38). The hex8 row with incompatible modes gives −5.400 MPa at the same
-mesh, much better than the ~−29 % a fully integrated hex8 shows. tet10 is not here: no Command
-hands out simplices, so `split_to_simplices` is reachable only from the geometry crate.
+**D1 uses ESRD's full-face support variant of LE10.** The original NAFEMS problem holds
+vertical displacement only along the outer face's mid-plane line and reports −5.38 MPa.
+Our model holds all three displacement components on the whole outer face. These boundary
+conditions are not equivalent. The [ESRD StressCheck Benchmarks Guide (2018), pp. 29–31](https://www.esrd.com/wp-content/uploads/dlm_uploads/Benchmarks-Guide-Standard-NAFEMS-Benchmarks-Linear-Elastic-Tests.pdf)
+explicitly distinguishes its full-face variant and reports a converged −5.25 MPa. D1 uses that
+independent reference with the existing **2 % tolerance unchanged**; it does not claim to
+validate the original line-supported problem.
+
+Both in-plane and thickness resolution matter for the averaged nodal stress at D. Hex20
+changes from −5.489432 MPa at 6 × 6 × 2 to −5.234137 MPa at 12 × 12 × 8: the error against
+−5.25 MPa falls from 4.56 % to 0.30 %. The previous 12 × 12 × 4 full-face result, −5.347745 MPa,
+was close to the original −5.38 MPa through discretization error; that did not establish
+boundary-condition equivalence. The hex8 incompatible-mode row remains a recorded result
+at 12 × 12 × 4 (−5.400396 MPa), not an independent stress oracle. The bundled example keeps
+its existing `nafems-le10-plate` identifier for compatibility, but its visible title and
+reference explicitly identify the full-face variant. Correction: #183; command-reachable
+Tet10 validation follows under #4.
 
 ## E. Heat transfer (phase 2)
 
@@ -298,8 +326,10 @@ hands out simplices, so `split_to_simplices` is reachable only from the geometry
 | E1 | 1D bar, fixed temperatures, hex8/tet4/quad4/tri3 | linear profile | 1e-10 | conduction | engine test + green |
 | E2 | Ansys VM97 fin, conduction + convection | 1D fin with a convective tip, `θ(L)/θ₀ = 1/[cosh mL + (h/mk) sinh mL]` | 2 % (see below) | convection with an analytical fin solution | engine test |
 | E3 | NAFEMS T3 1D transient, sinusoidal boundary | T = 36.60 °C, 20 mm inside the driven face at t = 32 s | 0.5 °C | transient integrator, θ-method order | engine test + green |
-| E4 | NAFEMS T2 conduction + radiation | T(B) = 927 K | 1 % | radiation BC (if/when added) | |
+| E4 | NAFEMS T2 conduction + radiation | T(B) = 927 K | 1 % | radiation BC | **resolve** — needs the published table |
 | E5 | Forced transient slab, all four simplex kinds | mean T(t) = 1/12 − Σ(m odd) 8 exp(−m²π²t)/(mπ)⁴, at t=0.1 | finest mean error < 2e-4; monotone refinement, rate > 1.8 (linear), > 3.5 (quadratic) | capacity and transient mesh convergence | engine test |
+| E6 | Radiating slab, conduction into a grey-body face | T_L from bisecting `k(T0 − T_L)/L = σε(T_L⁴ − T∞⁴)`: 927.0039504520639 K at k = 55.6 W/(m K), L = 0.1 m, T0 = 1000 K, T∞ = 300 K, ε = 0.98 | 1e-9 relative at three mesh sizes, and heat in through the held face = power radiated to 1e-9 | radiation BC, its Newton iteration, and the discrete energy balance it closes | engine test + green |
+| E7 | Radiating block, analytic transient | `T(t) = T0 (1 + 3 c T0³ t)^(−1/3)`, `c = σεA/(ρ c_p V)`: 381.49284808810995 K at t = 1 s | Crank–Nicolson at dt = 5 ms within 1e-4 relative; observed temporal rate > 0.85 at θ = 1 and > 1.7 at θ = 0.5 under two halvings | the fourth-power law itself, and the θ-method's order on a nonlinear boundary | engine test + green |
 
 E1 runs the four element families on the same bar and checks every node, not just a probe: the
 profile is linear to 1e-10 for all of them, and the heat that enters at the hot end leaves at
@@ -311,6 +341,22 @@ The registry's E1 VTU export is also read, unmodified, by the independent `vtkio
 Every exported temperature must match `T(x) = 273.15 + 100 x` K within 1e-9 K, with positions
 in metres; the B1 export checks point-field tuple counts and mesh topology through the same
 reader. This catches file-format errors that an encoder-specific test decoder would miss (#186).
+
+**E4 is still unsourced, and that is why it is not a gate.** The radiation boundary condition
+that E4 was waiting for now exists, and E6 runs T2's own physical parameters — k = 55.6 W/(m K),
+L = 0.1 m, 1000 K held, ε = 0.98 into a 300 K surrounding. Bisecting the flux balance gives
+927.0039504520639 K and the engine lands 6e-15 relative from it, which is within 0.0005 % of the
+927 K that circulates for T2. But nobody here has read that number out of the NAFEMS publication,
+and this catalogue only hard-codes numbers somebody has read from a source: E4 therefore stays
+**resolve**, and E6 — whose oracle is a scalar equation this repository solves itself — is the
+row that gates the feature.
+
+**E6 and E7 are the two halves of a radiation gate.** E6 fixes the steady answer against an
+oracle that never touches a finite element, and adds a conservation check: at convergence the
+heat entering through the held face equals `σε∫(T⁴ − T∞⁴)dS` off the radiating one, to 1e-9. E7
+fixes the transient answer against a closed form that a linearised film cannot reproduce by
+accident, and measures the θ-method's own order on it. Between them they would fail if the
+film, the iteration, the energy balance or the time integrator were wrong.
 
 **E2's tolerance is 2 %, not 1 %, and the reason is physics.** The published fin formula is
 one-dimensional; the model is the real two-dimensional slab, whose mid-plane has to conduct

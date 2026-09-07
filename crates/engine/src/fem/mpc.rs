@@ -385,19 +385,20 @@ pub fn transform(k: &Csr, f: &[f64], mpc: &Mpc) -> (Csr, Vec<f64>) {
         vals.extend_from_slice(&v);
         row_ptr[r + 1] = col_idx.len() as u32;
     }
-    let ft = (0..k.n)
-        .map(|r| match mpc.row_of(r as u32) {
-            Some(_) => 0.0,
-            None => {
-                let mut s = f[r];
-                for &(sl, a) in reverse.get(&(r as u32)).unwrap_or(&none) {
-                    s += a * f[sl as usize];
-                }
-                s
-            }
-        })
-        .collect();
-    (Csr { n: k.n, row_ptr, col_idx, vals }, ft)
+    (Csr { n: k.n, row_ptr, col_idx, vals }, transpose_load(mpc, f))
+}
+
+/// `Tᵀf`: the slave entries emptied and each one added into its masters. The right-hand side
+/// half of [`transform`], on its own for a caller that has a second load vector to move but the
+/// same operator — the amplitude schedule of a static Step transforms its thermal load this way.
+pub fn transpose_load(mpc: &Mpc, f: &[f64]) -> Vec<f64> {
+    let mut out = f.to_vec();
+    for &s in &mpc.slaves {
+        out[s as usize] = 0.0;
+    }
+    // A master is never a slave, so zeroing above cannot swallow what this adds.
+    master_forces(mpc, f, &mut out);
+    out
 }
 
 /// `acc += scale · (row `i` of `K`) · T`: an entry in a slave column is distributed over that

@@ -73,6 +73,8 @@ pub enum ErrorCode {
     SolveNotPositiveDefinite,
     #[serde(rename = "solve.stalled")]
     SolveStalled,
+    #[serde(rename = "solve.diverged")]
+    SolveDiverged,
     #[serde(rename = "solve.too-large")]
     SolveTooLarge,
     #[serde(rename = "gpu.shader")]
@@ -172,6 +174,7 @@ mod tests {
             ErrorCode::ContactUnpaired,
             ErrorCode::SolveNotPositiveDefinite,
             ErrorCode::SolveStalled,
+            ErrorCode::SolveDiverged,
             ErrorCode::SolveTooLarge,
             ErrorCode::GpuShader,
             ErrorCode::GpuTooLarge,

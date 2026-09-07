@@ -50,8 +50,9 @@ pub enum Query {
     Set { name: String },
 
     /// Summary of a Step's Result: solver info, extremes of every field with their location,
-    /// reactions per constraint and the applied totals, and whether the Result is stale
-    /// (the Model changed after it was solved). Check the reaction balance first.
+    /// reactions per constraint, applied totals, solver-used omitted material assumptions, and
+    /// whether the Result is stale (the Model changed after it was solved). Check the reaction
+    /// balance and assumptions first.
     #[serde(rename = "query.result", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ResultSummary"))]
     Result {
@@ -141,6 +142,15 @@ pub enum Query {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from_seq: Option<u32>,
     },
+
+    /// Compare this Model's Journal with a supplied base Journal. Returns the shared causal
+    /// prefix and each ordered divergent tail: removed entries belong to `base`, added entries
+    /// to the current Journal. Entry identity is the typed Command plus `hashAfter`; `seq` is
+    /// only a displayed location and is ignored. Entries after the first divergence are not
+    /// re-aligned. This read never replays either Journal.
+    #[serde(rename = "query.journalDiff", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "JournalDiff"))]
+    JournalDiff { base: crate::journal::Journal },
 
     /// The Journal as a TypeScript script against the `fem` API that reproduces the Model line by
     /// line; what the Script panel shows and what script.run accepts back.
@@ -434,6 +444,30 @@ pub struct Extreme {
     pub max_at: [Valued; 3],
 }
 
+/// An omitted optional material property that a successful solve read as its resolved zero.
+/// The value is kept in SI with the Result, so later unit, name and material edits cannot
+/// rewrite the assumption under an already-computed answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum AssumedMaterialProperty {
+    Rho,
+    Alpha,
+}
+
+/// One solver-used material assumption captured at solve time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultAssumption {
+    pub step: String,
+    pub body: String,
+    pub material: String,
+    pub property: AssumedMaterialProperty,
+    pub value: Valued,
+    /// The Material provenance at solve time; null when the Material named none.
+    pub source: Option<String>,
+    pub cause: String,
+}
+
 /// `query.result` response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -453,6 +487,10 @@ pub struct ResultSummary {
     pub reactions: Vec<ReactionRow>,
     /// Applied force vector or thermal power in component 0 (remaining components zero).
     pub applied_total: [Valued; 3],
+    /// Optional material properties the successful procedure actually read as zero because the
+    /// Material omitted them. Empty when every solver-used property was explicit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assumptions: Vec<ResultAssumption>,
     /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
     /// shape is the Result field named `mode:k`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -627,6 +665,22 @@ pub struct JournalDump {
     pub can_redo: bool,
 }
 
+/// `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
+/// comparison rather than a text diff that aligns similar Commands after histories diverge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalDiff {
+    /// Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied
+    /// `seq` can therefore change this hash without changing `sharedEntries`.
+    pub base_hash: String,
+    pub current_hash: String,
+    pub shared_entries: u32,
+    /// The base Journal's ordered tail after `sharedEntries`.
+    pub removed: Vec<crate::journal::JournalEntry>,
+    /// The current Journal's ordered tail after `sharedEntries`.
+    pub added: Vec<crate::journal::JournalEntry>,
+}
+
 /// `query.script` response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScriptText {
@@ -693,6 +747,7 @@ pub enum QueryResult {
     Path(PathResult),
     Cost(CostEstimate),
     Journal(JournalDump),
+    JournalDiff(JournalDiff),
     Script(ScriptText),
     Converted(Converted),
     MaterialLibrary(MaterialLibrary),

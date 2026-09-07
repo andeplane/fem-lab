@@ -399,7 +399,7 @@ pub fn expand(r: &Reduced, u_f: &[f64]) -> Vec<f64> {
 /// solved system only enforces equilibrium of the retained combination. `mpc::master_forces`
 /// adds that back, so what a support reports is what the support carries — and the sum over the
 /// supports balances the applied load whether or not a tie reaches them.
-pub fn reactions(k: &Csr, u: &[f64], f: &[f64], r: &Reduced, mpc: &crate::fem::mpc::Mpc) -> Vec<f64> {
+pub fn reactions(k: &Csr, u: &[f64], f: &[f64], fixed: &[u32], mpc: &crate::fem::mpc::Mpc) -> Vec<f64> {
     let mut residual = vec![0.0; k.n];
     k.spmv(u, &mut residual);
     for (i, v) in residual.iter_mut().enumerate() {
@@ -408,7 +408,7 @@ pub fn reactions(k: &Csr, u: &[f64], f: &[f64], r: &Reduced, mpc: &crate::fem::m
     let mut tie = vec![0.0; k.n];
     crate::fem::mpc::master_forces(mpc, &residual, &mut tie);
     let mut out = vec![0.0; k.n];
-    for &dof in &r.fixed {
+    for &dof in fixed {
         out[dof as usize] = residual[dof as usize] + tie[dof as usize];
     }
     out

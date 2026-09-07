@@ -1,0 +1,82 @@
+{
+  "name": "radiating-slab",
+  "reference": "Benchmark E6: steady conduction through a 0.1 m slab of k = 55.6 W/(m K) held at 1000 K on one face and radiating to a large 300 K surrounding from the other with emissivity 0.98. In steady state the same flux crosses every section, so the radiating surface temperature solves the scalar equation k (T0 - T_L) / L = sigma eps (T_L^4 - Tinf^4) with sigma = 5.670374419e-8 W/(m^2 K^4). Bisecting that equation to machine precision gives T_L = 927.0039504520639 K and a flux of 40585.8 W/m^2; the oracle is the scalar equation, not any finite-element calculation. The conduction profile is linear, so hex8 reproduces it exactly and the answer must not move with the mesh. These are the physical parameters of NAFEMS benchmark T2, whose published target is 927 K, but the number gated here is the bisection, which this repository can check against its own source.",
+  "journal": [
+    { "cmd": "model.new", "name": "radiating-slab" },
+    { "cmd": "model.setUnits", "units": { "length": "m", "temperature": "K" } },
+    {
+      "cmd": "geometry.addBox",
+      "name": "slab",
+      "size": ["0.1 m", "0.02 m", "0.02 m"]
+    },
+    {
+      "cmd": "material.add",
+      "name": "conductor",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "k": "55.6 W/(m K)",
+      "cp": "460 J/(kg K)",
+      "source": "NAFEMS T2 transport properties"
+    },
+    { "cmd": "material.assign", "material": "conductor", "bodies": ["slab"] },
+    {
+      "cmd": "mesh.set",
+      "mesher": { "kind": "lattice", "size": { "nx": 8, "ny": 2, "nz": 2 } },
+      "order": 1
+    },
+    {
+      "cmd": "constraint.temperature",
+      "name": "hot",
+      "on": "slab.xmin",
+      "value": "1000 K"
+    },
+    {
+      "cmd": "load.radiation",
+      "name": "sky",
+      "on": "slab.xmax",
+      "emissivity": 0.98,
+      "tInf": "300 K"
+    },
+    {
+      "cmd": "step.add",
+      "name": "radiate",
+      "procedure": "heat-steady",
+      "constraints": ["hot"],
+      "loads": ["sky"],
+      "output": ["temperature"],
+      "nonlinearTolerance": 1e-12
+    },
+    { "cmd": "solve.run", "step": "radiate" }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": ["0.1 m", "0.01 m", "0.01 m"]
+      },
+      "path": "/value/value",
+      "expect": 927.0039504520639,
+      "tol": 1e-9,
+      "rel": true,
+      "note": "radiating surface temperature, bisection oracle"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "temperature",
+        "at": ["0.05 m", "0.01 m", "0.01 m"]
+      },
+      "path": "/value/value",
+      "expect": 963.5019752260319,
+      "tol": 1e-9,
+      "rel": true,
+      "note": "the profile is linear, so the midpoint is the mean of the two faces"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

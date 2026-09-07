@@ -37,7 +37,7 @@ use femlab_engine::post::convergence::{observed_rate, richardson};
 use femlab_engine::post::probe::{path, probe};
 use femlab_engine::post::stress::{average_at_nodes, principal, stress_gp, von_mises};
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
-use femlab_engine::procedure::{self, heat, Step, StepResult};
+use femlab_engine::procedure::{self, heat, NonlinearControl, Step, StepResult};
 use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
 use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
 use femlab_engine::{OnProgress, Progress};
@@ -2353,7 +2353,7 @@ fn reduce_expand_and_reactions_recover_the_uniaxial_bar() {
             assert!((u[3 * node + c] - want[c]).abs() <= 1e-9 * delta, "node {node} component {c}");
         }
     }
-    let r = reactions(&a.k, &u, &f, &red, &Mpc::none());
+    let r = reactions(&a.k, &u, &f, &red.fixed, &Mpc::none());
     let total: f64 = red.fixed.iter().map(|&d| if d % 3 == 0 { r[d as usize] } else { 0.0 }).sum();
     assert!(total.abs() <= 1e-9 * (YOUNG * delta * 0.01), "reactions cancel: {total}");
     let root: f64 = sets["xmin"].nodes.iter().map(|&n| r[3 * n as usize]).sum();
@@ -2477,9 +2477,14 @@ fn cancel_on(at: usize) -> impl FnMut(Progress) -> bool {
     }
 }
 
+/// A static Step with the settings an amplitude would read, and no amplitude: the single
+/// solve `Step::Static` has always been.
+fn static_step(solver: SolveOptions) -> Step {
+    Step::Static { solver, dt: 1.0, t_end: 1.0, amplitude: None, output_every: 1 }
+}
+
 fn run_static(p: &Problem<'_>, progress: OnProgress<'_>) -> Result<StepResult, Error> {
-    let step = Step::Static { solver: SolveOptions::default() };
-    pollster::block_on(procedure::run(p, &step, &Pool::new(2), None, None, progress))
+    pollster::block_on(procedure::run(p, &static_step(SolveOptions::default()), &Pool::new(2), None, None, progress))
 }
 
 /// A7: the reactions must balance the applied load, on every structural case.
@@ -2859,9 +2864,9 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
 
     let opts = SolveOptions::default();
     let names: Vec<&str> = [
-        Step::Static { solver: opts },
+        static_step(opts),
         Step::Modal { n_modes: 3, shift: None, solver: opts },
-        Step::HeatSteady { solver: opts },
+        Step::HeatSteady { solver: opts, control: NonlinearControl::default() },
         Step::HeatTransient {
             dt: 1.0,
             t_end: 2.0,
@@ -2870,6 +2875,7 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
             output_every: 1,
             amplitude: None,
             solver: opts,
+            control: NonlinearControl::default(),
         },
         Step::Explicit { t_end: 1.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 },
     ]
@@ -3705,7 +3711,7 @@ fn a_step_result_is_bit_identical_at_one_and_many_threads() {
         };
         let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::IncompatibleModes, constraints);
         p.loads = loads;
-        let step = Step::Static { solver: SolveOptions::default() };
+        let step = static_step(SolveOptions::default());
         let run = |threads: usize| {
             let pool = Pool::new(threads);
             pollster::block_on(procedure::run(&p, &step, &pool, None, None, &mut nop)).expect("solves")
@@ -3721,6 +3727,233 @@ fn a_step_result_is_bit_identical_at_one_and_many_threads() {
             assert_eq!(v.to_bits(), par.scalars[k].to_bits(), "scalar {k}");
         }
         assert_eq!(one.reactions, par.reactions);
+    }
+}
+
+// -------------------------------------------------- amplituded static Steps (Benchmark B8)
+
+/// A static Step whose Loads and prescribed displacements ride an amplitude `g(t)`.
+fn ramped_step(amplitude: procedure::Amplitude, dt: f64, t_end: f64, output_every: usize) -> Step {
+    Step::Static { solver: SolveOptions::default(), dt, t_end, amplitude: Some(amplitude), output_every }
+}
+
+fn displacements(r: &StepResult) -> &[f64] {
+    &r.fields[&Field::Displacement].data
+}
+
+fn biggest(v: &[f64]) -> f64 {
+    v.iter().fold(0.0, |m: f64, x| m.max(x.abs()))
+}
+
+fn reaction_of(r: &StepResult, name: &str) -> [f64; 3] {
+    r.reactions.iter().find(|(n, _)| n == name).expect("the Constraint reports a reaction").1
+}
+
+/// The clamped cantilever of Benchmark B8, with a uniform temperature riding along.
+///
+/// Linear static is **affine** in the amplitude, not proportional: the amplitude scales the
+/// Loads and the prescribed displacements, never the temperature, because the thermal strain
+/// the element subtracts in `recover` belongs to the temperature field and not to the load
+/// history. So the frame at `g = 0` must be the pure thermal answer — displacement, stress and
+/// reactions alike — and the frame at `g = 1` today's un-amplituded answer. A procedure that
+/// "simplified" this back into `g · u` would fail the first of those.
+#[test]
+fn an_amplitude_is_affine_in_the_loads_and_never_scales_the_temperature() {
+    let mesh = cantilever_mesh([4, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let build = |loads: Vec<Load>| {
+        let mut p = problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            Formulation::Full,
+            vec![fix("root", "xmin", [true, true, true], 0.0)],
+        );
+        p.loads = loads;
+        p.temperature = Some((vec![60.0; mesh.n_nodes()], 0.0));
+        p
+    };
+    let tip = || vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let full = run_step(&build(tip()), &static_step(SolveOptions::default())).expect("solves");
+    let thermal = run_step(&build(Vec::new()), &static_step(SolveOptions::default())).expect("solves");
+    assert!(full.history.is_none(), "a static Step without an amplitude retains nothing");
+
+    // g rises to 1 at t = 1 s and returns to 0 at t = 2 s: a load–unload cycle.
+    let table = procedure::Amplitude::Table { t: vec![0.0, 1.0, 2.0], value: vec![0.0, 1.0, 0.0] };
+    let p = build(tip());
+    let ramped = run_step(&p, &ramped_step(table, 0.5, 2.0, 1)).expect("solves");
+    let h = ramped.history.as_ref().expect("an amplituded static Step retains its increments");
+    assert_eq!(h.field, Field::Displacement);
+    assert_eq!(h.times, vec![0.0, 0.5, 1.0, 1.5, 2.0]);
+    assert_eq!(ramped.scalars["increments"], 4.0);
+    assert_eq!(ramped.scalars["dt"], 0.5);
+
+    let (thermal_u, full_u) = (displacements(&thermal), displacements(&full));
+    let scale = biggest(full_u);
+    // Unloaded, the frame is the thermal answer — and that answer is not zero, which is what
+    // makes this an affine check rather than a proportional one.
+    assert!(biggest(thermal_u) > 1e-6, "the temperature has to move the beam: {}", biggest(thermal_u));
+    for (frame, g) in h.values.iter().zip([0.0, 0.5, 1.0, 0.5, 0.0]) {
+        for (i, &v) in frame.iter().enumerate() {
+            let want = thermal_u[i] + g * (full_u[i] - thermal_u[i]);
+            assert!((v - want).abs() <= 1e-14 * scale, "frame at g = {g}, dof {i}: {v} vs {want}");
+        }
+    }
+    // The Result's own fields are the last increment, g = 0: the pure thermal state, stress
+    // included, because the amplitude never touched the thermal strain.
+    for (name, f) in &ramped.fields {
+        let want = &thermal.fields[name].data;
+        let tol = 1e-9 * biggest(want).max(1e-30);
+        for (i, (&got, &w)) in f.data.iter().zip(want).enumerate() {
+            assert!((got - w).abs() <= tol, "{name:?}[{i}] unloaded: {got} vs {w}");
+        }
+    }
+    let (r, want) = (reaction_of(&ramped, "root"), reaction_of(&thermal, "root"));
+    for c in 0..3 {
+        assert!((r[c] - want[c]).abs() <= 1e-9 * (1.0 + want[c].abs()), "reaction {c}: {} vs {}", r[c], want[c]);
+    }
+    let area = face_set_area(&p, "xmax").expect("the tip face has an area");
+    let total = -1e5 * area;
+    assert!((full.scalars["applied_total_z"] - total).abs() <= 1e-9 * total.abs(), "the unramped total stands");
+    for axis in ["x", "y", "z"] {
+        assert_eq!(ramped.scalars[&format!("applied_total_{axis}")], 0.0, "no load is applied at g = 0 ({axis})");
+    }
+}
+
+/// Without a temperature the schedule is exactly `g(t) · u`, prescribed displacements included,
+/// retained at the output stride: the initial state, every third increment, and the final one
+/// whether or not it is a stride.
+#[test]
+fn a_sine_amplitude_reproduces_g_at_every_retained_frame_on_the_output_stride() {
+    let mesh = cantilever_mesh([4, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let pull = 2e-4;
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0), fix("pull", "xmax", [true, false, false], pull)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let full = run_step(&p, &static_step(SolveOptions::default())).expect("solves");
+    let sine = procedure::Amplitude::Sine { amplitude: 1.0, period: 4.0 };
+    let ramped = run_step(&p, &ramped_step(sine.clone(), 0.125, 0.875, 3)).expect("solves");
+    let h = ramped.history.as_ref().expect("retained");
+    // Seven increments at an output stride of three: 0, 3, 6 and the endpoint 7.
+    assert_eq!(ramped.scalars["increments"], 7.0);
+    assert_eq!(ramped.scalars["dt"], 0.125);
+    assert_eq!(h.times, vec![0.0, 0.375, 0.75, 0.875]);
+    let full_u = displacements(&full);
+    for (frame, &time) in h.values.iter().zip(&h.times) {
+        let g = sine.at(time);
+        for (i, &v) in frame.iter().enumerate() {
+            assert_eq!(v, g * full_u[i], "frame at t = {time} (g = {g}), dof {i}");
+        }
+        // The prescribed displacement rides the same amplitude the Loads do.
+        for &node in &sets["xmax"].nodes {
+            assert_eq!(frame[node as usize * 3], g * pull, "the prescribed ux at t = {time}");
+        }
+    }
+    // The Result's final field is the last increment, and the applied total rides with it.
+    let g_end = sine.at(0.875);
+    assert!(g_end > 0.9, "the endpoint is not a trivial multiple: {g_end}");
+    assert_eq!(displacements(&ramped), &h.values[3][..]);
+    assert_eq!(ramped.scalars["applied_total_z"], full.scalars["applied_total_z"] * g_end);
+    for name in ["root", "pull"] {
+        let (r, want) = (reaction_of(&ramped, name), reaction_of(&full, name));
+        for c in 0..3 {
+            let tol = 1e-9 * (1.0 + want[c].abs());
+            assert!((r[c] - g_end * want[c]).abs() <= tol, "reaction {name} {c}: {} vs {}", r[c], want[c]);
+        }
+    }
+}
+
+/// A8 for an amplituded Step: every retained frame is bit-identical at one and many threads,
+/// including the second solve the affine split runs for the thermal part.
+#[test]
+fn an_amplituded_step_retains_bit_identical_frames_at_one_and_many_threads() {
+    let many = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(2);
+    let mesh = cantilever_mesh([8, 2, 2], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::IncompatibleModes,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
+    p.temperature = Some((vec![40.0; mesh.n_nodes()], 0.0));
+    let step = ramped_step(procedure::Amplitude::Sine { amplitude: 1.0, period: 4.0 }, 0.25, 1.0, 1);
+    let run = |threads: usize| {
+        let pool = Pool::new(threads);
+        pollster::block_on(procedure::run(&p, &step, &pool, None, None, &mut nop)).expect("solves")
+    };
+    let (one, par) = (run(1), run(many));
+    let (a, b) = (one.history.expect("retained"), par.history.expect("retained"));
+    assert_eq!(a.times, b.times);
+    assert_eq!(a.values.len(), 5);
+    let differing = a.values.concat().iter().zip(b.values.concat()).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+    assert_eq!(differing, 0, "{differing} retained values differ at {many} threads");
+    for (k, v) in &one.scalars {
+        assert_eq!(v.to_bits(), par.scalars[k].to_bits(), "scalar {k}");
+    }
+}
+
+/// The endpoint is a real clock: a schedule that cannot be represented is a schema error
+/// naming the field, not a silent one-increment Step.
+#[test]
+fn an_amplituded_static_step_needs_a_representable_time_grid() {
+    let mesh = cantilever_mesh([1, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    let sine = procedure::Amplitude::Sine { amplitude: 1.0, period: 4.0 };
+    let step = ramped_step(sine, 1.0, -1.0, 1);
+    let e = pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut nop))
+        .expect_err("a negative endpoint is not a Step");
+    assert_eq!(e.code, ErrorCode::Schema);
+    assert_eq!(e.where_.as_deref(), Some("dt"));
+}
+
+/// A host that says stop during the second (thermal) solve of an amplituded Step is obeyed:
+/// the affine split runs two solves, and both are cancellable.
+#[test]
+fn a_host_that_says_stop_cancels_the_thermal_solve_of_an_amplituded_step() {
+    let mesh = cantilever_mesh([2, 1, 1], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["beam".to_string()];
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.temperature = Some((vec![60.0; mesh.n_nodes()], 0.0));
+    let sine = procedure::Amplitude::Sine { amplitude: 1.0, period: 4.0 };
+    let step = ramped_step(sine, 1.0, 1.0, 1);
+    // Phase 0 is the assembly report, 1 the load solve, 2 the thermal solve, 3 the recovery.
+    for at in 0..4 {
+        let mut stop = cancel_on(at);
+        let e =
+            pollster::block_on(procedure::run(&p, &step, &Pool::new(2), None, None, &mut stop)).expect_err("cancelled");
+        assert_eq!(e.code, ErrorCode::Cancelled, "phase {at}");
     }
 }
 
@@ -3780,7 +4013,7 @@ fn run_step(p: &Problem<'_>, step: &Step) -> Result<StepResult, Error> {
 }
 
 fn steady() -> Step {
-    Step::HeatSteady { solver: SolveOptions::default() }
+    Step::HeatSteady { solver: SolveOptions::default(), control: NonlinearControl::default() }
 }
 
 /// The nodal temperature of a heat Result.
@@ -4041,6 +4274,7 @@ fn transient_heat_reaches_the_requested_endpoint_with_the_correct_temperature() 
                     output_every: 2,
                     amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, t_end], value: vec![0.0, t_end] }),
                     solver: SolveOptions::default(),
+                    control: NonlinearControl::default(),
                 };
                 let res = run_step(&p, &step).expect("a uniformly heated transient");
                 assert!(res.scalars["dt"] <= dt);
@@ -4127,6 +4361,7 @@ fn t3_probe(theta: f64, dt: f64, t_end: f64) -> (f64, f64, usize) {
         // 100 sin(π t / 40) is a period of 80 s on a prescribed 100 K.
         amplitude: Some(procedure::Amplitude::Sine { amplitude: 1.0, period: 80.0 }),
         solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
     };
     let res = run_step(&p, &step).expect("a well-posed transient");
     let rows = res.history.as_ref().expect("a transient keeps a history").times.len();
@@ -4157,6 +4392,7 @@ fn a_transient_needs_a_positive_step_and_reads_its_amplitude_table() {
         output_every: 1,
         amplitude: None,
         solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
     };
     let e = run_step(&p, &bad).expect_err("a zero step");
     assert_eq!(e.code, ErrorCode::Schema);
@@ -4177,6 +4413,7 @@ fn a_transient_needs_a_positive_step_and_reads_its_amplitude_table() {
         output_every: 4,
         amplitude: Some(table),
         solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
     };
     let res = run_step(&p, &step).expect("a well-posed transient");
     let h = res.history.as_ref().expect("a history");
@@ -4615,6 +4852,19 @@ fn the_heat_and_mass_assemblies_report_what_the_checks_would_have_caught() {
     p.heat_loads = vec![HeatLoad::Convection { faces: "nowhere".into(), h: 10.0, t_inf: 300.0 }];
     assert_eq!(heat::assemble(&p, &pat).expect_err("no such Set").code, ErrorCode::SetEmpty);
 
+    // The radiative face integral answers for the same three things, and it is the one the
+    // procedures call with an `expect` on the strength of the checks having run first.
+    let mut k = pat.csr.clone();
+    let mut f = vec![0.0; mesh.n_nodes()];
+    let t = vec![300.0; mesh.n_nodes()];
+    p.heat_loads = vec![HeatLoad::Radiation { faces: "nowhere".into(), emissivity: 0.9, t_inf: 300.0 }];
+    let missing = heat::add_radiation(&p, &pat, &t, &mut k, &mut f).expect_err("no such Set");
+    assert_eq!(missing.code, ErrorCode::SetEmpty);
+    p.heat_loads = vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: 0.9, t_inf: 300.0 }];
+    p.material_of_block = vec![None];
+    let no_material = heat::add_radiation(&p, &pat, &t, &mut k, &mut f).expect_err("no material");
+    assert_eq!((no_material.code, no_material.where_.as_deref()), (ErrorCode::ModelNoMaterial, Some("element 0")));
+
     // The consistent mass assembly the modal procedure uses reports the same thing.
     let structural = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
     let mut no_material = structural;
@@ -4672,6 +4922,7 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
         output_every: 1,
         amplitude: None,
         solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
     };
     let steps: Vec<(&Problem<'_>, Step)> = vec![
         (&hot, steady()),
@@ -4925,6 +5176,7 @@ fn simplex_transient_capacity_converges_to_the_forced_slab_fourier_solution() {
                 output_every: 10000,
                 amplitude: None,
                 solver: SolveOptions::default(),
+                control: NonlinearControl::default(),
             };
             let res = run_step(&p, &step).expect("heated slab");
             // Every structured simplex has equal volume. Integrate T_h using exact
@@ -5095,10 +5347,6 @@ fn tie(name: &str, master: &str, slave: &str, tol: f64) -> Coupling {
 /// The bonded contact `a.xmax` → `b.xmin`, pairing within `tol`.
 fn bond(tol: f64) -> Coupling {
     tie("weld", "a.xmax", "b.xmin", tol)
-}
-
-fn statics() -> Step {
-    Step::Static { solver: SolveOptions::default() }
 }
 
 /// The index of the node at `x`, which the pairing assertions name by position.
@@ -5322,7 +5570,7 @@ fn patch_test_across_a_tie(na: [usize; 3], nb: [usize; 3]) {
     p.couplings = vec![bond(1e-9)];
     p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [sigma, 0.0, 0.0] }];
     assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
-    let res = run_step(&p, &statics()).expect("a tied static solve");
+    let res = run_step(&p, &static_step(SolveOptions::default())).expect("a tied static solve");
     assert!(res.warnings.is_empty(), "{:?}", res.warnings);
 
     let u = &res.fields[&Field::Displacement];
@@ -5353,7 +5601,7 @@ fn a_split_cantilever_matches_the_whole_one_and_is_thread_independent() {
     let root = |on: &str| vec![fix("root", on, [true, true, true], 0.0)];
     let mut wp = problem(&whole, &whole_sets, &one, Idealisation::Solid3d, Formulation::Full, root("xmin"));
     wp.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
-    let whole_res = run_step(&wp, &statics()).expect("the whole beam solves");
+    let whole_res = run_step(&wp, &static_step(SolveOptions::default())).expect("the whole beam solves");
 
     let half = Structured { kind: ElementKind::Hex8, n: [4, 2, 2] }.box_([0.5, 0.1, 0.1]);
     let mesh = join(&half, &half, [0.5, 0.0, 0.0]);
@@ -5362,10 +5610,24 @@ fn a_split_cantilever_matches_the_whole_one_and_is_thread_independent() {
     let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root("a.xmin"));
     p.couplings = vec![bond(1e-9)];
     p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [0.0, 0.0, -1e5] }];
-    let one_thread = pollster::block_on(procedure::run(&p, &statics(), &Pool::new(1), None, None, &mut nop))
-        .expect("the tied beam solves");
-    let four_threads = pollster::block_on(procedure::run(&p, &statics(), &Pool::new(4), None, None, &mut nop))
-        .expect("the tied beam solves");
+    let one_thread = pollster::block_on(procedure::run(
+        &p,
+        &static_step(SolveOptions::default()),
+        &Pool::new(1),
+        None,
+        None,
+        &mut nop,
+    ))
+    .expect("the tied beam solves");
+    let four_threads = pollster::block_on(procedure::run(
+        &p,
+        &static_step(SolveOptions::default()),
+        &Pool::new(4),
+        None,
+        None,
+        &mut nop,
+    ))
+    .expect("the tied beam solves");
 
     let at = [1.0, 0.05, 0.05];
     let tip = |res: &StepResult, m: &Mesh| probe(m, &res.fields[&Field::Displacement], at).expect("inside").1[2];
@@ -5402,7 +5664,7 @@ fn a_tie_into_a_held_face_reports_the_same_reactions_as_the_whole_body() {
     };
     let mut wp = problem(&whole, &whole_sets, &one, Idealisation::Solid3d, Formulation::Full, held("xmin", "side"));
     wp.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
-    let whole_res = run_step(&wp, &statics()).expect("the whole block solves");
+    let whole_res = run_step(&wp, &static_step(SolveOptions::default())).expect("the whole block solves");
 
     let mesh = two_blocks(ElementKind::Hex8, [2, 2, 2], [2, 2, 2], [1.0, 1.0, 1.0], 0.0);
     let sets = sets_of(&mesh);
@@ -5410,7 +5672,7 @@ fn a_tie_into_a_held_face_reports_the_same_reactions_as_the_whole_body() {
     let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held("a.xmin", "a.ymin"));
     p.couplings = vec![bond(1e-9)];
     p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [0.0, 0.0, -1e5] }];
-    let tied = run_step(&p, &statics()).expect("the tied assembly solves");
+    let tied = run_step(&p, &static_step(SolveOptions::default())).expect("the tied assembly solves");
 
     let side = tied.reactions.iter().find(|(n, _)| n == "side").expect("the side support reports").1;
     assert!(side[2].abs() > 1.0, "the side support carries something: {side:?}");
@@ -5462,6 +5724,7 @@ fn a_tie_conducts_as_one_bar_steady_and_transient() {
         output_every: 50,
         amplitude: None,
         solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
     };
     let late = run_step(&p, &transient).expect("a tied transient");
     for (node, got) in temperature_of(&late).iter().enumerate() {
@@ -5531,7 +5794,7 @@ fn the_pairing_warnings_reach_the_result() {
     );
     p.couplings = vec![bond(1e-3)];
     p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [1e5, 0.0, 0.0] }];
-    let res = run_step(&p, &statics()).expect("a tied solve across a gap");
+    let res = run_step(&p, &static_step(SolveOptions::default())).expect("a tied solve across a gap");
     let codes: Vec<&str> = res.warnings.iter().map(|w| w.code.as_str()).collect();
     assert_eq!(codes, vec!["contact.slave-coarser", "contact.gap"], "{:?}", res.warnings);
     assert!(res.warnings[0].text.contains("9 nodes on the slave set"), "{}", res.warnings[0].text);
@@ -5585,7 +5848,10 @@ fn a_node_beyond_the_tolerance_is_unpaired() {
     let all = checks::all(&p);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].code, ErrorCode::ContactUnpaired);
-    assert_eq!(run_step(&p, &statics()).expect_err("refused").code, ErrorCode::ContactUnpaired);
+    assert_eq!(
+        run_step(&p, &static_step(SolveOptions::default())).expect_err("refused").code,
+        ErrorCode::ContactUnpaired
+    );
 }
 
 /// A DOF two ties both eliminate, and one that is a slave here and a master there: either makes
@@ -5730,4 +5996,325 @@ fn the_projection_clamps_a_node_that_falls_off_its_master_face() {
     let off = node_at(&slid, [1.0, 1.8, 0.0]);
     let row = sm.rows.iter().find(|r| r.slave == 3 * off).expect("the far node is tied");
     assert!(row.masters.len() <= 2, "a node past the triangle clamps onto an edge or a corner: {row:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Radiation (#79). The Stefan-Boltzmann constant is repeated here on purpose: a test that read
+// it from the engine would agree with the engine by construction.
+const SIGMA: f64 = 5.670_374_419e-8;
+
+/// The bits `face_integrals` produced on a distorted hex8 face before the convection and
+/// radiation integrals were merged into `face_film`, captured from the previous implementation.
+/// Index and value; every other entry was exactly zero.
+const CONVECTION_MAT_BITS: [(usize, u64); 16] = [
+    (9, 4600136902572446901),
+    (10, 4595601230127101423),
+    (13, 4595429395609894819),
+    (14, 4590893701533684511),
+    (17, 4595601230127101423),
+    (18, 4600072756936496938),
+    (21, 4590893701533684510),
+    (22, 4595365206712215196),
+    (41, 4595429395609894820),
+    (42, 4590893701533684510),
+    (45, 4599729087902083732),
+    (46, 4595193372195008592),
+    (49, 4590893701533684511),
+    (50, 4595365206712215196),
+    (53, 4595193372195008592),
+    (54, 4599664855742674446),
+];
+const CONVECTION_VEC_BITS: [(usize, u64); 4] =
+    [(1, 4605360167270343204), (2, 4605312047227948316), (5, 4605054295452138411), (6, 4605006132148013862)];
+
+/// The eight corners of the distorted hex the captured bits came from.
+const FILM_COORDS: [f64; 24] = [
+    0.0, 0.0, 0.0, 1.3, 0.1, -0.2, 1.1, 1.7, 0.3, 0.2, 1.4, 0.05, 0.05, -0.1, 2.1, 1.4, 0.2, 1.9, 1.2, 1.6, 2.3, 0.1,
+    1.5, 2.0,
+];
+
+/// Generalising the convection face integral into `face_film` changed no number: the constant
+/// film reproduces the captured bits exactly, and it still does when the temperature field it is
+/// handed is wildly non-zero, because a constant film reads the temperature and ignores it.
+#[test]
+fn a_constant_film_reproduces_the_convection_face_integral_bit_for_bit() {
+    let material = conductor(45.0, 7800.0, 460.0);
+    let c = ElementCtx {
+        coords: &FILM_COORDS,
+        material: &material,
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::IncompatibleModes,
+        temperature: None,
+        t_ref: 0.0,
+    };
+    let mut mat = vec![0.0; 64];
+    let mut load = vec![0.0; 8];
+    femlab_engine::fem::heat::face_integrals(ElementKind::Hex8, &c, 3, &mut mat, &mut load)
+        .expect("a well-shaped face");
+    for &(i, bits) in &CONVECTION_MAT_BITS {
+        assert_eq!(mat[i].to_bits(), bits, "mat[{i}] = {}", mat[i]);
+    }
+    for &(i, bits) in &CONVECTION_VEC_BITS {
+        assert_eq!(load[i].to_bits(), bits, "vec[{i}] = {}", load[i]);
+    }
+    assert_eq!(mat.iter().filter(|v| **v != 0.0).count(), CONVECTION_MAT_BITS.len());
+    assert_eq!(load.iter().filter(|v| **v != 0.0).count(), CONVECTION_VEC_BITS.len());
+
+    let t_nodes = [301.0, 455.0, 12.0, -7.0, 900.0, 1.5, 260.0, 33.0];
+    let (mut mat2, mut load2) = (vec![0.0; 64], vec![0.0; 8]);
+    femlab_engine::fem::heat::face_film(ElementKind::Hex8, &c, 3, &t_nodes, &|_| (1.0, 1.0), &mut mat2, &mut load2)
+        .expect("a well-shaped face");
+    assert_eq!(mat2, mat);
+    assert_eq!(load2, load);
+
+    // A film that does depend on the temperature does not produce the same numbers, so the
+    // bit-identity above is a statement about constant films and not about a dead argument.
+    let (mut mat3, mut load3) = (vec![0.0; 64], vec![0.0; 8]);
+    femlab_engine::fem::heat::face_film(ElementKind::Hex8, &c, 3, &t_nodes, &|t| (t, 2.0 * t), &mut mat3, &mut load3)
+        .expect("a well-shaped face");
+    assert!(mat3 != mat && load3 != load);
+}
+
+/// A radiating slab's surface temperature by bisection on `k (T0 − T_L)/L = σ ε (T_L⁴ − T∞⁴)`.
+/// The whole oracle is this scalar equation; it knows nothing about finite elements.
+fn radiating_slab_surface(k: f64, length: f64, t0: f64, t_inf: f64, emissivity: f64) -> f64 {
+    let fourth = |t: f64| t * t * t * t;
+    let residual = |t: f64| k * (t0 - t) / length - SIGMA * emissivity * (fourth(t) - fourth(t_inf));
+    let (mut lo, mut hi) = (t_inf, t0);
+    // 200 halvings take the bracket far below one ulp of the answer.
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if residual(mid) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+fn tight() -> NonlinearControl {
+    NonlinearControl { tol: 1e-12, max_iterations: 100 }
+}
+
+/// Benchmark E6: a slab held at `T0` on one face and radiating to `T∞` from the other. The
+/// steady flux is the same through every section, so the surface temperature solves a scalar
+/// equation the test bisects independently; the conduction profile is linear, so quad4
+/// reproduces it exactly and the answer must not move with the mesh. At convergence the heat
+/// entering through the held face equals the power the surface radiates away, which is the
+/// conservation oracle for the nonlinear film.
+#[test]
+fn a_radiating_slab_reaches_the_surface_temperature_a_bisection_predicts() {
+    let (k, length, height, t0, t_inf, emissivity) = (55.6, 0.1, 0.02, 1000.0, 300.0, 0.98);
+    let want = radiating_slab_surface(k, length, t0, t_inf, emissivity);
+    let fourth = |t: f64| t * t * t * t;
+    let mut answers = Vec::new();
+    for n in [4usize, 8, 16] {
+        let mesh = Structured { kind: ElementKind::Quad4, n: [n, 2, 1] }.box_([length, height, 0.0]);
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::PlaneStrain,
+            conductor(k, 7800.0, 460.0),
+            vec![hold("hot", "xmin", t0)],
+            vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity, t_inf }],
+        );
+        let step = Step::HeatSteady { solver: SolveOptions::default(), control: tight() };
+        let res = run_step(&p, &step).expect("a radiating face holds the temperature");
+        let got = temperature_at(&mesh, &res, [length, 0.5 * height, 0.0]);
+        assert!((got - want).abs() <= 1e-9 * want, "n = {n}: {got} against the bisection {want}");
+        // The Picard passes are reported, and a fourth-power law is not solved in one.
+        let passes = res.scalars["nonlinear_iterations"];
+        assert!(passes > 1.0 && passes <= 100.0, "{passes} passes");
+        // Conservation: heat in through the support = power radiated from the far face, whose
+        // area is `height` times the unit out-of-plane thickness of a plane-strain model.
+        // A Constraint's thermal reaction is the heat it *removes*, so heat entering through the
+        // hot face is negative and its magnitude is the power the far face radiates away.
+        let radiated = SIGMA * emissivity * (fourth(got) - fourth(t_inf)) * height;
+        let through_support = -res.reactions[0].1[0];
+        assert!(
+            (through_support - radiated).abs() <= 1e-9 * radiated,
+            "n = {n}: {through_support} W in, {radiated} W radiated"
+        );
+        answers.push(got);
+    }
+    // A linear profile is in the quad4 space, so refining must not move the answer at all.
+    assert!((answers[1] - answers[0]).abs() <= 1e-9, "{answers:?}");
+    assert!((answers[2] - answers[0]).abs() <= 1e-9, "{answers:?}");
+}
+
+/// A steady Step whose boundaries are one convection face, one radiating face and a volumetric
+/// source: nothing holds the temperature by Dirichlet, and the two films between them must carry
+/// away exactly the heat the source puts in. Both face temperatures are uniform, so the balance
+/// is closed with two closed-form face fluxes and no engine quantity on the right-hand side.
+#[test]
+fn a_source_between_a_convecting_and_a_radiating_face_balances_exactly() {
+    let (k, length, height) = (20.0, 0.2, 0.05);
+    let (h, film_t_inf, emissivity, rad_t_inf, q) = (25.0, 300.0, 0.7, 400.0, 2.0e5);
+    let mesh = Structured { kind: ElementKind::Quad4, n: [8, 2, 1] }.box_([length, height, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(k, 7800.0, 460.0),
+        Vec::new(),
+        vec![
+            HeatLoad::Convection { faces: "xmin".into(), h, t_inf: film_t_inf },
+            HeatLoad::Radiation { faces: "xmax".into(), emissivity, t_inf: rad_t_inf },
+            HeatLoad::Source { bodies: vec!["bar".to_string()], q },
+        ],
+    );
+    // The two films are the only thing holding the temperature, and that is well posed.
+    assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
+    let step = Step::HeatSteady { solver: SolveOptions::default(), control: tight() };
+    let res = run_step(&p, &step).expect("two films hold the temperature");
+    let cold = temperature_at(&mesh, &res, [0.0, 0.5 * height, 0.0]);
+    let hot = temperature_at(&mesh, &res, [length, 0.5 * height, 0.0]);
+    let fourth = |t: f64| t * t * t * t;
+    let convected = h * (cold - film_t_inf) * height;
+    let radiated = SIGMA * emissivity * (fourth(hot) - fourth(rad_t_inf)) * height;
+    let supplied = q * length * height;
+    assert!(
+        (convected + radiated - supplied).abs() <= 1e-9 * supplied,
+        "{convected} W + {radiated} W against {supplied} W in"
+    );
+}
+
+/// The lumped closed form of a block that radiates from one face into a 0 K sink:
+/// `dT/dt = −c T⁴` with `c = σ ε A / (ρ c_p V)`, so `T(t) = T0 (1 + 3 c T0³ t)^(−1/3)`.
+fn radiating_block_temperature(c: f64, t0: f64, time: f64) -> f64 {
+    t0 * libm::cbrt(1.0 / (1.0 + 3.0 * c * t0 * t0 * t0 * time))
+}
+
+/// One transient run of the radiating block: the relative error of its final temperature
+/// against the closed form.
+fn radiating_block_error(theta: f64, dt: f64, t_end: f64) -> f64 {
+    // The conductivity is deliberately enormous so the block stays isothermal to 1e-7 (its
+    // radiative Biot number is 6e-6) and what is left to measure is the time integrator alone.
+    let (k, rho, cp, length, height, t0) = (1.0e4, 100.0, 100.0, 0.001, 0.001, 1000.0);
+    let mesh = Structured { kind: ElementKind::Quad4, n: [2, 1, 1] }.box_([length, height, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(k, rho, cp),
+        Vec::new(),
+        vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: 1.0, t_inf: 0.0 }],
+    );
+    let step = Step::HeatTransient {
+        dt,
+        t_end,
+        theta,
+        initial: t0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control: NonlinearControl { tol: 1e-9, max_iterations: 50 },
+    };
+    let res = run_step(&p, &step).expect("a radiating face holds the temperature");
+    // A / V is 1 / length for a face of the full cross-section.
+    let c = SIGMA / (rho * cp * length);
+    let want = radiating_block_temperature(c, t0, t_end);
+    let got = temperature_at(&mesh, &res, [0.5 * length, 0.5 * height, 0.0]);
+    (got - want).abs() / want
+}
+
+/// Benchmark E7: an insulated block radiating from one face into a 0 K sink cools by
+/// `dT/dt = −c T⁴`, whose closed form is `T(t) = T0 (1 + 3 c T0³ t)^(−1/3)` — a fourth-power
+/// oracle that no linearised film can reproduce by accident. Halving the increment must fall on
+/// the θ-method's own rate: first order at θ = 1, second at θ = 0.5.
+#[test]
+fn a_radiating_block_follows_its_analytic_cooling_curve_at_the_theta_method_rate() {
+    let t_end = 1.0;
+    for (theta, floor) in [(1.0, 0.85), (0.5, 1.7)] {
+        let errors: Vec<f64> = [0.02, 0.01, 0.005].iter().map(|&dt| radiating_block_error(theta, dt, t_end)).collect();
+        let rate = |a: f64, b: f64| libm::log2(a / b);
+        assert!(rate(errors[0], errors[1]) > floor, "theta {theta}: {errors:?}");
+        assert!(rate(errors[1], errors[2]) > floor, "theta {theta}: {errors:?}");
+        assert!(errors[2] < errors[1] && errors[1] < errors[0], "theta {theta}: {errors:?}");
+    }
+    // Crank-Nicolson at the finest increment is on the closed form to better than 0.1 %.
+    assert!(radiating_block_error(0.5, 0.005, t_end) < 1e-3);
+}
+
+/// A face whose film is negative makes the system indefinite whatever the temperature, and both
+/// radiating procedures let the factorisation error out rather than taking the host down with it.
+/// The Command boundary refuses a negative emissivity, so only a direct Problem can get here —
+/// which is exactly the malformed-extension case the linear paths already guard against.
+#[test]
+fn a_radiating_step_propagates_a_factorisation_failure() {
+    let mesh = Structured { kind: ElementKind::Quad4, n: [2, 1, 1] }.box_([0.1, 0.02, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(55.6, 7800.0, 460.0),
+        vec![hold("hot", "xmin", 1000.0)],
+        vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: -1e12, t_inf: 300.0 }],
+    );
+    let control = NonlinearControl::default();
+    let steady_error = run_step(&p, &Step::HeatSteady { solver: SolveOptions::default(), control: control.clone() })
+        .expect_err("a negative film cannot be factorised");
+    assert_eq!(steady_error.code, ErrorCode::SolveNotPositiveDefinite);
+    let transient = Step::HeatTransient {
+        dt: 1.0,
+        t_end: 1.0,
+        theta: 1.0,
+        initial: 300.0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control,
+    };
+    let transient_error = run_step(&p, &transient).expect_err("a negative film cannot be factorised");
+    assert_eq!(transient_error.code, ErrorCode::SolveNotPositiveDefinite);
+}
+
+/// A budget of one pass cannot converge a fourth-power film, and both radiating procedures say
+/// so with the same code, a `where` that names the increment, and a suggestion.
+#[test]
+fn a_radiation_step_that_runs_out_of_passes_is_solve_diverged() {
+    let mesh = Structured { kind: ElementKind::Quad4, n: [2, 1, 1] }.box_([0.1, 0.02, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        conductor(55.6, 7800.0, 460.0),
+        vec![hold("hot", "xmin", 1000.0)],
+        vec![HeatLoad::Radiation { faces: "xmax".into(), emissivity: 0.98, t_inf: 300.0 }],
+    );
+    let stingy = NonlinearControl { tol: 1e-12, max_iterations: 1 };
+    let steady_error = run_step(&p, &Step::HeatSteady { solver: SolveOptions::default(), control: stingy.clone() })
+        .expect_err("one pass cannot converge a fourth-power film");
+    assert_eq!(steady_error.code, ErrorCode::SolveDiverged);
+    assert_eq!(steady_error.where_.as_deref(), Some("heat-steady"));
+    assert!(steady_error.suggestion.expect("a way out").contains("nonlinearMaxIterations"));
+    let transient = Step::HeatTransient {
+        dt: 1.0,
+        t_end: 2.0,
+        theta: 1.0,
+        initial: 300.0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control: stingy,
+    };
+    let transient_error = run_step(&p, &transient).expect_err("one pass cannot converge an increment either");
+    assert_eq!(transient_error.code, ErrorCode::SolveDiverged);
+    assert_eq!(transient_error.where_.as_deref(), Some("heat-transient increment 1"));
 }
