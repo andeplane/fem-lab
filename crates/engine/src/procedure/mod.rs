@@ -21,7 +21,8 @@ use crate::post::{Extremum, FieldData};
 use crate::query::ResultAssumption;
 use crate::solve::{SolveInfo, SolveOptions};
 
-/// A scalar `g(t)` multiplying every prescribed temperature of a transient Step.
+/// A scalar `g(t)` multiplying the driven part of a Step: every prescribed temperature of a
+/// transient heat Step, and every Load and prescribed displacement of a static Step.
 ///
 /// Commands carry no closures (they are serialised into the Journal and replayed byte for
 /// byte), so a time-varying boundary is one of these two shapes and nothing else.
@@ -143,7 +144,12 @@ pub(crate) fn iterate(
 /// One analysis step.
 pub enum Step {
     /// Linear static equilibrium: `K u = f`.
-    Static { solver: SolveOptions },
+    ///
+    /// With an `amplitude` the Step is stepped instead: the Loads and the prescribed
+    /// displacements are scaled by `g(t)` over the grid `dt`/`t_end` and every
+    /// `output_every`-th increment is retained. Without one the other three fields mean
+    /// nothing and the Step is the single solve it has always been.
+    Static { solver: SolveOptions, dt: f64, t_end: f64, amplitude: Option<Amplitude>, output_every: usize },
     /// Natural frequencies and mode shapes by subspace iteration (plan A §6).
     Modal { n_modes: usize, shift: Option<f64>, solver: SolveOptions },
     /// Steady conduction with convection, flux and radiation boundaries: `(K + H) T = f`,
@@ -290,7 +296,9 @@ pub async fn run(
     progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
     match step {
-        Step::Static { solver } => static_::run(p, solver, pool, gpu, progress).await,
+        Step::Static { solver, dt, t_end, amplitude, output_every } => {
+            static_::run(p, solver, *dt, *t_end, amplitude.as_ref(), *output_every, pool, gpu, progress).await
+        }
         Step::Modal { n_modes, shift, solver } => modal::run(p, *n_modes, *shift, solver, pool, progress),
         Step::HeatSteady { solver, control } => heat::steady(p, solver, control, pool, gpu, progress).await,
         Step::HeatTransient { dt, t_end, theta, initial, output_every, amplitude, solver, control } => heat::transient(
