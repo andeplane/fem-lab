@@ -52,9 +52,21 @@ const handleKeys = (page: Page): Promise<string[]> =>
     }
   });
 
+/** Every value the page deserialises out of IndexedDB, as `store:key`, reset on each navigation. */
+const deserialised = (page: Page): Promise<string[]> => page.evaluate(() => (window as typeof window & { idbGets: string[] }).idbGets);
+
 test('@cpu a remembered folder this browser cannot restore costs a message, not the app', async ({ page }) => {
   test.setTimeout(90_000);
-  await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+  await page.addInitScript(() => {
+    localStorage.setItem('femlab.tour.dismissed', '1');
+    const reads: string[] = [];
+    (window as typeof window & { idbGets: string[] }).idbGets = reads;
+    const get = IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get = function (key: IDBValidKey | IDBKeyRange): IDBRequest {
+      reads.push(`${this.name}:${String(key)}`);
+      return get.call(this, key);
+    };
+  });
   await page.goto('./');
   await ready(page);
 
@@ -69,18 +81,25 @@ test('@cpu a remembered folder this browser cannot restore costs a message, not 
 
   // Start-up survived the poisoned record, and leads with the Recent list as it always does.
   await expect(page.getByTitle('project.open kept-project')).toBeVisible();
-  expect(await page.evaluate(() => window.fem.query.projects())).toHaveLength(1);
+  await expect(page.locator('.recent')).toHaveCount(1);
+  // The invariant behind all of it: nothing on the way to a usable app touched the handle store.
+  // With a real handle in that slot instead of this stand-in, that read is what ends the browser.
+  expect(await deserialised(page)).not.toContain('handles:folder');
 
   await page.getByTitle('project.open kept-project').click();
   await page.locator('.topbar').getByRole('button', { name: '✳ Assistant', exact: true }).click();
   const assistant = page.locator('.assistant');
 
-  // The folder is offered by name, which start-up read without touching the handle slot.
+  // The folder is offered by name, read from the descriptor beside the handle and never the handle.
   const reopen = assistant.getByTitle('Reopen the remembered folder', { exact: true });
   await expect(reopen).toBeVisible();
   await expect(reopen).toContainText('reopen ‘gone-folder’');
+  expect(await deserialised(page)).toContain('handles:folder:info');
+  expect(await deserialised(page)).not.toContain('handles:folder');
 
   await reopen.click();
+  // Deserialising it is the click's business, and only the click's.
+  await expect.poll(() => deserialised(page)).toContain('handles:folder');
 
   // Plain, structured, actionable — and the picker is back where the offer was.
   const banner = page.locator('.banner.error');
