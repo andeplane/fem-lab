@@ -106,7 +106,7 @@ it('queries the saved baseline freshly and reports no baseline before save or im
 it('keeps removed colleague rows independent of current attribution and solve boundaries', () => {
   const s = setup(); const solve: JournalEntry = { seq: 1, cmd: { cmd: 'solve.run', step: 'load' }, hashAfter: 'solve' };
   s.store.set({ tab: 'journal', journal: { entries: [first, solve], revision: 2, hash: 'solve', canUndo: true, canRedo: false },
-    result: { step: 'load', revision: 2, stale: true, reactionQuantity: 'force', solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 0, extremes: [], reactions: [], appliedTotal: [{ value: 0, unit: 'N' }, { value: 0, unit: 'N' }, { value: 0, unit: 'N' }], balance: 0 },
+    result: { resultId: 'result-1', step: 'load', revision: 2, stale: true, reactionQuantity: 'force', solver: 'cpu-direct', iterations: 1, residual: 0, timeMs: 0, extremes: [], reactions: [], appliedTotal: [{ value: 0, unit: 'N' }, { value: 0, unit: 'N' }, { value: 0, unit: 'N' }], balance: 0 },
     journalWho: { 1: { who: 'ai', at: 1000 } }, journalComparison: { ...diff('b', 'solve', [solve]), removed: [second] }, comparisonSource: 'imported' });
   const root = document.createElement('div');
   render(<Bottom s={s.store.state} store={s.store} dispatch={async () => undefined} query={async () => undefined} />, root);
