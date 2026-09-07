@@ -7,7 +7,7 @@ use femlab_geometry::{FacePredicate, QuadBlock, RefineBox, RegionPredicate, Shap
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::command::{Axis, CoupleKind, Dof, Field, Formulation, ObjectKind, Procedure};
+use crate::command::{Axis, CoupleKind, Dof, Field, Formulation, ObjectKind, Procedure, SweepSpacing};
 use crate::fem::section::Section;
 use crate::units::UnitSet;
 
@@ -372,6 +372,16 @@ pub struct Step {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonlinear_max_iterations: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub f_start: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub f_stop: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<SweepSpacing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damping_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rayleigh_alpha: Option<f64>,
@@ -710,6 +720,11 @@ mod tests {
             max_cutbacks: None,
             nonlinear_tolerance: None,
             nonlinear_max_iterations: None,
+            f_start: None,
+            f_stop: None,
+            points: None,
+            sweep: None,
+            damping_ratio: None,
             alpha: None,
             rayleigh_alpha: None,
             rayleigh_beta: None,

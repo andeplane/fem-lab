@@ -77,7 +77,7 @@ fn shape(s: &Shape) -> Result<ShapeSpec, Error> {
     })
 }
 
-fn face(p: &Face) -> FacePredicate {
+pub(crate) fn face(p: &Face) -> FacePredicate {
     match p {
         Face::Plane { normal, offset, tol } => {
             FacePredicate::Plane { normal: *normal, offset: length(*offset), tol: tol.map(length) }
@@ -253,6 +253,11 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 initial: x.initial.map(|v| Q::new(v, "K")),
                 nonlinear_tolerance: x.nonlinear_tolerance,
                 nonlinear_max_iterations: x.nonlinear_max_iterations,
+                f_start: x.f_start.map(|v| Q::new(v, "Hz")),
+                f_stop: x.f_stop.map(|v| Q::new(v, "Hz")),
+                points: x.points,
+                sweep: x.sweep,
+                damping_ratio: x.damping_ratio,
                 alpha: x.alpha,
                 rayleigh_alpha: x.rayleigh_alpha.map(|v| Q::new(v, "Hz")),
                 rayleigh_beta: x.rayleigh_beta.map(|v| Q::new(v, "s")),

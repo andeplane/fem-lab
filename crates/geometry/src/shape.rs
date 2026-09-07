@@ -164,6 +164,16 @@ pub enum Shape {
 }
 
 impl Shape {
+    /// Whether this Body came from an imported triangle mesh, allowing a host to wrap that
+    /// mesh in a world-space transform without losing its import-specific metadata.
+    pub fn is_imported(&self) -> bool {
+        match self {
+            Shape::Mesh { .. } => true,
+            Shape::Transform { shape, .. } | Shape::Named { shape, .. } => shape.is_imported(),
+            _ => false,
+        }
+    }
+
     /// 1 for line members, 2 for sheets (and booleans of sheets), 3 otherwise.
     pub fn dim(&self) -> usize {
         match self {
