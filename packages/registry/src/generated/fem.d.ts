@@ -412,7 +412,9 @@ export interface Fem {
      * it. `output` lists the fields to compute (default displacement, stress, von Mises and
      * reactions). Steps run in the order given by step.reorder, and `after` names an earlier
      * Step whose Result this one continues — a static Step after a heat Step picks up its
-     * temperature field and turns it into thermal stress. The remaining fields belong to one
+     * temperature field and turns it into thermal stress, and a modal Step after a static one
+     * picks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,
+     * which is what a tensioned or preloaded member needs. The remaining fields belong to one
      * procedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`
      * alone (default 1) to buckling, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
@@ -447,6 +449,12 @@ export interface Fem {
      * Heat Results report net applied power, positive removed heat and stored-energy rate;
      * transient powers belong to the last θ-method integration stage (radiation uses weighted
      * endpoint fluxes), while temperature fields belong to its endpoint.
+     * A modal Step's `after` is optional and means stress stiffening: naming a solved
+     * `static` or `static-nonlinear` Step adds that state's geometric stiffness to K, so the
+     * frequencies are those of the *preloaded* structure (tension up, compression down, zero
+     * at the buckling load), and `prestressFrom` on the Result names the preload Step. Naming
+     * a heat Step instead keeps the existing meaning, the temperature field alone, and
+     * stiffens nothing.
      * A harmonic Step requires `after` to name a Step whose `modal` Result is current: it
      * superposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is
      * bounded by that Step's `nModes`. It drives its own Loads at each swept frequency and

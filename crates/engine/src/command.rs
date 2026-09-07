@@ -229,6 +229,22 @@ pub enum Procedure {
     /// temperature field is applied in full rather than ramped with the load factor.
     StaticNonlinear,
     /// Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.
+    ///
+    /// **Prestressed (stress-stiffened) modal analysis.** Give the Step an `after` naming a
+    /// solved `static` or `static-nonlinear` Step and it vibrates *about that loaded state*:
+    /// the stress stiffening of the preload is added to the stiffness, so a guy rope or a
+    /// tensioned tie rings higher, a strut in compression rings lower, and a member loaded to
+    /// its buckling load has a first frequency of zero. Use it whenever the axial force in a
+    /// member is a large fraction of its Euler load — cable nets, tension rods, preloaded
+    /// bolts, slender bracing — because the unprestressed frequency of such a member is simply
+    /// the wrong number. Without `after` this is the ordinary modal analysis of the unloaded
+    /// structure, unchanged.
+    ///
+    /// The preload Step's own Loads are what does the stiffening; this Step's Loads are
+    /// ignored, as they are for any modal Step. `query.result` reports `prestressFrom` naming
+    /// the Step the stiffening came from. Not available for the axisymmetric idealisation
+    /// (the hoop term of a ring's stress stiffening is not written), and a preload far past the
+    /// buckling load is refused: past it the structure has no vibration about that state.
     Modal,
     /// Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening
     /// that state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`
@@ -1601,7 +1617,9 @@ pub enum Command {
     /// it. `output` lists the fields to compute (default displacement, stress, von Mises and
     /// reactions). Steps run in the order given by step.reorder, and `after` names an earlier
     /// Step whose Result this one continues — a static Step after a heat Step picks up its
-    /// temperature field and turns it into thermal stress. The remaining fields belong to one
+    /// temperature field and turns it into thermal stress, and a modal Step after a static one
+    /// picks up its stress state and becomes a prestressed (stress-stiffened) modal analysis,
+    /// which is what a tensioned or preloaded member needs. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`
     /// alone (default 1) to buckling, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
@@ -1636,6 +1654,12 @@ pub enum Command {
     /// Heat Results report net applied power, positive removed heat and stored-energy rate;
     /// transient powers belong to the last θ-method integration stage (radiation uses weighted
     /// endpoint fluxes), while temperature fields belong to its endpoint.
+    /// A modal Step's `after` is optional and means stress stiffening: naming a solved
+    /// `static` or `static-nonlinear` Step adds that state's geometric stiffness to K, so the
+    /// frequencies are those of the *preloaded* structure (tension up, compression down, zero
+    /// at the buckling load), and `prestressFrom` on the Result names the preload Step. Naming
+    /// a heat Step instead keeps the existing meaning, the temperature field alone, and
+    /// stiffens nothing.
     /// A harmonic Step requires `after` to name a Step whose `modal` Result is current: it
     /// superposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is
     /// bounded by that Step's `nModes`. It drives its own Loads at each swept frequency and

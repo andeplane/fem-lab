@@ -79,6 +79,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | imported-mesh-prism | green | 6/6 | 6.24289 | 6.24289 | 0.00 % |
 | kirsch-quarter-quad8 | green | 4/4 | 302.187087 | 300 | 0.73 % |
 | lame-3d-revolve-hex20 | green | 5/5 | 99.816731 | 100 | 0.18 % |
+| lame-3d-revolve-tet10 | green | 5/5 | 40.075333 | 40.075333 | 0.00 % |
+| lame-3d-revolve-tet4 | green | 5/5 | 35.033766 | 35.033766 | 0.00 % |
 | lame-axisymmetric | green | 4/4 | 99.588311 | 100 | 0.41 % |
 | lame-plane-strain-quad4 | green | 5/5 | 5.7170e-5 | 5.7200e-5 | 0.05 % |
 | lame-plane-strain-quad8 | green | 5/5 | 99.816731 | 100 | 0.18 % |
@@ -103,8 +105,11 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | nlgeom-uniaxial-svk | green | 6/6 | 24255 | 24255 | 0.00 % |
 | orthotropic-cylinder-axisymmetric | green | 5/5 | 157.133313 | 157.716261 | 0.37 % |
 | orthotropic-lamina-off-axis | green | 7/7 | 10 | 10 | 0.00 % |
+| prestressed-beam-modal | green | 10/10 | 46.876071 | 46.90661 | 0.07 % |
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
+| restrained-strip-transient-thermal-stress | green | 29/29 | 2 | 2 | 0.00 % |
+| taut-string-modal | green | 4/4 | 38.928994 | 38.8929 | 0.09 % |
 | thermal-contact-series | green | 5/5 | 327.777778 | 327.777778 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 | tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
@@ -286,6 +291,8 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B13 | Fixed–free bar's axial modes, 4/8/16 truss elements, consistent mass | f_n = (2n−1)/(4L)·√(E/ρ) | 1 % at 16 elements, observed rate > 1.9, every discrete frequency above the exact one | consistent mass and modal convergence of the line element | engine test |
 | B14 | Twisted axisymmetric shaft, solid, St Venant torsion | u_θ(a,L) = TLa/(GJ) = 5.296676506098277e-6 m, τ_θz(a) = Ta/J = 4074366.54315252 Pa, J = πa⁴/2 | 1e-9 (u_θ) and 1e-8 (τ) on two meshes | axisymmetric twist DOF, its two new Voigt rows, the rotation-about-the-axis rigid mode | engine test + green |
 | B15 | Twisted axisymmetric shaft, hollow | same closed form with J = π(a⁴−b⁴)/2: u_θ(a,L) = 6.085336059395998e-6 m, τ_θz(a) = 4681027.737996921 Pa | 1e-9 (u_θ), 1e-8 (τ) | the hollow-section case; superposition against a separate internal-pressure Step to 1e-10 | engine test + green |
+| B16 | Prestressed (stress-stiffened) modal: pinned–pinned beam under axial P, at −0.25 and +0.5 P_cr,1 | f_n(P) = f_n(0)·√(1 − P/P_cr,n), exact for Euler–Bernoulli; f_n(0) = (n²π/2)√(EI/ρAL⁴), P_cr,n = n²π²EI/L² | 1 % on modes n = 1 and n = 3, tension and compression | stress stiffening from a preceding static Step: the same K_σ linear buckling builds | engine test + green |
+| B17 | Taut string: the same beam pulled to T = 10 P_cr,1 | f_n = (n/2L)√(T/ρA)·√(1 + n²π²EI/(TL²)) | 1 % | the string limit of the same physics, written the way a cable is designed | green |
 | B21 | Timoshenko cantilever, tip force, one element and four; strong and weak axis (`beam-cantilever-tip`) | δ = PL³/3EI + PL/κGA: 2.0156 mm (I_y) and 8.0156 mm (I_z) for a 100 × 200 mm rectangle, L = 2 m, P = 10 kN; root M = PL, V = P everywhere; tip θ = PL²/2EI | 1e-10 rel, identical at one and four elements | the shear-flexible `Beam2` is nodally exact; the local triad; `sectionForce`/`sectionMoment`; the extreme-fibre stress | green |
 | B22 | Simply supported beam under self-weight, eight elements (`beam-simply-supported-udl`) | δ = 5wL⁴/384EI + wL²/8κGA = 0.394949 mm, w = ρgA = 1570 N/m, L = 4 m; θ_end = wL³/24EI; M_mid = wL²/8; V_end = wL/2 | 1e-9 rel | `constraint.pin`, gravity through the fixed-end loads `qL/2, qL²/12`, the `rotation` field | green |
 | B23 | The same beam clamped and pinned, side by side (`beam-clamped-vs-pinned`) | clamped δ = wL⁴/384EI + wL²/8κGA = 0.0809492 mm against the pinned 0.394949 mm; clamped end M = wL²/12, midspan wL²/24 | 1e-9 rel | `constraint.fix` as a clamp against `constraint.pin`: the difference is exactly the rotational restraint | green |
@@ -534,6 +541,84 @@ carries less. It is not a safety factor, and `query.result` and the calculation 
 stiffening carries a hoop term `σ_θθ N_a N_b / r²` on the radial degree of freedom that the
 Cartesian gradient form does not contain, and integrating the Cartesian part alone would silently
 under-stiffen the ring.
+
+### B16 and B17: prestressed modal analysis (#344)
+
+A modal Step whose `after` names a solved static (or static-nonlinear) Step solves
+`(K + K_σ) φ = ω² M φ` instead of `K φ = ω² M φ`. `K_σ` is the *same* geometric stiffness linear
+buckling assembles (`buckling::assemble_geometric`, §B5), integrated from the *same* displacement
+the preload Step solved, so the two procedures cannot drift into two theories: `K φ = λ(−K_σ)φ`
+and `(K + K_σ)φ = ω²Mφ` are one pencil, and at the preload where buckling reports `λ = 1` the
+prestressed modal Step reports `f₁ = 0`. Without `after` nothing is added and the unprestressed
+answer is unchanged to the bit.
+
+Both cases are the **B5 pinned–pinned Euler column's own model**: 20 mm × 10 mm section,
+plane stress, meshed as the lower half by symmetry with quad8 (2 × 40), `ux = 0` across the
+`y = 0` edge as the pin and `uy = 0` at mid-span as the symmetry condition of the `sin(nπy/L)`
+modes. That half model answers the **odd** modes of the full beam, so the two frequencies
+reported are `n = 1` and `n = 3`. `E = 210 GPa`, `ν = 0.3`, `ρ = 7850 kg/m³`, and the axial force
+is a pressure on the end face — **negative for tension**.
+
+**B16** (`prestressed-beam-modal`, L = 1 m): `EI = 1400 N·m²`, `ρA = 1.57 kg/m`,
+`P_cr,1 = π²EI/L² = 13817.45 N` (`σ_cr = 69.087 MPa` on the 200 mm² end).
+
+| Step | Axial load | Reference f₁ | Measured f₁ | Reference f₃ | Measured f₃ |
+|---|---|---|---|---|---|
+| `free` | none | 46.9066 Hz | 46.8761 (0.07 % low) | 422.160 Hz | 419.710 (0.58 % low) |
+| `modes-pull` | −0.25 P_cr,1 (17.272 MPa tension) | 52.4432 Hz | 52.4310 (0.02 % low) | 427.983 Hz | 425.583 (0.56 % low) |
+| `modes-push` | +0.5 P_cr,1 (34.544 MPa compression) | 33.1680 Hz | 33.0768 (0.27 % low) | 410.265 Hz | 407.710 (0.62 % low) |
+
+All six are gated at 1 %. Tension raises the fundamental by 11.9 % and compression lowers it by
+29.4 %, which is the whole point: a preloaded member's unstressed frequency is the wrong number.
+The third mode moves far less at the same axial force because `P_cr,3 = 9 P_cr,1`, and the
+oracle knows it — that the *ratio* between the two modes' shifts comes out right is what a single
+scalar factor could not have faked.
+
+**Why this oracle is exact.** For a pinned–pinned Euler–Bernoulli beam the vibration mode and the
+buckling mode are both `sin(nπy/L)`, and neither depends on `P`; the axial force enters the
+Rayleigh quotient as a single term and `ω_n²(P) = ω_n²(0)(1 − P/P_cr,n)` follows with no
+approximation. For a cantilever the same relation is only a good approximation, which is why the
+gated case is the pinned one. The residual ~0.6 % on mode 3 is discretisation and shear, not
+prestress: it is already there in the unloaded `free` Step and it cancels out of the ratios.
+
+**B17** (`taut-string-modal`, L = 2 m, same section): pulled to `T = 10 P_cr,1 = 34543.6 N`
+(172.718 MPa). The oracle is the vibrating-string formula with its bending correction,
+`f_n = (n/2L)√(T/ρA)·√(1 + n²π²EI/(TL²))` — a wave speed of `√(T/ρA) = 148.33 m/s` along the
+member and a correction of `0.1 n²`. It shares no line with the beam form above and is the way a
+cable or a guy rope is actually sized.
+
+| Mode | Reference | Measured | Error |
+|---|---|---|---|
+| f₁ | 38.8929 Hz | 38.9290 | 0.09 % high |
+| f₃ | 153.3459 Hz | 153.3274 | 0.01 % low |
+
+Without the tension this member's f₁ is 11.73 Hz, so three quarters of the answer is the
+prestress. Gated at 1 %.
+
+**The engine tests** (`tests/fem.rs`) carry the two checks a Journal case cannot express:
+
+- `a_prestressed_column_follows_its_axial_load_and_meets_its_own_buckling_factor`: on one hex20
+  cantilever, a preload solved at **zero** load reproduces the unprestressed frequency
+  **exactly** (`assert_eq!`, not a tolerance — a zero displacement gives an identically zero
+  `K_σ`, and adding zero is exact); tension raises and compression lowers f₁ by `√(1 ∓ P/P_cr)`
+  within 2 %; and at the buckling factor the same mesh reports, the first squared frequency has
+  collapsed to below 0.5 % of its unloaded value. Since `ω₁²` is very nearly linear in the
+  preload, a residual `ω₁²(λ)/ω₁²(0) = ε` puts the zero crossing at `λ(1 + ε)`, so that gate
+  *is* agreement with #58's load factor to **0.5 %** on the same mesh.
+- `a_preload_far_past_the_buckling_load_is_named_rather_than_blamed_on_the_solver`: past the
+  critical load `K + K_σ` is indefinite and no Cholesky of it exists. That comes out of the
+  linear algebra as `solve.not-positive-definite` pointing at the *solver*, which is the wrong
+  place to look, so a prestressed Step rewrites it to `model.ill-posed` at `after`. The rewrite
+  is **sound but not complete**: the iteration factorises `K + K_σ − σM` for a small negative
+  shift, so a slightly over-critical preload is still factorisable and reports `f₁ = 0` instead.
+  Only the failure is claimed.
+- `a_prestressed_modal_step_refuses_the_axisymmetric_idealisation`: the hoop term
+  `σ_θθ N_a N_b / r²` is not written, so the ring is refused by name, exactly as a buckling Step
+  over the same model is.
+
+**What is not modelled.** Spin softening, gyroscopic terms and follower loads are out of scope
+(#344). The preload is the predecessor's converged state at *its* final load; a modal Step does
+not ramp it.
 
 ## C. Two-dimensional and axisymmetric (phase 3)
 
