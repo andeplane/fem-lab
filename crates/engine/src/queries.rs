@@ -2,7 +2,7 @@
 
 use femlab_geometry::{face_centroid_normal, Face, Mesh};
 
-use crate::command::{Field, ObjectKind};
+use crate::command::{CoupleKind, Field, ObjectKind};
 use crate::engine::{display, Engine};
 use crate::error::{Error, ErrorCode};
 use crate::model::{ConstraintKind, Idealisation, LoadKind, SetSource};
@@ -267,7 +267,38 @@ impl Engine {
                         }
                     },
                 }),
+                ConstraintKind::Couple { point, coupling } => Some(match coupling {
+                    CoupleKind::Distributed => ConnectionRow {
+                        name: c.name.clone(),
+                        kind: "distributed".into(),
+                        master: c.on.clone(),
+                        slave: point.clone(),
+                        summary: format!("point '{point}' follows the weighted mean of '{}'", c.on),
+                    },
+                    CoupleKind::Rigid => ConnectionRow {
+                        name: c.name.clone(),
+                        kind: "rigid".into(),
+                        master: point.clone(),
+                        slave: c.on.clone(),
+                        summary: format!("every node of '{}' follows point '{point}'", c.on),
+                    },
+                }),
                 _ => None,
+            })
+            .collect();
+        let points = m
+            .points
+            .iter()
+            .map(|pt| PointRow {
+                name: pt.name.clone(),
+                at: pt.at.map(|x| display(m, x, Length::DIM)),
+                mass: display(m, pt.mass, Mass::DIM),
+                coupled_by: m
+                    .constraints
+                    .iter()
+                    .filter(|c| matches!(&c.kind, ConstraintKind::Couple { point, .. } if *point == pt.name))
+                    .map(|c| c.name.clone())
+                    .collect(),
             })
             .collect();
         let constraints = m
@@ -275,8 +306,9 @@ impl Engine {
             .iter()
             .filter_map(|c| {
                 let summary = match &c.kind {
-                    // A tie prescribes nothing and names two Sets: it is a Connection above.
-                    ConstraintKind::Bonded { .. } => return None,
+                    // A tie or a coupling prescribes nothing and names two Sets: they are the
+                    // Connections above.
+                    ConstraintKind::Bonded { .. } | ConstraintKind::Couple { .. } => return None,
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")
@@ -389,6 +421,7 @@ impl Engine {
             sets,
             constraints,
             connections,
+            points,
             loads,
             steps,
             mesh_settings: m.mesh.clone(),

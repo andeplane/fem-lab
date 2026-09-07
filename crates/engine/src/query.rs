@@ -401,6 +401,18 @@ pub struct ConnectionRow {
     pub summary: String,
 }
 
+/// One lumped point mass: where it sits and how heavy it is. It is also a node Set of the same
+/// name, which is what constraint.couple, load.force and query.set target.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PointRow {
+    pub name: String,
+    pub at: [Valued; 3],
+    pub mass: Valued,
+    /// The Constraints that attach it, empty when nothing does — which makes a Step ill-posed.
+    pub coupled_by: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadRow {
@@ -435,6 +447,9 @@ pub struct ModelSummary {
     pub sets: Vec<SetRow>,
     pub constraints: Vec<ConstraintRow>,
     pub connections: Vec<ConnectionRow>,
+    /// Lumped point masses; omitted when the Model has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<PointRow>,
     pub loads: Vec<LoadRow>,
     pub steps: Vec<StepRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

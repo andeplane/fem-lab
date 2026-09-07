@@ -490,7 +490,8 @@ mod tests {
 
     fn retain_test_temperature(engine: &mut Engine, step: &str, mesh: femlab_geometry::Mesh, value: f64) {
         let nodes = mesh.n_nodes();
-        engine.mesh = Some(BuiltMesh { mesh, body_of_block: vec!["body".into()], sets: Default::default() });
+        engine.mesh =
+            Some(BuiltMesh { mesh, body_of_block: vec!["body".into()], sets: Default::default(), points: Vec::new() });
         let mut result = crate::procedure::blank(crate::solve::SolveInfo {
             solver: "test",
             iterations: 0,
