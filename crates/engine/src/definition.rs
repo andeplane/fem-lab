@@ -145,6 +145,15 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                     kind: ContactKind::Bonded,
                     tol: tol.map(length),
                 },
+                ConstraintKind::Cyclic { from, axis, angle_deg, through, tol } => Command::ConstraintCyclic {
+                    name,
+                    from: from.clone(),
+                    to: on,
+                    axis: *axis,
+                    angle_deg: *angle_deg,
+                    through: through.map(|t| t.map(length)),
+                    tol: tol.map(length),
+                },
             }
         }
         ObjectKind::Load => {

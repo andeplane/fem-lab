@@ -102,7 +102,14 @@ pub fn build(p: &Problem<'_>) -> Result<Mpc, Error> {
     let mut rows: Vec<Row> = Vec::new();
     let mut warnings: Vec<Warning> = Vec::new();
     for (owner, c) in p.couplings.iter().enumerate() {
-        bonded_rows(p, c, owner, &mut rows, &mut warnings)?;
+        match c {
+            Coupling::Bonded { name, master, slave, tol } => {
+                bonded_rows(p, name, master, slave, *tol, owner, &mut rows, &mut warnings)?;
+            }
+            Coupling::Cyclic { name, from, to, axis, through, angle, tol } => {
+                cyclic_rows(p, name, from, to, *axis, *through, *angle, *tol, owner, &mut rows)?;
+            }
+        }
     }
     rows.sort_by_key(|r| r.slave);
     let dpn = p.dofs_per_node();
@@ -140,15 +147,17 @@ fn dependent(p: &Problem<'_>, dof: u32, dpn: usize, first: usize, second: usize,
 
 /// The rows of one bonded contact: every node of `slave` tied to the point it projects onto in
 /// `master`, in every component.
+#[allow(clippy::too_many_arguments)]
 fn bonded_rows(
     p: &Problem<'_>,
-    coupling: &Coupling,
+    name: &str,
+    master: &str,
+    slave: &str,
+    tol: f64,
     owner: usize,
     out: &mut Vec<Row>,
     warnings: &mut Vec<Warning>,
 ) -> Result<(), Error> {
-    let Coupling::Bonded { name, master, slave, tol } = coupling;
-    let (master, slave, tol) = (master.as_str(), slave.as_str(), *tol);
     let at = || format!("contact '{name}'");
     let faces = &p.set(master).map_err(|e| e.at(at()))?.faces;
     let slave_set = p.set(slave).map_err(|e| e.at(at()))?;
@@ -229,6 +238,113 @@ fn bonded_rows(
         });
     }
     Ok(())
+}
+
+/// The rows of one cyclic symmetry tie (plan B §4): every node of `from` is tied to the node it
+/// rotates onto in `to`. Node to node, not node to face, because a matching sector mesh from the
+/// revolve mesher is the only case in scope, and the pairing is a nearest-node match rather than
+/// a projection. `axis` is a coordinate axis (0 = x, 1 = y, 2 = z) and `through` is a point on
+/// it; `angle` is in radians.
+///
+/// A structural DOF mixes its `dpn` components under the rotation `R`; a heat DOF (`dpn == 1`)
+/// does not, because a temperature has no orientation to rotate. [`rotation`] returns the right
+/// `dpn × dpn` block for either case, so the row loop below never branches on `p.heat`.
+// ponytail: O(from nodes × to nodes) scan, same as the bonded pairing above; a bbox grid if a
+// tie ever needs more than the few hundred nodes a mesh face at reasonable order-2 density has.
+#[allow(clippy::too_many_arguments)]
+fn cyclic_rows(
+    p: &Problem<'_>,
+    name: &str,
+    from: &str,
+    to: &str,
+    axis: usize,
+    through: [f64; 3],
+    angle: f64,
+    tol: f64,
+    owner: usize,
+    out: &mut Vec<Row>,
+) -> Result<(), Error> {
+    let at = || format!("cyclic '{name}'");
+    let from_nodes = &p.set(from).map_err(|e| e.at(at()))?.nodes;
+    let to_set = p.set(to).map_err(|e| e.at(at()))?;
+    if let Some(&shared) = from_nodes.iter().find(|n| to_set.nodes.contains(n)) {
+        return Err(Error::new(
+            ErrorCode::ModelIllPosed,
+            format!("cyclic '{name}' ties node {shared} to itself: sets '{from}' and '{to}' share it"),
+        )
+        .at(at())
+        .suggest("constraint.cyclic between the two sector faces of one revolved Body"));
+    }
+    let dpn = p.dofs_per_node();
+    let r = rotation(axis, angle, dpn);
+    for &node in from_nodes {
+        let xr = rotate_point(p.mesh.node(node), axis, through, angle);
+        let mut best = (f64::INFINITY, 0u32);
+        for &cand in &to_set.nodes {
+            let d = dot3_sub(xr, p.mesh.node(cand));
+            if d < best.0 {
+                best = (d, cand);
+            }
+        }
+        let gap = best.0.sqrt();
+        if gap.is_nan() || gap > tol {
+            return Err(Error::new(
+                ErrorCode::ContactUnpaired,
+                format!(
+                    "cyclic '{name}': node {node} of '{from}' rotates to {gap} m from the nearest node of '{to}', \
+                     more than the tolerance {tol} m",
+                ),
+            )
+            .at(at())
+            .suggest(
+                "mesh both sector faces with the revolve mesher, whose theta0/theta1 Sets mesh identically, \
+                 or constraint.cyclic with a larger tol",
+            ));
+        }
+        let t = best.1;
+        for c in 0..dpn {
+            let masters: Vec<(u32, f64)> = (0..dpn)
+                .filter(|&d| r[c][d].abs() > WEIGHT_EPS)
+                .map(|d| (node * dpn as u32 + d as u32, r[c][d]))
+                .collect();
+            out.push(Row { slave: t * dpn as u32 + c as u32, masters, owner });
+        }
+    }
+    Ok(())
+}
+
+/// `dpn × dpn` block of the rotation by `angle` about coordinate axis `axis` (0 = x, 1 = y,
+/// 2 = z) that a cyclic tie's DOFs use. A heat Problem's single scalar DOF has no orientation,
+/// so `dpn == 1` is the 1×1 identity rather than the top-left corner of the 3×3 matrix — the
+/// same code in [`cyclic_rows`] then ties `T_to = T_from` with no branch.
+fn rotation(axis: usize, angle: f64, dpn: usize) -> [[f64; 3]; 3] {
+    if dpn == 1 {
+        return [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
+    }
+    let (c, s) = (libm::cos(angle), libm::sin(angle));
+    match axis {
+        0 => [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]],
+        1 => [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]],
+        _ => [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+    }
+}
+
+/// `x` rotated by `angle` about the line through `through` parallel to coordinate axis `axis`.
+fn rotate_point(x: [f64; 3], axis: usize, through: [f64; 3], angle: f64) -> [f64; 3] {
+    let d = [x[0] - through[0], x[1] - through[1], x[2] - through[2]];
+    let r = rotation(axis, angle, 3);
+    let mut out = [0.0; 3];
+    for (c, row) in r.iter().enumerate() {
+        out[c] = through[c] + dot3(*row, d);
+    }
+    out
+}
+
+/// Squared distance between two points, named for what the caller does with it: find the
+/// smallest one without an intervening square root.
+fn dot3_sub(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    dot3(d, d)
 }
 
 /// The face of `faces` nearest `x`: its gap, the face, and the face coordinates of the closest

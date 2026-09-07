@@ -107,6 +107,18 @@ fn build_problem_with_temperature<'a>(
                 });
                 continue;
             }
+            ConstraintKind::Cyclic { from, axis, angle_deg, through, tol } => {
+                couplings.push(Coupling::Cyclic {
+                    name: c.name.clone(),
+                    from: from.clone(),
+                    to: c.on.clone(),
+                    axis: axis.index(),
+                    through: through.unwrap_or([0.0; 3]),
+                    angle: angle_deg.to_radians(),
+                    tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
             ConstraintKind::Fix { dofs } => {
                 let mut on = [false; 3];
                 for d in dofs {

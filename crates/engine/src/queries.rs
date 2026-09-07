@@ -224,6 +224,13 @@ impl Engine {
                         }
                     },
                 }),
+                ConstraintKind::Cyclic { from, angle_deg, .. } => Some(ConnectionRow {
+                    name: c.name.clone(),
+                    kind: "cyclic".into(),
+                    master: from.clone(),
+                    slave: c.on.clone(),
+                    summary: format!("cyclic, {angle_deg} deg"),
+                }),
                 _ => None,
             })
             .collect();
@@ -233,7 +240,7 @@ impl Engine {
             .filter_map(|c| {
                 let summary = match &c.kind {
                     // A tie prescribes nothing and names two Sets: it is a Connection above.
-                    ConstraintKind::Bonded { .. } => return None,
+                    ConstraintKind::Bonded { .. } | ConstraintKind::Cyclic { .. } => return None,
                     ConstraintKind::Fix { dofs } => format!(
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")

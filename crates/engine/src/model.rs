@@ -117,6 +117,20 @@ pub enum ConstraintKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tol: Option<f64>,
     },
+    /// A cyclic symmetry tie: the Constraint's own Set is `to`, `from` names the other sector
+    /// face, and `u(to) = R·u(from)` for the rotation `angleDeg` about `axis` through `through`
+    /// (metres, `None` the origin). `tol` is the largest pairing gap in metres (`None` scales
+    /// with the Mesh).
+    Cyclic {
+        from: String,
+        axis: Axis,
+        #[serde(rename = "angleDeg")]
+        angle_deg: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        through: Option<[f64; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<f64>,
+    },
 }
 
 /// A Constraint on a Set.
@@ -134,8 +148,13 @@ impl Constraint {
     /// accessor, so a rename or an in-use check can never miss the second one.
     pub fn sets(&self) -> Vec<&str> {
         let mut out = vec![self.on.as_str()];
-        if let ConstraintKind::Bonded { master, .. } = &self.kind {
-            out.push(master);
+        match &self.kind {
+            ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Cyclic { from, .. } => out.push(from),
+            ConstraintKind::Fix { .. }
+            | ConstraintKind::Prescribe { .. }
+            | ConstraintKind::Symmetry { .. }
+            | ConstraintKind::Temperature { .. } => {}
         }
         out
     }
@@ -143,8 +162,13 @@ impl Constraint {
     /// The same Sets, for a rename to rewrite in place.
     pub fn sets_mut(&mut self) -> Vec<&mut String> {
         let mut out = vec![&mut self.on];
-        if let ConstraintKind::Bonded { master, .. } = &mut self.kind {
-            out.push(master);
+        match &mut self.kind {
+            ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Cyclic { from, .. } => out.push(from),
+            ConstraintKind::Fix { .. }
+            | ConstraintKind::Prescribe { .. }
+            | ConstraintKind::Symmetry { .. }
+            | ConstraintKind::Temperature { .. } => {}
         }
         out
     }
