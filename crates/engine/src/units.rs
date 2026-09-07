@@ -154,6 +154,9 @@ dims! {
     HeatSource, "heat_source", "1 kW/m^3", [-1,1,-3,0];
     Frequency, "frequency", "50 Hz", [0,0,-1,0];
     Dimensionless, "dimensionless", "0.3", [0,0,0,0];
+    // Same dimension as energy (force times length); a separate marker so a schema mismatch
+    // between a torque and a plain force is caught even though the SI unit is the same.
+    Torque, "torque", "100 N m", [2,1,-2,0];
 }
 
 /// A [`Quantity`] whose dimension is fixed by the schema. Serialises exactly like `Quantity`.

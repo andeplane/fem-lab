@@ -363,11 +363,16 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
 
 /// A per-node vector as three components, so a 2D Result reaches a host and a VTU writer with
 /// the same shape as a 3D one (the z component is zero, and a one-DOF heat field fills only x).
+/// Under axisymmetric twist the third slot is `u_theta`, not a spatial z, exactly filling the
+/// three components this shape provides.
+// ponytail: the `node * 3` output stride is `dofs_per_node`'s ceiling (3, today's largest);
+// a future idealisation with more DOFs per node needs a wider Per::Node shape here, not a
+// literal 3.
 pub(crate) fn vector_field(v: &[f64], dofs_per_node: usize) -> FieldData {
     let n = v.len() / dofs_per_node;
     let mut data = vec![0.0; n * 3];
     for node in 0..n {
-        for c in 0..dofs_per_node {
+        for c in 0..dofs_per_node.min(3) {
             data[node * 3 + c] = v[node * dofs_per_node + c];
         }
     }
@@ -522,5 +527,24 @@ mod tests {
         }
         let history = super::History::with_initial(crate::command::Field::Temperature, vec![1.0, 2.0], 4);
         assert_eq!((history.times.capacity(), history.values.capacity()), (4, 4));
+    }
+
+    /// #82: every real `dofs_per_node` today is at most 3, so `node * 3` never overruns; a
+    /// future stride above 3 (a beam's 6, say) would otherwise write into the next node's
+    /// slot. Called directly with such a stride, `vector_field` must drop the extra components
+    /// rather than corrupt data belonging to a different node.
+    #[test]
+    fn vector_field_never_writes_past_its_own_node() {
+        use super::vector_field;
+        // dofs_per_node = 2: a plain 2D field, unaffected.
+        let plane = vector_field(&[1.0, 2.0, 3.0, 4.0], 2);
+        assert_eq!(plane.data, vec![1.0, 2.0, 0.0, 3.0, 4.0, 0.0]);
+        // dofs_per_node = 3: axisymmetric twist, filling every one of the three slots.
+        let twist = vector_field(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3);
+        assert_eq!(twist.data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        // dofs_per_node = 4 (hypothetical, no real Idealisation reaches this yet): components
+        // beyond the third are dropped, never scattered into node 1's own three slots.
+        let wide = vector_field(&[1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0], 4);
+        assert_eq!(wide.data, vec![1.0, 2.0, 3.0, 10.0, 20.0, 30.0]);
     }
 }

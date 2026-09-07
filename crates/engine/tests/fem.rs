@@ -766,7 +766,11 @@ fn idealisations(kind: ElementKind) -> Vec<Idealisation> {
     if kind.dim() == 3 {
         vec![Idealisation::Solid3d]
     } else {
-        vec![Idealisation::PlaneStress { thickness: THICKNESS }, Idealisation::PlaneStrain, Idealisation::Axisymmetric]
+        vec![
+            Idealisation::PlaneStress { thickness: THICKNESS },
+            Idealisation::PlaneStrain,
+            Idealisation::Axisymmetric { twist: false },
+        ]
     }
 }
 
@@ -775,7 +779,7 @@ fn weighted(id: &Idealisation, base: f64, rbar: f64) -> f64 {
     match id {
         Idealisation::Solid3d | Idealisation::PlaneStrain => base,
         Idealisation::PlaneStress { thickness } => base * thickness,
-        Idealisation::Axisymmetric => 2.0 * std::f64::consts::PI * rbar * base,
+        Idealisation::Axisymmetric { .. } => 2.0 * std::f64::consts::PI * rbar * base,
     }
 }
 
@@ -921,7 +925,7 @@ fn nodal_field(kind: ElementKind, coords: &[f64], f: &dyn Fn([f64; 3]) -> [f64; 
 /// translation for an axisymmetric body (a radial one strains the hoop direction).
 fn rigid_modes(kind: ElementKind, id: &Idealisation, coords: &[f64]) -> Vec<Vec<f64>> {
     let m = |f: &dyn Fn([f64; 3]) -> [f64; 3]| nodal_field(kind, coords, f);
-    if let Idealisation::Axisymmetric = id {
+    if let Idealisation::Axisymmetric { .. } = id {
         return vec![m(&|_x: [f64; 3]| [0.0, 1.0, 0.0])];
     }
     let mut v = vec![
@@ -947,7 +951,7 @@ fn patch_modes(id: &Idealisation) -> Vec<[f64; VOIGT]> {
     };
     match id {
         Idealisation::Solid3d => (0..VOIGT).map(unit).collect(),
-        Idealisation::Axisymmetric => {
+        Idealisation::Axisymmetric { .. } => {
             let mut rr = unit(0);
             rr[2] = 1e-3;
             vec![rr, unit(1), unit(3)]
@@ -964,7 +968,7 @@ fn patch_u(id: &Idealisation, three: bool, e: &[f64; VOIGT], x: [f64; 3]) -> [f6
             0.5 * e[3] * x[0] + e[1] * x[1] + 0.5 * e[5] * x[2],
             0.5 * e[4] * x[0] + 0.5 * e[5] * x[1] + e[2] * x[2],
         ]
-    } else if let Idealisation::Axisymmetric = id {
+    } else if let Idealisation::Axisymmetric { .. } = id {
         [e[0] * x[0], e[1] * x[1] + e[3] * x[0], 0.0]
     } else {
         [e[0] * x[0] + 0.5 * e[3] * x[1], 0.5 * e[3] * x[0] + e[1] * x[1], 0.0]
@@ -1047,6 +1051,80 @@ fn element_stiffness_is_symmetric_and_annihilates_the_rigid_modes() {
                     assert!(res <= 1e-12 * scale * inf_norm(&r), "{kind:?} {id:?} {form:?}: {res}");
                 }
             }
+        }
+    }
+}
+
+/// #82: axisymmetric twist widens quad4's DOF stride to 3 and adds Voigt rows 4 (r-theta) and
+/// 5 (theta-z). Extends the symmetry/rigid-mode check above to that idealisation, and, on a
+/// rectangular element where `r` and `z` each vary with one parametric coordinate only, proves
+/// the two new rows reproduce the bilinear field `u_theta = alpha r z` exactly — the same
+/// patch-test argument the twisted-shaft Benchmark relies on — while the four original rows see
+/// none of it, which is what the pressure+torque superposition Benchmark also depends on.
+#[test]
+fn axisymmetric_twist_is_symmetric_psd_and_reproduces_pure_twist_strain_exactly() {
+    let mat = steel();
+    let kind = ElementKind::Quad4;
+    let (coords, _, _) = simple(kind);
+    let el = element_for(kind);
+    let (nn, dofs) = (kind.n_nodes(), 3);
+    let nd = nn * dofs;
+    for form in [Formulation::Full, Formulation::IncompatibleModes] {
+        let c = ctx(&coords, &mat, Idealisation::Axisymmetric { twist: true }, form);
+        let mut k = vec![0.0; nd * nd];
+        let det = el.stiffness(&c, &mut k).expect("a valid twisted element");
+        assert!(det > 0.0);
+        let scale = row_sum_norm(&k, nd);
+        for i in 0..nd {
+            for j in 0..nd {
+                assert!((k[i * nd + j] - k[j * nd + i]).abs() <= 1e-9 * scale, "{form:?} ({i},{j})");
+            }
+        }
+        // Symmetric with a genuine zero mode (the axis rotation) is positive *semi*-definite:
+        // no eigenvalue may be meaningfully negative.
+        let ev = jacobi_eigenvalues(&k, nd);
+        let top = ev.iter().cloned().fold(0.0f64, f64::max);
+        assert!(ev.iter().all(|&v| v >= -1e-8 * top), "{form:?} {ev:?}");
+
+        // Rigid rotation about the axis, u_theta = r: the only zero-energy twist motion.
+        let mut rigid = vec![0.0; nd];
+        for a in 0..nn {
+            rigid[dofs * a + 2] = coords[3 * a];
+        }
+        let f = mat_vec(&k, nd, &rigid);
+        assert!(inf_norm(&f) <= 1e-6 * scale * inf_norm(&rigid), "{form:?}: axis rotation is not rigid: {f:?}");
+
+        // u_theta = alpha r z: on this axis-aligned rectangle r(xi) and z(eta) each depend on
+        // one parametric coordinate, so their product is exactly the bilinear span {1,xi,eta,
+        // xi eta} quad4 already spans — the discrete strain must equal the closed form exactly,
+        // not approximately, at every Gauss point.
+        let alpha = 0.037;
+        let mut u = vec![0.0; nd];
+        for a in 0..nn {
+            let (r, z) = (coords[3 * a], coords[3 * a + 1]);
+            u[dofs * a + 2] = alpha * r * z;
+        }
+        let n_gp = el.n_gp();
+        let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
+        el.recover(&c, &u, &mut sig, &mut eps).expect("recovery of a bilinear twist field");
+        for g in 0..n_gp {
+            let mut sh = vec![0.0; nn];
+            el.shape_at(el.gp_xi(g), &mut sh);
+            let r_gp: f64 = (0..nn).map(|a| sh[a] * coords[3 * a]).sum();
+            for row in 0..4 {
+                assert!(eps[g * VOIGT + row].abs() <= 1e-12, "{form:?} row {row} at gp {g}: {}", eps[g * VOIGT + row]);
+            }
+            assert!(eps[g * VOIGT + 4].abs() <= 1e-10, "{form:?} gamma_r-theta at gp {g}: {}", eps[g * VOIGT + 4]);
+            let want = alpha * r_gp;
+            assert!(
+                (eps[g * VOIGT + 5] - want).abs() <= 1e-10 * want.abs().max(1.0),
+                "{form:?} gamma_theta-z at gp {g}: {} vs {want}",
+                eps[g * VOIGT + 5]
+            );
+            // The 6x6 isotropic law puts the shear modulus on rows 4 and 5 like any other
+            // shear row, so stress is simply G times the strain just checked.
+            let g_mod = YOUNG / (2.0 * (1.0 + POISSON));
+            assert!((sig[g * VOIGT + 5] - g_mod * want).abs() <= 1e-4 * (g_mod * want).abs().max(1.0));
         }
     }
 }
@@ -2588,6 +2666,32 @@ fn two_constraints_that_disagree_on_one_dof_are_a_conflict() {
     );
     let e = resolve(&missing).expect_err("an unknown set");
     assert_eq!(e.code, ErrorCode::SetEmpty);
+
+    // #82: the conflict message's component labels are the idealisation's own, not a hardcoded
+    // ux/uy/uz — under axisymmetric they are ur/uz, and with twist utheta joins as the third.
+    let quad = Structured { kind: ElementKind::Quad4, n: [2, 2, 1] }.box_([0.05, 0.1, 0.0]);
+    let qsets = sets_of(&quad);
+    let qbodies = vec!["shaft".to_string()];
+    let axi_clash = problem(
+        &quad,
+        &qsets,
+        &qbodies,
+        Idealisation::Axisymmetric { twist: false },
+        Formulation::Full,
+        vec![fix("a", "xmin", [true, false, false], 0.0), fix("b", "xmin", [true, false, false], 1e-3)],
+    );
+    let e = resolve(&axi_clash).expect_err("two values on ur");
+    assert!(e.cause.contains("ur"), "{}", e.cause);
+    let twist_clash = problem(
+        &quad,
+        &qsets,
+        &qbodies,
+        Idealisation::Axisymmetric { twist: true },
+        Formulation::Full,
+        vec![fix("a", "xmin", [false, false, true], 0.0), fix("b", "xmin", [false, false, true], 1e-3)],
+    );
+    let e = resolve(&twist_clash).expect_err("two values on utheta");
+    assert!(e.cause.contains("utheta"), "{}", e.cause);
 }
 
 #[test]
@@ -2770,7 +2874,7 @@ fn the_patch_test_passes_for_every_kind_and_every_constant_strain_mode() {
             // In axisymmetry a constant γ_rz is not an equilibrium state — it needs the body
             // force σ_rz/r — so the mesh patch test drops it; the single-element test, where
             // every node is prescribed, still covers it.
-            let axi = matches!(id, Idealisation::Axisymmetric);
+            let axi = matches!(id, Idealisation::Axisymmetric { .. });
             let modes: Vec<[f64; VOIGT]> =
                 patch_modes(&id).into_iter().enumerate().filter(|(i, _)| !(axi && *i == 2)).map(|(_, e)| e).collect();
             for e in modes {
@@ -2948,6 +3052,51 @@ fn a_plane_model_has_three_rigid_modes() {
     );
     let e = run_static(&p, &mut nop).expect_err("a sheet on a pin still turns");
     assert_eq!(e.cause, "the model can still move as a rigid body: rotation about z");
+}
+
+/// #82: before `rigid_basis` took its DOF stride from the idealisation instead of `mesh.dim`,
+/// this panicked — the mode vector was sized `n_nodes * 2` while the resolved-constraint DOF
+/// indices this check compares it against range over `n_nodes * dofs_per_node` (3), an
+/// out-of-bounds read. Also the twist rigid mode itself: a shaft nobody holds against rotation
+/// about its own axis must not be silently accepted.
+#[test]
+fn a_twisted_axisymmetric_shaft_has_a_rotation_about_the_axis_rigid_mode() {
+    let mesh = Structured { kind: ElementKind::Quad4, n: [2, 3, 1] }.box_([0.05, 0.2, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["shaft".to_string()];
+    let free = problem(&mesh, &sets, &bodies, Idealisation::Axisymmetric { twist: true }, Formulation::Full, vec![]);
+    let e = run_static(&free, &mut nop).expect_err("nothing holds a twisted shaft");
+    assert_eq!(e.code, ErrorCode::ConstraintRigidModes);
+    assert!(e.cause.contains("translation y") && e.cause.contains("rotation about the axis"), "{}", e.cause);
+
+    // Holding the axial translation alone still leaves it free to spin about its axis.
+    let axial_only = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Axisymmetric { twist: true },
+        Formulation::Full,
+        vec![fix("root", "ymin", [false, true, false], 0.0)],
+    );
+    let e = run_static(&axial_only, &mut nop).expect_err("axial hold alone does not stop the spin");
+    assert_eq!(e.cause, "the model can still move as a rigid body: rotation about the axis");
+
+    // Fixing the twist component too (the third, index-2 DOF) leaves no rigid mode.
+    let held = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Axisymmetric { twist: true },
+        Formulation::Full,
+        vec![fix("root", "ymin", [false, true, true], 0.0)],
+    );
+    assert!(checks::all(&held).is_empty(), "{:?}", checks::all(&held));
+
+    // Without twist the axisymmetric idealisation is unaffected: still only translation y.
+    let untwisted =
+        problem(&mesh, &sets, &bodies, Idealisation::Axisymmetric { twist: false }, Formulation::Full, vec![]);
+    let e = run_static(&untwisted, &mut nop).expect_err("an untwisted disc still slides");
+    assert_eq!(e.cause, "the model can still move as a rigid body: translation y");
 }
 
 #[test]
@@ -3458,10 +3607,10 @@ fn free_thermal_expansion_is_alpha_delta_t_with_no_stress() {
         (ElementKind::Hex8, Idealisation::Solid3d),
         (ElementKind::Hex20, Idealisation::Solid3d),
         (ElementKind::Quad4, Idealisation::PlaneStress { thickness: 0.1 }),
-        (ElementKind::Quad4, Idealisation::Axisymmetric),
+        (ElementKind::Quad4, Idealisation::Axisymmetric { twist: false }),
     ];
     for (kind, id) in cases {
-        let axi = matches!(id, Idealisation::Axisymmetric);
+        let axi = matches!(id, Idealisation::Axisymmetric { .. });
         let n = if kind.dim() == 3 { [4, 4, 4] } else { [4, 4, 1] };
         // the axisymmetric ring sits away from the axis; everything else is a unit block
         let mesh = Structured { kind, n }.build(|q| [if axi { 1.0 } else { 0.0 } + q[0], q[1], q[2]]);
@@ -5447,7 +5596,7 @@ fn every_simplex_mass_and_capacity_entry_matches_barycentric_closed_forms() {
             }
             for id in idealisations(kind) {
                 let scale = match id {
-                    Idealisation::Axisymmetric => {
+                    Idealisation::Axisymmetric { .. } => {
                         vec![(2.0 * PI, [0; 4]), bary_power(4.0 * PI, 1, 1), bary_power(2.0 * PI * curvature, 1, 2)]
                     }
                     Idealisation::PlaneStress { thickness } => vec![(thickness, [0; 4])],

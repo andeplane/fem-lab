@@ -1,0 +1,69 @@
+{
+  "name": "twisted-shaft-hollow",
+  "reference": "Benchmark B15: the hollow variant of B14, a = 25 mm, b = 15 mm inner radius, L = 100 mm, same steel and T = 100 N*m at z = L. J = pi(a^4 - b^4)/2 = 5.340707511102649e-7 m^4. Closed form u_theta(a, L) = T L a / (G J) = 6.085336059395998e-6 m, tau_theta_z(a) = T a / J = 4681027.737996921 Pa, reproduced exactly for the same bilinear-field reason B14 is.",
+  "journal": [
+    { "cmd": "model.new", "name": "twisted-shaft-hollow" },
+    { "cmd": "model.setUnits", "units": { "length": "m", "stress": "Pa", "force": "N" } },
+    { "cmd": "model.setIdealisation", "idealisation": { "kind": "axisymmetric", "twist": true } },
+    { "cmd": "material.add", "name": "steel", "E": "200 GPa", "nu": 0.3 },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "shaft",
+        "blocks": [
+          {
+            "corners": [["0.015 m", "0 m"], ["0.025 m", "0 m"], ["0.025 m", "0.1 m"], ["0.015 m", "0.1 m"]],
+            "n": [4, 8],
+            "tags": ["zmin", "outer", "zmax", "inner"]
+          }
+        ]
+      },
+      "order": 1
+    },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["shaft"] },
+    { "cmd": "constraint.fix", "name": "clamp", "on": "shaft.zmin", "dofs": ["uy", "uz"] },
+    { "cmd": "load.torque", "name": "torque", "on": "shaft.zmax", "total": "100 N*m" },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": ["clamp"],
+      "loads": ["torque"]
+    },
+    { "cmd": "solve.run", "step": "static" }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": ["0.025 m", "0.1 m", "0 m"]
+      },
+      "path": "/value/value",
+      "expect": 6.085336059395998e-6,
+      "tol": 1e-9,
+      "rel": true,
+      "note": "u_theta(a, L) with J = pi(a^4 - b^4)/2"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 5,
+        "at": ["0.025 m", "0.05 m", "0 m"]
+      },
+      "path": "/value/value",
+      "expect": 4681027.737996921,
+      "tol": 1e-8,
+      "rel": true,
+      "note": "tau_theta_z(a) = T a / J"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

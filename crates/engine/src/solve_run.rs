@@ -12,7 +12,7 @@ use crate::engine::{display, Engine, OnProgress};
 use crate::error::{Error, ErrorCode};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
-use crate::fem::loads::{face_set_area, Load};
+use crate::fem::loads::{face_set_area, face_set_polar_moment, Load};
 use crate::fem::problem::{Constraint, Coupling, Problem};
 use crate::mesh::{scale_mesher, BuiltMesh};
 use crate::model::{ConstraintKind, LoadKind, MeshSettings, Model, Step};
@@ -171,6 +171,10 @@ fn build_problem_with_temperature<'a>(
             LoadKind::HeatFlux { on, q } => heat_loads.push(HeatLoad::Flux { faces: on.clone(), q: *q }),
             LoadKind::HeatSource { bodies, q } => {
                 heat_loads.push(HeatLoad::Source { bodies: bodies.clone(), q: *q });
+            }
+            LoadKind::Torque { on, total } => {
+                let j = face_set_polar_moment(&p, on)?;
+                loads.push(Load::Torque { faces: on.clone(), c: total / j });
             }
         }
     }
@@ -356,8 +360,13 @@ pub(crate) struct PlannedCost {
 
 /// The cost Query and solve preflight share one schedule and byte calculation. Explicit Steps
 /// derive their step count from the same element-frequency bound as the integrator.
+///
+/// `dofs_per_node` is the idealisation's structural stride (`Idealisation::dofs_per_node`, not
+/// the mesh's geometric dimension), so a twisted axisymmetric Model's cost reflects its third
+/// DOF; the heat arms ignore it and always budget one unknown per node.
 pub(crate) fn planned_cost(
     mesh: &femlab_geometry::Mesh,
+    dofs_per_node: usize,
     explicit_problem: Option<&Problem<'_>>,
     step: &procedure::Step,
 ) -> Result<PlannedCost, Error> {
@@ -367,12 +376,12 @@ pub(crate) fn planned_cost(
         // are the full-field vectors alive while it retains.
         procedure::Step::Static { solver, dt, t_end, amplitude: Some(_), output_every } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;
-            let base = crate::solve::cost_estimate(mesh, mesh.dim, solver.solver);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 6)
+            let base = crate::solve::cost_estimate(mesh, dofs_per_node, solver.solver);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), dofs_per_node, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "static")) });
         }
         procedure::Step::Static { solver, .. } | procedure::Step::Modal { solver, .. } => {
-            crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
+            crate::solve::cost_estimate(mesh, dofs_per_node, solver.solver)
         }
         procedure::Step::HeatSteady { solver, .. } => crate::solve::cost_estimate(mesh, 1, solver.solver),
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
@@ -392,9 +401,8 @@ pub(crate) fn planned_cost(
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
             let p = explicit_problem.expect("an explicit cost plan needs its resolved Problem");
             let (steps, _) = procedure::explicit::retention_grid(p, *t_end, *dt_factor)?;
-            let components = p.dofs_per_node();
-            let base = crate::solve::cost_estimate(mesh, components, Solver::Auto);
-            return crate::solve::add_transient_cost(base, mesh.n_nodes(), components, steps, *output_every, 6)
+            let base = crate::solve::cost_estimate(mesh, dofs_per_node, Solver::Auto);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), dofs_per_node, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "explicit")) });
         }
     };
@@ -492,7 +500,7 @@ impl Engine {
                     | procedure::Step::Explicit { .. }
                     | procedure::Step::Static { amplitude: Some(_), .. }
             ) {
-                planned_cost(p.mesh, Some(&p), &proc_step)?
+                planned_cost(p.mesh, p.dofs_per_node(), Some(&p), &proc_step)?
                     .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                     .enforce(&step.name)?;
             }

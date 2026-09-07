@@ -1,0 +1,69 @@
+{
+  "name": "twisted-shaft-solid-fine",
+  "reference": "Benchmark B14's second mesh: the same solid shaft (a = 25 mm, L = 100 mm, T = 100 N*m, steel) at 6x10 quad4 instead of 2x3. u_theta = alpha r z is exactly bilinear, so the closed form u_theta(a, L) = 5.296676506098277e-6 m and tau_theta_z(a) = 4074366.54315252 Pa are reproduced to machine precision on this mesh too: the coarse and fine cases matching at 1e-9/1e-8 is the patch-test proof that the twist DOF's kinematics do not depend on mesh size.",
+  "journal": [
+    { "cmd": "model.new", "name": "twisted-shaft-solid-fine" },
+    { "cmd": "model.setUnits", "units": { "length": "m", "stress": "Pa", "force": "N" } },
+    { "cmd": "model.setIdealisation", "idealisation": { "kind": "axisymmetric", "twist": true } },
+    { "cmd": "material.add", "name": "steel", "E": "200 GPa", "nu": 0.3 },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "shaft",
+        "blocks": [
+          {
+            "corners": [["0 m", "0 m"], ["0.025 m", "0 m"], ["0.025 m", "0.1 m"], ["0 m", "0.1 m"]],
+            "n": [6, 10],
+            "tags": ["zmin", "outer", "zmax", "inner"]
+          }
+        ]
+      },
+      "order": 1
+    },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["shaft"] },
+    { "cmd": "constraint.fix", "name": "clamp", "on": "shaft.zmin", "dofs": ["uy", "uz"] },
+    { "cmd": "load.torque", "name": "torque", "on": "shaft.zmax", "total": "100 N*m" },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": ["clamp"],
+      "loads": ["torque"]
+    },
+    { "cmd": "solve.run", "step": "static" }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": ["0.025 m", "0.1 m", "0 m"]
+      },
+      "path": "/value/value",
+      "expect": 5.296676506098277e-6,
+      "tol": 1e-9,
+      "rel": true,
+      "note": "u_theta(a, L), the same closed form as the coarse mesh"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 5,
+        "at": ["0.025 m", "0.05 m", "0 m"]
+      },
+      "path": "/value/value",
+      "expect": 4074366.54315252,
+      "tol": 1e-8,
+      "rel": true,
+      "note": "tau_theta_z(a), unchanged by mesh refinement"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

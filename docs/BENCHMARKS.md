@@ -235,6 +235,8 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
 | B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
+| B14 | Twisted axisymmetric shaft, solid, St Venant torsion | u_θ(a,L) = TLa/(GJ) = 5.296676506098277e-6 m, τ_θz(a) = Ta/J = 4074366.54315252 Pa, J = πa⁴/2 | 1e-9 (u_θ) and 1e-8 (τ) on two meshes | axisymmetric twist DOF, its two new Voigt rows, the rotation-about-the-axis rigid mode | engine test + green |
+| B15 | Twisted axisymmetric shaft, hollow | same closed form with J = π(a⁴−b⁴)/2: u_θ(a,L) = 6.085336059395998e-6 m, τ_θz(a) = 4681027.737996921 Pa | 1e-9 (u_θ), 1e-8 (τ) | the hollow-section case; superposition against a separate internal-pressure Step to 1e-10 | engine test + green |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
 motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
@@ -255,6 +257,25 @@ a temperature Load present, the frame at g = 0 must equal a pure thermal solve �
 and reactions — and the frame at g = 1 the un-amplituded answer. The exactness of the scaling
 itself is what a linear procedure guarantees; when a nonlinear material, contact or large
 deflection lands, the increments become real solves and this benchmark becomes their gate.
+
+**B14/B15: the twist DOF is a patch test, not just a Benchmark.** `u_θ = T r z / (G J)` is exactly
+bilinear in the meridional (r, z) plane, and on the axis-aligned rectangular mesh both cases use,
+r and z each vary with one parametric coordinate only — so quad4's bilinear shape functions
+reproduce the field, and every strain derived from it, to machine precision regardless of mesh
+size. `a_twisted_axisymmetric_shaft_matches_the_closed_form_on_two_meshes` in `tests/registry.rs`
+solves the solid shaft (a = 25 mm, L = 100 mm, steel, T = 100 N·m) at 2×3 and 6×10 and gates the
+tip twist at 1e-9 relative and the surface shear at 1e-8 on both — the two meshes agreeing is the
+patch-test half of the claim, and the closed form is the Benchmark half.
+`a_hollow_twisted_shaft_matches_its_closed_form` repeats it with a 15 mm bore, J = π(a⁴−b⁴)/2.
+`torque_and_pressure_do_not_couple_under_axisymmetric_twist` solves internal pressure and torque
+together in one Step and separately in two, on the same mesh so the same physical point can be
+compared pointwise: the combined Step's fields equal the sum of the separate ones to 1e-10, and
+pressure alone drives no twist while torque alone drives no radial expansion at all — the proof
+that the new Voigt rows (r-θ, θ-z) share no material coupling with the four original ones. The
+element-level companion, `axisymmetric_twist_is_symmetric_psd_and_reproduces_pure_twist_strain_exactly`
+in `tests/fem.rs`, checks the same exactness and the stiffness's symmetry, positive
+semi-definiteness and rigid-mode annihilation (`u_θ = r`, the rotation about the axis) directly
+against the element kernel, both formulations.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the

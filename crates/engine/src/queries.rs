@@ -297,6 +297,10 @@ impl Engine {
                         let v = display(m, *q, crate::units::HeatSource::DIM);
                         ("heatSource", format!("{} {} on {}", units::fmt_sig(v.value, 4), v.unit, bodies.join(", ")))
                     }
+                    LoadKind::Torque { total, .. } => {
+                        let v = display(m, *total, crate::units::Torque::DIM);
+                        ("torque", format!("total {} {}", units::fmt_sig(v.value, 4), v.unit))
+                    }
                     LoadKind::Temperature { bodies, value, reference } => {
                         let v = display(m, *value, Temperature::DIM);
                         let r = display(m, *reference, Temperature::DIM);
@@ -339,7 +343,8 @@ impl Engine {
                     format!("planeStress (thickness {} {})", units::fmt_sig(t.value, 4), t.unit)
                 }
                 Idealisation::PlaneStrain => "planeStrain".into(),
-                Idealisation::Axisymmetric => "axisymmetric".into(),
+                Idealisation::Axisymmetric { twist: false } => "axisymmetric".into(),
+                Idealisation::Axisymmetric { twist: true } => "axisymmetric (twist)".into(),
             },
             bodies,
             materials,
@@ -375,7 +380,7 @@ impl Engine {
             nodes: mesh.n_nodes() as u32,
             elements: mesh.n_elems() as u32,
             element_kind: format!("{:?}", mesh.blocks[0].kind).to_lowercase(),
-            dofs: (mesh.n_nodes() * mesh.dim) as u32,
+            dofs: (mesh.n_nodes() * m.idealisation.dofs_per_node()) as u32,
             bbox: bbox6(m, lo, hi),
             min_edge: display(m, min_edge, Length::DIM),
             max_edge: display(m, max_edge, Length::DIM),
@@ -545,13 +550,14 @@ impl Engine {
         let procedure = crate::solve_run::procedure_step(&step, crate::solve::SolveOptions::default())?;
         self.mesh()?;
         let built = self.mesh.as_ref().expect("built above");
+        let dofs_per_node = self.model.idealisation.dofs_per_node();
         if matches!(procedure, crate::procedure::Step::Explicit { .. } | crate::procedure::Step::HeatTransient { .. }) {
             let problem = crate::solve_run::build_problem(&self.model, built, &step)?;
-            Ok(crate::solve_run::planned_cost(&built.mesh, Some(&problem), &procedure)?
+            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, Some(&problem), &procedure)?
                 .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                 .estimate)
         } else {
-            Ok(crate::solve_run::planned_cost(&built.mesh, None, &procedure)?
+            Ok(crate::solve_run::planned_cost(&built.mesh, dofs_per_node, None, &procedure)?
                 .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                 .estimate)
         }

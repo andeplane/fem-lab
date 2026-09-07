@@ -60,6 +60,9 @@ pub struct ElementCtx<'a> {
 pub enum FaceLoad {
     Pressure(f64),
     Traction([f64; 3]),
+    /// Circumferential traction `t_theta = c r` at each Gauss point, valid only under
+    /// axisymmetric twist (where the third DOF exists to carry it).
+    Torque(f64),
 }
 
 /// Outcome of isoparametric point location. `Outside` is a converged reference coordinate
@@ -128,7 +131,7 @@ pub(crate) fn scale_at(id: &Idealisation, x: [f64; 3]) -> f64 {
     match id {
         Idealisation::Solid3d | Idealisation::PlaneStrain => 1.0,
         Idealisation::PlaneStress { thickness } => *thickness,
-        Idealisation::Axisymmetric => 2.0 * PI * x[0],
+        Idealisation::Axisymmetric { .. } => 2.0 * PI * x[0],
     }
 }
 
@@ -212,7 +215,12 @@ fn fill_b(b: &mut [f64], nt: usize, col: usize, comp: usize, g: [f64; 3], dim: u
 struct Kin {
     n_gp: usize,
     n_nodes: usize,
+    /// Geometric dimension: what the Jacobian, the shape-function gradients and a body or face
+    /// load's spatial components use.
     dim: usize,
+    /// Degrees of freedom per node: what every column stride into `b` and every mass or load
+    /// vector uses. Equals `dim` except under axisymmetric twist, where it is 3.
+    dofs: usize,
     n_dof: usize,
     m: usize,
     b: Vec<f64>,
@@ -247,14 +255,16 @@ fn kinematics(kind: ElementKind, c: &ElementCtx<'_>) -> Result<Kin, Error> {
 
 fn kinematics_with_rule(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Result<Kin, Error> {
     let (nn, dim) = (kind.n_nodes(), kind.dim());
+    let dofs = c.idealisation.dofs_per_node();
     let n_gp = rule.points.len();
-    let n_dof = nn * dim;
+    let n_dof = nn * dofs;
     let m = n_modes(kind, c.formulation);
     let nt = n_dof + m;
     let mut kin = Kin {
         n_gp,
         n_nodes: nn,
         dim,
+        dofs,
         n_dof,
         m,
         b: vec![0.0; n_gp * VOIGT * nt],
@@ -291,7 +301,7 @@ fn kinematics_with_rule(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Re
         for (a, d) in dn.iter().enumerate() {
             let grad = grad_of(d, &inv, dim);
             for i in 0..dim {
-                fill_b(bg, nt, dim * a + i, i, grad, dim);
+                fill_b(bg, nt, dofs * a + i, i, grad, dim);
             }
         }
         for p in 0..m {
@@ -303,10 +313,17 @@ fn kinematics_with_rule(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Re
             }
             fill_b(bg, nt, n_dof + p, i, g_alpha, dim);
         }
-        if let Idealisation::Axisymmetric = c.idealisation {
+        if let Idealisation::Axisymmetric { twist } = &c.idealisation {
             let r = xg[0];
-            for (a, &n) in sh.iter().enumerate() {
-                bg[2 * nt + dim * a] = n / r;
+            for (a, (&n, d)) in sh.iter().zip(dn.iter()).enumerate() {
+                bg[2 * nt + dofs * a] = n / r;
+                if *twist {
+                    // gamma_r-theta = dw/dr - w/r, gamma_theta-z = dw/dz (Voigt rows 4, 5),
+                    // with w the circumferential displacement carried in the node's third DOF.
+                    let grad = grad_of(d, &inv, dim);
+                    bg[4 * nt + dofs * a + 2] = grad[0] - n / r;
+                    bg[5 * nt + dofs * a + 2] = grad[1];
+                }
             }
             for p in (0..m).step_by(dim) {
                 let k = p / dim;
@@ -510,7 +527,7 @@ fn stiffness_of(kind: ElementKind, c: &ElementCtx<'_>, k: &mut [f64]) -> Result<
 
 fn mass_of(kind: ElementKind, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -> Result<(), Error> {
     let kin = kinematics_with_rule(kind, c, product_rule_of(kind))?;
-    let (nn, dim, nd) = (kin.n_nodes, kin.dim, kin.n_dof);
+    let (nn, dofs, nd) = (kin.n_nodes, kin.dofs, kin.n_dof);
     m.fill(0.0);
     if !c.material.rho.is_finite() || c.material.rho < 0.0 {
         return Err(Error::new(ErrorCode::ModelIllPosed, "material density must be finite and non-negative")
@@ -528,8 +545,11 @@ fn mass_of(kind: ElementKind, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -
         for a in 0..nn {
             for b in 0..nn {
                 let v = wr * n[a] * n[b];
-                for i in 0..dim {
-                    m[(dim * a + i) * nd + dim * b + i] += v;
+                // Every DOF a node carries — including axisymmetric twist's circumferential
+                // one — is inertia of the same material particle, so it gets the same ρ N_a N_b
+                // mass as the in-plane components.
+                for i in 0..dofs {
+                    m[(dofs * a + i) * nd + dofs * b + i] += v;
                 }
             }
         }
@@ -539,7 +559,7 @@ fn mass_of(kind: ElementKind, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -
         // which plain row summing is not for hex20 and tet10.
         let total: f64 = kin.w.iter().sum::<f64>() * c.material.rho;
         let diag: Vec<f64> = (0..nd).map(|i| m[i * nd + i]).collect();
-        let trace: f64 = (0..nn).map(|a| diag[dim * a]).sum();
+        let trace: f64 = (0..nn).map(|a| diag[dofs * a]).sum();
         m.fill(0.0);
         for i in 0..nd {
             m[i * nd + i] = diag[i] * total / trace;
@@ -560,8 +580,10 @@ fn body_load_of(
         let fv = f(kin.x[g]);
         for a in 0..kin.n_nodes {
             let n = kin.n[g * kin.n_nodes + a] * kin.w[g];
+            // A body force (gravity) only ever has geometric components; under axisymmetric
+            // twist the third DOF's slot in `out` is simply left at zero.
             for i in 0..kin.dim {
-                out[kin.dim * a + i] += n * fv[i];
+                out[kin.dofs * a + i] += n * fv[i];
             }
         }
     }
@@ -604,9 +626,67 @@ pub(crate) fn loaded_face_measure(mesh: &Mesh, face: Face, idealisation: &Ideali
     let kind = mesh.kind_of(face.elem);
     let mut coords = vec![0.0; kind.n_nodes() * 3];
     mesh.elem_coords(face.elem, &mut coords);
-    let mut force = vec![0.0; kind.n_nodes() * kind.dim()];
+    let dofs = idealisation.dofs_per_node();
+    let mut force = vec![0.0; kind.n_nodes() * dofs];
     face_load_of(kind, &coords, idealisation, face.local, FaceLoad::Traction([1.0, 0.0, 0.0]), &mut force);
-    force.iter().step_by(kind.dim()).sum()
+    force.iter().step_by(dofs).sum()
+}
+
+/// `∫ g(x) dS` over one face through the boundary quadrature `face_load_of` uses: the
+/// idealisation's scale (`2π r` under axisymmetric) times the face Jacobian. `loaded_face_measure`
+/// is `g = 1`; `face_polar_moment` is `g = r²`, the `∫ r² dS` a torsional load's traction
+/// coefficient is divided by.
+fn face_scalar_integral(
+    kind: ElementKind,
+    coords: &[f64],
+    idealisation: &Idealisation,
+    local_face: u8,
+    g: impl Fn([f64; 3]) -> f64,
+) -> f64 {
+    let dim = kind.dim();
+    let fk = kind.face_kind();
+    let nodes = kind.face_nodes(local_face as usize);
+    let rule = face_rule_of(fk);
+    let mut sh = vec![0.0; fk.n_nodes()];
+    let mut ds = vec![[0.0; 2]; fk.n_nodes()];
+    let mut total = 0.0;
+    for (gp, p) in rule.points.iter().enumerate() {
+        let s = [p[0], p[1]];
+        face_shape_of(fk, s, &mut sh);
+        face_dshape_of(fk, s, &mut ds);
+        let mut t = [[0.0f64; 3]; 2];
+        let mut x = [0.0; 3];
+        for (i, &node) in nodes.iter().enumerate() {
+            let xc = &coords[3 * node as usize..3 * node as usize + 3];
+            for k in 0..3 {
+                x[k] += sh[i] * xc[k];
+                t[0][k] += ds[i][0] * xc[k];
+                t[1][k] += ds[i][1] * xc[k];
+            }
+        }
+        let area = if dim == 3 {
+            [
+                t[0][1] * t[1][2] - t[0][2] * t[1][1],
+                t[0][2] * t[1][0] - t[0][0] * t[1][2],
+                t[0][0] * t[1][1] - t[0][1] * t[1][0],
+            ]
+        } else {
+            [t[0][1], -t[0][0], 0.0]
+        };
+        let jac = (area[0] * area[0] + area[1] * area[1] + area[2] * area[2]).sqrt();
+        let w = rule.weights[gp] * scale_at(idealisation, x);
+        total += g(x) * jac * w;
+    }
+    total
+}
+
+/// `∫ r² dS` over one face; `face_set_polar_moment` sums this across a Set to turn a requested
+/// total torque into the traction coefficient `c` in `t_theta = c r`.
+pub(crate) fn face_polar_moment(mesh: &Mesh, face: Face, idealisation: &Idealisation) -> f64 {
+    let kind = mesh.kind_of(face.elem);
+    let mut coords = vec![0.0; kind.n_nodes() * 3];
+    mesh.elem_coords(face.elem, &mut coords);
+    face_scalar_integral(kind, &coords, idealisation, face.local, |x| x[0] * x[0])
 }
 
 fn face_load_of(
@@ -618,6 +698,7 @@ fn face_load_of(
     out: &mut [f64],
 ) {
     let dim = kind.dim();
+    let dofs = idealisation.dofs_per_node();
     let fk = kind.face_kind();
     let nodes = kind.face_nodes(local_face as usize);
     let rule = face_rule_of(fk);
@@ -652,13 +733,20 @@ fn face_load_of(
         };
         let jac = (area[0] * area[0] + area[1] * area[1] + area[2] * area[2]).sqrt();
         let w = rule.weights[g] * scale_at(idealisation, x);
-        let traction = match load {
-            FaceLoad::Pressure(p) => [-p * area[0] / jac, -p * area[1] / jac, -p * area[2] / jac],
-            FaceLoad::Traction(t) => t,
+        // Torque has no spatial traction component (`dim` stays untouched); its coefficient
+        // becomes a nodal force on the third, circumferential DOF instead, `t_theta = c r`.
+        let (traction, torque_c) = match load {
+            FaceLoad::Pressure(p) => ([-p * area[0] / jac, -p * area[1] / jac, -p * area[2] / jac], None),
+            FaceLoad::Traction(t) => (t, None),
+            FaceLoad::Torque(c) => ([0.0; 3], Some(c)),
         };
         for (i, &node) in nodes.iter().enumerate() {
+            let n = node as usize;
             for k in 0..dim {
-                out[dim * node as usize + k] += sh[i] * traction[k] * jac * w;
+                out[dofs * n + k] += sh[i] * traction[k] * jac * w;
+            }
+            if let Some(c) = torque_c {
+                out[dofs * n + 2] += sh[i] * c * x[0] * jac * w;
             }
         }
     }
@@ -778,7 +866,10 @@ fn inverse_map_status_of(kind: ElementKind, coords: &[f64], x: [f64; 3]) -> Inve
 }
 
 fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
-    let n = kind.n_nodes() * kind.dim();
+    // The DOF stride, not the geometric dimension: `stiffness_of`/`mass_of` size their buffers
+    // by `Idealisation::dofs_per_node`, and under axisymmetric twist that is 3 while `dim()` is
+    // still 2, so using `dim()` here would underallocate `k`/`mm` and write out of bounds.
+    let n = kind.n_nodes() * c.idealisation.dofs_per_node();
     let mut k = vec![0.0; n * n];
     let mut mm = vec![0.0; n * n];
     // One `?`: the two integrals fail on exactly the same elements and materials.

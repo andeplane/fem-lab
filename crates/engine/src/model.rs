@@ -15,9 +15,18 @@ use crate::units::UnitSet;
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Idealisation {
     Solid3d,
-    PlaneStress { thickness: f64 },
+    PlaneStress {
+        thickness: f64,
+    },
     PlaneStrain,
-    Axisymmetric,
+    Axisymmetric {
+        /// Adds a third degree of freedom, the circumferential displacement u_theta, so the
+        /// section can carry torsion. With twist, the third component of a vector Command is
+        /// the circumferential direction. Defaults to false, so every Journal and saved Model
+        /// written before this field existed still loads.
+        #[serde(default)]
+        twist: bool,
+    },
 }
 
 impl Idealisation {
@@ -25,6 +34,16 @@ impl Idealisation {
         match self {
             Idealisation::Solid3d => 3,
             _ => 2,
+        }
+    }
+
+    /// Unknowns per node for a structural (non-heat) Step: 3 with axisymmetric twist, else the
+    /// spatial dimension. `Problem::dofs_per_node` delegates here so the stride generalises in
+    /// one place for every element kernel, assembly and post-processing path.
+    pub fn dofs_per_node(&self) -> usize {
+        match self {
+            Idealisation::Axisymmetric { twist: true } => 3,
+            _ => self.dim(),
         }
     }
 }
@@ -154,15 +173,50 @@ impl Constraint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LoadKind {
-    Pressure { on: String, value: f64 },
-    Traction { on: String, total: [f64; 3] },
-    Force { on: String, total: [f64; 3] },
-    Gravity { g: [f64; 3] },
-    Temperature { bodies: Vec<String>, value: f64, reference: f64 },
-    Convection { on: String, h: f64, t_inf: f64 },
-    Radiation { on: String, emissivity: f64, t_inf: f64 },
-    HeatFlux { on: String, q: f64 },
-    HeatSource { bodies: Vec<String>, q: f64 },
+    Pressure {
+        on: String,
+        value: f64,
+    },
+    Traction {
+        on: String,
+        total: [f64; 3],
+    },
+    Force {
+        on: String,
+        total: [f64; 3],
+    },
+    Gravity {
+        g: [f64; 3],
+    },
+    Temperature {
+        bodies: Vec<String>,
+        value: f64,
+        reference: f64,
+    },
+    Convection {
+        on: String,
+        h: f64,
+        t_inf: f64,
+    },
+    Radiation {
+        on: String,
+        emissivity: f64,
+        t_inf: f64,
+    },
+    HeatFlux {
+        on: String,
+        q: f64,
+    },
+    HeatSource {
+        bodies: Vec<String>,
+        q: f64,
+    },
+    /// Torsional traction on a face Set of an axisymmetric-with-twist Model, `total` newton
+    /// metres delivered exactly via `t_theta = c r` (see `face_set_polar_moment`).
+    Torque {
+        on: String,
+        total: f64,
+    },
 }
 
 /// A Load.
@@ -185,7 +239,8 @@ impl LoadKind {
             | LoadKind::Gravity { .. }
             | LoadKind::Convection { .. }
             | LoadKind::Radiation { .. }
-            | LoadKind::HeatFlux { .. } => &[],
+            | LoadKind::HeatFlux { .. }
+            | LoadKind::Torque { .. } => &[],
         }
     }
 
@@ -197,7 +252,8 @@ impl LoadKind {
             | LoadKind::Force { on, .. }
             | LoadKind::Convection { on, .. }
             | LoadKind::Radiation { on, .. }
-            | LoadKind::HeatFlux { on, .. } => Some(on),
+            | LoadKind::HeatFlux { on, .. }
+            | LoadKind::Torque { on, .. } => Some(on),
             LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => None,
         }
     }
@@ -483,7 +539,12 @@ mod tests {
         assert_eq!(m.idealisation.dim(), 3);
         assert_eq!(Idealisation::PlaneStrain.dim(), 2);
         assert_eq!(Idealisation::PlaneStress { thickness: 0.1 }.dim(), 2);
-        assert_eq!(Idealisation::Axisymmetric.dim(), 2);
+        assert_eq!(Idealisation::Axisymmetric { twist: false }.dim(), 2);
+        assert_eq!(Idealisation::Axisymmetric { twist: true }.dim(), 2);
+        assert_eq!(m.idealisation.dofs_per_node(), 3);
+        assert_eq!(Idealisation::PlaneStrain.dofs_per_node(), 2);
+        assert_eq!(Idealisation::Axisymmetric { twist: false }.dofs_per_node(), 2);
+        assert_eq!(Idealisation::Axisymmetric { twist: true }.dofs_per_node(), 3);
         m.bodies.push(Body { name: "beam".into(), shape: Shape::Box { size: [1.0; 3] }, material: None });
         m.cuts.push(Cut { name: "hole".into(), from: "beam".into(), shape: Shape::Box { size: [0.1; 3] } });
         m.cuts.push(Cut { name: "other".into(), from: "plate".into(), shape: Shape::Box { size: [0.1; 3] } });
@@ -564,6 +625,7 @@ mod tests {
         assert_eq!(LoadKind::Traction { on: "a".into(), total: [0.0; 3] }.set(), Some("a"));
         assert_eq!(LoadKind::Force { on: "a".into(), total: [0.0; 3] }.set(), Some("a"));
         assert_eq!(LoadKind::Temperature { bodies: vec![], value: 300.0, reference: 293.15 }.set(), None);
+        assert_eq!(LoadKind::Torque { on: "a".into(), total: 100.0 }.set(), Some("a"));
         for kind in [
             LoadKind::Pressure { on: "a".into(), value: 1.0 },
             LoadKind::Traction { on: "a".into(), total: [0.0; 3] },
@@ -572,6 +634,7 @@ mod tests {
             LoadKind::Convection { on: "a".into(), h: 1.0, t_inf: 300.0 },
             LoadKind::Radiation { on: "a".into(), emissivity: 0.8, t_inf: 300.0 },
             LoadKind::HeatFlux { on: "a".into(), q: 1.0 },
+            LoadKind::Torque { on: "a".into(), total: 100.0 },
         ] {
             assert!(kind.bodies().is_empty());
         }
@@ -593,5 +656,12 @@ mod tests {
         assert!(j.contains(r#""kind":"fix""#) && j.contains(r#""kind":"pressure""#));
         let minimal: Model = serde_json::from_str(r#"{"name":"x","idealisation":{"kind":"solid3d"}}"#).unwrap();
         assert!(minimal.bodies.is_empty());
+        // A Model saved before `twist` existed has no such field in its JSON; the serde
+        // default must still load it, at twist: false.
+        let old: Model = serde_json::from_str(r#"{"name":"x","idealisation":{"kind":"axisymmetric"}}"#).unwrap();
+        assert_eq!(old.idealisation, Idealisation::Axisymmetric { twist: false });
+        let twisted: Model =
+            serde_json::from_str(r#"{"name":"x","idealisation":{"kind":"axisymmetric","twist":true}}"#).unwrap();
+        assert_eq!(twisted.idealisation, Idealisation::Axisymmetric { twist: true });
     }
 }
