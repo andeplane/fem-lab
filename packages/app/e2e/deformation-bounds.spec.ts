@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('@cpu displaced triangles remain pickable outside their original bounds', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   const displacement = await page.evaluate(async () => {
     await window.fem.model.new({ name: 'deformation-bounds' });
     await window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '0.1 m', '0.1 m'] });

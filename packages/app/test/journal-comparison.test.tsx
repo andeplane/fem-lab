@@ -6,7 +6,7 @@ import { appHostCommands, appHostQueries, makeHostContext } from '../src/host';
 import type { HostCaps } from '../src/capabilities';
 import { Store, unsaved } from '../src/store';
 import { Bottom } from '../src/ui/Bottom';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const first: JournalEntry = { seq: 0, cmd: { cmd: 'model.new', name: 'A' }, hashAfter: 'a' };
 const second: JournalEntry = { seq: 1, cmd: { cmd: 'model.setName', name: 'B' }, hashAfter: 'b' };
@@ -24,6 +24,7 @@ function setup() {
   const file = { format: 'femlab/1', model: { name: 'A' }, journal: { entries: [structuredClone(first)] } };
   const query = vi.fn(async (): Promise<JournalDiff> => diff());
   const transport = { exportFile: vi.fn(async () => file), query, importFile: vi.fn() };
+  store.setJournalDiffQuery(async base => await (transport as unknown as WorkerTransport).query({ query: 'query.journalDiff', base }) as JournalDiff);
   const ctx = makeHostContext(store, transport as unknown as WorkerTransport, { current: null }, {} as HostCaps);
   const registry = new Registry({
     schema: schema as unknown as EngineSchema, host: ctx,

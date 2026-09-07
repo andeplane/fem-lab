@@ -13,7 +13,6 @@ async function ready(page: Page): Promise<void> {
   await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
   await page.goto('./');
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 /** Replay a fixture Journal and solve its Step, the way the gallery and a script both would. */

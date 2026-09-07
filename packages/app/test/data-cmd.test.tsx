@@ -13,7 +13,7 @@ import { Store, visibilityReducer } from '../src/store';
 import { App, handleGlobalKey, isEditableTarget } from '../src/ui/App';
 import { journalTarget } from '../src/ui/Bottom';
 import type { Dispatch } from '../src/ui/cmd';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import { afterEffects, waitFor, waitForGone } from './wait-for';
 
 // `test/setup.ts` stands the drawer's chunk in with a component that renders nothing. Issue #40

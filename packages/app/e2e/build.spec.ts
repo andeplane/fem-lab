@@ -15,7 +15,6 @@ const journal = fixture.filter((e) => !String(e.cmd.cmd).startsWith('solve.'));
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 async function shot(page: Page, name: string): Promise<void> {
@@ -29,7 +28,9 @@ const fill = async (page: Page, path: string, value: string, nth = 0): Promise<v
   await field(page, path).locator('input').nth(nth).fill(value);
 };
 const apply = async (page: Page): Promise<void> => {
+  const count = await page.locator('.jrow').count();
   await page.locator('.props .apply').click();
+  await expect(page.locator('.jrow')).toHaveCount(count + 1);
   await expect(page.locator('.props .surface.error')).toHaveCount(0);
 };
 

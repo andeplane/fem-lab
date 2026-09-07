@@ -22,7 +22,6 @@ test('@thumbnails render every example through the viewer', async ({ page }) => 
   await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
   await page.goto('./');
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 
   for (const name of names) {
     const entries = JSON.parse(readFileSync(path.join(journalsDir, `${name}.json`), 'utf8')) as { cmd: { cmd: string } & Record<string, unknown> }[];

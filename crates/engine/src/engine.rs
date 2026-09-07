@@ -17,6 +17,12 @@ use crate::par::Pool;
 use crate::query::{Ack, Output};
 use crate::units::{Dimension, Q};
 
+/// A borrowed rendering input exposes no model mutator or active-engine pointer.
+pub enum RenderView<'a> {
+    Mesh(&'a crate::mesh::BuiltMesh),
+    Geometry(Vec<GeometrySurface>),
+}
+
 /// What the host provides: a clock, for timings.
 pub trait Host {
     /// Milliseconds on a monotonic clock.
@@ -96,6 +102,7 @@ impl Engine {
         }
     }
 
+    #[cfg(feature = "test-internals")]
     pub fn gpu(&self) -> Option<&crate::gpu::Gpu> {
         self.gpu.as_ref()
     }
@@ -103,6 +110,7 @@ impl Engine {
         self.gpu.as_mut()
     }
 
+    #[cfg(feature = "test-internals")]
     pub fn model(&self) -> &Model {
         &self.model
     }
@@ -125,6 +133,7 @@ impl Engine {
         self.pool.threads()
     }
     /// The host's monotonic clock, in milliseconds.
+    #[cfg(feature = "test-internals")]
     pub fn now_ms(&self) -> f64 {
         self.host.now_ms()
     }
@@ -224,6 +233,7 @@ impl Engine {
     }
 
     /// Install a saved file as-is (no replay); clears undo, redo and caches.
+    #[cfg(feature = "test-internals")]
     pub fn import_file(&mut self, f: ModelFile) -> Result<(), Error> {
         if f.format != FILE_FORMAT {
             return Err(
@@ -439,7 +449,16 @@ impl Engine {
         Ok(self.mesh.as_ref().expect("just built"))
     }
 
+    pub fn render_view(&mut self) -> Result<RenderView<'_>, Error> {
+        if self.model.mesh.is_some() {
+            self.mesh().map(RenderView::Mesh)
+        } else {
+            self.geometry_surface().map(RenderView::Geometry)
+        }
+    }
+
     /// The mesh skin the viewer draws.
+    #[cfg(feature = "test-internals")]
     pub fn mesh_surface(&mut self) -> Result<femlab_geometry::Surface, Error> {
         Ok(self.mesh()?.mesh.surface())
     }
