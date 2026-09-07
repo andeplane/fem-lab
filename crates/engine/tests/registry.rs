@@ -5887,7 +5887,9 @@ fn sections_are_named_assigned_removed_and_listed_like_materials() {
     ok(&mut solid, r#"{"cmd":"section.add","name":"rod","shape":{"kind":"circle","radius":"25 mm"}}"#);
     ok(&mut solid, r#"{"cmd":"section.assign","section":"rod","bodies":["beam"]}"#);
     ok(&mut solid, r#"{"cmd":"solve.run","step":"static"}"#);
-    let QueryResult::Result(r) = solid.query(Query::Result { step: None }).unwrap() else { panic!("result") };
+    let QueryResult::Result(r) = solid.query(Query::Result { result_id: None, step: None }).unwrap() else {
+        panic!("result")
+    };
     assert!(!r.stale);
 
     // Reassigning frees the first Section, which can then be removed.
@@ -5962,7 +5964,9 @@ fn a_line_body_meshes_into_members_with_a_node_set_per_joint() {
         r#"{"cmd":"geometry.addLine","name":"truss","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"],["0.5 m","0.5 m","0 m"]],"members":[[0,2],[1,2]],"divisions":1}"#,
     );
     ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
-    let QueryResult::Result(r) = e.query(Query::Result { step: None }).unwrap() else { panic!("result") };
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: None }).unwrap() else {
+        panic!("result")
+    };
     assert!(!r.stale);
     assert!(r.balance.abs() < 1e-9, "reactions balance the load: {}", r.balance);
 }

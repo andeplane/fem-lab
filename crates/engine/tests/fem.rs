@@ -1446,7 +1446,9 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
             }
         }
         let outside_xi = match kind {
-            ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8 => [1.1, 0.0, 0.0],
+            ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Truss2 => {
+                [1.1, 0.0, 0.0]
+            }
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Tri3 | ElementKind::Tri6 => [-0.1, 0.0, 0.0],
         };
         el.shape_at(outside_xi, &mut n);
