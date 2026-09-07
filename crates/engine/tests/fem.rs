@@ -4421,9 +4421,10 @@ fn transient_field_chaining_gives_stress_at_every_retained_frame() {
         law: builtin_law("linear-elastic").expect("built in"),
         props: vec![YOUNG, POISSON],
         rho,
-        alpha: 0.0,
-        k,
+        alpha: [0.0; 3],
+        k: [k; 3],
         cp,
+        axes: None,
     };
     let p_heat = heat_problem(
         &mesh,
@@ -4453,9 +4454,10 @@ fn transient_field_chaining_gives_stress_at_every_retained_frame() {
         law: builtin_law("linear-elastic").expect("built in"),
         props: vec![YOUNG, POISSON],
         rho,
-        alpha,
-        k,
+        alpha: [alpha; 3],
+        k: [k; 3],
         cp,
+        axes: None,
     };
     let mut p_static = problem(
         &mesh,
@@ -4555,7 +4557,7 @@ fn warmed_strip() -> (Mesh, History) {
     let history = {
         let sets = sets_of(&mesh);
         let bodies = one_body();
-        let material = Material { rho: 2.0, alpha: 0.0, k: 6.0, cp: 3.0, ..steel() };
+        let material = Material { rho: 2.0, alpha: [0.0; 3], k: [6.0; 3], cp: 3.0, ..steel() };
         let p = heat_problem(
             &mesh,
             &sets,
