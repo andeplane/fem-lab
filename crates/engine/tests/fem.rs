@@ -18,7 +18,7 @@ use femlab_engine::fem::element::{
     element_for, min_det_j, Element, ElementCtx, FaceLoad, InverseMap, Iso, Material, TangentOut,
 };
 use femlab_engine::fem::heat::HeatLoad;
-use femlab_engine::fem::loads::{assemble_loads, face_set_area, Load, LoadTotals};
+use femlab_engine::fem::loads::{assemble_loads, face_set_area, face_set_polar_moment, Load, LoadTotals};
 use femlab_engine::fem::material::{
     builtin_law, check_batch, isotropic_d, plane_stress_condense, LinearElastic, MaterialBatch, MaterialLaw,
     MaterialOut, VOIGT,
@@ -3779,6 +3779,17 @@ fn a_load_on_an_empty_set_is_reported_by_the_checks() {
     let e = assemble_loads(&p, &mut vec![0.0; p.n_dofs()]).expect_err("no such set");
     assert_eq!(e.code, ErrorCode::SetEmpty);
     assert_eq!(face_set_area(&p, "nowhere").expect_err("no such set").code, ErrorCode::SetEmpty);
+    // A torque, which only a twisted axisymmetric Problem can carry, answers the same way from
+    // the checks, the assembly and the polar moment its coefficient is divided by.
+    let disc = Structured { kind: ElementKind::Quad4, n: [1, 1, 1] }.box_([1.0, 1.0, 0.0]);
+    let disc_sets = sets_of(&disc);
+    let mut q =
+        problem(&disc, &disc_sets, &bodies, Idealisation::Axisymmetric { twist: true }, Formulation::Full, vec![]);
+    q.loads = vec![Load::Torque { faces: "nowhere".into(), c: 1.0 }];
+    assert_eq!(checks::all(&q)[0].code, ErrorCode::SetEmpty);
+    let e = assemble_loads(&q, &mut vec![0.0; q.n_dofs()]).expect_err("no such set");
+    assert_eq!(e.code, ErrorCode::SetEmpty);
+    assert_eq!(face_set_polar_moment(&q, "nowhere").expect_err("no such set").code, ErrorCode::SetEmpty);
 }
 
 /// Every Load that integrates over the mesh needs a material to know the idealisation's scale
@@ -3793,6 +3804,7 @@ fn a_load_over_a_body_without_a_material_says_so() {
     let each = [
         Load::Pressure { faces: "xmax".into(), p: 1.0 },
         Load::Traction { faces: "xmax".into(), t: [1.0, 0.0, 0.0] },
+        Load::Torque { faces: "xmax".into(), c: 1.0 },
         Load::Gravity { g: [0.0, 0.0, -9.81] },
     ];
     for load in each {

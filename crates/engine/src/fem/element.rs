@@ -705,6 +705,21 @@ pub(crate) fn loaded_face_measure(mesh: &Mesh, face: Face, idealisation: &Ideali
     force.iter().step_by(dofs).sum()
 }
 
+/// The outward normal times the Jacobian of a face map from its two tangents: the cross
+/// product in 3D, the tangent rotated by −90° in 2D (where the second tangent is unused).
+/// Shared by every boundary integral so the 2D and 3D forms live in one place.
+fn face_area_vector(dim: usize, t: &[[f64; 3]; 2]) -> [f64; 3] {
+    if dim == 3 {
+        [
+            t[0][1] * t[1][2] - t[0][2] * t[1][1],
+            t[0][2] * t[1][0] - t[0][0] * t[1][2],
+            t[0][0] * t[1][1] - t[0][1] * t[1][0],
+        ]
+    } else {
+        [t[0][1], -t[0][0], 0.0]
+    }
+}
+
 /// `∫ g(x) dS` over one face through the boundary quadrature `face_load_of` uses: the
 /// idealisation's scale (`2π r` under axisymmetric) times the face Jacobian. `loaded_face_measure`
 /// is `g = 1`; `face_polar_moment` is `g = r²`, the `∫ r² dS` a torsional load's traction
@@ -737,15 +752,7 @@ fn face_scalar_integral(
                 t[1][k] += ds[i][1] * xc[k];
             }
         }
-        let area = if dim == 3 {
-            [
-                t[0][1] * t[1][2] - t[0][2] * t[1][1],
-                t[0][2] * t[1][0] - t[0][0] * t[1][2],
-                t[0][0] * t[1][1] - t[0][1] * t[1][0],
-            ]
-        } else {
-            [t[0][1], -t[0][0], 0.0]
-        };
+        let area = face_area_vector(dim, &t);
         let jac = (area[0] * area[0] + area[1] * area[1] + area[2] * area[2]).sqrt();
         let w = rule.weights[gp] * scale_at(idealisation, x);
         total += g(x) * jac * w;
@@ -793,17 +800,7 @@ fn face_load_of(
                 t[1][k] += ds[i][1] * xc[k];
             }
         }
-        // `area` is the outward normal times the Jacobian of the face map: the cross product of
-        // the two tangents in 3D, the tangent rotated by −90° in 2D.
-        let area = if dim == 3 {
-            [
-                t[0][1] * t[1][2] - t[0][2] * t[1][1],
-                t[0][2] * t[1][0] - t[0][0] * t[1][2],
-                t[0][0] * t[1][1] - t[0][1] * t[1][0],
-            ]
-        } else {
-            [t[0][1], -t[0][0], 0.0]
-        };
+        let area = face_area_vector(dim, &t);
         let jac = (area[0] * area[0] + area[1] * area[1] + area[2] * area[2]).sqrt();
         let w = rule.weights[g] * scale_at(idealisation, x);
         // Torque has no spatial traction component (`dim` stays untouched); its coefficient

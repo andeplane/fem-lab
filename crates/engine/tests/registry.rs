@@ -8398,15 +8398,32 @@ fn load_torque_requires_axisymmetric_twist_and_a_torque_quantity() {
     assert_eq!(wrong_dim.where_.as_deref(), Some("total"));
     let unknown_set = err(&mut e, r#"{"cmd":"load.torque","name":"t","on":"nowhere","total":"10 N*m"}"#);
     assert_eq!(unknown_set.code, ErrorCode::NotFound);
+    let unnamed = err(&mut e, r#"{"cmd":"load.torque","name":"","on":"beam.xmax","total":"10 N*m"}"#);
+    assert_eq!((unnamed.code, unnamed.where_.as_deref()), (ErrorCode::Schema, Some("name")));
 
     ok(&mut e, r#"{"cmd":"load.torque","name":"t","on":"beam.xmax","total":"10 N*m"}"#);
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
     let row = m.loads.iter().find(|l| l.name == "t").expect("the Load is listed");
     assert_eq!(row.kind, "torque");
     assert!(row.summary.contains("10"), "{}", row.summary);
+    // Its editable definition is the Command itself, and replaying it changes nothing.
+    let before = e.model().clone();
+    let QueryResult::Definition(def) = e.query(Query::Definition { kind: ObjectKind::Load, name: "t".into() }).unwrap()
+    else {
+        panic!("definition")
+    };
+    ok(&mut e, &serde_json::to_string(&def.command).unwrap());
+    assert_eq!(e.model(), &before, "replaying the definition changes nothing");
     // Renaming the Body the Set belongs to follows the Load, like every other face Load.
     ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"beam","to":"shaft"}"#);
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    assert_eq!(m.loads.iter().find(|l| l.name == "t").expect("still there").on.as_deref(), Some("shaft.xmax"));
+    // So does renaming a named Set, and only the Load on that Set moves.
+    ok(&mut e, r#"{"cmd":"geometry.nameFace","name":"rim","of":"shaft","where":{"kind":"normal","normal":[1,0,0]}}"#);
+    ok(&mut e, r#"{"cmd":"load.torque","name":"t2","on":"rim","total":"5 N*m"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"rim","to":"lip"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    assert_eq!(m.loads.iter().find(|l| l.name == "t2").expect("still there").on.as_deref(), Some("lip"));
     assert_eq!(m.loads.iter().find(|l| l.name == "t").expect("still there").on.as_deref(), Some("shaft.xmax"));
     ok(&mut e, r#"{"cmd":"load.remove","name":"t"}"#);
     let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
@@ -8476,6 +8493,11 @@ fn a_reaction_on_the_twist_dof_lands_in_its_own_component() {
     // axial (component 1) reaction stays at zero because nothing pulls the shaft axially.
     assert!(clamp.total[1].value.abs() <= 1e-6, "{:?}", clamp.total);
     assert!(clamp.total[2].value.abs() > 1.0, "the twist reaction landed in its own component: {:?}", clamp.total);
+    // A torque on a face the Mesh never made is `set.empty` when the Step builds its Problem,
+    // where the requested total is divided by the face Set's polar moment.
+    ok(&mut e, r#"{"cmd":"load.torque","name":"lost","on":"shaft.side","total":"1 N*m"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"nowhere","procedure":"static","constraints":["clamp"],"loads":["lost"]}"#);
+    assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"nowhere"}"#), ErrorCode::SetEmpty);
 }
 
 /// The two convergence fields are validated at dispatch and reach the procedure: a budget of one
