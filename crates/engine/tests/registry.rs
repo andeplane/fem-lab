@@ -7679,3 +7679,206 @@ fn steady_radiation_propagates_a_rejected_direct_solve_transactionally() {
 fn transient_radiation_propagates_a_rejected_direct_solve_transactionally() {
     radiating_heat_with_unrepresentable_temperature("heat-transient");
 }
+
+// ---------------------------------------------------------------- geometry.import (#350)
+
+use femlab_engine::io::vtu::base64;
+use femlab_engine::io::write_stl;
+use femlab_geometry::{Shape, Solid};
+
+/// The ASCII STL our own writer produces for a shape: the fixtures are our own output, so no
+/// proprietary or large file ships with the tests.
+fn stl_of(shape: &Shape) -> String {
+    write_stl(Solid::evaluate(shape).unwrap().triangles(), "part")
+}
+
+/// The same triangles packed as a binary STL, which is what most tools write.
+fn binary_stl_of(shape: &Shape) -> Vec<u8> {
+    let solid = Solid::evaluate(shape).unwrap();
+    let tri = solid.triangles();
+    let mut out = vec![0u8; 80];
+    out.extend_from_slice(&(tri.triangles.len() as u32).to_le_bytes());
+    for t in &tri.triangles {
+        out.extend_from_slice(&[0u8; 12]);
+        for v in t {
+            for c in tri.positions[*v as usize] {
+                out.extend_from_slice(&(c as f32).to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&[0u8; 2]);
+    }
+    out
+}
+
+fn import_cmd(name: &str, data: &str, extra: &str) -> String {
+    let quoted = serde_json::to_string(data).unwrap();
+    format!(r#"{{"cmd":"geometry.import","name":"{name}","format":"stl","unitLength":"1 m","data":{quoted}{extra}}}"#)
+}
+
+fn body_row(e: &mut Engine, i: usize) -> femlab_engine::query::BodyRow {
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("query.model") };
+    m.bodies[i].clone()
+}
+
+#[test]
+fn an_imported_stl_body_measures_exactly_what_its_shape_did() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"import"}"#);
+    ok(&mut e, &import_cmd("part", &stl_of(&Shape::Box { size: [1.0, 2.0, 3.0] }), ""));
+    let row = body_row(&mut e, 0);
+    assert_eq!(row.name, "part");
+    assert_eq!(row.measure.unit, "m^3");
+    assert!((row.measure.value - 6.0).abs() < 1e-12, "{:?}", row.measure);
+    assert_eq!(row.faces, ["part.face0", "part.face1", "part.face2", "part.face3", "part.face4", "part.face5"]);
+    assert_eq!(row.bbox.iter().map(|q| q.value).collect::<Vec<_>>(), vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0]);
+
+    // a faceted cylinder: the closed form for a regular n-gon prism, n/2 r^2 sin(2 pi / n) h
+    let n = 64.0;
+    let cyl = Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(64) };
+    ok(&mut e, &import_cmd("rod", &stl_of(&cyl), ""));
+    let rod = body_row(&mut e, 1);
+    let closed_form = n / 2.0 * libm::sin(2.0 * std::f64::consts::PI / n) * 2.0;
+    assert!((rod.measure.value - closed_form).abs() < 1e-9, "{:?} vs {closed_form}", rod.measure);
+    assert_eq!(rod.faces, ["rod.face0", "rod.face1", "rod.face2"], "side plus the two caps");
+
+    // mass follows, because the welded solid has a real volume
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["part"]}"#);
+    let row = body_row(&mut e, 0);
+    assert!((row.mass.unwrap().value - 6.0 * 7850.0).abs() < 1e-6);
+}
+
+#[test]
+fn unit_length_says_what_one_file_unit_means() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"units"}"#);
+    let text = stl_of(&Shape::Box { size: [1.0, 2.0, 3.0] });
+    let quoted = serde_json::to_string(&text).unwrap();
+    let mm = format!(r#"{{"cmd":"geometry.import","name":"part","format":"stl","unitLength":"1 mm","data":{quoted}}}"#);
+    ok(&mut e, &mm);
+    let row = body_row(&mut e, 0);
+    assert!((row.measure.value - 6e-9).abs() < 1e-21, "{:?}", row.measure);
+    // a unitLength of the wrong dimension, or one that is not a length at all
+    let bad = format!(r#"{{"cmd":"geometry.import","name":"p2","format":"stl","unitLength":"1 kg","data":{quoted}}}"#);
+    assert_eq!(err(&mut e, &bad).code, ErrorCode::UnitDimension);
+    let zero = format!(r#"{{"cmd":"geometry.import","name":"p2","format":"stl","unitLength":"0 m","data":{quoted}}}"#);
+    let error = err(&mut e, &zero);
+    assert_eq!(error.where_.as_deref(), Some("unitLength"));
+    assert!(error.cause.contains("must be positive"));
+}
+
+#[test]
+fn a_binary_stl_travels_as_base64_and_its_sha256_is_checked() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"binary"}"#);
+    let bytes = binary_stl_of(&Shape::Box { size: [1.0, 2.0, 3.0] });
+    let data = base64(&bytes);
+    let digest = femlab_engine::hash::sha256_hex(&bytes);
+    let with = |extra: &str| import_cmd("part", &data, extra);
+    ok(&mut e, &with(&format!(r#","encoding":"base64","sha256":"{digest}""#)));
+    assert!((body_row(&mut e, 0).measure.value - 6.0).abs() < 1e-9);
+    // upper case hex is the same digest
+    ok(&mut e, &with(&format!(r#","encoding":"base64","sha256":"{}""#, digest.to_uppercase())));
+
+    let wrong = "0".repeat(64);
+    let error = err(&mut e, &with(&format!(r#","encoding":"base64","sha256":"{wrong}""#)));
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert_eq!(error.where_.as_deref(), Some("sha256"));
+    assert!(error.cause.contains(&digest), "{}", error.cause);
+    assert!(error.suggestion.is_some());
+
+    // base64 that is not base64
+    let error = err(&mut e, &import_cmd("part", "not base 64 !!", r#","encoding":"base64""#));
+    assert_eq!(error.where_.as_deref(), Some("data"));
+    assert!(error.cause.contains("standard base64"));
+    // the same payload read as text is not an STL either
+    let error = err(&mut e, &import_cmd("part", "not base 64 !!", r#","encoding":"utf8""#));
+    assert!(error.cause.contains("holds no triangles"));
+}
+
+#[test]
+fn feature_angle_and_simplify_below_reshape_the_patches() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"patches"}"#);
+    let text = stl_of(&Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(8) });
+    ok(&mut e, &import_cmd("rod", &text, ""));
+    assert_eq!(body_row(&mut e, 0).faces.len(), 10, "an octagon turns 45 degrees per facet");
+    ok(&mut e, &import_cmd("rod", &text, r#","featureAngle":50"#));
+    assert_eq!(body_row(&mut e, 0).faces, ["rod.face0", "rod.face1", "rod.face2"]);
+    assert_eq!(err(&mut e, &import_cmd("rod", &text, r#","featureAngle":0"#)).code, ErrorCode::Schema);
+
+    // simplifyBelow is a length, and a length that swallows the body is refused
+    ok(&mut e, &import_cmd("rod", &text, r#","simplifyBelow":"1 um""#));
+    assert_eq!(body_row(&mut e, 0).faces.len(), 10);
+    let error = err(&mut e, &import_cmd("rod", &text, r#","simplifyBelow":"10 m""#));
+    assert!(error.cause.contains("simplifies away to nothing"), "{}", error.cause);
+    assert_eq!(err(&mut e, &import_cmd("rod", &text, r#","simplifyBelow":"1 kg""#)).code, ErrorCode::UnitDimension);
+}
+
+#[test]
+fn a_named_face_predicate_survives_a_re_import_at_a_different_tessellation() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"durable"}"#);
+    ok(&mut e, &import_cmd("rod", &stl_of(&Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(16) }), ""));
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"lid","of":"rod","where":{"kind":"plane","normal":[0,0,1],"offset":"2 m"}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":4,"ny":4,"nz":4}},"order":1}"#);
+    // a 4x4x4 lattice over the bounding box keeps the 12 cells per layer whose centre is
+    // inside the circle, so the lid is 12 faces
+    let QueryResult::Set(before) = e.query(Query::Set { name: "lid".into() }).unwrap() else { panic!() };
+    assert_eq!(before.count, 12);
+
+    // the same part re-exported at twice the resolution: the patch numbers move, the rule does not
+    let finer = stl_of(&Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(64) });
+    ok(&mut e, &import_cmd("rod", &finer, ""));
+    let QueryResult::Set(after) = e.query(Query::Set { name: "lid".into() }).unwrap() else { panic!() };
+    assert_eq!(after.count, before.count);
+    assert!((after.measure.value - before.measure.value).abs() < 1e-12);
+
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("query.mesh") };
+    assert_eq!(m.elements, 48, "12 kept cells in each of the 4 layers");
+}
+
+#[test]
+fn an_imported_body_has_no_editable_shape_definition() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"definition"}"#);
+    ok(&mut e, &import_cmd("part", &stl_of(&Shape::Box { size: [1.0; 3] }), ""));
+    let error = e.query(Query::Definition { kind: ObjectKind::Body, name: "part".into() }).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.where_.as_deref(), Some("shape"));
+    assert!(error.suggestion.unwrap().contains("geometry.import"));
+}
+
+#[test]
+fn an_import_replays_byte_for_byte_and_undoes() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"replay"}"#);
+    let before = e.model_hash();
+    ok(&mut e, &import_cmd("part", &stl_of(&Shape::Sphere { radius: 1.0, segments: Some(16) }), ""));
+    let after = e.model_hash();
+    assert_ne!(before, after);
+    let file = e.export_file();
+    let mut replayed = engine();
+    replayed.import_file(file).unwrap();
+    assert_eq!(replayed.model_hash(), after, "a Journal carrying the file replays to the same Model");
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.model_hash(), before);
+}
+
+#[test]
+fn an_import_that_is_not_a_solid_is_refused_without_touching_the_model() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"broken"}"#);
+    let before = e.model().clone();
+    // an open surface: one facet on its own
+    let open = "solid t\nfacet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet\n";
+    let error = err(&mut e, &import_cmd("part", open, ""));
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert!(error.cause.contains("at least 4 triangles"), "{}", error.cause);
+    assert_eq!(e.model(), &before);
+    // a name a Body cannot have
+    assert_eq!(err(&mut e, &import_cmd("a.b", open, "")).code, ErrorCode::Schema);
+}

@@ -171,6 +171,46 @@ export type Command =
     }
   | {
       name: string;
+      format: MeshFormat;
+      /**
+       * The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
+       * what a binary STL needs.
+       */
+      data: string;
+      encoding?: DataEncoding | null;
+      /**
+       * Hex sha256 of the decoded file, checked before it is read.
+       */
+      sha256?: string | null;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      unitLength:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * Dihedral angle in degrees above which an edge splits two face patches.
+       */
+      featureAngle?: number | null;
+      /**
+       * Collapse mesh features smaller than this before use.
+       */
+      simplifyBelow?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "geometry.import";
+    }
+  | {
+      name: string;
       of: string;
       where: FacePredicate;
       cmd: "geometry.nameFace";
@@ -951,6 +991,14 @@ export type SegmentSpec =
       tag?: string | null;
       kind: "arc";
     };
+/**
+ * The geometry file formats geometry.import reads.
+ */
+export type MeshFormat = "stl";
+/**
+ * How a Command's inline file payload is encoded.
+ */
+export type DataEncoding = "utf8" | "base64";
 /**
  * A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.
  */
@@ -1878,6 +1926,46 @@ export type ModelFile_Command =
       from: string;
       shape: ShapeSpec;
       cmd: "geometry.subtract";
+    }
+  | {
+      name: string;
+      format: MeshFormat;
+      /**
+       * The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
+       * what a binary STL needs.
+       */
+      data: string;
+      encoding?: DataEncoding | null;
+      /**
+       * Hex sha256 of the decoded file, checked before it is read.
+       */
+      sha256?: string | null;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      unitLength:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * Dihedral angle in degrees above which an edge splits two face patches.
+       */
+      featureAngle?: number | null;
+      /**
+       * Collapse mesh features smaller than this before use.
+       */
+      simplifyBelow?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "geometry.import";
     }
   | {
       name: string;
@@ -2811,6 +2899,25 @@ export type Shape =
       name: string;
       shape: Shape;
       kind: "named";
+    }
+  | {
+      /**
+       * Vertex positions in metres.
+       */
+      positions: [number, number, number][];
+      /**
+       * Triangles as vertex indices, counter-clockwise seen from outside.
+       */
+      triangles: [number, number, number][];
+      /**
+       * Dihedral angle in degrees above which an edge splits two face patches; 30 by default.
+       */
+      feature_angle?: number | null;
+      /**
+       * Collapse mesh features smaller than this many metres before use.
+       */
+      simplify_below?: number | null;
+      kind: "mesh";
     };
 /**
  * One edge of a loop. A loop is a closed sequence: segment k runs from the previous
