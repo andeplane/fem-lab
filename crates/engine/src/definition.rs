@@ -146,8 +146,8 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                     nu12: o.nu12,
                     nu13: o.nu13,
                     nu23: o.nu23,
-                    alpha: x.alpha.map(|v| v.map(|c| Q::new(c, "1/K"))),
-                    k: x.k.map(|v| v.map(|c| Q::new(c, "W/(m K)"))),
+                    alpha: x.alpha.map(|v| v.axes().map(|c| Q::new(c, "1/K"))),
+                    k: x.k.map(|v| v.axes().map(|c| Q::new(c, "W/(m K)"))),
                 })
             });
             let isotropic = ortho.is_none();
@@ -160,8 +160,8 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                     .map(|o| crate::command::Orientation { axis: o.axis, angle: Q::new(o.angle, "1") }),
                 orthotropic: ortho,
                 rho: x.rho.map(|v| Q::new(v, "kg/m^3")),
-                alpha: x.alpha.filter(|_| isotropic).map(|v| Q::new(v[0], "1/K")),
-                k: x.k.filter(|_| isotropic).map(|v| Q::new(v[0], "W/(m K)")),
+                alpha: x.alpha.filter(|_| isotropic).map(|v| Q::new(v.axes()[0], "1/K")),
+                k: x.k.filter(|_| isotropic).map(|v| Q::new(v.axes()[0], "W/(m K)")),
                 cp: x.cp.map(|v| Q::new(v, "J/(kg K)")),
                 yield_: x.yield_.map(|v| Q::new(v, "Pa")),
                 source: x.source.clone(),
@@ -196,6 +196,9 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 ConstraintKind::Symmetry { normal } => Command::ConstraintSymmetry { name, on, normal: *normal },
                 ConstraintKind::Temperature { value } => {
                     Command::ConstraintTemperature { name, on, value: Q::new(*value, "K") }
+                }
+                ConstraintKind::Couple { point, coupling } => {
+                    Command::ConstraintCouple { name, point: point.clone(), on, kind: *coupling }
                 }
                 ConstraintKind::Bonded { master, tol } => Command::ContactAdd {
                     name,

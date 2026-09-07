@@ -255,6 +255,48 @@ export type Command =
     }
   | {
       name: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      at: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * A mass with unit, e.g. "2 kg". Any unit of the right dimension is accepted.
+       */
+      mass:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "geometry.addMass";
+    }
+  | {
+      name: string;
       E?:
         | (
             | string
@@ -406,6 +448,13 @@ export type Command =
           )
         | null;
       cmd: "contact.add";
+    }
+  | {
+      name: string;
+      point: string;
+      on: string;
+      kind: CoupleKind;
+      cmd: "constraint.couple";
     }
   | {
       name: string;
@@ -1665,6 +1714,11 @@ export type Axis = "x" | "y" | "z";
  */
 export type ContactKind = "bonded";
 /**
+ * How a point mass is connected to a face Set. Nodes carry translations only, so neither kind
+ * transmits a moment.
+ */
+export type CoupleKind = "distributed" | "rigid";
+/**
  * Analysis procedures.
  */
 export type Procedure = "static" | "static-nonlinear" | "modal" | "heat-steady" | "heat-transient" | "explicit";
@@ -2281,6 +2335,48 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      at: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * A mass with unit, e.g. "2 kg". Any unit of the right dimension is accepted.
+       */
+      mass:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "geometry.addMass";
+    }
+  | {
+      name: string;
       E?:
         | (
             | string
@@ -2432,6 +2528,13 @@ export type ModelFile_Command =
           )
         | null;
       cmd: "contact.add";
+    }
+  | {
+      name: string;
+      point: string;
+      on: string;
+      kind: CoupleKind;
+      cmd: "constraint.couple";
     }
   | {
       name: string;
@@ -3373,6 +3476,12 @@ export type ModelFile_RegionPredicate =
       kind: "body";
     };
 /**
+ * A property given once (isotropic: every material axis the same) or once per material axis.
+ * It is stored as it was given, so an isotropic Material serialises the single number it always
+ * had and saved files, Journal hashes and the tree editor see no change from orthotropic support.
+ */
+export type Axial = number | [number, number, number];
+/**
  * A Constraint on a Set.
  */
 export type Constraint = {
@@ -3401,6 +3510,11 @@ export type Constraint1 =
       master: string;
       tol?: number | null;
       kind: "bonded";
+    }
+  | {
+      point: string;
+      coupling: CoupleKind;
+      kind: "couple";
     };
 /**
  * A Load.
@@ -4071,6 +4185,10 @@ export interface ModelSummary {
   sets: SetRow[];
   constraints: ConstraintRow[];
   connections: ConnectionRow[];
+  /**
+   * Lumped point masses; omitted when the Model has none.
+   */
+  points?: PointRow[];
   loads: LoadRow[];
   steps: StepRow[];
   meshSettings?: MeshSettings | null;
@@ -4174,6 +4292,23 @@ export interface ConnectionRow {
   master: string;
   slave: string;
   summary: string;
+}
+/**
+ * One lumped point mass: where it sits and how heavy it is. It is also a node Set of the same
+ * name, which is what constraint.couple, load.force and query.set target.
+ */
+export interface PointRow {
+  name: string;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  at: [Valued, Valued, Valued];
+  mass: Valued;
+  /**
+   * The Constraints that attach it, empty when nothing does — which makes a Step ill-posed.
+   */
+  coupledBy: string[];
 }
 export interface LoadRow {
   name: string;
@@ -5030,6 +5165,11 @@ export interface Model {
   idealisation: Idealisation;
   bodies?: Body[];
   cuts?: Cut[];
+  /**
+   * Lumped point masses, each also a node Set of its own name. Omitted when empty, so a
+   * Model without one hashes exactly as it did before point masses existed.
+   */
+  points?: PointMass[];
   sets?: NamedSet[];
   materials?: Material[];
   /**
@@ -5116,6 +5256,20 @@ export interface Cut {
   shape: Shape;
 }
 /**
+ * A lumped mass at a point: a node of its own with no element around it, and a node Set of its
+ * own name so Constraints, Loads and Queries can target it by that name. `at` is in metres and
+ * `mass` in kilograms.
+ */
+export interface PointMass {
+  name: string;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  at: [number, number, number];
+  mass: number;
+}
+/**
  * A named Set from a predicate (auto face Sets are not stored: they follow the shapes).
  */
 export interface NamedSet {
@@ -5142,19 +5296,13 @@ export interface Material {
   orientation?: ModelFile_Orientation | null;
   rho?: number | null;
   /**
-   * Thermal expansion along the three material axes.
-   *
-   * @minItems 3
-   * @maxItems 3
+   * Thermal expansion, one value or one per material axis.
    */
-  alpha?: [number, number, number] | null;
+  alpha?: Axial | null;
   /**
-   * Conductivity along the three material axes.
-   *
-   * @minItems 3
-   * @maxItems 3
+   * Conductivity, one value or one per material axis.
    */
-  k?: [number, number, number] | null;
+  k?: Axial | null;
   cp?: number | null;
   yield?: number | null;
   source?: string | null;
