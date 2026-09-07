@@ -644,6 +644,16 @@
   {
     "kind": "load",
     "command": {
+      "cmd": "load.radiation",
+      "name": "editable",
+      "on": "base.xmax",
+      "emissivity": 0.85,
+      "tInf": "21 degC"
+    }
+  },
+  {
+    "kind": "load",
+    "command": {
       "cmd": "load.heatFlux",
       "name": "editable",
       "on": "base.xmax",
@@ -752,6 +762,18 @@
       "tEnd": "0.1 s",
       "dtFactor": 0.7,
       "outputEvery": 4
+    }
+  },
+  {
+    "kind": "step",
+    "command": {
+      "cmd": "step.add",
+      "name": "editable",
+      "procedure": "heat-steady",
+      "constraints": [],
+      "loads": [],
+      "nonlinearTolerance": 1e-08,
+      "nonlinearMaxIterations": 25
     }
   },
   {

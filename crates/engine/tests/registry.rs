@@ -6,7 +6,7 @@ use femlab_engine::command::{
     Solver,
 };
 use femlab_engine::post::convergence::richardson;
-use femlab_engine::query::{Output, Query, QueryResult};
+use femlab_engine::query::{AssumedMaterialProperty, Output, Query, QueryResult};
 use femlab_engine::report::ReportSection;
 use femlab_engine::units::{Quantity, Q};
 use femlab_engine::{Command, Engine, Error, ErrorCode, Host, NoClock, Progress};
@@ -1165,6 +1165,7 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     ok(&mut e, r#"{"cmd":"load.pressure","name":"pfa","on":"fa","value":"1 MPa"}"#);
     ok(&mut e, r#"{"cmd":"load.convection","name":"cfa","on":"fa","h":"50 W/(m^2 K)","tInf":"20 degC"}"#);
     ok(&mut e, r#"{"cmd":"load.heatFlux","name":"hfa","on":"fa","q":"1 kW/m^2"}"#);
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"rfa","on":"fa","emissivity":0.9,"tInf":"20 degC"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"ta","bodies":["a"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.temperature","name":"tb","bodies":["b"],"value":"300 K"}"#);
     ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
@@ -1196,6 +1197,7 @@ fn rename_with_several_objects_touches_only_the_named_one() {
     assert_eq!(e.model().load("pfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("cfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("hfa").unwrap().kind.set(), Some("faa"));
+    assert_eq!(e.model().load("rfa").unwrap().kind.set(), Some("faa"));
     assert_eq!(e.model().load("tra").unwrap().kind.set(), Some("aa.zmax"));
     let QueryResult::Objects(o) = e.query(Query::Objects { kinds: Some(vec![ObjectKind::Set]) }).unwrap() else {
         panic!()
@@ -2049,6 +2051,26 @@ fn the_free_mesher_validates_its_body_its_size_and_its_boxes() {
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
     assert!(er.cause.contains("a full circle"), "{}", er.cause);
     assert!(er.suggestion.unwrap().contains("split the full-circle arc into two arcs"));
+    // Wrapping the same malformed sketch must retain its located diagnostic.
+    let mut wrapped = serde_json::to_value(&e.journal().entries[e.journal().entries.len() - 2].cmd).unwrap();
+    wrapped["shape"] = serde_json::json!({
+        "kind":"transform","at":{"translate":["1 m","0 m","0 m"]},"shape":wrapped["shape"].clone()
+    });
+    ok(&mut e, &wrapped.to_string());
+    let before = e.model_hash();
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(error.suggestion.unwrap().contains("split the full-circle arc into two arcs"));
+    assert_eq!(e.model_hash(), before);
+    // Native Model files retain named geometry wrappers even though geometry.add's boundary
+    // schema supplies the Body name separately. Their sketch diagnostics must be identical.
+    let mut file = e.export_file();
+    let plate = file.model.bodies.iter_mut().find(|body| body.name == "plate").unwrap();
+    plate.shape = femlab_geometry::Shape::Named { name: "outline".into(), shape: Box::new(plate.shape.clone()) };
+    e.import_file(file).unwrap();
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!((error.code, error.where_.as_deref()), (ErrorCode::MeshFailed, Some("shape.sketch.holes[0][3]")));
+    assert!(error.cause.contains("a full circle"));
 }
 
 #[test]
@@ -2137,6 +2159,7 @@ fn solving_the_cantilever_reports_the_tip_deflection_and_balanced_reactions() {
     let r = result(&mut e);
     assert_eq!(r.step, "static");
     assert!(!r.stale);
+    assert!(r.assumptions.is_empty(), "unused omitted material properties are not assumptions");
     assert_eq!(r.solver, "cpu-direct");
     assert!(r.balance <= 1e-9, "reactions must balance: {}", r.balance);
     // the applied total is the 1 kN the traction asked for, and the root carries it back
@@ -2247,13 +2270,28 @@ fn a_solve_refuses_a_model_it_cannot_answer_for() {
 fn a_result_goes_stale_when_the_model_changes_and_undo_orphans_it() {
     let mut e = engine();
     solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#);
+    let first_solve = result(&mut e).revision;
+    assert_eq!(first_solve, e.revision(), "the producing solve's Journal line is stable provenance");
     assert!(!result(&mut e).stale);
     // an edit that does not touch the mesh still stales the Result: the Model hash moved
     ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m"}}"#);
-    assert!(result(&mut e).stale, "the Result predates the edit");
+    let stale = result(&mut e);
+    assert!(stale.stale, "the Result predates the edit");
+    assert_eq!(stale.revision, first_solve, "an edit does not rewrite Result provenance");
     // undoing back to the solved Model makes it current again
     ok(&mut e, r#"{"cmd":"journal.undo"}"#);
     assert!(!result(&mut e).stale);
+    // A later solve of the same Step replaces the cached Result. Undo removes its producing
+    // line, but the cache keeps that exact provenance instead of falling back to the old solve.
+    ok(&mut e, r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 N","0 N","-2 kN"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let second_solve = result(&mut e).revision;
+    assert!(second_solve > first_solve);
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    let orphaned = result(&mut e);
+    assert!(!orphaned.stale, "undo restored the Model solved by the cached Result");
+    assert_eq!(orphaned.revision, second_solve);
+    assert!(e.journal().entries.iter().all(|entry| entry.seq + 1 != second_solve));
     // undoing past the solve orphans the Result: it survives, and says it is stale
     ok(&mut e, r#"{"cmd":"journal.undo","steps":3}"#);
     // the Step is gone from the Model, so only its name reaches the Result it orphaned
@@ -2261,9 +2299,135 @@ fn a_result_goes_stale_when_the_model_changes_and_undo_orphans_it() {
     let QueryResult::Result(r) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
     assert!(r.stale, "the Step it belongs to is gone");
     assert_eq!(r.step, "static");
+    assert_eq!(r.revision, second_solve);
     // model.new throws Results away entirely
     ok(&mut e, r#"{"cmd":"model.new","name":"other"}"#);
     assert_eq!(e.query(Query::Result { step: None }).expect_err("cleared").code, ErrorCode::NotFound);
+}
+
+#[test]
+fn solver_used_material_assumptions_are_scoped_snapshotted_and_replayed() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"assumptions"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"a","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"],"at":["2 m","0 m","0 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"omitted","E":"1 GPa","nu":0.3,"source":"catalogue grade at 20 degC"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"explicit-zero","E":"1 GPa","nu":0.3,"rho":"0 kg/m^3","alpha":"0 1/K"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"unused","E":"1 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"omitted","bodies":["a"]}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"explicit-zero","bodies":["b"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"ca","on":"a.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"cb","on":"b.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(&mut e, r#"{"cmd":"load.temperature","name":"hot","bodies":["a"],"value":"100 K","reference":"0 K"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["ca","cb"],"loads":["g","hot"]}"#);
+    let ack = ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let Output::Solve { summary } = ack.output else { panic!("a solve summary") };
+    assert_eq!(summary.assumptions.len(), 2);
+    let rho = &summary.assumptions[0];
+    assert_eq!(
+        (rho.step.as_str(), rho.body.as_str(), rho.material.as_str(), rho.property),
+        ("s", "a", "omitted", AssumedMaterialProperty::Rho)
+    );
+    assert_eq!((rho.value.value, rho.value.unit.as_str()), (0.0, "kg/m^3"));
+    assert_eq!(rho.source.as_deref(), Some("catalogue grade at 20 degC"));
+    assert!(rho.cause.contains("gravity"));
+    let alpha = &summary.assumptions[1];
+    assert_eq!(alpha.property, AssumedMaterialProperty::Alpha);
+    assert_eq!((alpha.value.value, alpha.value.unit.as_str()), (0.0, "1/K"));
+    assert!(alpha.cause.contains("temperature field"));
+    assert!(summary.assumptions.iter().all(|row| row.material != "explicit-zero" && row.material != "unused"));
+
+    // The solve output and query.result carry the same typed records.
+    let captured = summary.assumptions.clone();
+    assert_eq!(result_of(&mut e, Some("s")).assumptions, captured);
+    let wire = serde_json::to_value(result_of(&mut e, Some("s"))).unwrap();
+    assert_eq!(wire["assumptions"][0]["property"], "rho");
+    assert_eq!(wire["assumptions"][1]["property"], "alpha");
+
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"a","to":"heated"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"material","name":"omitted","to":"renamed"}"#);
+    let stale = result_of(&mut e, Some("s"));
+    assert!(stale.stale);
+    assert_eq!(stale.assumptions, captured, "later names cannot rewrite the Result snapshot");
+
+    // A failed rerun leaves the previous Result and its assumption snapshot intact.
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":[],"loads":["g","hot"]}"#);
+    assert_eq!(code(&mut e, r#"{"cmd":"solve.run","step":"s"}"#), ErrorCode::ConstraintRigidModes);
+    assert_eq!(result_of(&mut e, Some("s")).assumptions, captured);
+
+    // A later successful solve captures the current names while retaining the source text.
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["ca","cb"],"loads":["g","hot"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let fresh = result_of(&mut e, Some("s"));
+    assert!(!fresh.stale);
+    assert!(fresh.assumptions.iter().all(|row| row.body == "heated" && row.material == "renamed"));
+    assert!(fresh.assumptions.iter().all(|row| row.source.as_deref() == Some("catalogue grade at 20 degC")));
+
+    let file = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&file.journal.entries, false, true)).unwrap();
+    assert_eq!(result_of(&mut replayed, Some("s")).assumptions, fresh.assumptions);
+}
+
+#[test]
+fn explicit_thermal_assembly_reports_its_omitted_alpha() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"explicit thermal"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"dynamic","E":"1 MPa","nu":0.3,"rho":"1 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"dynamic","bodies":["block"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"load.temperature","name":"hot","bodies":["block"],"value":"100 K","reference":"0 K"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"drop","procedure":"explicit","constraints":[],"loads":["hot"],"tEnd":"0.000001 s"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"drop"}"#);
+    let summary = result_of(&mut e, Some("drop"));
+    assert_eq!(summary.assumptions.len(), 1);
+    let alpha = &summary.assumptions[0];
+    assert_eq!((alpha.body.as_str(), alpha.material.as_str()), ("block", "dynamic"));
+    assert_eq!(alpha.property, AssumedMaterialProperty::Alpha);
+    assert!(alpha.source.is_none());
+    assert!(serde_json::to_value(alpha).unwrap()["source"].is_null());
+}
+
+#[test]
+fn explicit_mass_assembly_reports_a_fully_constrained_massless_body() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"explicit mass assumption"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"massive","size":["0.1 m","0.1 m","0.1 m"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.addBox","name":"massless","size":["0.1 m","0.1 m","0.1 m"],"at":["0.2 m","0 m","0 m"]}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"held-massless","where":{"kind":"bbox","min":["0.19 m","-0.01 m","-0.01 m"],"max":["0.31 m","0.11 m","0.11 m"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.add","name":"massive-material","E":"1 MPa","nu":0.3,"rho":"1 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"massless-material","E":"1 MPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"massive-material","bodies":["massive"]}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"massless-material","bodies":["massless"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"hold","on":"held-massless"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"dynamic","procedure":"explicit","constraints":["hold"],"loads":[],"tEnd":"1e-8 s","dtFactor":0.9}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"dynamic"}"#);
+    let summary = result_of(&mut e, Some("dynamic"));
+    assert_eq!(summary.assumptions.len(), 1);
+    let rho = &summary.assumptions[0];
+    assert_eq!((rho.body.as_str(), rho.material.as_str()), ("massless", "massless-material"));
+    assert_eq!(rho.property, AssumedMaterialProperty::Rho);
+    assert_eq!((rho.value.value, rho.value.unit.as_str()), (0.0, "kg/m^3"));
+    assert!(rho.cause.contains("explicit mass assembly"));
 }
 
 #[test]
@@ -4185,8 +4349,8 @@ fn the_nafems_le1_membrane_reaches_its_target_stress() {
     }
 }
 
-/// NAFEMS LE10 at one in-plane mesh: `sigma_yy(D)` in MPa on the loaded surface above D.
-fn le10_stress(n: usize) -> f64 {
+/// ESRD full-face-support LE10 variant at one mesh: `sigma_yy(D)` in MPa on the loaded surface above D.
+fn le10_stress(n: usize, layers: usize) -> f64 {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"le10"}"#);
     ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"MPa","force":"N"}}"#);
@@ -4195,7 +4359,7 @@ fn le10_stress(n: usize) -> f64 {
         &mut e,
         &format!(
             r#"{{"cmd":"mesh.set","mesher":{{"kind":"sweep","base":{{"kind":"mapped","body":"plate","blocks":[{}]}},
-               "sweep":{{"kind":"extrude","layers":4,"height":"0.6 m"}}}},"order":2}}"#,
+               "sweep":{{"kind":"extrude","layers":{layers},"height":"0.6 m"}}}},"order":2}}"#,
             le1_block(n)
         ),
     );
@@ -4212,12 +4376,13 @@ fn le10_stress(n: usize) -> f64 {
     probe_value(&mut e, Field::Stress, 1, ["2 m", "0 m", "0.6 m"])
 }
 
-/// D1: the thick plate's −5.38 MPa, hex20, by the same point-value rule over two meshes.
+/// D1: ESRD's full-face-support variant (Benchmarks Guide pp. 29–31), −5.25 MPa.
+/// The original NAFEMS mid-plane-line support is a different problem (−5.38 MPa).
 #[test]
-fn the_nafems_le10_thick_plate_reaches_its_target_stress() {
-    let coarse = rel(le10_stress(6), -5.38);
-    let fine = rel(le10_stress(12), -5.38);
-    assert!(fine < 0.02, "hex20 at n = 12 is {:.2} % from -5.38 MPa", fine * 100.0);
+fn the_le10_full_face_variant_reaches_its_independent_target_stress() {
+    let coarse = rel(le10_stress(6, 2), -5.25);
+    let fine = rel(le10_stress(12, 8), -5.25);
+    assert!(fine < 0.02, "hex20 at 12 x 12 x 8 is {:.2} % from ESRD -5.25 MPa", fine * 100.0);
     assert!(fine < coarse, "the error must fall with the mesh: {coarse} then {fine}");
 }
 
@@ -4401,7 +4566,7 @@ const TIP_UZ: &str = r#"{"kind":"probe","field":"displacement","component":2,"at
 /// The rate is about 1, not the 2 plan A hoped for: a fully clamped three-dimensional root is a
 /// re-entrant corner, and a point quantity measured over a singular corner converges at first
 /// order however good the element is. (The same study over 100, 50 and 25 mm is not even in the
-/// asymptotic range yet — its differences grow, so `richardson` reports a negative rate.) What
+/// asymptotic range yet — its differences grow, so the convergent estimate is unavailable.) What
 /// the extrapolation does reach is the beam formula, inside 1 %.
 #[test]
 fn a_convergence_study_reports_a_rate_and_restores_the_mesh() {
@@ -4461,7 +4626,9 @@ fn a_convergence_study_scales_a_mapped_mesh_and_can_keep_the_finest() {
     assert!(rel(r.extrapolated.expect("a limit"), 23.9) < 0.02, "Cook's membrane: {:?}", r.extrapolated);
     let QueryResult::Mesh(m) = e.query(Query::Mesh {}).expect("meshed") else { panic!("a MeshSummary") };
     assert_eq!(m.elements, 16 * 16, "restore: false leaves the finest mesh in place");
-    assert!(!result(&mut e).stale, "and its Result with it");
+    let kept = result(&mut e);
+    assert!(!kept.stale, "and its Result with it");
+    assert_eq!(kept.revision, e.revision(), "the non-restoring study is the Result producer");
 }
 
 /// The extremes a study can follow instead of a point, and what two sizes alone can say: a
@@ -5361,6 +5528,80 @@ fn journal_guard_uses_full_history_even_for_filtered_queries() {
     let guarded = serde_json::json!({"cmd":"journal.undo","expectedJournal":tail.hash}).to_string();
     ok(&mut e, &guarded);
     assert_eq!(e.revision(), 1);
+}
+
+#[test]
+fn the_free_mesher_accepts_a_transformed_sheet_and_preserves_named_holes() {
+    let mut e = engine();
+    let commands: Vec<Command> = serde_json::from_str(include_str!("fixtures/transformed-sheet.json")).unwrap();
+    for cmd in commands {
+        pollster::block_on(e.dispatch(cmd, &mut |_: Progress| true)).unwrap();
+    }
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"domain","where":{"kind":"body","name":"plate"}}"#);
+    for size in ["1 m", "0.5 m", "0.25 m"] {
+        for order in [1, 2] {
+            ok(
+                &mut e,
+                &format!(
+                    r#"{{"cmd":"mesh.set","mesher":{{"kind":"free","of":"plate","size":"{size}"}},"order":{order}}}"#
+                ),
+            );
+            let summary = mesh_summary(&mut e);
+            assert_eq!(summary.element_kind, if order == 1 { "tri3" } else { "tri6" });
+            assert!((set_info(&mut e, "domain").measure.value - 18.0).abs() < 1e-9);
+            for (tag, length) in [
+                ("plate.left", 6.0),
+                ("plate.bottom", 4.0),
+                ("plate.right", 6.0),
+                ("plate.top", 4.0),
+                ("plate.hole", 10.0),
+            ] {
+                let set = set_info(&mut e, tag);
+                assert!((set.measure.value - length).abs() < 1e-10, "{tag}: {set:?}");
+                assert!(set.count > 0);
+            }
+            let mesh = &e.mesh().unwrap().mesh;
+            for element in 0..mesh.n_elems() as u32 {
+                let nodes = mesh.elem_nodes(element);
+                let (a, b, c) = (mesh.node(nodes[0]), mesh.node(nodes[1]), mesh.node(nodes[2]));
+                let det = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+                assert!(det > 0.0, "positive physical Jacobian");
+            }
+        }
+    }
+}
+
+#[test]
+fn unsupported_sheet_transforms_return_structured_errors_without_mutating_the_model() {
+    let mut e = engine();
+    let commands: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("fixtures/transformed-sheet.json")).unwrap();
+    for cmd in &commands[..2] {
+        ok(&mut e, &cmd.to_string());
+    }
+    let before = serde_json::to_value(e.export_file()).unwrap();
+    for at in [
+        serde_json::json!({"scale":[1e308,1.0,1.0]}),
+        serde_json::json!({"scale":[4e307,1.0,1.0],"translate":["1.7e308 m","0 m","0 m"]}),
+    ] {
+        let mut cmd = commands[2].clone();
+        cmd["shape"]["at"] = at;
+        let error = err(&mut e, &cmd.to_string());
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert!(error.cause.contains("non-finite coordinates"));
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
+    for (field, value) in
+        [("rotate", serde_json::json!([15.0, 0.0, 0.0])), ("translate", serde_json::json!(["5 m", "7 m", "1 m"]))]
+    {
+        let mut cmd = commands[2].clone();
+        cmd["shape"]["at"][field] = value;
+        let error = err(&mut e, &cmd.to_string());
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert!(error.cause.contains("xy plane"));
+        assert!(error.where_.is_some());
+        assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
+    }
 }
 
 fn selector_mesh(e: &mut Engine, n: u32, order: u32, swept: bool) {
@@ -6517,6 +6758,129 @@ fn body_rename_and_duplicate_reject_cut_names_without_mutation() {
     assert_eq!(serde_json::to_value(replayed.export_file()).unwrap(), after);
 }
 
+/// `load.radiation` validates its Set, its emissivity and its absolute surrounding temperature
+/// at dispatch, so a Journal never records a Load that cannot be integrated. Zero kelvin is a
+/// legitimate surrounding (a deep-space sink); below it is not.
+#[test]
+fn load_radiation_validates_its_emissivity_and_its_absolute_temperature() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    let cases: [(&str, ErrorCode, &str); 7] = [
+        (
+            r#"{"cmd":"load.radiation","name":"","on":"bar.xmax","emissivity":0.9,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "name",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"nowhere","emissivity":0.9,"tInf":"20 degC"}"#,
+            ErrorCode::NotFound,
+            "set 'nowhere'",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":0,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "emissivity",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":1.5,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "emissivity",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":-0.2,"tInf":"20 degC"}"#,
+            ErrorCode::Schema,
+            "emissivity",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":0.9,"tInf":"5 m"}"#,
+            ErrorCode::UnitDimension,
+            "tInf",
+        ),
+        (
+            r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":0.9,"tInf":"-5 K"}"#,
+            ErrorCode::ModelIllPosed,
+            "tInf",
+        ),
+    ];
+    for (json, code, field) in cases {
+        let got = err(&mut e, json);
+        assert_eq!((got.code, got.where_.as_deref()), (code, Some(field)), "{json}: {got:?}");
+    }
+    // The two validations this Command owns say what to do about it.
+    let bad_eps = err(&mut e, r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":2,"tInf":"0 K"}"#);
+    assert!(bad_eps.suggestion.expect("a range").contains("black body"));
+    let bad_t = err(&mut e, r#"{"cmd":"load.radiation","name":"r","on":"bar.xmax","emissivity":1,"tInf":"-1 K"}"#);
+    assert!(bad_t.suggestion.expect("a floor").contains("0 K"));
+    // A black body and a 0 K sink are both inside the range.
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"space","on":"bar.xmax","emissivity":1,"tInf":"0 K"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    let row = m.loads.iter().find(|l| l.name == "space").expect("the Load is listed");
+    assert_eq!(row.kind, "radiation");
+    assert!(row.summary.contains("emissivity = 1"), "{}", row.summary);
+    assert!(row.summary.contains("tInf"), "{}", row.summary);
+    // Renaming the Body the Set belongs to follows the Load, as it does for a convection face.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"bar","to":"rod"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("a model summary") };
+    assert_eq!(m.loads.iter().find(|l| l.name == "space").expect("still there").on.as_deref(), Some("rod.xmax"));
+}
+
+/// The two convergence fields are validated at dispatch and reach the procedure: a budget of one
+/// pass cannot converge a fourth-power film, and the Step says so with `solve.diverged` instead
+/// of reporting an unconverged temperature.
+#[test]
+fn a_radiating_step_iterates_under_the_control_step_add_carries() {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmin","value":"1000 K"}"#);
+    ok(&mut e, r#"{"cmd":"load.radiation","name":"cool","on":"bar.xmax","emissivity":0.98,"tInf":"300 K"}"#);
+    for (json, field) in [
+        (
+            r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":[],"loads":[],
+                "nonlinearTolerance":0}"#,
+            "nonlinearTolerance",
+        ),
+        (
+            r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":[],"loads":[],
+                "nonlinearTolerance":-1}"#,
+            "nonlinearTolerance",
+        ),
+        (
+            r#"{"cmd":"step.add","name":"s","procedure":"heat-steady","constraints":[],"loads":[],
+                "nonlinearMaxIterations":0}"#,
+            "nonlinearMaxIterations",
+        ),
+    ] {
+        let got = err(&mut e, json);
+        assert_eq!((got.code, got.where_.as_deref()), (ErrorCode::Schema, Some(field)), "{json}: {got:?}");
+    }
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"radiate","procedure":"heat-steady","constraints":["hot"],"loads":["cool"],
+            "output":["temperature"],"nonlinearMaxIterations":1}"#,
+    );
+    let stingy = err(&mut e, r#"{"cmd":"solve.run","step":"radiate"}"#);
+    assert_eq!(stingy.code, ErrorCode::SolveDiverged, "{stingy:?}");
+    assert!(stingy.suggestion.expect("a way out").contains("nonlinearMaxIterations"));
+
+    // With a real budget it converges, and the Result reports the passes it took.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"radiate","procedure":"heat-steady","constraints":["hot"],"loads":["cool"],
+            "output":["temperature"],"nonlinearTolerance":1e-10}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"radiate"}"#);
+    let summary = result_of(&mut e, Some("radiate"));
+    assert!(summary.iterations > 1 && summary.iterations < 50, "{} passes", summary.iterations);
+    assert!(!summary.stale);
+
+    // The whole Journal replays into the same Model, so the new Command and the two new Step
+    // fields survive a round trip through the Journal.
+    let before = e.export_file();
+    let mut replayed = engine();
+    pollster::block_on(replayed.replay(&before.journal.entries, true, true)).expect("the journal replays");
+    assert_eq!(replayed.export_file(), before);
+}
+
 /// A slender steel cantilever, quadratic elements, loaded far enough to bend visibly.
 ///
 /// `PL²/EI = 1.3791547` is the elastica whose tip slope is 0.6 rad, which puts the tip at
@@ -6618,22 +6982,26 @@ fn a_nonlinear_step_that_diverges_names_the_increment_and_the_way_out() {
     assert_eq!(bad.where_.as_deref(), Some("step"));
     assert!(bad.suggestion.expect("a way out").contains("increments"));
 
-    // and the controls it cannot run with are schema errors naming their own field
-    for (fields, field) in [
-        (r#""increments":0"#, "increments"),
-        (r#""nonlinearMaxIterations":0"#, "nonlinearMaxIterations"),
-        (r#""nonlinearTolerance":0"#, "nonlinearTolerance"),
-        (r#""maxCutbacks":21"#, "maxCutbacks"),
-        (r#""tEnd":"0 s""#, "tEnd"),
+    // The controls shared with an iterating heat Step are refused where they are written, by
+    // `step.add`; the ones only this procedure has are refused when it runs, because nothing
+    // above `procedure_step` knows which fields the procedure will read.
+    for (fields, field, at_add) in [
+        (r#""nonlinearMaxIterations":0"#, "nonlinearMaxIterations", true),
+        (r#""nonlinearTolerance":0"#, "nonlinearTolerance", true),
+        (r#""increments":0"#, "increments", false),
+        (r#""maxCutbacks":21"#, "maxCutbacks", false),
+        (r#""tEnd":"0 s""#, "tEnd", false),
     ] {
-        ok(
-            &mut e,
-            &format!(
-                r#"{{"cmd":"step.add","name":"bad","procedure":"static-nonlinear","constraints":["root"],
-                    "loads":["tip"],{fields}}}"#
-            ),
+        let add = format!(
+            r#"{{"cmd":"step.add","name":"bad","procedure":"static-nonlinear","constraints":["root"],
+                "loads":["tip"],{fields}}}"#
         );
-        let bad = err(&mut e, r#"{"cmd":"solve.run","step":"bad"}"#);
+        let bad = if at_add {
+            err(&mut e, &add)
+        } else {
+            ok(&mut e, &add);
+            err(&mut e, r#"{"cmd":"solve.run","step":"bad"}"#)
+        };
         assert_eq!(bad.code, ErrorCode::Schema, "{field}");
         assert_eq!(bad.where_.as_deref(), Some(field));
     }

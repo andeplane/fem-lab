@@ -482,6 +482,21 @@ export type Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -558,14 +573,18 @@ export type Command =
        */
       maxCutbacks?: number | null;
       /**
-       * Relative convergence tolerance of the nonlinear iteration, on both the residual
-       * force and the displacement correction in the infinity norm (default 1e-8). This is
-       * not `solve.run`'s `tolerance`, which is the *linear* solver's.
+       * Convergence tolerance for a Step that must iterate, relative in both cases: the
+       * sup-norm change of the solution between two passes for a radiating heat Step
+       * (default 1e-6), and the residual force and the displacement correction of one Newton
+       * increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
+       * tolerance, which is `solve.run`'s.
        */
       nonlinearTolerance?: number | null;
       /**
-       * Iterations one increment of a nonlinear Step may take before it is cut back
-       * (default 20). Full Newton reaches 1e-8 in four or five from a good starting point.
+       * Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
+       * heat Step (default 50); for static-nonlinear it is what makes an increment cut back
+       * and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
+       * five iterations from a good starting point).
        */
       nonlinearMaxIterations?: number | null;
       cmd: "step.add";
@@ -1744,6 +1763,12 @@ export type Sweep =
       kind: "revolve";
     };
 /**
+ * An omitted optional material property that a successful solve read as its resolved zero.
+ * The value is kept in SI with the Result, so later unit, name and material edits cannot
+ * rewrite the assumption under an already-computed answer.
+ */
+export type AssumedMaterialProperty = "rho" | "alpha";
+/**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  */
 export type ModelFile_Command =
@@ -2225,6 +2250,21 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      on: string;
+      emissivity: number;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
+    }
+  | {
+      name: string;
       bodies: string[];
       /**
        * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
@@ -2301,14 +2341,18 @@ export type ModelFile_Command =
        */
       maxCutbacks?: number | null;
       /**
-       * Relative convergence tolerance of the nonlinear iteration, on both the residual
-       * force and the displacement correction in the infinity norm (default 1e-8). This is
-       * not `solve.run`'s `tolerance`, which is the *linear* solver's.
+       * Convergence tolerance for a Step that must iterate, relative in both cases: the
+       * sup-norm change of the solution between two passes for a radiating heat Step
+       * (default 1e-6), and the residual force and the displacement correction of one Newton
+       * increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
+       * tolerance, which is `solve.run`'s.
        */
       nonlinearTolerance?: number | null;
       /**
-       * Iterations one increment of a nonlinear Step may take before it is cut back
-       * (default 20). Full Newton reaches 1e-8 in four or five from a good starting point.
+       * Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
+       * heat Step (default 50); for static-nonlinear it is what makes an increment cut back
+       * and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
+       * five iterations from a good starting point).
        */
       nonlinearMaxIterations?: number | null;
       cmd: "step.add";
@@ -2898,6 +2942,12 @@ export type Load1 =
     }
   | {
       on: string;
+      emissivity: number;
+      t_inf: number;
+      kind: "radiation";
+    }
+  | {
+      on: string;
       q: number;
       kind: "heatFlux";
     }
@@ -3382,6 +3432,10 @@ export interface SetInfo {
  */
 export interface ResultSummary {
   step: string;
+  /**
+   * The Journal revision after the Command that produced this Result. It stays fixed while
+   * later edits make the Result stale and when undo removes that producing Command.
+   */
   revision: number;
   stale: boolean;
   solver: string;
@@ -3401,6 +3455,11 @@ export interface ResultSummary {
    * @maxItems 3
    */
   appliedTotal: [Valued, Valued, Valued];
+  /**
+   * Optional material properties the successful procedure actually read as zero because the
+   * Material omitted them. Empty when every solver-used property was explicit.
+   */
+  assumptions?: ResultAssumption[];
   /**
    * Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
    * shape is the Result field named `mode:k`.
@@ -3449,6 +3508,21 @@ export interface ReactionRow {
    * @maxItems 3
    */
   total: [Valued, Valued, Valued];
+}
+/**
+ * One solver-used material assumption captured at solve time.
+ */
+export interface ResultAssumption {
+  step: string;
+  body: string;
+  material: string;
+  property: AssumedMaterialProperty;
+  value: Valued;
+  /**
+   * The Material provenance at solve time; null when the Material named none.
+   */
+  source?: string | null;
+  cause: string;
 }
 /**
  * One time of a transient Step's history: the extremes of the field at that instant.
@@ -3891,6 +3965,7 @@ export interface EngineError {
     | "constraint.rigid-modes"
     | "solve.not-positive-definite"
     | "solve.stalled"
+    | "solve.diverged"
     | "solve.too-large"
     | "gpu.shader"
     | "gpu.too-large"

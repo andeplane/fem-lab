@@ -278,6 +278,9 @@ pub enum MesherSpec {
     /// each entry of `refine` asks for a smaller size inside its box. Use it when the domain is
     /// too awkward to cover with mapped blocks; prefer mapped blocks when it is not, because
     /// they are exact and grade smoothly. The idealisation must be 2D, as the Body is.
+    /// Sheet translation, rotation about z and positive in-plane scaling are applied before
+    /// meshing. Size and refine boxes use world coordinates; curved boundaries are sampled
+    /// to one tenth of size in world space. Nested or out-of-plane transforms are unsupported.
     Free {
         of: String,
         size: Q<Length>,
@@ -935,6 +938,19 @@ pub enum Command {
     #[serde(rename = "load.heatFlux", rename_all = "camelCase")]
     LoadHeatFlux { name: String, on: SetRef, q: Q<HeatFlux> },
 
+    /// Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses
+    /// `sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant
+    /// sigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model
+    /// displayed in degC is converted to kelvin before the fourth power is taken. `emissivity`
+    /// is dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this
+    /// holds the temperature, so a heat Step whose only boundary is radiation is still well
+    /// posed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and
+    /// solution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A
+    /// heat-steady Result reports the number of passes as its solver iteration count, and a Step
+    /// that runs out of them fails with solve.diverged rather than returning a wrong answer.
+    #[serde(rename = "load.radiation", rename_all = "camelCase")]
+    LoadRadiation { name: String, on: SetRef, emissivity: f64, t_inf: Q<Temperature> },
+
     /// A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
     /// It is a density, not a total: the heat delivered is `q` times each Body's volume.
     /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
@@ -958,7 +974,9 @@ pub enum Command {
     /// `nonlinearTolerance`, `nonlinearMaxIterations`, `tEnd` and `amplitude` to
     /// static-nonlinear. Heat-steady requires a finite positive material
     /// conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
-    /// `theta` must lie in [0, 1].
+    /// `theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any
+    /// Step whose system depends on its own answer — today a radiation load — and are ignored by
+    /// a Step that is linear.
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -1000,13 +1018,17 @@ pub enum Command {
         /// (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_cutbacks: Option<u32>,
-        /// Relative convergence tolerance of the nonlinear iteration, on both the residual
-        /// force and the displacement correction in the infinity norm (default 1e-8). This is
-        /// not `solve.run`'s `tolerance`, which is the *linear* solver's.
+        /// Convergence tolerance for a Step that must iterate, relative in both cases: the
+        /// sup-norm change of the solution between two passes for a radiating heat Step
+        /// (default 1e-6), and the residual force and the displacement correction of one Newton
+        /// increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
+        /// tolerance, which is `solve.run`'s.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nonlinear_tolerance: Option<f64>,
-        /// Iterations one increment of a nonlinear Step may take before it is cut back
-        /// (default 20). Full Newton reaches 1e-8 in four or five from a good starting point.
+        /// Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
+        /// heat Step (default 50); for static-nonlinear it is what makes an increment cut back
+        /// and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
+        /// five iterations from a good starting point).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nonlinear_max_iterations: Option<u32>,
     },
@@ -1023,10 +1045,11 @@ pub enum Command {
     StepReorder { order: Vec<String> },
 
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
-    /// element quality) and refuses with a suggested fix. Returns extremes and reactions;
-    /// always check that reactions balance the applied loads before trusting a stress. A Step
-    /// with `after` requires its predecessor's Result to match the current Model state;
-    /// after an edit, solve the predecessor again before continuing the chain.
+    /// element quality) and refuses with a suggested fix. Returns extremes, reactions and every
+    /// omitted optional material property the successful solver actually read as zero; always
+    /// check that reactions balance the applied loads before trusting a stress. A Step with
+    /// `after` requires its predecessor's Result to match the current Model state; after an edit,
+    /// solve the predecessor again before continuing the chain.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,
@@ -1040,13 +1063,15 @@ pub enum Command {
 
     /// Re-mesh at each size, re-solve the Step and report the quantity of interest per size,
     /// the observed convergence rate and a Richardson estimate of the converged value. Sizes
-    /// should halve each time (three or more). Restores the previous mesh settings afterwards
-    /// unless `restore` is false. Uses the Step's actual procedure: static and steady heat
-    /// measure equilibrium fields; transient heat and explicit dynamics measure the final
-    /// field at the configured tEnd with the Step's time settings unchanged. Modal Steps are
-    /// unsupported because a mode amplitude is not a mesh-independent quantity; compare
-    /// frequencies with solve.run/query.result instead. Steps with after are unsupported:
-    /// solve their dependencies and target at each mesh explicitly.
+    /// may have unequal refinement ratios. Three distinct positive sizes are needed for a
+    /// finite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate
+    /// are unavailable. Restores the previous mesh settings afterwards unless `restore` is false.
+    /// Uses the Step's actual procedure: static and steady heat measure equilibrium fields;
+    /// transient heat and explicit dynamics measure the final field at the configured tEnd
+    /// with the Step's time settings unchanged. Modal Steps are unsupported because a mode
+    /// amplitude is not a mesh-independent quantity; compare frequencies with
+    /// solve.run/query.result instead. Steps with after are unsupported: solve their
+    /// dependencies and target at each mesh explicitly.
     #[serde(rename = "study.converge", rename_all = "camelCase")]
     StudyConverge {
         step: String,

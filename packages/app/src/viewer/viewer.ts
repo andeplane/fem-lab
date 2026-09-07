@@ -39,6 +39,11 @@ export interface CameraState {
   target: [number, number, number];
   up?: [number, number, number];
 }
+export interface AnimationState {
+  playing: boolean;
+  phase: number;
+  speed: number;
+}
 export type ViewPreset = 'iso' | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom';
 export interface Pick {
   face: string | null;
@@ -113,6 +118,10 @@ export class Viewer {
   /** Design state 6: a stale Result keeps its contours, at 42 % so nobody trusts them. */
   private dim = false;
   private hoverFace: string | null = null;
+  private selectedBodies = new Set<string>();
+  private selectedFaces = new Set<string>();
+  private highlightedBodies = new Set<string>();
+  private highlightedFaces = new Set<string>();
   private readonly hidden = new Set<string>();
   /** Visibility survives the replacement of mesh, edge, grid and axis objects. */
   private readonly layerVisibility = new Map<string, boolean>();
@@ -120,6 +129,7 @@ export class Viewer {
   private pickCb: ((p: Pick | null) => void) | null = null;
   private frame = 0;
   private disposed = false;
+  private animation: AnimationState = { playing: false, phase: 0.25, speed: 1 };
   private readonly click = (e: MouseEvent) => this.pickCb?.(this.pick(e.clientX, e.clientY));
   private readonly pointerMove = (e: PointerEvent) => this.hoverAt(e);
   /** The last displacement handed to `setDeformed`, and the scale it was drawn at, so the
@@ -158,6 +168,29 @@ export class Viewer {
 
   onPick(cb: (p: Pick | null) => void): void {
     this.pickCb = cb;
+  }
+
+  /** Persistent selection and transient Journal hover share the same drawable name boundary. */
+  setSelection(s: { bodies: string[]; faces: string[]; sets: string[] }): void {
+    this.selectedBodies = new Set(s.bodies);
+    this.selectedFaces = new Set([...s.faces, ...s.sets]);
+    this.paint();
+    this.render();
+  }
+
+  setHighlight(s: { bodies?: string[]; faces?: string[]; sets?: string[] }): void {
+    this.highlightedBodies = new Set(s.bodies ?? []);
+    this.highlightedFaces = new Set([...(s.faces ?? []), ...(s.sets ?? [])]);
+    this.paint();
+    this.render();
+  }
+
+  private matchesSet(surface: AppSurface, triangle: number, names: Set<string>): boolean {
+    const start = surface.triSetOffsets?.[triangle];
+    const end = surface.triSetOffsets?.[triangle + 1];
+    if (start === undefined || end === undefined || !surface.triSets || !surface.setNames) return false;
+    for (let i = start; i < end; i++) if (names.has(surface.setNames[surface.triSets[i]!] ?? '')) return true;
+    return false;
   }
 
   resize(): void {
@@ -314,7 +347,12 @@ export class Viewer {
     for (let i = 0; i < this.tri.length; i++) {
       const t = this.tri[i]!;
       const faceName = s.faceNames[s.triFace[t]!] ?? null;
-      const hot = faceName !== null && faceName === this.hoverFace;
+      const bodyName = s.bodyNames[s.triBody[t]!] ?? null;
+      const selected = (bodyName !== null && this.selectedBodies.has(bodyName)) || (faceName !== null && this.selectedFaces.has(faceName)) || this.matchesSet(s, t, this.selectedFaces);
+      const hot =
+        (faceName !== null && (faceName === this.hoverFace || this.highlightedFaces.has(faceName))) ||
+        (bodyName !== null && this.highlightedBodies.has(bodyName)) ||
+        this.matchesSet(s, t, this.highlightedFaces);
       for (let k = 0; k < 3; k++) {
         const vertex = i * 3 + k;
         if (this.mode === 'results' && this.field) {
@@ -325,6 +363,7 @@ export class Viewer {
         } else {
           c.setScalar(grey).lerp(bodyTint(s.triBody[t]!), 0.14);
         }
+        if (selected) c.lerp(HIGHLIGHT, 0.28);
         if (hot) c.lerp(HIGHLIGHT, 0.45);
         if (this.dim) c.multiplyScalar(0.42);
         colour.setXYZ(vertex, c.r, c.g, c.b);
@@ -535,10 +574,21 @@ export class Viewer {
    */
   animate(playing: boolean, speed = 1, phase?: number): void {
     cancelAnimationFrame(this.frame);
-    if (!playing) return phase === undefined ? void this.drawDeformed(this.deformation, this.deformScale) : this.setPhase(phase);
-    const t0 = performance.now();
+    if (!playing) {
+      if (phase !== undefined) return this.setPhase(phase);
+      this.animation = { playing: false, phase: 0.25, speed };
+      return void this.drawDeformed(this.deformation, this.deformScale);
+    }
+    this.startAnimation(speed, phase ?? 0);
+  }
+
+  private startAnimation(speed: number, phase: number): void {
+    this.animation = { playing: true, phase, speed };
+    const t0 = performance.now() - (phase / speed) * 1000;
     const step = () => {
-      this.drawDeformed(this.deformation, this.deformScale * Math.sin((((performance.now() - t0) / 1000) * speed + (phase ?? 0)) * 2 * Math.PI));
+      const turns = (((performance.now() - t0) / 1000) * speed) % 1;
+      this.animation.phase = turns;
+      this.drawDeformed(this.deformation, this.deformScale * Math.sin(turns * 2 * Math.PI));
       this.frame = requestAnimationFrame(step);
     };
     this.frame = requestAnimationFrame(step);
@@ -547,7 +597,35 @@ export class Viewer {
   /** Where in one sweep the shape sits, as a phase in turns: what the scrub slider sets. */
   setPhase(turns: number): void {
     cancelAnimationFrame(this.frame);
+    this.animation = { playing: false, phase: turns, speed: this.animation.speed };
     this.drawDeformed(this.deformation, this.deformScale * Math.sin(turns * 2 * Math.PI));
+  }
+
+  animationState(): AnimationState {
+    return { ...this.animation };
+  }
+
+  restoreAnimation(state: AnimationState): void {
+    cancelAnimationFrame(this.frame);
+    if (state.playing) this.startAnimation(state.speed, state.phase);
+    else this.setPhase(state.phase);
+  }
+
+  /** Render into an exact-size canvas while `task` records it, then restore the live viewport. */
+  async atCaptureSize<T>(width: number, height: number, task: (canvas: HTMLCanvasElement) => Promise<T>): Promise<T> {
+    const ratio = this.renderer.getPixelRatio();
+    try {
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(width, height, false);
+      this.perspective.aspect = width / height;
+      this.perspective.updateProjectionMatrix();
+      this.frameOrtho(width / height);
+      this.render();
+      return await task(this.canvas);
+    } finally {
+      this.renderer.setPixelRatio(ratio);
+      this.resize();
+    }
   }
 
   fit(): void {

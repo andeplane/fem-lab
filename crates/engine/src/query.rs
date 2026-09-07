@@ -50,8 +50,9 @@ pub enum Query {
     Set { name: String },
 
     /// Summary of a Step's Result: solver info, extremes of every field with their location,
-    /// reactions per constraint and the applied totals, and whether the Result is stale
-    /// (the Model changed after it was solved). Check the reaction balance first.
+    /// reactions per constraint, applied totals, solver-used omitted material assumptions, and
+    /// whether the Result is stale (the Model changed after it was solved). Check the reaction
+    /// balance and assumptions first.
     #[serde(rename = "query.result", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ResultSummary"))]
     Result {
@@ -420,11 +421,37 @@ pub struct Extreme {
     pub max_at: [Valued; 3],
 }
 
+/// An omitted optional material property that a successful solve read as its resolved zero.
+/// The value is kept in SI with the Result, so later unit, name and material edits cannot
+/// rewrite the assumption under an already-computed answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum AssumedMaterialProperty {
+    Rho,
+    Alpha,
+}
+
+/// One solver-used material assumption captured at solve time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultAssumption {
+    pub step: String,
+    pub body: String,
+    pub material: String,
+    pub property: AssumedMaterialProperty,
+    pub value: Valued,
+    /// The Material provenance at solve time; null when the Material named none.
+    pub source: Option<String>,
+    pub cause: String,
+}
+
 /// `query.result` response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultSummary {
     pub step: String,
+    /// The Journal revision after the Command that produced this Result. It stays fixed while
+    /// later edits make the Result stale and when undo removes that producing Command.
     pub revision: u32,
     pub stale: bool,
     pub solver: String,
@@ -437,6 +464,10 @@ pub struct ResultSummary {
     pub reactions: Vec<ReactionRow>,
     /// Applied force vector or thermal power in component 0 (remaining components zero).
     pub applied_total: [Valued; 3],
+    /// Optional material properties the successful procedure actually read as zero because the
+    /// Material omitted them. Empty when every solver-used property was explicit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assumptions: Vec<ResultAssumption>,
     /// Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
     /// shape is the Result field named `mode:k`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

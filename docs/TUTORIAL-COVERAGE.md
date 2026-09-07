@@ -53,7 +53,7 @@ login.
 | 11 | [Beam/gap example](https://ceae-server.colorado.edu/v2016/books/bmk/ch01s01ach01.html) (Abaqus Benchmarks Guide) | Cubic beam elements, three cantilevers, five gap elements opening and closing | **cannot** — no beam elements, no gap/contact elements |
 | 12 | [FV4: Cantilever with off-center point masses](https://ceae-server.colorado.edu/v2016/books/bmk/ch04s04anf17.html) (NAFEMS) | Beam elements, eccentric point masses, first six eigenmodes | **cannot** — no beam elements, no point masses |
 | 13 | [The Hertz contact problem](https://ceae-server.colorado.edu/v2016/books/bmk/ch01s01ach11.html) (Abaqus Benchmarks Guide) | Two cylinders, frictionless finite-sliding contact, quarter symmetry, contact pressure vs the Hertz solution | **cannot** — no contact |
-| 14 | [Conductive, convective, and radiative heat transfer in an exhaust manifold](https://ceae-server.colorado.edu/v2016/books/exa/ch05s01aex121.html) | Steady conduction, surface film convection, cavity radiation, nonlinear iteration | **partial** — conduction and convection are `step.add{heat-steady}` + `load.convection`; radiation and the CAD manifold are missing |
+| 14 | [Conductive, convective, and radiative heat transfer in an exhaust manifold](https://ceae-server.colorado.edu/v2016/books/exa/ch05s01aex121.html) | Steady conduction, surface film convection, cavity radiation, nonlinear iteration | **partial** — conduction, convection and radiation to a surrounding are `step.add{heat-steady}` + `load.convection` + `load.radiation`; the tutorial's *cavity* radiation (surface-to-surface view factors) and the CAD manifold are missing |
 | 15 | [Geometrically nonlinear analysis of a cantilever beam](https://ceae-server.colorado.edu/v2016/books/bmk/ch02s01ach139.html) | Large displacement and rotation, transverse and end-moment loading, Bisshopp–Drucker exact solution | **cannot** — no geometric nonlinearity, no moment loads |
 
 ### Siemens Simcenter Femap / Nastran
@@ -159,7 +159,7 @@ against the official `FreeCAD/FreeCAD-documentation` markdown mirror of the same
 
 | # | Tutorial | Physics / features needed | FEM Lab status |
 |---|---|---|---|
-| 72 | [Validation Case: Thick Plate Under Pressure (NAFEMS LE10)](https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/) | Elliptic plate with an elliptic hole, quarter symmetry, distributed pressure, linear elastic, element-order comparison | **can do** — ships as `nafems-le10-plate` (σyy(D) = −5.348 MPa against the −5.38 MPa reference) |
+| 72 | [Validation Case: Thick Plate Under Pressure (NAFEMS LE10)](https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/) | Elliptic plate with an elliptic hole, quarter symmetry, distributed pressure, linear elastic, element-order comparison | **variant available** — `nafems-le10-plate` uses whole-face support (ESRD reference −5.25 MPa; computed −5.234 MPa). Original LE10 mid-plane-line support is not implemented; see BENCHMARKS.md D1 and #183 |
 | 73 | [Validation Case: Design Analysis of a Spherical Pressure Vessel](https://www.simscale.com/docs/validation-cases/design-analysis-of-spherical-pressure-vessel/) | 1/8 sphere, transient thermo-structural coupling, internal pressure ramp, convective BCs, thermal expansion | **partial** — sphere and symmetry are reachable, but a thin spherical wall stair-steps on the lattice mesher, and the thermal-structural chain is not transient |
 | 74 | [Validation Case: Flange Under Bolt Preload](https://www.simscale.com/docs/validation-cases/flange-under-bolt-preload/) | Bolt pretension, bonded and physical contact at the flange faces and seal, nonlinear static, internal pressure, quarter symmetry | **cannot** — no bolt pretension, no contact; `bolt-flange` models the same part with a preload *pressure* instead |
 | 75 | [Validation Case: Hertzian Contact Between Two Spheres](https://www.simscale.com/docs/validation-cases/hertzian-contact-between-two-spheres/) | Frictionless physical contact, nonlinear contact solve, penalty vs augmented Lagrange | **cannot** — no contact |
@@ -389,12 +389,16 @@ Scope: exactly #14's K_σ, reused — a `modal` Step whose `after` names a stati
 (K + K_σ) instead of K. If #14 ships, this is a flag rather than a project; file it as a
 follow-up on that issue.
 
-**24. Radiation boundary condition — 1 tutorial.**
+**24. Radiation boundary condition — 1 tutorial.** *Shipped (#79).*
 Tutorial 14.
-Scope: a `load.radiation` with emissivity and a sink temperature giving a σε(T⁴ − T∞⁴) surface
-term. It makes the heat Step nonlinear (a Newton loop over temperature), so it is the smallest
-possible customer for a nonlinear thermal solve. Gate already written: BENCHMARKS E4 (NAFEMS T2,
-T(B) = 927 K).
+`load.radiation` gives a face a σε(T⁴ − T∞⁴) surface term against a large surrounding, and makes
+the heat Step nonlinear — a Newton loop over temperature through `procedure::iterate`, which is
+now the repository's shared nonlinear-iteration structure, governed by `step.add`'s
+`nonlinearTolerance` and `nonlinearMaxIterations`. Gated by BENCHMARKS E6 (a bisection oracle on
+the steady flux balance) and E7 (the analytic T(t) = T0(1 + 3cT0³t)^(−1/3) cooling curve); E4
+(NAFEMS T2) stays **resolve** because its 927 K has not been read from the publication.
+What is still missing for tutorial 14 is *cavity* radiation — surface-to-surface exchange with
+view factors — which is a different feature, not a parameter of this one.
 
 **25. Conjugate heat transfer / fluid-structure — 1 tutorial.**
 Tutorial 45.
@@ -483,7 +487,7 @@ sequences would be validated by `packages/app/test/tutorial-fixtures.test.ts` li
 | 4 | [Tutorial: Thermal analysis](https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-4B1F8D61-6F33-4E6A-B08A-4E562026762C.htm) (Fusion) | A design decision rather than a benchmark: does this heat sink stay under the limit? The same Commands as `heated-fin-convection`, framed as a question with a pass/fail answer. |
 | 5 | [Tutorial: Thermal stress analysis](https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-88BCA6F7-A333-41C8-AA35-703F6F99DE13.htm) (Fusion) | Pressure and temperature in one Step on a 1/8-symmetry model — three `constraint.symmetry` planes at once, and why a symmetry constraint must not fight thermal expansion. |
 | 6 | [Thermal-Stress Analysis](https://www.appliedcax.com/resources/simcenter-femap-nastran/thermal-stress-analysis/) (Femap) | `step.add.after`: one Step's temperature field becoming the next Step's load. `thermal-stress-plate` is the checked model (σ = −EαΔT/(1−ν), −0.00 % error) and has no tutorial yet. |
-| 7 | [Thick Plate Under Pressure, NAFEMS LE10](https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/) (SimScale) | A published 3D benchmark end to end, including why hex20 and hex8 disagree. `nafems-le10-plate` already computes −5.348 MPa against the −5.38 MPa reference. |
+| 7 | [Thick Plate Under Pressure, NAFEMS LE10](https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/) (SimScale) | A 3D benchmark comparison including element order and boundary-condition fidelity. `nafems-le10-plate` implements the ESRD whole-face-support variant: −5.234 MPa against −5.25 MPa. The original NAFEMS line-supported target −5.38 MPa belongs to a different model (#183). |
 | 8 | [Tutorial: Modal frequencies analysis](https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-49EBF17A-7E55-4FB8-8431-D222718137D6.htm) (Fusion) | Free-free modal: six rigid-body modes at zero, why the eigen solve needs `shift` to get past them, and how to tell a rigid-body mode from a real one. The existing `modal-analysis` tutorial is clamped, so this is its missing half. |
 | 9 | [FEM Tutorial Python](https://wiki.freecad.org/FEM_Tutorial_Python) (FreeCAD) | The Journal as a program: `query.script`, editing it, replaying it, `femlab run --verify`. FEM Lab's strongest differentiator, currently taught nowhere. |
 | 10 | [Elasticity using algebraic multigrid](https://docs.fenicsproject.org/dolfinx/main/python/demos/demo_elasticity.html) (FEniCSx) | Cost and solver choice: `query.cost` before solving, `solve.run{solver}`, direct vs PCG vs GPU, and what `solve.stalled` means. The only one that would teach the numerics rather than the model. |

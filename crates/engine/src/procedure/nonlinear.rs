@@ -465,6 +465,7 @@ pub async fn run(
         // measured in Newton iterations, and `solver` names the linear solver each went through.
         solver: SolveInfo { iterations, ..solved },
         warnings,
+        assumptions: Vec::new(),
     })
 }
 

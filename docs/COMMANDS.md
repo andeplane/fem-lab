@@ -37,6 +37,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [load.heatFlux](#commands-load-heatFlux)
 - [load.heatSource](#commands-load-heatSource)
 - [load.pressure](#commands-load-pressure)
+- [load.radiation](#commands-load-radiation)
 - [load.remove](#commands-load-remove)
 - [load.temperature](#commands-load-temperature)
 - [load.traction](#commands-load-traction)
@@ -354,6 +355,29 @@ The total force is the pressure times the face area and is reported by query.mod
 | value | yes | <code>{"$ref":"#/$defs/Q_stress"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"load.pressure"}</code> |  |
 
+<a id="commands-load-radiation"></a>
+
+### load.radiation
+
+Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses
+`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant
+sigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model
+displayed in degC is converted to kelvin before the fourth power is taken. `emissivity`
+is dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this
+holds the temperature, so a heat Step whose only boundary is radiation is still well
+posed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and
+solution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A
+heat-steady Result reports the number of passes as its solver iteration count, and a Step
+that runs out of them fails with solve.diverged rather than returning a wrong answer.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| on | yes | <code>{"type":"string"}</code> |  |
+| emissivity | yes | <code>{"type":"number","format":"double"}</code> |  |
+| tInf | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"load.radiation"}</code> |  |
+
 <a id="commands-load-remove"></a>
 
 ### load.remove
@@ -580,10 +604,11 @@ content hash. Not available yet: returns unsupported until the plugin phase land
 ### solve.run
 
 Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
-element quality) and refuses with a suggested fix. Returns extremes and reactions;
-always check that reactions balance the applied loads before trusting a stress. A Step
-with `after` requires its predecessor's Result to match the current Model state;
-after an edit, solve the predecessor again before continuing the chain.
+element quality) and refuses with a suggested fix. Returns extremes, reactions and every
+omitted optional material property the successful solver actually read as zero; always
+check that reactions balance the applied loads before trusting a stress. A Step with
+`after` requires its predecessor's Result to match the current Model state; after an edit,
+solve the predecessor again before continuing the chain.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -608,7 +633,9 @@ procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt
 `nonlinearTolerance`, `nonlinearMaxIterations`, `tEnd` and `amplitude` to
 static-nonlinear. Heat-steady requires a finite positive material
 conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, and its
-`theta` must lie in [0, 1].
+`theta` must lie in [0, 1]. `nonlinearTolerance` and `nonlinearMaxIterations` govern any
+Step whose system depends on its own answer — today a radiation load — and are ignored by
+a Step that is linear.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -629,8 +656,8 @@ conductivity `k`; heat-transient also requires finite positive `rho` and `cp`, a
 | initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
 | increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
 | maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
-| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Relative convergence tolerance of the nonlinear iteration, on both the residual force and the displacement correction in the infinity norm (default 1e-8). This is not &#96;solve.run&#96;'s &#96;tolerance&#96;, which is the *linear* solver's. |
-| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iterations one increment of a nonlinear Step may take before it is cut back (default 20). Full Newton reaches 1e-8 in four or five from a good starting point. |
+| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Convergence tolerance for a Step that must iterate, relative in both cases: the sup-norm change of the solution between two passes for a radiating heat Step (default 1e-6), and the residual force and the displacement correction of one Newton increment for static-nonlinear (default 1e-8). It is never the *linear* solver's tolerance, which is &#96;solve.run&#96;'s. |
+| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iteration budget for a Step that must iterate. Exceeding it is &#96;solve.diverged&#96; for a heat Step (default 50); for static-nonlinear it is what makes an increment cut back and try again at half the load (default 20, and full Newton reaches 1e-8 in four or five iterations from a good starting point). |
 | cmd | yes | <code>{"type":"string","const":"step.add"}</code> |  |
 
 <a id="commands-step-remove"></a>
@@ -664,13 +691,15 @@ this order and a later Step may inherit state (a temperature field) from an earl
 
 Re-mesh at each size, re-solve the Step and report the quantity of interest per size,
 the observed convergence rate and a Richardson estimate of the converged value. Sizes
-should halve each time (three or more). Restores the previous mesh settings afterwards
-unless `restore` is false. Uses the Step's actual procedure: static and steady heat
-measure equilibrium fields; transient heat and explicit dynamics measure the final
-field at the configured tEnd with the Step's time settings unchanged. Modal Steps are
-unsupported because a mode amplitude is not a mesh-independent quantity; compare
-frequencies with solve.run/query.result instead. Steps with after are unsupported:
-solve their dependencies and target at each mesh explicitly.
+may have unequal refinement ratios. Three distinct positive sizes are needed for a
+finite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate
+are unavailable. Restores the previous mesh settings afterwards unless `restore` is false.
+Uses the Step's actual procedure: static and steady heat measure equilibrium fields;
+transient heat and explicit dynamics measure the final field at the configured tEnd
+with the Step's time settings unchanged. Modal Steps are unsupported because a mode
+amplitude is not a mesh-independent quantity; compare frequencies with
+solve.run/query.result instead. Steps with after are unsupported: solve their
+dependencies and target at each mesh explicitly.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -1285,7 +1314,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.",
+      "description": "Unstructured triangles inside the sketch of an existing 2D Body, at about `size`, with a\n30 degree minimum angle. Every sketch segment tag becomes the face Set `<of>.<tag>`, and\neach entry of `refine` asks for a smaller size inside its box. Use it when the domain is\ntoo awkward to cover with mapped blocks; prefer mapped blocks when it is not, because\nthey are exact and grade smoothly. The idealisation must be 2D, as the Body is.\nSheet translation, rotation about z and positive in-plane scaling are applied before\nmeshing. Size and refine boxes use world coordinates; curved boundaries are sampled\nto one tenth of size in world space. Nested or out-of-plane transforms are unsupported.",
       "type": "object",
       "properties": {
         "of": {
@@ -2803,8 +2832,9 @@ Returns: `ReportText`.
 ### query.result
 
 Summary of a Step's Result: solver info, extremes of every field with their location,
-reactions per constraint and the applied totals, and whether the Result is stale
-(the Model changed after it was solved). Check the reaction balance first.
+reactions per constraint, applied totals, solver-used omitted material assumptions, and
+whether the Result is stale (the Model changed after it was solved). Check the reaction
+balance and assumptions first.
 
 Returns: `ResultSummary`.
 

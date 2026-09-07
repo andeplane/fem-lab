@@ -132,6 +132,7 @@ pub enum LoadKind {
     Gravity { g: [f64; 3] },
     Temperature { bodies: Vec<String>, value: f64, reference: f64 },
     Convection { on: String, h: f64, t_inf: f64 },
+    Radiation { on: String, emissivity: f64, t_inf: f64 },
     HeatFlux { on: String, q: f64 },
     HeatSource { bodies: Vec<String>, q: f64 },
 }
@@ -155,6 +156,7 @@ impl LoadKind {
             | LoadKind::Force { .. }
             | LoadKind::Gravity { .. }
             | LoadKind::Convection { .. }
+            | LoadKind::Radiation { .. }
             | LoadKind::HeatFlux { .. } => &[],
         }
     }
@@ -166,6 +168,7 @@ impl LoadKind {
             | LoadKind::Traction { on, .. }
             | LoadKind::Force { on, .. }
             | LoadKind::Convection { on, .. }
+            | LoadKind::Radiation { on, .. }
             | LoadKind::HeatFlux { on, .. } => Some(on),
             LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => None,
         }
@@ -542,6 +545,7 @@ mod tests {
             LoadKind::Force { on: "a".into(), total: [0.0; 3] },
             LoadKind::Gravity { g: [0.0; 3] },
             LoadKind::Convection { on: "a".into(), h: 1.0, t_inf: 300.0 },
+            LoadKind::Radiation { on: "a".into(), emissivity: 0.8, t_inf: 300.0 },
             LoadKind::HeatFlux { on: "a".into(), q: 1.0 },
         ] {
             assert!(kind.bodies().is_empty());
