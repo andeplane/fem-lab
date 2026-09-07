@@ -4897,6 +4897,11 @@ fn the_tet_mesher_is_already_simplices_so_the_flag_is_a_noop() {
     assert_eq!(a.element_kind, b.element_kind);
     assert_eq!(a.elements, b.elements);
     assert_eq!(a.nodes, b.nodes);
+    // The tet settings name no Body, so renaming one leaves them exactly as written.
+    let settings = on.model().mesh.clone();
+    ok(&mut on, r#"{"cmd":"model.rename","kind":"body","name":"block","to":"brick"}"#);
+    assert_eq!(on.model().mesh, settings);
+    assert_eq!(mesh_summary(&mut on).elements, b.elements);
 }
 
 /// Every structured error the tet mesher's settings and the mesher itself can raise, located
