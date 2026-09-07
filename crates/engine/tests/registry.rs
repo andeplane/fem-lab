@@ -3981,6 +3981,80 @@ fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
     assert_eq!(bad.code, ErrorCode::Schema);
 }
 
+/// A buckling Step reports its load factors, hands the shapes out as `mode:k` like any mode, and
+/// keeps the static state it was solved from — which is what makes its reaction balance mean
+/// something. `nModes` defaults to 1, so a Step that names none still answers the question.
+#[test]
+fn a_buckling_step_reports_load_factors_and_keeps_its_static_state() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"euler-column"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"column","size":["1 m","20 mm","20 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["column"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":10,"ny":1,"nz":1}},"order":2}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"column.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"squeeze","on":"column.xmax","value":"1 MPa"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"buckle","procedure":"buckling","constraints":["root"],
+            "loads":["squeeze"],"output":["displacement"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"buckle","tolerance":1e-9}"#);
+    let summary = result_of(&mut e, Some("buckle"));
+    // nModes defaulted to one, and a buckling Step reports factors rather than frequencies.
+    assert_eq!(summary.buckling_factors.len(), 1);
+    assert!(summary.frequencies.is_empty());
+    // pi^2 EI / (4 L^2) = 6908.72 N over the 400 N reference end load.
+    let factor = summary.buckling_factors[0];
+    assert!((factor - 17.2718).abs() <= 0.02 * 17.2718, "load factor {factor}");
+    // The static state is the Result's, so the supports still balance the applied load.
+    assert!(summary.balance <= 1e-9, "balance {}", summary.balance);
+    assert!((summary.applied_total[0].value + 400.0).abs() <= 1e-6, "{:?}", summary.applied_total[0]);
+
+    // The shape is a field named `mode:1`, scaled to unit peak; `displacement` stays static.
+    let shape = e.field_named(Some("buckle"), "mode:1").expect("the first shape").data.clone();
+    let peak = shape.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    assert!((peak - 1.0).abs() <= 1e-12, "unit peak, got {peak}");
+    let statics = e.field_named(Some("buckle"), "displacement").expect("the static displacement").data.clone();
+    assert_ne!(statics, shape);
+    let missing = e.field_named(Some("buckle"), "mode:2").expect_err("one factor was asked for");
+    assert_eq!(missing.code, ErrorCode::NotFound);
+
+    // The calculation note names the factors, and says what they are not.
+    let md = report(&mut e, Some("buckle"), Some(vec![ReportSection::Results])).markdown;
+    assert!(md.contains("#### Buckling load factors"), "{md}");
+    assert!(md.contains("| Mode | Load factor |"), "{md}");
+    assert!(md.contains("not a safety factor"), "{md}");
+}
+
+/// The axisymmetric idealisation has no geometric stiffness written, so a buckling Step over one
+/// refuses by name instead of quietly leaving the hoop term out.
+#[test]
+fn a_buckling_step_refuses_the_axisymmetric_idealisation() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"ring"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"axisymmetric"}}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"mapped","body":"wall","blocks":[{
+            "corners":[["1 m","0 m"],["1.2 m","0 m"],["1.2 m","1 m"],["1 m","1 m"]],
+            "n":[2,4],"tags":["bottom","outer","top","inner"]}]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["wall"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"base","on":"wall.bottom"}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"squeeze","on":"wall.top","value":"1 MPa"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"buckle","procedure":"buckling","constraints":["base"],"loads":["squeeze"]}"#,
+    );
+    let failure = err(&mut e, r#"{"cmd":"solve.run","step":"buckle"}"#);
+    assert_eq!(failure.code, ErrorCode::Unsupported);
+    assert!(failure.cause.contains("hoop"), "{}", failure.cause);
+    assert!(failure.suggestion.expect("a way out").contains("model.setIdealisation"));
+}
+
 /// A modal model with every displacement DOF constrained has no reduced system to solve. The
 /// failed solve must be a structured model error, and the Engine must remain usable afterwards.
 #[test]

@@ -78,6 +78,17 @@ fn no_density() -> Error {
         .suggest("material.add with rho, e.g. \"7850 kg/m^3\"")
 }
 
+/// The `model.ill-posed` error a Step with nothing left to move answers with. Buckling shares
+/// it: an eigenproblem over an empty free set is the same modelling mistake either way.
+pub(crate) fn no_free_dofs() -> Error {
+    Error::new(
+        ErrorCode::ModelIllPosed,
+        "modal analysis has no free displacement DOFs; every displacement DOF is constrained",
+    )
+    .at("constraints")
+    .suggest("constraint.remove on an over-constraining displacement constraint")
+}
+
 /// Solve one modal Step: `n_modes` frequencies and their M-normalised shapes.
 pub fn run(
     p: &Problem<'_>,
@@ -108,12 +119,7 @@ pub fn run(
     let red_m = reduce(&mt, &zeros, &rc, &mpc.slaves);
     let n = red_k.k_ff.n;
     if n == 0 {
-        return Err(Error::new(
-            ErrorCode::ModelIllPosed,
-            "modal analysis has no free displacement DOFs; every displacement DOF is constrained",
-        )
-        .at("constraints")
-        .suggest("constraint.remove on an over-constraining displacement constraint"));
+        return Err(no_free_dofs());
     }
     let p_modes = n_modes.clamp(1, n);
     report(&mut progress, "solve", 0.3, "subspace iteration")?;
@@ -227,7 +233,7 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>) -> Result<Spectrum, 
 }
 
 /// `Xᵀ A X` for `q` columns of length `n`, row-major `q × q`.
-fn project(a: &Csr, x: &[Vec<f64>], q: usize, n: usize) -> Vec<f64> {
+pub(crate) fn project(a: &Csr, x: &[Vec<f64>], q: usize, n: usize) -> Vec<f64> {
     let mut out = vec![0.0; q * q];
     let mut ax = vec![0.0; n];
     for c in 0..q {
@@ -244,7 +250,10 @@ fn project(a: &Csr, x: &[Vec<f64>], q: usize, n: usize) -> Vec<f64> {
 /// `M̂ = L Lᵀ`, and `L⁻¹ K̂ L⁻ᵀ` is symmetric with the same eigenvalues; faer's self-adjoint
 /// eigendecomposition returns them nondecreasing, and `z = L⁻ᵀ Q` makes the eigenvectors
 /// M̂-orthonormal, which is what keeps the iterated subspace M-orthonormal too.
-fn dense_eigen(k_hat: &[f64], m_hat: &[f64], q: usize) -> (Vec<f64>, Vec<f64>) {
+///
+/// Only the *second* operand is factorised, so a linear buckling Step passes its indefinite
+/// `X̄ᵀ(−K_σ)X̄` first and its positive definite `X̄ᵀKX̄` second and this needs no change.
+pub(crate) fn dense_eigen(k_hat: &[f64], m_hat: &[f64], q: usize) -> (Vec<f64>, Vec<f64>) {
     // `M̂ = X̄ᵀ M X̄` with `M` positive definite (the density check above) and `X̄` of full rank,
     // so the factorisation and the symmetric eigendecomposition below cannot fail. Both are the
     // low-level faer entry points, which take the parallelism as an argument: the high-level
