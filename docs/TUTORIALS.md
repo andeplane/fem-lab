@@ -22,12 +22,13 @@ satisfying the steps of a tutorial you are only now beginning.
 | [`read-a-result`](../packages/app/tutorials/read-a-result.json) | 4 | Nothing — five explanation-only steps over the Results and Checks panels, for a Model you have already solved. | — |
 | [`heat-conduction`](../packages/app/tutorials/heat-conduction.json) | 8 | A bar held at two temperatures, solved, then re-solved with a convection face. What a boundary condition *is*, Fourier's law, and reading a scalar field. | Fourier, Dirichlet vs Newton cooling, and why an unnamed face is insulated |
 | [`modal-analysis`](../packages/app/tutorials/modal-analysis.json) | 7 | The `cantilever-modal` example: a rectangular-section cantilever, four modes. | fₙ = (βₙ²/2π)√(EI/ρAL⁴); why consistent mass converges from above; degenerate pairs |
+| [`free-free-modal`](../packages/app/tutorials/free-free-modal.json) | 9 | The same beam as `modal-analysis`, unconstrained (the `free-free-beam-modal` example): six rigid-body modes, then two real ones. | Why rigid modes sit near zero rather than at it, the eigen shift, and the free-free f₁ = (β₁²/2π)√(EI/ρAL⁴) with β₁ = 4.730041 |
 | [`transient-heat`](../packages/app/tutorials/transient-heat.json) | 9 | NAFEMS T3 twice: once with Crank–Nicolson, once with backward Euler at the same Δt. | The θ-method, order vs damping, and why Crank–Nicolson rings |
 | [`mesh-convergence`](../packages/app/tutorials/mesh-convergence.json) | 7 | The cantilever plus one `study.converge` over three sizes. | Observed rate p, Richardson extrapolation, and when to stop |
 | [`symmetry-and-2d`](../packages/app/tutorials/symmetry-and-2d.json) | 9 | The `kirsch-quarter-plate` example: plane stress, two symmetry planes, mapped blocks on the hole. | Kirsch's field, plane stress vs plane strain, what symmetry costs you |
 
-The first four are the phase-1 set. The last five each own one procedure or one piece of method
-that the Commands alone do not explain.
+The first four are the phase-1 set. The rest each own one procedure, one idealisation or one
+piece of method that the Commands alone do not explain.
 
 ## The file format
 

@@ -2,6 +2,7 @@
 // one is adding a file here, not writing a component. Vite bundles JSON imports directly, so
 // there is no fetch and no build step, unlike the Examples gallery's Journals.
 import cantilever from '../../tutorials/cantilever.json';
+import freeFreeModal from '../../tutorials/free-free-modal.json';
 import heatConduction from '../../tutorials/heat-conduction.json';
 import meshConvergence from '../../tutorials/mesh-convergence.json';
 import modalAnalysis from '../../tutorials/modal-analysis.json';
@@ -21,6 +22,7 @@ export const TUTORIALS: Tutorial[] = [
   readAResult,
   heatConduction,
   modalAnalysis,
+  freeFreeModal,
   transientHeat,
   meshConvergence,
   symmetryAnd2d,
