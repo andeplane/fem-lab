@@ -888,7 +888,8 @@ pub enum Command {
     ConstraintRemove { name: String },
 
     /// Uniform pressure on a face Set, positive into the surface (a negative value pulls).
-    /// The total force is the pressure times the face area and is reported by query.model.
+    /// Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
+    /// force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
     #[serde(rename = "load.pressure", rename_all = "camelCase")]
     LoadPressure { name: String, on: SetRef, value: Q<Stress> },
 

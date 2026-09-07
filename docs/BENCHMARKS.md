@@ -663,6 +663,17 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
 
+### Loaded boundary area (Properties pressure preview)
+
+`query.set.pressureArea` uses the same boundary quadrature as pressure and traction, without
+requiring a Material or appending a Command. Registry tests check both mesh orders against
+independent exact areas: a 350 mm × 300 mm solid face is 0.105 m²; a 2 m edge with 30 mm
+plane-stress thickness is 0.06 m²; plane strain uses 2 m² per metre of out-of-plane depth;
+an axisymmetric edge at r = 3 m and length 2 m sweeps 12π m². Remeshing preserves these
+areas. Multiplying by pressure yields the scalar pressure-area integral, not the net vector
+force on a curved boundary. Chromium checks the draft conversion (2.4 MPa × 0.105 m² =
+252 kN), edits and geometry changes without a load Command until Apply.
+
 ### Transformed Sheet free meshing (#230)
 
 A 2×2 m square with a centered 1×1 m square hole, scaled (2,3), rotated 90°

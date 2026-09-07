@@ -400,6 +400,16 @@ impl Engine {
             count: set.count() as u32,
             bbox: bbox6(m, lo, hi),
             measure: display(m, measure, Dimension([exponent, 0, 0, 0])),
+            pressure_area: if set.kind == crate::mesh::SetKind::Face {
+                let area = set
+                    .faces
+                    .iter()
+                    .map(|&face| crate::fem::element::loaded_face_measure(mesh, face, &m.idealisation))
+                    .sum();
+                Some(display(m, area, Dimension([2, 0, 0, 0])))
+            } else {
+                None
+            },
             centroid: [
                 display(m, centroid[0], Length::DIM),
                 display(m, centroid[1], Length::DIM),
