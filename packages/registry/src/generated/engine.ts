@@ -1331,7 +1331,8 @@ export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | 
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
- * display units.
+ * display units. Transient thermal reactions include stored energy and refer to the last
+ * θ-method integration stage, not an endpoint steady-state residual.
  */
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
@@ -3448,6 +3449,12 @@ export interface ResultSummary {
    */
   appliedTotal: [Valued, Valued, Valued];
   /**
+   * Thermal stored-energy rate in power display units (zero for steady heat). Transient
+   * power totals/reactions use the last θ-method integration stage; the temperature field
+   * itself is at the final time. Positive reactions remove heat: applied − removed = storage.
+   */
+  storagePower?: Valued | null;
+  /**
    * Optional material properties the successful procedure actually read as zero because the
    * Material omitted them. Empty when every solver-used property was explicit.
    */
@@ -3468,12 +3475,6 @@ export interface ResultSummary {
    * Zero is perfect balance; values above 1e-9 fail the report's conservation check.
    */
   balance: number;
-  /**
-   * Thermal stored-energy rate in power display units (zero for steady heat). Transient
-   * power totals/reactions use the last θ-method integration stage; the temperature field
-   * itself is at the final time. Positive reactions remove heat: applied − removed = storage.
-   */
-  storagePower?: Valued | null;
 }
 /**
  * One extreme of a field component.
