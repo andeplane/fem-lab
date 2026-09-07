@@ -47,6 +47,20 @@ control strip was clipped at its right edge with all panels open, so complete co
 reachability and the populated Result-state comparison still need explicit acceptance.
 No Assistant request or paid evaluation was submitted during this inspection.
 
+### Deployed report inspection
+
+A second manual inspection on 7 September opened the bundled cantilever through the Gallery,
+then opened Report after the ten-Command solve completed. The full-screen calculation note
+rendered the actual Model/revision, units, assumptions, geometry/material tables, Results,
+verification and Journal. Two KaTeX expressions rendered, and the current static Result image
+was fully decoded at 2400 × 1350. The report dialog's scroll width equalled its 1600 px client
+width. This is direct evidence for the report's populated screen state, not print pagination.
+
+Copy Markdown was invoked, but the browser tool returned an empty clipboard and exposed no
+error feedback; its successful output is therefore unverified in this session. Subsequent
+browser control timed out, so print/PDF and the remainder of the comparison were not completed.
+The report acceptance row remains open. No API-backed Assistant request was made.
+
 ### Current source and scenario references
 
 These references were inspected at `3a3e1e4`; scenario existence is not a substitute for
