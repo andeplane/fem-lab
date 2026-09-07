@@ -5773,7 +5773,7 @@ fn convergence_studies_use_explicit_dynamics_for_a_falling_block() {
         r#"{"cmd":"study.converge","step":"fall","sizes":["0.1 m","0.05 m","0.025 m"],
         "quantity":{"kind":"probe","field":"displacement","component":2,"at":["0.05 m","0.05 m","0.05 m"]},"restore":false}"#,
     );
-    let expected = -1.0 * 1e-3 - 0.5 * 9.81 * 1e-6;
+    let expected = -1e-3 - 0.5 * 9.81 * 1e-6;
     for row in &r.rows {
         assert!((row.value - expected).abs() < 0.01 * expected.abs(), "{row:?}");
     }
@@ -8506,9 +8506,9 @@ fn an_implicit_step_is_defined_costed_and_run_through_the_registry() {
     ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
     let t = 5e-3;
     let want = [0.3 * t, -0.2 * t, 0.1 * t - 0.5 * 9.81 * t * t];
-    for c in 0..3 {
+    for (c, want) in want.iter().enumerate() {
         let got = probe_at(&mut e, "fall", Field::Displacement, Some(c as u8), ["50 mm", "50 mm", "50 mm"]);
-        assert!((got - want[c]).abs() <= 1e-12, "component {c}: {got} vs {}", want[c]);
+        assert!((got - want).abs() <= 1e-12, "component {c}: {got} vs {want}");
     }
     let summary = result_of(&mut e, Some("fall"));
     assert_eq!((summary.solver.as_str(), summary.iterations, summary.history.len()), ("cpu-direct", 5, 4));

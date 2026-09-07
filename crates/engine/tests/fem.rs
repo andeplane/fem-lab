@@ -9147,6 +9147,7 @@ fn implicit_step(
 /// solving for the acceleration:
 /// `[m + (1+α)γΔt c + (1+α)βΔt² k] a₁ = f − (1+α)(c ṽ + k ũ) + α(c v₀ + k u₀)`.
 /// It shares no algebra with the engine's effective-stiffness form.
+#[allow(clippy::too_many_arguments)]
 fn scalar_hht(m: f64, k: f64, c: f64, f: f64, alpha: f64, dt: f64, steps: usize, v0: f64) -> Vec<(f64, f64)> {
     let (beta, gamma) = ((1.0 - alpha).powi(2) / 4.0, 0.5 - alpha);
     let (mut u, mut v) = (0.0, v0);
@@ -9230,7 +9231,8 @@ fn a_single_degree_of_freedom_under_a_step_load_matches_the_closed_form_and_the_
         let exact = |t: f64| {
             u_static
                 * (1.0
-                    - (-zeta * omega * t).exp() * ((omega_d * t).cos() + zeta * omega / omega_d * (omega_d * t).sin()))
+                    - libm::exp(-zeta * omega * t)
+                        * (libm::cos(omega_d * t) + zeta * omega / omega_d * libm::sin(omega_d * t)))
         };
         let recurrence = three_term_newmark(m, k, c, f, dt, steps);
         let mut worst = 0.0f64;
@@ -9417,8 +9419,10 @@ fn a_suddenly_loaded_bar_matches_the_wave_series_and_converges_at_second_order_i
     let t_end = 0.35 * period;
     let static_tip = traction * length / YOUNG;
     let series = |t: f64| {
-        let sum: f64 =
-            (1..200_000u64).step_by(2).map(|n| (n as f64 * PI * c * t / (2.0 * length)).cos() / (n * n) as f64).sum();
+        let sum: f64 = (1..200_000u64)
+            .step_by(2)
+            .map(|n| libm::cos(n as f64 * PI * c * t / (2.0 * length)) / (n * n) as f64)
+            .sum();
         static_tip * (1.0 - 8.0 / (PI * PI) * sum)
     };
     let bar = |nx: usize| Structured { kind: ElementKind::Hex8, n: [nx, 1, 1] }.box_([length, side, side]);
@@ -9564,7 +9568,7 @@ fn implicit_dynamics_refuses_what_it_cannot_integrate() {
     moving.constraints = root();
     moving.loads = vec![Load::Traction { faces: "xmax".into(), t: [1e6, 0.0, 0.0] }];
     let res = run_step(&moving, &ramped).expect("an amplitude on the loads");
-    assert!((res.scalars["load_total_x"] - 0.01 * 1e6 * (2.0 * PI * t_end / 1e-3).sin()).abs() <= 1e-6);
+    assert!((res.scalars["load_total_x"] - 0.01 * 1e6 * libm::sin(2.0 * PI * t_end / 1e-3)).abs() <= 1e-6);
     // A NaN in the load table after t = 0 poisons the first solve, never the history.
     let Step::Implicit { amplitude, .. } = &mut ramped else { panic!() };
     *amplitude = Some(procedure::Amplitude::Table { t: vec![0.0, 1.0], value: vec![1.0, f64::NAN] });
