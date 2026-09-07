@@ -1,0 +1,197 @@
+{
+  "name": "beam-torsion-shaft",
+  "reference": "Benchmark B25: a circular shaft of radius 50 mm and length 1 m clamped at one end and twisted by 1 kN m at the other (load.moment), three elements. St Venant torsion gives phi = T L / (G J) with J = pi r^4 / 2 and G = E / 2(1 + nu) = 76.923 GPa: 1.32417e-3 rad, linear along the shaft, and the torque is 1 kN m in every element.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "beam-torsion-shaft"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "shaft",
+      "points": [
+        [
+          "0 m",
+          "0 m",
+          "0 m"
+        ],
+        [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 3,
+      "kind": "beam"
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "round numbers, so the closed forms are exact in floating point"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "shaft"
+      ]
+    },
+    {
+      "cmd": "section.add",
+      "name": "round",
+      "shape": {
+        "kind": "circle",
+        "radius": "50 mm"
+      }
+    },
+    {
+      "cmd": "section.assign",
+      "section": "round",
+      "bodies": [
+        "shaft"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "shaft.p0"
+    },
+    {
+      "cmd": "load.moment",
+      "name": "twist",
+      "on": "shaft.p1",
+      "total": [
+        "1 kN m",
+        "0 kN m",
+        "0 kN m"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "twist"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "rotation",
+        "component": 0,
+        "at": [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.001324169126524569,
+      "tol": 1e-10,
+      "note": "tip twist phi = T L / (G J), J = pi r^4 / 2",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "rotation",
+        "component": 0,
+        "at": [
+          "333.333333333333 mm",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.000441389708841523,
+      "tol": 1e-10,
+      "note": "the twist is linear along the shaft: phi/3 one third along",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 2,
+        "at": [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "a torque bends nothing"
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/0",
+      "expect": 1000.0,
+      "tol": 1e-10,
+      "note": "T = 1 kN m at the root end of the first element",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.field",
+        "field": "sectionMoment"
+      },
+      "path": "/values/15",
+      "expect": 1000.0,
+      "tol": 1e-10,
+      "note": "and at the far end of the last: the torque is uniform",
+      "rel": true
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the supports carry the applied load"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

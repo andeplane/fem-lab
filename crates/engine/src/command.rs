@@ -301,6 +301,9 @@ pub enum Field {
     Strain,
     Reaction,
     Temperature,
+    /// The rotation of every node about the global axes, in radians: a static Result of a
+    /// Model with beams carries it, zero on every node no beam reaches. Absent otherwise.
+    Rotation,
     /// Per-member section forces of beam elements at each element end: `N` (axial, positive
     /// in tension), `V_y` and `V_z` (shear along the member's local y and z). One triple per
     /// element node (`elementNode` location), zero on every element that is not a beam.

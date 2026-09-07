@@ -17,7 +17,9 @@ use crate::fem::problem::Problem;
 use crate::fem::{assembly, checks, loads, mpc};
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, stress, FieldData, Per};
-use crate::procedure::{report, retained_frame_count, time_grid, vector_field, Amplitude, History, StepResult};
+use crate::procedure::{
+    report, retained_frame_count, rotation_field, time_grid, vector_field, Amplitude, History, StepResult,
+};
 use crate::solve::{direct::Direct, solve, solve_reusable, LinearSolve, SolveInfo, SolveOptions};
 
 /// The retained frames of an amplituded Step, from the two solved parts of `u(t) = u_th + g·u_L`.
@@ -208,6 +210,9 @@ pub(crate) async fn post(
 
     let mut fields = BTreeMap::new();
     fields.insert(Field::Displacement, vector_field(&u, dpn));
+    if p.has_beams() {
+        fields.insert(Field::Rotation, rotation_field(&u));
+    }
     fields.insert(Field::Reaction, vector_field(&r, dpn));
     stress_fields(p, &u, pool, &mut fields);
     scalars.insert("min_det_j".to_string(), a.min_det_j);
