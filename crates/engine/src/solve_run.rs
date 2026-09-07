@@ -396,14 +396,9 @@ pub(crate) fn planned_cost(
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "static")) });
         }
-<<<<<<< HEAD
         procedure::Step::Static { solver, .. }
         | procedure::Step::Modal { solver, .. }
         | procedure::Step::Buckling { solver, .. } => crate::solve::cost_estimate(mesh, mesh.dim, solver.solver),
-=======
-        procedure::Step::Static { solver, .. } | procedure::Step::Modal { solver, .. } => {
-            crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
-        }
         // A nonlinear Step keeps one displacement field per converged increment — the
         // load–deflection curve — so its retained history is counted exactly as a transient's.
         // It is reported rather than enforced: `outputEvery`, which the budget error suggests,
@@ -413,7 +408,6 @@ pub(crate) fn planned_cost(
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, o.increments, 1, 5)
                 .map(|estimate| PlannedCost { estimate, transient: None });
         }
->>>>>>> origin/main
         procedure::Step::HeatSteady { solver, .. } => crate::solve::cost_estimate(mesh, 1, solver.solver),
         procedure::Step::HeatTransient { dt, t_end, output_every, solver, .. } => {
             let (steps, _) = procedure::time_grid(*dt, *t_end)?;

@@ -1,14 +1,9 @@
 //! Procedures: what a Step *does*. One `run` for every one of them (plan A §6).
 //!
-<<<<<<< HEAD
-//! `Step::Static` is the linear static procedure ([`static_`]); [`modal`] finds natural
-//! frequencies by subspace iteration, [`buckling`] the load factors that make the static
-//! stress state cancel the stiffness, [`heat`] solves steady and transient conduction, and
-=======
 //! `Step::Static` is the linear static procedure ([`static_`]); [`nonlinear`] is its
-//! finite-deformation counterpart; [`modal`] finds natural
-//! frequencies by subspace iteration, [`heat`] solves steady and transient conduction, and
->>>>>>> origin/main
+//! finite-deformation counterpart; [`modal`] finds natural frequencies by subspace iteration,
+//! [`buckling`] the load factors that make the static stress state cancel the stiffness,
+//! [`heat`] solves steady and transient conduction, and
 //! [`explicit`] integrates the equations of motion by central differences. Each one takes the
 //! same resolved [`Problem`] and answers the same [`StepResult`], so `solve.run` and every
 //! host read one shape whatever the physics.

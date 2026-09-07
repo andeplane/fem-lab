@@ -497,6 +497,7 @@ pub async fn run(
         extremes: ex,
         reactions: per_constraint,
         frequencies: Vec::new(),
+        buckling_factors: Vec::new(),
         modes: Vec::new(),
         history: Some(history),
         // The Step's own iteration count, not the last linear solve's: a nonlinear Step is

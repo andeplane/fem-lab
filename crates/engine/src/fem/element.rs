@@ -95,14 +95,16 @@ pub trait Element: Send + Sync {
     fn face_load(&self, c: &ElementCtx<'_>, local_face: u8, load: FaceLoad, out: &mut [f64]) -> Result<(), Error>;
     /// Total strain and stress at the Gauss points, `VOIGT` each: `stress.len() == n_gp * 6`.
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error>;
-<<<<<<< HEAD
-    /// `K_σ = ∫ (∂N_a/∂x_i) σ_ij (∂N_b/∂x_j) δ_kl dV`, row-major `n_dof × n_dof`: the stress
-    /// stiffening of the state `u` puts this element in, which a linear buckling Step scales by
-    /// the load factor. The stress is this element's own Gauss-point stress, recomputed from `u`
-    /// exactly as [`Element::recover`] does — the integral wants the unaveraged values, and a
-    /// nodal average is a different (smoothed) field.
+    /// `K_sigma = integral of (dN_a/dx_i) sigma_ij (dN_b/dx_j) delta_kl dV`, row-major
+    /// `n_dof x n_dof`: the stress stiffening of the state `u` puts this element in, which a
+    /// linear buckling Step scales by the load factor. The stress is this element's own
+    /// Gauss-point stress, recomputed from `u` through [`Element::recover`] itself — the
+    /// integral wants the unaveraged values, and a nodal average is a different, smoothed field.
+    ///
+    /// This is the *small-strain* stress stiffening, which is what a linear buckling Step
+    /// multiplies. [`Element::tangent_and_force`] builds its own geometric term from the second
+    /// Piola-Kirchhoff stress for the finite-deformation path; the two agree at small strain.
     fn geometric(&self, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error>;
-=======
     /// The finite-deformation counterpart of [`Element::stiffness`] and [`Element::recover`]
     /// in one pass: the consistent tangent `K_T`, the internal force `f_int`, the Cauchy
     /// stress and Green–Lagrange strain at the Gauss points, and the advanced per-point state,
@@ -121,7 +123,6 @@ pub trait Element: Send + Sync {
         state_in: &[f64],
         out: TangentOut<'_>,
     ) -> Result<f64, Error>;
->>>>>>> origin/main
     /// Parametric coordinates of Gauss point `i`, for extrapolation and probes.
     fn gp_xi(&self, i: usize) -> [f64; 3];
     fn shape_at(&self, xi: [f64; 3], n: &mut [f64]);
@@ -266,13 +267,8 @@ struct Kin {
     b: Vec<f64>,
     /// `n_gp * n_nodes` shape values.
     n: Vec<f64>,
-<<<<<<< HEAD
-    /// `n_gp * n_nodes` physical shape-function gradients `∂N_a/∂x`, the same ones `B` is
-    /// filled from. The geometric stiffness needs them raw rather than in Voigt rows.
-=======
     /// `n_gp * n_nodes` reference gradients `∂N_a/∂X`, which the finite-strain kernels need
     /// as vectors rather than as the `B` columns they are packed into.
->>>>>>> origin/main
     grad: Vec<[f64; 3]>,
     /// `w · det J · scale` per Gauss point.
     w: Vec<f64>,
@@ -751,14 +747,71 @@ fn face_load_of(
     }
 }
 
-/// One element's kinematics, its Gauss-point total strain, and the Cauchy stress that strain
-/// produces, all `VOIGT` per Gauss point.
+/// The `unsupported` error an axisymmetric geometric stiffness answers with.
 ///
-/// Recovery and the geometric stiffness are the same computation up to what they do with the
-/// answer, and they must agree to the last bit: `K_σ` integrates the *unaveraged* Gauss-point
-/// stress, which is why it recomputes the stress here rather than reading back a nodal field
-/// that averaging has already smoothed.
-fn recovered(kind: ElementKind, c: &ElementCtx<'_>, u: &[f64]) -> Result<(Kin, Vec<f64>, Vec<f64>), Error> {
+/// A ring element's stress stiffening carries a hoop term `sigma_theta N_a N_b / r^2` on the
+/// radial degree of freedom that the Cartesian gradient form below does not contain.
+/// Integrating the Cartesian part alone would silently under-stiffen the ring, so this refuses.
+fn no_axisymmetric_geometric() -> Error {
+    Error::new(
+        ErrorCode::Unsupported,
+        "linear buckling has no axisymmetric geometric stiffness: its hoop term sigma_theta N_a N_b / r^2 is not integrated",
+    )
+    .at("idealisation")
+    .suggest("model.setIdealisation with solid3d, planeStress or planeStrain")
+}
+
+/// `K_sigma`, row-major, node-major columns.
+///
+/// The `delta_kl` is why one scalar per node pair fills `dim` diagonal entries of the
+/// `dim x dim` block: stress stiffening couples each displacement component to itself. In 2D
+/// the gradients have no out-of-plane part, so `sigma_33` cannot contribute — which is right,
+/// because there is no out-of-plane degree of freedom for it to stiffen.
+///
+/// The incompatible modes are deliberately absent: `K_sigma` is built from the compatible
+/// gradients alone, so the internal bubbles stiffen `K` but never `K_sigma`.
+///
+/// ponytail: `recover_of` recomputes the kinematics this already holds, so an element is walked
+/// twice on the buckling path. Sharing them would mean splitting `recover_of` in two; one extra
+/// shape-function pass per element is not worth that until a profile says so.
+fn geometric_of(kind: ElementKind, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error> {
+    if let Idealisation::Axisymmetric = c.idealisation {
+        return Err(no_axisymmetric_geometric());
+    }
+    let kin = kinematics(kind, c)?;
+    let (nn, dim, nd) = (kin.n_nodes, kin.dim, kin.n_dof);
+    let n = kin.n_gp * VOIGT;
+    let (mut sig, mut eps) = (vec![0.0; n], vec![0.0; n]);
+    // The very stress `recover` reports, so the two can never disagree.
+    recover_of(kind, c, u, &mut sig, &mut eps)?;
+    kg.fill(0.0);
+    for g in 0..kin.n_gp {
+        let sigma = voigt_3x3(&sig[g * VOIGT..(g + 1) * VOIGT]);
+        let grad = &kin.grad[g * nn..(g + 1) * nn];
+        for a in 0..nn {
+            // `sigma grad(N_a)`, so the inner pair below is one dot product rather than dim^2.
+            let mut sga = [0.0; 3];
+            for (j, v) in sga.iter_mut().enumerate().take(dim) {
+                *v = (0..dim).map(|i| grad[a][i] * sigma[i][j]).sum();
+            }
+            for b in 0..nn {
+                let v = kin.w[g] * (0..dim).map(|j| sga[j] * grad[b][j]).sum::<f64>();
+                for k in 0..dim {
+                    kg[(dim * a + k) * nd + dim * b + k] += v;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn recover_of(
+    kind: ElementKind,
+    c: &ElementCtx<'_>,
+    u: &[f64],
+    stress: &mut [f64],
+    strain: &mut [f64],
+) -> Result<(), Error> {
     let kin = kinematics(kind, c)?;
     let (nt, nd, m) = (kin.nt(), kin.n_dof, kin.m);
     let mut uhat = vec![0.0; nt];
@@ -772,85 +825,19 @@ fn recovered(kind: ElementKind, c: &ElementCtx<'_>, u: &[f64]) -> Result<(Kin, V
             uhat[nd + p] = -v;
         }
     }
-    let mut strain = vec![0.0; kin.n_gp * VOIGT];
     for g in 0..kin.n_gp {
         let b = kin.b_at(g);
         for i in 0..VOIGT {
             strain[g * VOIGT + i] = (0..nt).map(|col| b[i * nt + col] * uhat[col]).sum();
         }
     }
-    let mut mech = strain.clone();
+    let mut mech = strain[..kin.n_gp * VOIGT].to_vec();
     if let Some(eps) = thermal_strain(&kin, c) {
         for (a, b) in mech.iter_mut().zip(eps.iter()) {
             *a -= b;
         }
     }
-    let mut stress = vec![0.0; kin.n_gp * VOIGT];
     let mut tangent = vec![0.0; kin.n_gp * VOIGT * VOIGT];
-<<<<<<< HEAD
-    constitutive(c, kin.n_gp, &mech, &mut stress, &mut tangent)?;
-    Ok((kin, stress, strain))
-}
-
-fn recover_of(
-    kind: ElementKind,
-    c: &ElementCtx<'_>,
-    u: &[f64],
-    stress: &mut [f64],
-    strain: &mut [f64],
-) -> Result<(), Error> {
-    let (_, sig, eps) = recovered(kind, c, u)?;
-    stress[..sig.len()].copy_from_slice(&sig);
-    strain[..eps.len()].copy_from_slice(&eps);
-    Ok(())
-}
-
-/// The `unsupported` error an axisymmetric geometric stiffness answers with.
-///
-/// A ring element's stress stiffening carries a hoop term `σ_θθ N_a N_b / r²` on the radial
-/// degree of freedom that the Cartesian gradient form below does not contain. Integrating the
-/// Cartesian part alone would silently under-stiffen the ring, so this refuses instead.
-fn no_axisymmetric_geometric() -> Error {
-    Error::new(
-        ErrorCode::Unsupported,
-        "linear buckling has no axisymmetric geometric stiffness: its hoop term σ_θθ N_a N_b / r² is not integrated",
-    )
-    .at("idealisation")
-    .suggest("model.setIdealisation with solid3d, planeStress or planeStrain")
-}
-
-/// `K_σ = ∫ (∂N_a/∂x_i) σ_ij (∂N_b/∂x_j) δ_kl dV`, row-major, node-major columns.
-///
-/// The `δ_kl` is why one scalar per node pair fills `dim` diagonal entries of the `dim × dim`
-/// block: stress stiffening couples each displacement component to itself. In 2D the gradients
-/// have no out-of-plane part, so `σ₃₃` cannot contribute — which is right, because there is no
-/// out-of-plane degree of freedom for it to stiffen.
-///
-/// The incompatible modes are deliberately absent: `K_σ` is built from the compatible gradients
-/// alone, so the internal bubbles stiffen `K` but never `K_σ`.
-fn geometric_of(kind: ElementKind, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error> {
-    if let Idealisation::Axisymmetric = c.idealisation {
-        return Err(no_axisymmetric_geometric());
-    }
-    let (kin, sig, _) = recovered(kind, c, u)?;
-    let (nn, dim, nd) = (kin.n_nodes, kin.dim, kin.n_dof);
-    kg.fill(0.0);
-    for g in 0..kin.n_gp {
-        let s = &sig[g * VOIGT..(g + 1) * VOIGT];
-        // Voigt 11, 22, 33, 12, 13, 23 back into the symmetric `dim × dim` Cauchy tensor.
-        let sigma = [[s[0], s[3], s[4]], [s[3], s[1], s[5]], [s[4], s[5], s[2]]];
-        let grad = &kin.grad[g * nn..(g + 1) * nn];
-        for a in 0..nn {
-            // `σ ∇N_a`, so the inner pair below is one dot product rather than dim².
-            let mut sga = [0.0; 3];
-            for (j, v) in sga.iter_mut().enumerate().take(dim) {
-                *v = (0..dim).map(|i| grad[a][i] * sigma[i][j]).sum();
-            }
-            for b in 0..nn {
-                let v = kin.w[g] * (0..dim).map(|j| sga[j] * grad[b][j]).sum::<f64>();
-                for k in 0..dim {
-                    kg[(dim * a + k) * nd + dim * b + k] += v;
-=======
     constitutive_stateless(c, kin.n_gp, &mech, stress, &mut tangent)
 }
 
@@ -965,14 +952,10 @@ fn tangent_and_force_of(
                     for k in 0..dim {
                         b[row * nd + dim * a + k] += fm[k][i] * ga[j];
                     }
->>>>>>> origin/main
                 }
             }
         }
     }
-<<<<<<< HEAD
-    Ok(())
-=======
     let mut mech = out.strain[..n_gp * VOIGT].to_vec();
     if let Some(eps) = thermal_strain(&kin, &full) {
         for (a, b) in mech.iter_mut().zip(eps.iter()) {
@@ -1007,7 +990,6 @@ fn tangent_and_force_of(
         }
     }
     Ok(kin.min_det)
->>>>>>> origin/main
 }
 
 /// The smallest Gauss-point `det J` of one element's coordinates, or `None` when the element
@@ -1156,10 +1138,9 @@ impl<R: RefElement> Element for Iso<R> {
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
         recover_of(R::KIND, c, u, stress, strain)
     }
-<<<<<<< HEAD
     fn geometric(&self, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error> {
         geometric_of(R::KIND, c, u, kg)
-=======
+    }
     fn tangent_and_force(
         &self,
         c: &ElementCtx<'_>,
@@ -1168,7 +1149,6 @@ impl<R: RefElement> Element for Iso<R> {
         out: TangentOut<'_>,
     ) -> Result<f64, Error> {
         tangent_and_force_of(R::KIND, c, u, state_in, out)
->>>>>>> origin/main
     }
     fn gp_xi(&self, i: usize) -> [f64; 3] {
         rule_of(R::KIND).points[i]

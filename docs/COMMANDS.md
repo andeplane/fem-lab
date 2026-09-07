@@ -778,7 +778,8 @@ it. `output` lists the fields to compute (default displacement, stress, von Mise
 reactions). Steps run in the order given by step.reorder, and `after` names an earlier
 Step whose Result this one continues — a static Step after a heat Step picks up its
 temperature field and turns it into thermal stress. The remaining fields belong to one
-procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
+procedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`
+alone (default 1) to buckling, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
 `dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and
 `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
@@ -1759,6 +1760,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
       "type": "string",
       "const": "modal"
+    },
+    {
+      "description": "Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening\nthat state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`\nwith the smallest `|lambda|` first; `nModes` (default 1) says how many. Multiply this\nStep's Loads by `lambda` to get the critical load.\n\nRead the answer carefully. A mode shape has **arbitrary amplitude** — it shows *where*\nthe structure buckles, never how far — so never report a displacement from it. A\n**negative** factor is not an error: it means the structure buckles under the *reversed*\nload, which matters if the load can change sign. And the factor is an **upper bound**: it\nignores imperfections, pre-buckling rotation and yielding, so a real column carries less\nthan this predicts. It is not a safety factor; treat it as the ceiling a perfect,\nperfectly elastic structure would reach. Not available for the axisymmetric idealisation,\nand it needs the direct solver: the iteration back-substitutes hundreds of times through\none factorisation, which `cpu-pcg` and `gpu-pcg` do not build.",
+      "type": "string",
+      "const": "buckling"
     },
     {
       "description": "Steady heat conduction with convection, flux and source boundaries; needs `k`.",
@@ -4602,7 +4608,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`\nalone (default 1) to buckling, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
       "type": "object",
       "properties": {
         "name": {
@@ -5919,6 +5925,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
       "type": "string",
       "const": "modal"
+    },
+    {
+      "description": "Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening\nthat state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`\nwith the smallest `|lambda|` first; `nModes` (default 1) says how many. Multiply this\nStep's Loads by `lambda` to get the critical load.\n\nRead the answer carefully. A mode shape has **arbitrary amplitude** — it shows *where*\nthe structure buckles, never how far — so never report a displacement from it. A\n**negative** factor is not an error: it means the structure buckles under the *reversed*\nload, which matters if the load can change sign. And the factor is an **upper bound**: it\nignores imperfections, pre-buckling rotation and yielding, so a real column carries less\nthan this predicts. It is not a safety factor; treat it as the ceiling a perfect,\nperfectly elastic structure would reach. Not available for the axisymmetric idealisation,\nand it needs the direct solver: the iteration back-substitutes hundreds of times through\none factorisation, which `cpu-pcg` and `gpu-pcg` do not build.",
+      "type": "string",
+      "const": "buckling"
     },
     {
       "description": "Steady heat conduction with convection, flux and source boundaries; needs `k`.",

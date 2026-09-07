@@ -1665,7 +1665,8 @@ export type ContactKind = "bonded";
 /**
  * Analysis procedures.
  */
-export type Procedure = "static" | "static-nonlinear" | "modal" | "heat-steady" | "heat-transient" | "explicit";
+export type Procedure =
+  "static" | "static-nonlinear" | "modal" | "buckling" | "heat-steady" | "heat-transient" | "explicit";
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
@@ -4029,6 +4030,15 @@ export interface ResultSummary {
    * shape is the Result field named `mode:k`.
    */
   frequencies?: Valued[];
+  /**
+   * Buckling load factors, smallest magnitude first and dimensionless; empty unless the Step
+   * was a buckling one. Multiply the Step's Loads by one to get its critical load; a negative
+   * factor buckles under the reversed load. Factor `k`'s shape is the field named `mode:k`,
+   * and it has arbitrary amplitude: it says where the structure buckles, not how far. The
+   * factor is an upper bound — imperfections, pre-buckling rotation and yielding all lower
+   * the real capacity — so it is not a safety factor.
+   */
+  bucklingFactors?: number[];
   /**
    * One row per retained output time: when, and the range the field covered.
    */

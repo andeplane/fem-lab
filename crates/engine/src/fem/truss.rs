@@ -196,7 +196,6 @@ impl Element for Truss2 {
         Ok(())
     }
 
-<<<<<<< HEAD
     /// `(N/L) [[I, -I], [-I, I]]` with `N = sigma * A` the axial force: tension stiffens a member
     /// across its own axis and compression softens it, which is the whole of how a truss
     /// assembly buckles.
@@ -225,7 +224,8 @@ impl Element for Truss2 {
             }
         }
         Ok(())
-=======
+    }
+
     /// A pin-jointed member has no finite-strain kernel yet: the total Lagrangian formulation
     /// of #59 is written for continuum elements, and a Green–Lagrange axial strain plus its
     /// cable-like geometric stiffness is its own piece of work. Refused by name rather than
@@ -240,7 +240,6 @@ impl Element for Truss2 {
         Err(Error::new(ErrorCode::Unsupported, "a line member has no finite-strain kernel")
             .at("element")
             .suggest("step.add with procedure 'static', or mesh the member as a solid"))
->>>>>>> origin/main
     }
 
     fn gp_xi(&self, i: usize) -> [f64; 3] {
