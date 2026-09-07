@@ -1,0 +1,305 @@
+{
+  "name": "orthotropic-lamina-off-axis",
+  "reference": "Benchmark A12. A unidirectional carbon/epoxy lamina in plane stress, fibres at 45 degrees to the load, pulled by a uniform sigma_x = 10 MPa. E1 = 155 GPa, E2 = E3 = 12.1 GPa, G12 = G13 = 4.4 GPa, G23 = 3.2 GPa, nu12 = nu13 = 0.248, nu23 = 0.458. The oracle is the off-axis compliance, obtained by rotating the *compliance* (Sbar = T^-1 S T^-T with T^-1 = voigt_rotation(R^T)) rather than the stiffness the engine rotates, so it is an independent path: Sbar11 = 7.8292242069e-11 /Pa, Sbar12 = -3.5344121568e-11 /Pa, Sbar16 = -3.8096507598e-11 /Pa. Under sigma_x alone the strains are the first column of Sbar, so eps_x = 7.8292242069e-4, eps_y = -3.5344121568e-4 and gamma_xy = -3.8096507598e-4. Sbar11 is checked in the engine test against the classical off-axis modulus 1/Ex = cos^4(t)/E1 + (1/G12 - 2 nu12/E1) sin^2(t) cos^2(t) + sin^4(t)/E2, which agrees to 1e-12 relative: Ex(45 deg) = 12.7727 GPa, an eighth of E1. The shear-extension coupling gamma_xy is the term only a correct Voigt rotation produces; an on-axis or cross-axis ply has none. The stress field is uniform, so the answer is exact on any mesh and this is a patch test with an anisotropic closed form rather than a convergence study. The plate is 1 m square and 1 mm thick, pulled by equal and opposite end tractions so the load is self-equilibrating, and supported at two corners only (a pin and a roller) so the supports carry nothing and the shear-extension coupling is free to develop.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "orthotropic-lamina-off-axis"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "m",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "1 mm"
+      }
+    },
+    {
+      "cmd": "geometry.add",
+      "name": "ply",
+      "shape": {
+        "kind": "sheet",
+        "sketch": {
+          "outer": [
+            {
+              "kind": "line",
+              "to": [
+                "1 m",
+                "0 m"
+              ],
+              "tag": "ymin"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "1 m",
+                "1 m"
+              ],
+              "tag": "xmax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "1 m"
+              ],
+              "tag": "ymax"
+            },
+            {
+              "kind": "line",
+              "to": [
+                "0 m",
+                "0 m"
+              ],
+              "tag": "xmin"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "lamina",
+      "orthotropic": {
+        "E1": "155 GPa",
+        "E2": "12.1 GPa",
+        "E3": "12.1 GPa",
+        "G12": "4.4 GPa",
+        "G13": "4.4 GPa",
+        "G23": "3.2 GPa",
+        "nu12": 0.248,
+        "nu13": 0.248,
+        "nu23": 0.458
+      },
+      "orientation": {
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "angle": "45 deg"
+      },
+      "source": "a representative unidirectional carbon/epoxy ply"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "lamina",
+      "bodies": [
+        "ply"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 4,
+          "ny": 4,
+          "nz": 1
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "pin",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-0.01 m",
+          "-0.01 m",
+          "-0.01 m"
+        ],
+        "max": [
+          "0.01 m",
+          "0.01 m",
+          "0.01 m"
+        ]
+      }
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "roller",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "0.99 m",
+          "-0.01 m",
+          "-0.01 m"
+        ],
+        "max": [
+          "1.01 m",
+          "0.01 m",
+          "0.01 m"
+        ]
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "pinned",
+      "on": "pin",
+      "dofs": [
+        "ux",
+        "uy"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "rolled",
+      "on": "roller",
+      "dofs": [
+        "uy"
+      ]
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "pull",
+      "on": "ply.xmax",
+      "value": "-10 MPa"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "react",
+      "on": "ply.xmin",
+      "value": "-10 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "pinned",
+        "rolled"
+      ],
+      "loads": [
+        "pull",
+        "react"
+      ],
+      "output": [
+        "displacement",
+        "stress",
+        "strain"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 10.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the applied uniaxial stress is carried exactly by a constant-stress field"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 1,
+        "at": [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-06,
+      "note": "sigma_y vanishes: the plate is free to contract across the pull"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 3,
+        "at": [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-06,
+      "note": "and so does the shear, even though the strain field has shear in it"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "strain",
+        "component": 0,
+        "at": [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.00078292242069,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "eps_x = Sbar11 sigma_x, with Ex(45 deg) = 12.77 GPa against E1 = 155 GPa"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "strain",
+        "component": 1,
+        "at": [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.00035344121568,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "eps_y = Sbar12 sigma_x"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "strain",
+        "component": 3,
+        "at": [
+          "0.5 m",
+          "0.5 m",
+          "0 m"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -0.00038096507598,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "gamma_xy = Sbar16 sigma_x: the shear-extension coupling only a correct rotation gives"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

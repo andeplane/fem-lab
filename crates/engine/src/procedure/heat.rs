@@ -70,7 +70,9 @@ fn positive_material_property(
 /// Steady heat needs conductivity; transient heat additionally needs thermal capacity `rho cp`.
 fn validate_materials(p: &Problem<'_>, transient: bool) -> Result<(), Error> {
     let procedure = if transient { "heat-transient" } else { "heat-steady" };
-    positive_material_property(p, procedure, "k", "conductivity k", |m| m.k)?;
+    // Every material-axis component has to conduct, so the weakest of the three is the one to
+    // report; an isotropic material repeats one value three times and this is unchanged.
+    positive_material_property(p, procedure, "k", "conductivity k", |m| m.k[0].min(m.k[1]).min(m.k[2]))?;
     if transient {
         positive_material_property(p, procedure, "rho", "density rho", |m| m.rho)?;
         positive_material_property(p, procedure, "cp", "specific heat cp", |m| m.cp)?;

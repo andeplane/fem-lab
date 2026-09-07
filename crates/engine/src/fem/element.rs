@@ -23,7 +23,10 @@ use femlab_geometry::{Face, Mesh};
 
 use crate::command::Formulation;
 use crate::error::{Error, ErrorCode};
-use crate::fem::material::{plane_stress_condense, MaterialBatch, MaterialLaw, MaterialOut, VOIGT};
+use crate::fem::material::{
+    plane_stress_condense, rotate_diagonal, transpose3, voigt_rotation, MaterialBatch, MaterialLaw, MaterialOut,
+    Rotated, VOIGT,
+};
 use crate::fem::quadrature::Rule;
 use crate::fem::section::Section;
 use crate::fem::shape::{
@@ -35,13 +38,29 @@ use crate::model::Idealisation;
 /// A material resolved to numbers: the law and its props, plus the properties the *element*
 /// owns (density, expansion, conductivity, specific heat), which no law ever sees.
 /// `model::Material` is the serialisable row this is resolved from.
+///
+/// `alpha` and `k` are the three material-axis components; an isotropic material repeats one
+/// value three times. `axes` is the rotation whose **rows are the material axes in global
+/// coordinates**, or `None` when the material axes are the global ones.
 pub struct Material {
     pub law: &'static dyn MaterialLaw,
     pub props: Vec<f64>,
     pub rho: f64,
-    pub alpha: f64,
-    pub k: f64,
+    pub alpha: [f64; 3],
+    pub k: [f64; 3],
     pub cp: f64,
+    pub axes: Option<[[f64; 3]; 3]>,
+}
+
+impl Material {
+    /// The conductivity as a global-coordinate tensor, `Rᵀ diag(k) R`: this is what the heat
+    /// kernel integrates, and it is computed once per element rather than per Gauss point.
+    pub fn conductivity_tensor(&self) -> [[f64; 3]; 3] {
+        match &self.axes {
+            Some(r) => rotate_diagonal(r, self.k),
+            None => [[self.k[0], 0.0, 0.0], [0.0, self.k[1], 0.0], [0.0, 0.0, self.k[2]]],
+        }
+    }
 }
 
 /// Everything one element integral needs besides the load itself.
@@ -391,7 +410,17 @@ fn constitutive(
     stress: &mut [f64],
     tangent: &mut [f64],
 ) -> Result<(), Error> {
-    let law = c.material.law;
+    // An oriented material is the same law seen from rotated axes, so every idealisation below
+    // — plane stress included, since `plane_stress_condense` takes `&dyn MaterialLaw` — goes
+    // through the identical path whether or not there is an orientation.
+    let rotated;
+    let law: &dyn MaterialLaw = match &c.material.axes {
+        Some(axes) => {
+            rotated = Rotated::new(c.material.law, axes);
+            &rotated
+        }
+        None => c.material.law,
+    };
     if let Idealisation::PlaneStress { .. } = c.idealisation {
         state_out.copy_from_slice(state_in);
         let mut e2 = vec![0.0; n * 3];
@@ -559,13 +588,24 @@ fn delta_t(kin: &Kin, c: &ElementCtx<'_>) -> Option<Vec<f64>> {
     )
 }
 
-/// `ε_th = α ΔT` on the three normal components at every Gauss point.
+/// `ε_th = α ΔT` at every Gauss point, in *global* Voigt components.
+///
+/// In the material axes it is `(α1, α2, α3, 0, 0, 0) ΔT`. Strain rotates back to global by
+/// `T⁻¹`, and with engineering shear `T⁻¹ = voigt_rotation(Rᵀ)` rather than `Tᵀ` — using the
+/// stress transform here would scale the shear rows by two, which is exactly what the free
+/// expansion benchmark (`u = Rᵀ diag(α) R ΔT (x − x₀)`, σ = 0) would catch.
 fn thermal_strain(kin: &Kin, c: &ElementCtx<'_>) -> Option<Vec<f64>> {
     let dt = delta_t(kin, c)?;
+    let a = c.material.alpha;
+    let mut base = [a[0], a[1], a[2], 0.0, 0.0, 0.0];
+    if let Some(r) = &c.material.axes {
+        let t_inv = voigt_rotation(&transpose3(r));
+        base = std::array::from_fn(|i| (0..3).map(|j| t_inv[i][j] * a[j]).sum());
+    }
     let mut e = vec![0.0; kin.n_gp * VOIGT];
     for (g, &d) in dt.iter().enumerate() {
-        for i in 0..3 {
-            e[g * VOIGT + i] = c.material.alpha * d;
+        for (i, &b) in base.iter().enumerate() {
+            e[g * VOIGT + i] = b * d;
         }
     }
     Some(e)

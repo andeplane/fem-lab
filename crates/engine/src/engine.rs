@@ -10,8 +10,8 @@ use crate::error::{Error, ErrorCode, Warning};
 use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
 use crate::model::{
-    Body, Constraint, ConstraintKind, Cut, Idealisation, Load, LoadKind, Material, MeshSettings, Model, NamedSet,
-    PointMass, SetSource, Step,
+    Axial, Body, Constraint, ConstraintKind, Cut, Idealisation, Load, LoadKind, Material, MeshSettings, Model,
+    NamedSet, PointMass, SetSource, Step,
 };
 use crate::par::Pool;
 use crate::query::{Ack, Output};
@@ -622,22 +622,55 @@ impl Engine {
                 Ok(upsert(&mut self.model.points, pm, |p| &p.name, ObjectKind::Set))
             }
             Command::GeometryRemove { name } => self.geometry_remove(name),
-            Command::MaterialAdd { name, e, nu, rho, alpha, k, cp, yield_, source } => {
+            Command::MaterialAdd { name, e, nu, orthotropic, orientation, rho, alpha, k, cp, yield_, source } => {
                 check_name(name)?;
-                let e_si = e.si().map_err(|er| er.at("E"))?;
-                if e_si <= 0.0 {
-                    return Err(Error::schema("E must be positive").at("E"));
+                let isotropic = match (e, nu) {
+                    (Some(e), Some(nu)) => Some((e, nu)),
+                    (None, None) => None,
+                    _ => return Err(Error::schema("E and nu go together: give both or neither").at("E")),
+                };
+                let (e_si, nu) = match (isotropic, orthotropic.is_some()) {
+                    (Some(_), true) | (None, false) => {
+                        return Err(Error::schema(
+                            "give exactly one of (E, nu) for an isotropic material and orthotropic for an \
+                             orthotropic one",
+                        )
+                        .at("E")
+                        .suggest("material.add with E and nu, or with an orthotropic block"))
+                    }
+                    (Some((e, nu)), false) => {
+                        let e_si = e.si().map_err(|er| er.at("E"))?;
+                        if e_si <= 0.0 {
+                            return Err(Error::schema("E must be positive").at("E"));
+                        }
+                        if !(0.0..0.5).contains(nu) {
+                            return Err(Error::schema(format!("nu must be in [0, 0.5), got {nu}")).at("nu"));
+                        }
+                        (Some(e_si), Some(*nu))
+                    }
+                    (None, true) => (None, None),
+                };
+                let ortho = orthotropic.as_deref().map(orthotropic_si).transpose()?;
+                if let Some(o) = &ortho {
+                    // The compliance is inverted here, not at solve time, so an inadmissible set
+                    // of moduli is refused by the Command that introduced it.
+                    crate::fem::material::orthotropic_d(&o.props()).map_err(|er| er.at("orthotropic"))?;
                 }
-                if !(0.0..0.5).contains(nu) {
-                    return Err(Error::schema(format!("nu must be in [0, 0.5), got {nu}")).at("nu"));
+                let orientation = orientation.as_ref().map(resolve_orientation).transpose()?;
+                if let Some(o) = &orientation {
+                    check_orientation_fits(&self.model.idealisation, o)?;
                 }
+                let ortho_alpha = orthotropic.as_ref().and_then(|o| o.alpha.as_ref());
+                let ortho_k = orthotropic.as_ref().and_then(|o| o.k.as_ref());
                 let mat = Material {
                     name: name.clone(),
                     e: e_si,
-                    nu: *nu,
+                    nu,
+                    orthotropic: ortho,
+                    orientation,
                     rho: opt_si(rho, "rho")?,
-                    alpha: opt_si(alpha, "alpha")?,
-                    k: opt_si(k, "k")?,
+                    alpha: axis_property(alpha, ortho_alpha, "alpha")?,
+                    k: axis_property(k, ortho_k, "k")?,
                     cp: opt_si(cp, "cp")?,
                     yield_: opt_si(yield_, "yield")?,
                     source: source.clone(),
@@ -1707,6 +1740,81 @@ fn opt_si<D: crate::units::Dim>(q: &Option<Q<D>>, field: &str) -> Result<Option<
         Some(v) => Ok(Some(v.si().map_err(|e| e.at(field))?)),
         None => Ok(None),
     }
+}
+
+/// A property that is either one isotropic value or one per material axis, resolved to the three
+/// components the element sees. Giving both forms is a Schema error rather than a silent winner.
+fn axis_property<D: crate::units::Dim>(
+    scalar: &Option<Q<D>>,
+    axes: Option<&[Q<D>; 3]>,
+    field: &str,
+) -> Result<Option<Axial>, Error> {
+    let per_axis = match axes {
+        Some(a) => {
+            let mut out = [0.0; 3];
+            for (i, (o, q)) in out.iter_mut().zip(a).enumerate() {
+                *o = q.si().map_err(|e| e.at(format!("orthotropic.{field}[{i}]")))?;
+            }
+            Some(Axial::Axes(out))
+        }
+        None => None,
+    };
+    match (opt_si(scalar, field)?, per_axis) {
+        (Some(_), Some(_)) => Err(Error::schema(format!(
+            "{field} is given twice: once on material.add and once per material axis in orthotropic"
+        ))
+        .at(field)
+        .suggest(format!("material.add with only one of {field} and orthotropic.{field}"))),
+        (Some(v), None) => Ok(Some(Axial::Isotropic(v))),
+        (None, per_axis) => Ok(per_axis),
+    }
+}
+
+/// The orthotropic block in SI.
+fn orthotropic_si(o: &crate::command::Orthotropic) -> Result<crate::model::Orthotropic, Error> {
+    let at = |field: &'static str| move |e: Error| e.at(format!("orthotropic.{field}"));
+    Ok(crate::model::Orthotropic {
+        e1: o.e1.si().map_err(at("E1"))?,
+        e2: o.e2.si().map_err(at("E2"))?,
+        e3: o.e3.si().map_err(at("E3"))?,
+        g12: o.g12.si().map_err(at("G12"))?,
+        g13: o.g13.si().map_err(at("G13"))?,
+        g23: o.g23.si().map_err(at("G23"))?,
+        nu12: o.nu12,
+        nu13: o.nu13,
+        nu23: o.nu23,
+    })
+}
+
+/// The orientation with its axis normalised, or a Schema error when the axis is degenerate.
+fn resolve_orientation(o: &crate::command::Orientation) -> Result<crate::model::Orientation, Error> {
+    let angle = o.angle.si().map_err(|e| e.at("orientation.angle"))?;
+    let norm = o.axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if !(norm.is_finite() && norm > 0.0 && angle.is_finite()) {
+        return Err(Error::schema(format!("the orientation axis {:?} has no direction", o.axis))
+            .at("orientation.axis")
+            .suggest("material.add with orientation.axis [0, 0, 1]"));
+    }
+    Ok(crate::model::Orientation { axis: o.axis.map(|v| v / norm), angle })
+}
+
+/// In a 2D idealisation the material axes may only turn about the out-of-plane direction: any
+/// other rotation couples the in-plane strains to the out-of-plane shears the idealisation
+/// drops. Checked here so `material.add` refuses immediately, and again in `fem::checks`,
+/// because `model.setIdealisation` can come afterwards.
+fn check_orientation_fits(
+    idealisation: &crate::model::Idealisation,
+    o: &crate::model::Orientation,
+) -> Result<(), Error> {
+    if idealisation.dim() == 3 || crate::fem::material::axes_are_planar(&o.rows()) {
+        return Ok(());
+    }
+    Err(Error::schema(format!(
+        "a 2D idealisation only allows a material orientation about the out-of-plane axis [0, 0, 1], not {:?}",
+        o.axis
+    ))
+    .at("orientation.axis")
+    .suggest("material.add with orientation.axis [0, 0, 1], or model.setIdealisation solid3d"))
 }
 
 /// The initial-velocity list in SI, each component error naming its entry.

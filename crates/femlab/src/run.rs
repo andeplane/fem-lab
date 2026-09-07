@@ -169,14 +169,22 @@ pub fn summary_text(m: &femlab_engine::query::ModelSummary) -> String {
         );
     }
     for mat in &m.materials {
-        s += &format!(
-            "  material {:<8} E = {} {}, nu = {}  on {}\n",
-            mat.name,
-            femlab_engine::units::fmt_sig(mat.e.value, 5),
-            mat.e.unit,
-            mat.nu,
-            mat.assigned_to.join(", ")
-        );
+        // An orthotropic material has three moduli and no single `nu`, so the line names the
+        // material axes' Young's moduli instead.
+        let stiffness = match (&mat.orthotropic, &mat.e) {
+            (Some(o), _) => format!(
+                "E1/E2/E3 = {}/{}/{} {}",
+                femlab_engine::units::fmt_sig(o.e1.value, 5),
+                femlab_engine::units::fmt_sig(o.e2.value, 5),
+                femlab_engine::units::fmt_sig(o.e3.value, 5),
+                o.e1.unit
+            ),
+            (None, Some(e)) => {
+                format!("E = {} {}, nu = {}", femlab_engine::units::fmt_sig(e.value, 5), e.unit, mat.nu.unwrap_or(0.0))
+            }
+            (None, None) => "no stiffness".to_string(),
+        };
+        s += &format!("  material {:<8} {}  on {}\n", mat.name, stiffness, mat.assigned_to.join(", "));
     }
     for c in &m.constraints {
         s += &format!("  constraint {:<6} on {}: {}\n", c.name, c.on, c.summary);
