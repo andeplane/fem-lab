@@ -8024,6 +8024,13 @@ fn contact_thermal_validates_of_and_tracks_the_contact_it_names() {
     ok(&mut e, r#"{"cmd":"model.rename","kind":"constraint","name":"weld","to":"welded"}"#);
     let still_held = err(&mut e, r#"{"cmd":"constraint.remove","name":"welded"}"#);
     assert_eq!(still_held.code, ErrorCode::InUse);
+    // Renaming a Constraint the Load does not name leaves its `of` alone.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"constraint","name":"cold","to":"chill"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"constraint","name":"chill","to":"cold"}"#);
+    assert_eq!(
+        e.model().loads.iter().find(|l| l.name == "resist").unwrap().kind,
+        femlab_engine::model::LoadKind::ThermalContact { of: "welded".into(), h: 500.0 }
+    );
 
     ok(
         &mut e,
