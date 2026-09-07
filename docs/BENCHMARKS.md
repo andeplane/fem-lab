@@ -411,7 +411,7 @@ checked beyond aggregate counts.
 | D1 | LE10 full-face support variant (ESRD) | σyy(D) = −5.25 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark; original NAFEMS line support is a different problem | green |
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
-| D4 | Manufactured solution, elasticity and Poisson, hex/tet p=1,2 | prescribed u(x); L2 rate p+1, H1 rate p | rate ± 0.1 | convergence machinery, body loads | |
+| D4 | Manufactured solution, elasticity and Poisson: every element kind on the lattice mesher (Kuhn-split simplices) in every idealisation, tri3/tri6 on the free mesher, hex8/quad4 in both formulations | `u = ∇φ`, `T = φ` for a harmonic φ (`sin x cosh y`, `sin x sin y cosh √2 z`, `r⁴ − 8r²z² + 8/3 z⁴` axisymmetric), the exact field on every boundary DOF; L2 rate p+1, H1 rate p over the two finest of h = 1/2, 1/4, 1/8 | rate ± 0.1 | an element is the order it claims: quadrature degree, shape-function order, mid-node placement, every strain term in `B` | engine test |
 | D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale | green |
 
 **D1 uses ESRD's full-face support variant of LE10.** The original NAFEMS problem holds
@@ -753,6 +753,33 @@ rows, because their oracles are the geometry itself:
 - **Never panics.** A proptest sends random triangle soups through `Solid::evaluate`, the ray
   cast and the lattice mesher; any `Err` is a pass and a panic is the failure, the same rule
   the free mesher's sketches live under.
+
+## K. Invariants (#397)
+
+Every row here is a property a correct linear finite-element solver has whatever the answer,
+so each fails on a whole class of bug that no single answer benchmark can see. All are engine
+tests in `crates/engine/tests/fem.rs`; each test's doc comment names the class of bug it exists
+to catch, so a failure points at a cause. Where the property is exact the gate is round-off and
+the measured value is recorded; where it holds only up to a discretisation effect the bound is
+derived in the test.
+
+| # | Case | Reference | Tolerance (measured) | Proves | Status |
+|---|---|---|---|---|---|
+| K1 | Maxwell–Betti reciprocity, all eight kinds in every idealisation, and a hex8 block bonded to a finer one | `u_B·e_i` under `e_j` at A equals `u_A·e_j` under `e_i` at B, every direction pair, scaled by the flexibility bound `√(f_AA f_BB)` | 1e-13 (7e-16) | assembly, constraint elimination and the MPC transform `Tᵀ K T` are symmetric | engine test |
+| K2 | Superposition, affine form `u(L₁∪L₂) + u(∅) = u(L₁) + u(L₂)`: static, amplitude-stepped static, explicit, static across a tie, steady and transient heat, with a prescribed displacement, a temperature field, an initial state and a convection ambient in `u(∅)` | every field linear in the loads, applied totals, per-Constraint reactions, every history frame | 1e-10 (9e-12) | nothing on a linear path is nonlinear or stateful | engine test |
+| K3 | Frame invariance under a general rotation `Rz Ry Rx` (in-plane rotation in 2D): hex8, hex20, tet10, quad4 plane stress, quad8 and tri6 plane strain, every Load kind and a varying temperature | `u' = R u`, `σ' = R σ Rᵀ`, `ε' = R ε Rᵀ`, rotated reactions and totals, unchanged von Mises and principal stresses; natural frequencies unchanged | 1e-10 (1e-12); frequencies 1e-9 (the subspace iteration's 1e-10 stop, linear convergence, √λ) | no hard-coded axis, no Voigt-rotation or shear-ordering slip, loads in the right frame, isotropic thermal strain | engine test |
+| K4 | Geometric scaling by s = 1e-3 and 1e3 with total forces × s² (× s in plane strain, whose unit thickness does not scale), prescribed displacements × s, same cases as K3 | displacements × s, reactions × s², stresses, strains and invariants unchanged | 1e-10 (4e-13) | no dimensional slip in any integral or measure | engine test |
+| K5 | Unit invariance: one model authored in mm, MPa, kN, t/mm³, W/(mm K), °C and the same one in SI, static and steady-heat Steps | identical Model hash; bit-identical displacements, stresses, reactions and temperatures | exact | conversions applied exactly once at the Command boundary; SI inside | engine test |
+| K6 | Reciprocity of the conduction operator with a film: unit flux on face A against unit flux on face B, hex8, tet10, quad8, tri6 | `f_A · T_B = f_B · T_A` scaled by `√((f_A·T_A)(f_B·T_B))` | 1e-13 (2e-17) | conductivity, film and flux assembly are symmetric and share one face measure | engine test |
+| K7 | Heat frame invariance under the K3 rotations, steady and transient, with a held face, a film, a flux and a source | identical temperatures, reaction powers and history | 1e-10 (2e-11) | no axis-dependent conduction, film or capacity term | engine test |
+| K8 | Mesh independence of exact fields: the A1 patch test on the engine's meshers — the lattice for every kind (Kuhn-split simplices, interior nodes perturbed) and the free mesher at both orders | every constant-strain mode exact in the interior DOFs and every Gauss-point stress | 1e-10 rel | a mesher's connectivity, node order and face Sets are conforming | engine test |
+| K9 | Determinism of every procedure — static, modal, explicit, steady and transient heat — at 1 and N threads (extends A8) | bit-identical fields, scalars, reactions, frequencies, modes and history | exact | every reduction is fixed-order | engine test |
+
+The rate half of the suite is D4 above. K1 and K6 compare two solves through the same
+factorisation, so only the substitution round-off differs and they hold at 1e-13; K2, K3, K4
+and K7 compare solves of different matrices of condition number about 1e5, so the derived
+bound is a few times `κ ε ≈ 1e-11` and the gate is 1e-10. Axisymmetry is not in K3 or K7
+because its axis is the frame; it is in K1, K4, K8 and D4.
 
 ## I. Cross-solver checks (phase 3, manual, documented)
 

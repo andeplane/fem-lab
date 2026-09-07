@@ -2823,15 +2823,17 @@ fn patch_mesh_field(mesh: &Mesh, id: &Idealisation, e: &[f64; VOIGT]) -> Vec<f64
     v
 }
 
-/// Every DOF of every boundary node, with the value the exact field takes there.
+/// Every DOF of every boundary node, with the value the exact field takes there. The DOF
+/// stride is read off `exact`, so a one-component temperature field works as well.
 fn boundary_constraints(mesh: &Mesh, exact: &[f64]) -> ResolvedConstraints {
+    let dpn = exact.len() / mesh.n_nodes();
     let mut nodes: Vec<u32> = mesh.boundary_faces().iter().flat_map(|&f| mesh.face_nodes(f)).collect();
     nodes.sort_unstable();
     nodes.dedup();
     let fixed: Vec<(u32, f64)> = nodes
         .iter()
-        .flat_map(|&n| (0..mesh.dim).map(move |c| (n * mesh.dim as u32 + c as u32, 0.0)))
-        .map(|(d, _)| (d, exact[d as usize]))
+        .flat_map(|&n| (0..dpn).map(move |c| n * dpn as u32 + c as u32))
+        .map(|d| (d, exact[d as usize]))
         .collect();
     let owner = vec![0; fixed.len()];
     ResolvedConstraints { fixed, owner }
@@ -2844,7 +2846,6 @@ fn the_patch_test_passes_for_every_kind_and_every_constant_strain_mode() {
     for kind in ALL_KINDS {
         let mesh = patch_mesh(kind);
         let sets = sets_of(&mesh);
-        let bodies = vec!["patch".to_string()];
         for id in idealisations(kind) {
             // In axisymmetry a constant γ_rz is not an equilibrium state — it needs the body
             // force σ_rz/r — so the mesh patch test drops it; the single-element test, where
@@ -2853,62 +2854,66 @@ fn the_patch_test_passes_for_every_kind_and_every_constant_strain_mode() {
             let modes: Vec<[f64; VOIGT]> =
                 patch_modes(&id).into_iter().enumerate().filter(|(i, _)| !(axi && *i == 2)).map(|(_, e)| e).collect();
             for e in modes {
-                let p = problem(
-                    &mesh,
-                    &sets,
-                    &bodies,
-                    id.clone(),
-                    Formulation::IncompatibleModes,
-                    vec![fix("edge", "all", [true, true, true], 0.0)],
+                patch_check(&mesh, &sets, &id, &e, &format!("{kind:?} {id:?}"));
+            }
+        }
+    }
+}
+
+/// The patch test on one mesh and one constant-strain mode: with the exact linear field
+/// prescribed on every boundary DOF, every interior DOF and every Gauss-point stress must be
+/// exact to 1e-10 relative. `label` names the case in a failure.
+fn patch_check(mesh: &Mesh, sets: &BTreeMap<String, ResolvedSet>, id: &Idealisation, e: &[f64; VOIGT], label: &str) {
+    let bodies = vec!["patch".to_string()];
+    let p = problem(
+        mesh,
+        sets,
+        &bodies,
+        id.clone(),
+        Formulation::IncompatibleModes,
+        vec![fix("edge", "all", [true, true, true], 0.0)],
+    );
+    let pat = pattern(mesh, mesh.dim);
+    let a = assemble_stiffness(&p, &pat).expect("a patch mesh assembles");
+    let exact = patch_mesh_field(mesh, id, e);
+    let rc = boundary_constraints(mesh, &exact);
+    let red = reduce(&a.k, &vec![0.0; a.k.n], &rc, &[]);
+    let (u_f, info) =
+        pollster::block_on(solve(&red.k_ff, &red.f_f, &SolveOptions::default(), &Pool::new(2), None, &mut nop))
+            .expect("the patch system is positive definite");
+    assert!(info.rel_residual < 1e-10, "{label}: residual {}", info.rel_residual);
+    let u = expand(&red, &u_f);
+    let scale = exact.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+    for (i, (got, want)) in u.iter().zip(&exact).enumerate() {
+        assert!((got - want).abs() <= 1e-10 * scale, "{label} dof {i}: {got} vs {want}");
+    }
+    // and the stress at every Gauss point is D ε
+    let want = expected_stress(id, e);
+    let sscale = want.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+    let mut coords = Vec::new();
+    for elem in 0..mesh.n_elems() as u32 {
+        let kind = mesh.kind_of(elem);
+        let el = element_for(kind);
+        let (nn, n_gp) = (kind.n_nodes(), el.n_gp());
+        coords.resize(nn * 3, 0.0);
+        mesh.elem_coords(elem, &mut coords);
+        let mut ue: Vec<f64> = Vec::with_capacity(nn * mesh.dim);
+        for &n in mesh.elem_nodes(elem) {
+            for c in 0..mesh.dim {
+                ue.push(u[n as usize * mesh.dim + c]);
+            }
+        }
+        let c = ctx(&coords, &p.materials[0], id.clone(), Formulation::IncompatibleModes);
+        let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
+        el.recover(&c, &ue, &mut sig, &mut eps).expect("recover");
+        for g in 0..n_gp {
+            for i in 0..VOIGT {
+                let got = sig[g * VOIGT + i];
+                assert!(
+                    (got - want[i]).abs() <= 1e-10 * sscale,
+                    "{label} element {elem} gp {g} component {i}: {got} vs {}",
+                    want[i]
                 );
-                let pat = pattern(&mesh, mesh.dim);
-                let a = assemble_stiffness(&p, &pat).expect("a patch mesh assembles");
-                let exact = patch_mesh_field(&mesh, &id, &e);
-                let rc = boundary_constraints(&mesh, &exact);
-                let red = reduce(&a.k, &vec![0.0; a.k.n], &rc, &[]);
-                let (u_f, info) = pollster::block_on(solve(
-                    &red.k_ff,
-                    &red.f_f,
-                    &SolveOptions::default(),
-                    &Pool::new(2),
-                    None,
-                    &mut nop,
-                ))
-                .expect("the patch system is positive definite");
-                assert!(info.rel_residual < 1e-10, "{kind:?}: residual {}", info.rel_residual);
-                let u = expand(&red, &u_f);
-                let scale = exact.iter().fold(0.0f64, |m, x| m.max(x.abs()));
-                for (i, (got, want)) in u.iter().zip(&exact).enumerate() {
-                    assert!((got - want).abs() <= 1e-10 * scale, "{kind:?} {id:?} dof {i}: {got} vs {want}");
-                }
-                // and the stress at every Gauss point is D ε
-                let want = expected_stress(&id, &e);
-                let sscale = want.iter().fold(0.0f64, |m, x| m.max(x.abs()));
-                let el = element_for(kind);
-                let (nn, n_gp) = (kind.n_nodes(), el.n_gp());
-                let mut coords = vec![0.0; nn * 3];
-                for elem in 0..mesh.n_elems() as u32 {
-                    mesh.elem_coords(elem, &mut coords);
-                    let mut ue: Vec<f64> = Vec::with_capacity(nn * mesh.dim);
-                    for &n in mesh.elem_nodes(elem) {
-                        for c in 0..mesh.dim {
-                            ue.push(u[n as usize * mesh.dim + c]);
-                        }
-                    }
-                    let c = ctx(&coords, &p.materials[0], id.clone(), Formulation::IncompatibleModes);
-                    let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
-                    el.recover(&c, &ue, &mut sig, &mut eps).expect("recover");
-                    for g in 0..n_gp {
-                        for i in 0..VOIGT {
-                            let got = sig[g * VOIGT + i];
-                            assert!(
-                                (got - want[i]).abs() <= 1e-10 * sscale,
-                                "{kind:?} {id:?} element {elem} gp {g} component {i}: {got} vs {}",
-                                want[i]
-                            );
-                        }
-                    }
-                }
             }
         }
     }
@@ -9165,6 +9170,81 @@ fn scalar_hht(m: f64, k: f64, c: f64, f: f64, alpha: f64, dt: f64, steps: usize,
     out
 }
 
+// ------------------------------------------------------------- invariant suite (#397)
+//
+// Every property here holds for a correct linear finite-element solver whatever the answer,
+// so each one catches a whole class of bug that no answer benchmark can: an asymmetry, a
+// hard-coded axis, a dimensional slip, a conversion applied twice. Where a property is exact
+// the gate is round-off; where it is exact only up to a discretisation effect the bound is
+// derived in the test and said so. The catalogue rows are K1–K9 in `docs/BENCHMARKS.md`.
+
+use femlab_engine::fem::quadrature::{TET_125, TRI_25};
+use femlab_engine::{Command, Engine, NoClock};
+use femlab_geometry::{free, lattice};
+
+/// `max |a − b| / max |b|`: the relative disagreement of two fields, which every round-off
+/// gate below is measured in. Against an all-zero reference it is the absolute disagreement,
+/// so a field that must vanish (an explicit Step's applied totals) is still gated.
+fn rel_diff(a: &[f64], b: &[f64]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    let scale = b.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    let d = a.iter().zip(b).fold(0.0f64, |m, (x, y)| m.max((x - y).abs()));
+    if scale > 0.0 {
+        d / scale
+    } else {
+        d
+    }
+}
+
+/// `rel_diff` gated at `tol`, naming the case; returns the measured value so a test can report
+/// the tightest tolerance it actually holds at.
+fn gate(label: &str, got: &[f64], want: &[f64], tol: f64) -> f64 {
+    let d = rel_diff(got, want);
+    assert!(d <= tol, "{label}: relative disagreement {d:e} exceeds {tol:e}");
+    d
+}
+
+const IDENTITY: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+fn mat3(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut c = [[0.0; 3]; 3];
+    for (i, row) in c.iter_mut().enumerate() {
+        for (j, v) in row.iter_mut().enumerate() {
+            *v = (0..3).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    c
+}
+
+fn transpose(a: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    [[a[0][0], a[1][0], a[2][0]], [a[0][1], a[1][1], a[2][1]], [a[0][2], a[1][2], a[2][2]]]
+}
+
+/// `Rz(c) · Ry(b) · Rx(a)`: with all three angles nonzero no entry is zero, so no axis of the
+/// original frame survives into the rotated one.
+fn rotation(a: f64, b: f64, c: f64) -> [[f64; 3]; 3] {
+    let (sa, ca) = (libm::sin(a), libm::cos(a));
+    let (sb, cb) = (libm::sin(b), libm::cos(b));
+    let (sc, cc) = (libm::sin(c), libm::cos(c));
+    let rx = [[1.0, 0.0, 0.0], [0.0, ca, -sa], [0.0, sa, ca]];
+    let ry = [[cb, 0.0, sb], [0.0, 1.0, 0.0], [-sb, 0.0, cb]];
+    let rz = [[cc, -sc, 0.0], [sc, cc, 0.0], [0.0, 0.0, 1.0]];
+    mat3(&rz, &mat3(&ry, &rx))
+}
+
+fn rot_vec(r: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [0, 1, 2].map(|i| r[i][0] * v[0] + r[i][1] * v[1] + r[i][2] * v[2])
+}
+
+/// Every node of `m` rotated by `r`; connectivity and Sets untouched.
+fn rotate_mesh(m: &Mesh, r: &[[f64; 3]; 3]) -> Mesh {
+    let mut out = m.clone();
+    for n in 0..m.n_nodes() {
+        out.coords[3 * n..3 * n + 3].copy_from_slice(&rot_vec(r, m.node(n as u32)));
+    }
+    out
+}
+
 /// Newmark's displacement difference equation (Hughes, *The Finite Element Method*, §9.1) for
 /// `m ü + c u̇ + k u = f` at `β = ¼`, `γ = ½`, from rest, started by one acceleration-form step:
 /// `A u₁ + B u₀ + C u₋₁ = β f₁ + (½+γ−2β) f₀ + (½−γ+β) f₋₁` with
@@ -9649,5 +9729,1089 @@ fn an_implicit_step_is_bit_identical_at_one_and_many_threads() {
     assert_eq!(a.times, b.times);
     for (i, (x, y)) in a.values.iter().zip(&b.values).enumerate() {
         assert!(x.iter().zip(y).all(|(x, y)| x.to_bits() == y.to_bits()), "frame {i}");
+    }
+}
+
+/// A nodal vector field of `dpn` components rotated by `r` (a 2D field lies in the xy plane).
+fn rotate_field(r: &[[f64; 3]; 3], data: &[f64], dpn: usize) -> Vec<f64> {
+    data.chunks_exact(dpn)
+        .flat_map(|v| {
+            let mut full = [0.0; 3];
+            full[..dpn].copy_from_slice(v);
+            rot_vec(r, full).into_iter().take(dpn)
+        })
+        .collect()
+}
+
+/// `R σ Rᵀ` for every entry of a Voigt field (`11,22,33,12,13,23`); `shear` is the factor the
+/// off-diagonal entries are stored with — 1 for a stress, 2 for an engineering strain.
+fn rotate_voigt(r: &[[f64; 3]; 3], f: &FieldData, shear: f64) -> Vec<f64> {
+    assert_eq!(f.comps, VOIGT);
+    let rt = transpose(r);
+    f.data
+        .chunks_exact(VOIGT)
+        .flat_map(|s| {
+            let t = [
+                [s[0], s[3] / shear, s[4] / shear],
+                [s[3] / shear, s[1], s[5] / shear],
+                [s[4] / shear, s[5] / shear, s[2]],
+            ];
+            let m = mat3(r, &mat3(&t, &rt));
+            [m[0][0], m[1][1], m[2][2], shear * m[0][1], shear * m[0][2], shear * m[1][2]]
+        })
+        .collect()
+}
+
+/// A structured block of `kind`, `n` cells per axis (the third ignored in 2D), `size` metres,
+/// starting at `x = shift` so an axisymmetric radius is never zero.
+fn block(kind: ElementKind, n: [usize; 3], size: [f64; 3], shift: f64) -> Mesh {
+    Structured { kind, n }.build(|p| [shift + p[0] * size[0], p[1] * size[1], p[2] * size[2]])
+}
+
+/// The engine's own lattice mesher — with the Kuhn split for the simplex kinds, exactly as
+/// `mesh.set` with `simplices` does — on the unit box (unit square for a 2D kind) shifted to
+/// `x ∈ [1, 2]`, `n` cells per axis.
+fn lattice_block(kind: ElementKind, n: usize) -> Mesh {
+    let shape =
+        if kind.dim() == 3 { Shape::Box { size: [1.0; 3] } } else { Shape::Sheet { sketch: Sketch::rect(1.0, 1.0) } };
+    let solid = Solid::evaluate(&shape).expect("a box evaluates");
+    let quadratic = kind.n_nodes() > kind.n_corners();
+    let grid = lattice(&solid, None, Some([n as u32; 3]), quadratic).expect("a box lattices");
+    let mut m = match kind {
+        ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Tri3 | ElementKind::Tri6 => split_to_simplices(&grid),
+        _ => grid,
+    };
+    shift_x(&mut m, 1.0);
+    m
+}
+
+/// The free triangle mesher on the unit square at about `size`, shifted to `x ∈ [1, 2]`.
+fn free_square(quadratic: bool, size: f64) -> Mesh {
+    let mut m = free(&Sketch::rect(1.0, 1.0), size, quadratic, &[]).expect("a square meshes");
+    shift_x(&mut m, 1.0);
+    m
+}
+
+fn shift_x(m: &mut Mesh, by: f64) {
+    for x in m.coords.iter_mut().step_by(3) {
+        *x += by;
+    }
+}
+
+/// A nodal temperature that varies in every direction, above a reference of 293.15 K.
+fn varying_temperature(mesh: &Mesh) -> Vec<f64> {
+    (0..mesh.n_nodes())
+        .map(|n| {
+            let x = mesh.node(n as u32);
+            293.15 + 25.0 * x[0] + 10.0 * x[1] - 5.0 * x[2]
+        })
+        .collect()
+}
+
+/// Every structural Load kind at once, in the frame `r`, on a geometry scaled by `s` with the
+/// total forces scaled by `force`. A traction and a pressure are per area, so their totals
+/// follow the geometry on their own; a nodal force carries `force` itself; gravity, a force
+/// per volume, carries `1/s` whatever the idealisation. In 2D the out-of-plane components
+/// are dropped.
+fn every_load(r: &[[f64; 3]; 3], s: f64, force: f64, three: bool) -> Vec<Load> {
+    let planar = |v: [f64; 3]| if three { v } else { [v[0], v[1], 0.0] };
+    let nodes = if three { "zmax" } else { "ymax" };
+    vec![
+        Load::Traction { faces: "xmax".into(), t: planar(rot_vec(r, [3e5, -2e5, 1e5])) },
+        Load::Pressure { faces: "ymin".into(), p: 2e5 },
+        Load::NodalForce { nodes: nodes.into(), f: planar(rot_vec(r, [1e3, 2e3, -1.5e3]).map(|x| x * force)) },
+        Load::Gravity { g: planar(rot_vec(r, [0.0, -9.81, 2.0]).map(|x| x / s)) },
+    ]
+}
+
+/// A Problem with every Load in frame `r` at geometric scale `s` and force scale `force`, the
+/// `xmin` face clamped, the nodal temperature `t`, and any `extra` Constraints.
+#[allow(clippy::too_many_arguments)]
+fn loaded<'a>(
+    mesh: &'a Mesh,
+    sets: &'a BTreeMap<String, ResolvedSet>,
+    bodies: &'a [String],
+    id: Idealisation,
+    form: Formulation,
+    r: &[[f64; 3]; 3],
+    s: f64,
+    force: f64,
+    t: &[f64],
+    extra: Vec<Constraint>,
+) -> Problem<'a> {
+    let mut constraints = vec![fix("root", "xmin", [true, true, true], 0.0)];
+    constraints.extend(extra);
+    let mut p = problem(mesh, sets, bodies, id, form, constraints);
+    p.loads = every_load(r, s, force, mesh.dim == 3);
+    p.temperature = Some((t.to_vec(), 293.15));
+    p
+}
+
+fn applied_totals(res: &StepResult) -> [f64; 3] {
+    ["x", "y", "z"].map(|a| res.scalars[&format!("applied_total_{a}")])
+}
+
+fn constraint_totals(res: &StepResult) -> Vec<f64> {
+    res.reactions.iter().flat_map(|(_, r)| *r).collect()
+}
+
+/// The six structural cases the frame and scaling tests run: both 3D families at both orders
+/// and every 2D idealisation, with the incompatible-mode formulation where it applies.
+fn frame_cases() -> [(ElementKind, Idealisation, Formulation); 6] {
+    [
+        (ElementKind::Hex8, Idealisation::Solid3d, Formulation::IncompatibleModes),
+        (ElementKind::Hex20, Idealisation::Solid3d, Formulation::Full),
+        (ElementKind::Tet10, Idealisation::Solid3d, Formulation::Full),
+        (ElementKind::Quad4, Idealisation::PlaneStress { thickness: THICKNESS }, Formulation::IncompatibleModes),
+        (ElementKind::Quad8, Idealisation::PlaneStrain, Formulation::Full),
+        (ElementKind::Tri6, Idealisation::PlaneStrain, Formulation::Full),
+    ]
+}
+
+/// The round-off gate of the exact properties. Two solves of the same problem in different
+/// frames, scales or load groups go through the same direct factorisation of matrices whose
+/// condition number is about 1e5 on these blocks, so they may differ by a few times
+/// `κ · ε ≈ 1e-11`; every test reports what it measures, and they measure about 1e-12.
+const EXACT_TOL: f64 = 1e-10;
+
+/// The gate of the two reciprocity tests, which compare two solves through the *same*
+/// factorisation: only the forward and back substitutions differ, so the answers agree to
+/// about `n ε ≈ 1e-13`; they measure below 1e-15.
+const RECIPROCITY_TOL: f64 = 1e-13;
+
+/// K3: frame invariance. The model rotated by a general `R` — geometry, tractions, nodal
+/// forces and gravity alike — gives `u' = R u`, `σ' = R σ Rᵀ`, `ε' = R ε Rᵀ`, rotated reactions
+/// and applied totals, and unchanged invariants (von Mises, principal stresses), to round-off.
+///
+/// Fails on any hard-coded axis, on a Voigt rotation or shear-ordering slip in `B` or `D`
+/// (the kind the orthotropic review caught), on a face normal or a traction taken in the wrong
+/// frame, and on a thermal strain that is not isotropic. Axisymmetry is not frame-invariant
+/// by construction (its axis is the frame), so it is not here.
+#[test]
+fn a_rotated_model_gives_rotated_displacements_and_stresses() {
+    let mut worst = 0.0f64;
+    for (kind, id, form) in frame_cases() {
+        let three = kind.dim() == 3;
+        let mesh = block(kind, [4, 2, 2], [1.0, 0.5, 0.5], 0.0);
+        let r = if three { rotation(0.3, -0.7, 1.1) } else { rotation(0.0, 0.0, 0.9) };
+        let rotated = rotate_mesh(&mesh, &r);
+        let t = varying_temperature(&mesh);
+        let (sets, rsets) = (sets_of(&mesh), sets_of(&rotated));
+        let bodies = one_body();
+        let p = loaded(&mesh, &sets, &bodies, id.clone(), form, &IDENTITY, 1.0, 1.0, &t, vec![]);
+        let q = loaded(&rotated, &rsets, &bodies, id.clone(), form, &r, 1.0, 1.0, &t, vec![]);
+        let step = static_step(SolveOptions::default());
+        let a = run_step(&p, &step).expect("the block solves");
+        let b = run_step(&q, &step).expect("the rotated block solves");
+        let label = format!("{kind:?} {id:?}");
+        for field in [Field::Displacement, Field::Reaction] {
+            let want = rotate_field(&r, &a.fields[&field].data, a.fields[&field].comps);
+            worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[&field].data, &want, EXACT_TOL));
+        }
+        for (field, shear) in [(Field::Stress, 1.0), (Field::StressUnaveraged, 1.0), (Field::Strain, 2.0)] {
+            let want = rotate_voigt(&r, &a.fields[&field], shear);
+            worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[&field].data, &want, EXACT_TOL));
+        }
+        for field in [Field::VonMises, Field::Principal] {
+            let want = &a.fields[&field].data;
+            worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[&field].data, want, EXACT_TOL));
+        }
+        let want = rot_vec(&r, applied_totals(&a));
+        worst = worst.max(gate(&format!("{label} applied"), &applied_totals(&b), &want, EXACT_TOL));
+        let want = rotate_field(&r, &constraint_totals(&a), 3);
+        worst = worst.max(gate(&format!("{label} reactions"), &constraint_totals(&b), &want, EXACT_TOL));
+        // The natural frequencies are frame-invariant too. The subspace iteration stops when
+        // no eigenvalue moves by more than 1e-10 relative in a sweep and converges linearly,
+        // so each frame's eigenvalues are within a small multiple of 1e-10 of the limit and
+        // the two frames' frequencies (√λ, which halves the relative error) agree to 1e-9.
+        let modal = Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default() };
+        let (fa, fb) = (run_step(&p, &modal).expect("modal"), run_step(&q, &modal).expect("rotated modal"));
+        gate(&format!("{label} frequencies"), &fb.frequencies, &fa.frequencies, 1e-9);
+    }
+    eprintln!("K3 frame invariance: worst relative disagreement {worst:e}");
+}
+
+/// K4: geometric scaling. The geometry scaled by `s` with the total loads scaled by `s²` (so
+/// tractions and pressures unchanged, nodal forces `× s²`, gravity `× 1/s`, prescribed
+/// displacements `× s`, temperatures unchanged) gives displacements `× s`, reactions `× s²`
+/// and stresses and strains unchanged, from millimetre to kilometre blocks, to round-off.
+/// Plane strain carries an implicit unit thickness that does not scale, so there the forces
+/// and reactions go as `s`, not `s²` — the one exponent the idealisation changes.
+///
+/// Fails on any dimensional slip: a length used where an area belongs, a Jacobian determinant
+/// missing from one integral, a thickness applied to one term and not another, a face measure
+/// in the wrong power of `h`.
+#[test]
+fn a_scaled_model_scales_its_displacements_and_keeps_its_stresses() {
+    let mut worst = 0.0f64;
+    for (kind, id, form) in frame_cases() {
+        let three = kind.dim() == 3;
+        // the prescribed face must not share a node with the clamped one
+        let dof = if three { [false, false, true] } else { [false, true, false] };
+        let base = block(kind, [4, 2, 2], [1.0, 0.5, 0.5], 0.0);
+        let t = varying_temperature(&base);
+        let bodies = one_body();
+        let sets = sets_of(&base);
+        let lift = |s: f64| vec![fix("lift", "xmax", dof, 1e-4 * s)];
+        let p = loaded(&base, &sets, &bodies, id.clone(), form, &IDENTITY, 1.0, 1.0, &t, lift(1.0));
+        let step = static_step(SolveOptions::default());
+        let a = run_step(&p, &step).expect("the block solves");
+        for s in [1e-3, 1e3] {
+            let force = if id == Idealisation::PlaneStrain { s } else { s * s };
+            let mesh = block(kind, [4, 2, 2], [s, 0.5 * s, 0.5 * s], 0.0);
+            let ssets = sets_of(&mesh);
+            let id_s = match &id {
+                Idealisation::PlaneStress { thickness } => Idealisation::PlaneStress { thickness: thickness * s },
+                other => other.clone(),
+            };
+            let q = loaded(&mesh, &ssets, &bodies, id_s, form, &IDENTITY, s, force, &t, lift(s));
+            let b = run_step(&q, &step).expect("the scaled block solves");
+            let label = format!("{kind:?} {id:?} s={s:e}");
+            let scaled = |f: Field, by: f64| a.fields[&f].data.iter().map(|x| x * by).collect::<Vec<f64>>();
+            for (field, by) in [
+                (Field::Displacement, s),
+                (Field::Reaction, force),
+                (Field::Stress, 1.0),
+                (Field::StressUnaveraged, 1.0),
+                (Field::Strain, 1.0),
+                (Field::VonMises, 1.0),
+                (Field::Principal, 1.0),
+            ] {
+                let want = scaled(field, by);
+                worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[&field].data, &want, EXACT_TOL));
+            }
+            let want = applied_totals(&a).map(|x| x * force);
+            worst = worst.max(gate(&format!("{label} applied"), &applied_totals(&b), &want, EXACT_TOL));
+            let want: Vec<f64> = constraint_totals(&a).iter().map(|x| x * force).collect();
+            worst = worst.max(gate(&format!("{label} reactions"), &constraint_totals(&b), &want, EXACT_TOL));
+        }
+    }
+    eprintln!("K4 scaling: worst relative disagreement {worst:e}");
+}
+
+/// A one-node Set, for a point force.
+fn node_set(sets: &mut BTreeMap<String, ResolvedSet>, name: &str, node: u32) {
+    sets.insert(
+        name.into(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![node], elems: Vec::new() },
+    );
+}
+
+/// The displacement field due to a unit force along `dir` on the one-node Set `at`, as the
+/// Step reports it (three components per node whatever the dimension).
+fn influence(p: &mut Problem<'_>, at: &str, dir: usize) -> FieldData {
+    let mut f = [0.0; 3];
+    f[dir] = 1.0;
+    p.loads = vec![Load::NodalForce { nodes: at.into(), f }];
+    run_step(p, &static_step(SolveOptions::default())).expect("a clamped block solves").fields[&Field::Displacement]
+        .clone()
+}
+
+/// Maxwell–Betti on one Problem: `u_B·e_i` under a unit force `e_j` at A equals `u_A·e_j`
+/// under a unit force `e_i` at B, for every pair of directions. The cross flexibility is
+/// bounded by `√(f_AA f_BB)` (the flexibility matrix is positive definite), which is the
+/// scale the disagreement is measured against. Returns the worst relative disagreement.
+fn betti(p: &mut Problem<'_>, a: u32, b: u32, label: &str) -> f64 {
+    let dpn = p.dofs_per_node();
+    let from_a: Vec<FieldData> = (0..dpn).map(|j| influence(p, "A", j)).collect();
+    let from_b: Vec<FieldData> = (0..dpn).map(|i| influence(p, "B", i)).collect();
+    let at = |f: &FieldData, node: u32, c: usize| f.data[node as usize * f.comps + c];
+    let mut worst = 0.0f64;
+    for (j, ua) in from_a.iter().enumerate() {
+        for (i, ub) in from_b.iter().enumerate() {
+            let (ab, ba) = (at(ua, b, i), at(ub, a, j));
+            let scale = (at(ua, a, j) * at(ub, b, i)).sqrt();
+            let d = (ab - ba).abs() / scale;
+            assert!(d <= RECIPROCITY_TOL, "{label} A{j} B{i}: {ab} vs {ba}, {d:e} of the flexibility bound");
+            worst = worst.max(d);
+        }
+    }
+    worst
+}
+
+/// K1: Maxwell–Betti reciprocity for every kind and idealisation, and across a bonded tie
+/// whose slave mesh is finer than its master (every pairing a fractional projection).
+///
+/// Fails on any asymmetry: an element stiffness scattered into the wrong triangle, a
+/// constraint elimination that keeps a coupling on one side only, a multipoint-constraint
+/// transform that is not `Tᵀ K T` (the tie case), a load applied through a different operator
+/// than the one solved.
+#[test]
+fn a_unit_force_at_a_moves_b_as_much_as_a_unit_force_at_b_moves_a() {
+    let mut worst = 0.0f64;
+    for kind in ALL_KINDS {
+        let three = kind.dim() == 3;
+        let mesh = block(kind, [4, 2, 2], [1.0, 0.5, 0.5], 1.0);
+        let z = if three { 0.5 } else { 0.0 };
+        let (a, b) = (node_at(&mesh, [2.0, 0.5, z]), node_at(&mesh, [1.5, 0.0, 0.5 * z]));
+        let mut sets = sets_of(&mesh);
+        node_set(&mut sets, "A", a);
+        node_set(&mut sets, "B", b);
+        let bodies = one_body();
+        for id in idealisations(kind) {
+            let root = vec![fix("root", "xmin", [true; 3], 0.0)];
+            let mut p = problem(&mesh, &sets, &bodies, id.clone(), Formulation::IncompatibleModes, root);
+            worst = worst.max(betti(&mut p, a, b, &format!("{kind:?} {id:?}")));
+        }
+    }
+    let mesh = two_blocks(ElementKind::Hex8, [2, 2, 2], [3, 3, 3], [0.5, 0.5, 0.5], 0.0);
+    let (a, b) = (node_at(&mesh, [1.0, 0.5, 0.5]), node_at(&mesh, [0.25, 0.0, 0.25]));
+    let mut sets = sets_of(&mesh);
+    node_set(&mut sets, "A", a);
+    node_set(&mut sets, "B", b);
+    let bodies = two_bodies();
+    let root = vec![fix("root", "a.xmin", [true; 3], 0.0)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root);
+    p.couplings = vec![bond(1e-9)];
+    worst = worst.max(betti(&mut p, a, b, "tied"));
+    eprintln!("K1 reciprocity: worst relative disagreement {worst:e}");
+}
+
+fn add(a: &[f64], b: &[f64]) -> Vec<f64> {
+    a.iter().zip(b).map(|(x, y)| x + y).collect()
+}
+
+/// Every retained history frame of a Result, concatenated.
+fn frames(r: &StepResult) -> Vec<f64> {
+    r.history.as_ref().expect("the Step retains frames").values.concat()
+}
+
+/// `both + none == one + two` on every field that is linear in the loads, on the applied
+/// totals, the per-Constraint reactions and every retained history frame; returns the worst
+/// relative disagreement. Von Mises and principal stresses are not linear and are skipped.
+fn affine(both: &StepResult, none: &StepResult, one: &StepResult, two: &StepResult, label: &str) -> f64 {
+    let mut worst = 0.0f64;
+    for (field, f) in &both.fields {
+        if *field == Field::VonMises || *field == Field::Principal {
+            continue;
+        }
+        let got = add(&f.data, &none.fields[field].data);
+        let want = add(&one.fields[field].data, &two.fields[field].data);
+        worst = worst.max(gate(&format!("{label} {field:?}"), &got, &want, EXACT_TOL));
+    }
+    let got = add(&applied_totals(both), &applied_totals(none));
+    let want = add(&applied_totals(one), &applied_totals(two));
+    worst = worst.max(gate(&format!("{label} applied"), &got, &want, EXACT_TOL));
+    let got = add(&constraint_totals(both), &constraint_totals(none));
+    let want = add(&constraint_totals(one), &constraint_totals(two));
+    worst = worst.max(gate(&format!("{label} reactions"), &got, &want, EXACT_TOL));
+    if let Some(h) = &both.history {
+        assert_eq!(h.times, none.history.as_ref().expect("frames").times);
+        let (got, want) = (add(&frames(both), &frames(none)), add(&frames(one), &frames(two)));
+        worst = worst.max(gate(&format!("{label} history"), &got, &want, EXACT_TOL));
+    }
+    worst
+}
+
+/// The four runs of a structural superposition check on `step`: all of `loads`, none, the
+/// first `split` of them, the rest.
+fn superpose(p: &mut Problem<'_>, step: &Step, loads: &[Load], split: usize, label: &str) -> f64 {
+    let mut run = |l: &[Load]| {
+        p.loads = l.to_vec();
+        run_step(p, step).expect("every load group solves")
+    };
+    let (both, none, one, two) = (run(loads), run(&[]), run(&loads[..split]), run(&loads[split..]));
+    affine(&both, &none, &one, &two, label)
+}
+
+/// The same four runs of a heat superposition check: `base` is in every run (a convection
+/// film is part of the operator, so it cannot be a load group), `groups` are the two groups.
+fn superpose_heat(p: &mut Problem<'_>, step: &Step, base: &[HeatLoad], groups: [&[HeatLoad]; 2], label: &str) -> f64 {
+    let mut run = |extra: &[&[HeatLoad]]| {
+        p.heat_loads = base.iter().chain(extra.iter().flat_map(|g| g.iter())).cloned().collect();
+        run_step(p, step).expect("every heat load group conducts")
+    };
+    let (both, none, one, two) = (run(&groups), run(&[]), run(&groups[..1]), run(&groups[1..]));
+    affine(&both, &none, &one, &two, label)
+}
+
+/// K2: superposition. `u(L₁ ∪ L₂) + u(∅) = u(L₁) + u(L₂)` for every linear procedure — the
+/// affine form, so a prescribed displacement, a temperature field, a transient's initial
+/// state and a convection ambient (which all live in the `u(∅)` answer) are allowed and
+/// exercised. Runs the static Step plain, amplitude-stepped and across a bonded tie, explicit
+/// dynamics, and steady and transient heat.
+///
+/// Fails if anything on a linear path is secretly nonlinear or stateful: a load assembled
+/// with a sign that depends on what else is applied, a solver reusing a stale factorisation,
+/// a history buffer not reset between increments, an amplitude applied to one load and not
+/// another.
+#[test]
+fn every_linear_procedure_superposes_its_loads() {
+    let mut worst = 0.0f64;
+    let mesh = block(ElementKind::Hex8, [4, 2, 2], [1.0, 0.5, 0.5], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let t = varying_temperature(&mesh);
+    let lift = vec![fix("lift", "xmax", [false, false, true], 1e-4)];
+    let mut p = loaded(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::IncompatibleModes,
+        &IDENTITY,
+        1.0,
+        1.0,
+        &t,
+        lift,
+    );
+    let all = p.loads.clone();
+    let dt_crit = critical_step(&p);
+    let ramp = procedure::Amplitude::Table { t: vec![0.0, 1.0, 2.0], value: vec![0.0, 1.0, 0.5] };
+    let steps = [
+        static_step(SolveOptions::default()),
+        ramped_step(ramp, 0.5, 2.0, 1),
+        Step::Explicit { t_end: 18.0 * dt_crit, dt_factor: 0.9, initial_velocity: None, output_every: 5 },
+    ];
+    for step in &steps {
+        worst = worst.max(superpose(&mut p, step, &all, 2, step.name()));
+    }
+
+    let tied = two_blocks(ElementKind::Hex8, [2, 2, 2], [3, 3, 3], [0.5, 0.5, 0.5], 0.0);
+    let tsets = sets_of(&tied);
+    let two = two_bodies();
+    let root = vec![fix("root", "a.xmin", [true; 3], 0.0)];
+    let mut q = problem(&tied, &tsets, &two, Idealisation::Solid3d, Formulation::Full, root);
+    q.couplings = vec![bond(1e-9)];
+    let loads =
+        [Load::Traction { faces: "b.xmax".into(), t: [1e5, -2e5, 3e5] }, Load::Gravity { g: [0.0, 0.0, -9.81] }];
+    worst = worst.max(superpose(&mut q, &steps[0], &loads, 1, "tied static"));
+
+    let cold = vec![hold("cold", "xmin", 300.0)];
+    let mut h =
+        heat_problem(&mesh, &sets, &bodies, Idealisation::Solid3d, conductor(45.0, 7800.0, 460.0), cold, vec![]);
+    let base = [HeatLoad::Convection { faces: "xmax".into(), h: 50.0, t_inf: 350.0 }];
+    let flux = [HeatLoad::Flux { faces: "ymax".into(), q: 2000.0 }];
+    let source = [HeatLoad::Source { bodies: one_body(), q: 5e4 }];
+    let transient = Step::HeatTransient {
+        dt: 0.5,
+        t_end: 2.0,
+        theta: 0.5,
+        initial: 300.0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
+    };
+    for step in [steady(), transient] {
+        worst = worst.max(superpose_heat(&mut h, &step, &base, [&flux, &source], step.name()));
+    }
+    eprintln!("K2 superposition: worst relative disagreement {worst:e}");
+}
+
+/// A one-face Set, for a unit flux.
+fn face_set(sets: &mut BTreeMap<String, ResolvedSet>, name: &str, mesh: &Mesh, face: Face) {
+    let mut nodes: Vec<u32> = mesh.face_nodes(face).collect();
+    nodes.sort_unstable();
+    let set = ResolvedSet { kind: SetKind::Face, faces: vec![face], nodes, elems: Vec::new() };
+    sets.insert(name.into(), set);
+}
+
+/// The heat cases of the frame, reciprocity and unit tests: both 3D families and two 2D
+/// idealisations.
+fn heat_cases() -> [(ElementKind, Idealisation); 4] {
+    [
+        (ElementKind::Hex8, Idealisation::Solid3d),
+        (ElementKind::Tet10, Idealisation::Solid3d),
+        (ElementKind::Quad8, Idealisation::PlaneStrain),
+        (ElementKind::Tri6, Idealisation::PlaneStress { thickness: THICKNESS }),
+    ]
+}
+
+/// K6: reciprocity of the conduction operator. With the same held face and the same
+/// convection film, the temperature field `T_B` due to a unit flux on face A and `T_A` due to
+/// a unit flux on face B satisfy `f_A · T_B = f_B · T_A`, where `f` is the assembled flux
+/// vector; the cross term is bounded by `√((f_A·T_A)(f_B·T_B))`, the scale it is gated on.
+///
+/// Fails on any asymmetry in the conductivity or film assembly, on a flux integrated with a
+/// different face measure than the film, and on a constraint elimination that drops a
+/// coupling on one side.
+#[test]
+fn a_unit_flux_on_a_warms_b_as_much_as_a_unit_flux_on_b_warms_a() {
+    let mut worst = 0.0f64;
+    for (kind, id) in heat_cases() {
+        let mesh = block(kind, [4, 2, 2], [1.0, 0.5, 0.5], 1.0);
+        let top = if kind.dim() == 3 { "zmax" } else { "ymax" };
+        let (fa, fb) = (mesh.face_sets[top][0], mesh.face_sets["xmax"][mesh.face_sets["xmax"].len() - 1]);
+        let mut sets = sets_of(&mesh);
+        face_set(&mut sets, "A", &mesh, fa);
+        face_set(&mut sets, "B", &mesh, fb);
+        let bodies = one_body();
+        let cold = vec![hold("cold", "xmin", 0.0)];
+        let mut p = heat_problem(&mesh, &sets, &bodies, id.clone(), conductor(45.0, 7800.0, 460.0), cold, vec![]);
+        let pat = pattern(&mesh, 1);
+        let mut solve_with = |set: &str| {
+            let film = HeatLoad::Convection { faces: "ymin".into(), h: 30.0, t_inf: 0.0 };
+            p.heat_loads = vec![film, HeatLoad::Flux { faces: set.into(), q: 1.0 }];
+            let f = heat::assemble(&p, &pat).expect("assembles").f;
+            (f, temperature_of(&run_step(&p, &steady()).expect("conducts")))
+        };
+        let ((fa, ta), (fb, tb)) = (solve_with("A"), solve_with("B"));
+        let dot = |x: &[f64], y: &[f64]| x.iter().zip(y).map(|(a, b)| a * b).sum::<f64>();
+        let (ab, ba) = (dot(&fa, &tb), dot(&fb, &ta));
+        let d = (ab - ba).abs() / (dot(&fa, &ta) * dot(&fb, &tb)).sqrt();
+        assert!(d <= RECIPROCITY_TOL, "{kind:?} {id:?}: {ab} vs {ba}, {d:e} of the bound");
+        worst = worst.max(d);
+    }
+    eprintln!("K6 heat reciprocity: worst relative disagreement {worst:e}");
+}
+
+/// Every field, applied total, per-Constraint reaction and history frame of two Results that
+/// must be the same numbers; returns the worst relative disagreement.
+fn same_result(a: &StepResult, b: &StepResult, label: &str) -> f64 {
+    let mut worst = 0.0f64;
+    for (field, f) in &a.fields {
+        worst = worst.max(gate(&format!("{label} {field:?}"), &b.fields[field].data, &f.data, EXACT_TOL));
+    }
+    worst = worst.max(gate(&format!("{label} applied"), &applied_totals(b), &applied_totals(a), EXACT_TOL));
+    worst = worst.max(gate(&format!("{label} reactions"), &constraint_totals(b), &constraint_totals(a), EXACT_TOL));
+    if let Some(h) = &a.history {
+        assert_eq!(h.times, b.history.as_ref().expect("frames").times);
+        worst = worst.max(gate(&format!("{label} history"), &frames(b), &frames(a), EXACT_TOL));
+    }
+    worst
+}
+
+/// The heat Problem of the frame and determinism tests: a held face, a convecting face, a
+/// flux and a volumetric source.
+fn heated<'a>(
+    mesh: &'a Mesh,
+    sets: &'a BTreeMap<String, ResolvedSet>,
+    bodies: &'a [String],
+    id: Idealisation,
+) -> Problem<'a> {
+    let loads = vec![
+        HeatLoad::Convection { faces: "xmax".into(), h: 50.0, t_inf: 350.0 },
+        HeatLoad::Flux { faces: "ymax".into(), q: 2000.0 },
+        HeatLoad::Source { bodies: bodies.to_vec(), q: 5e4 },
+    ];
+    let cold = vec![hold("cold", "xmin", 300.0)];
+    heat_problem(mesh, sets, bodies, id, conductor(45.0, 7800.0, 460.0), cold, loads)
+}
+
+fn transient_step() -> Step {
+    Step::HeatTransient {
+        dt: 0.5,
+        t_end: 1.0,
+        theta: 0.5,
+        initial: 300.0,
+        output_every: 1,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
+    }
+}
+
+/// K7: heat frame invariance. Temperature is a scalar, so the model rotated by a general `R`
+/// gives the same nodal temperatures, reaction powers and history, steady and transient, to
+/// round-off.
+///
+/// Fails on a conductivity or film integral that reads a coordinate direction, on a face
+/// measure taken from one component of a normal, and on any axis-dependent capacity term.
+#[test]
+fn a_rotated_heat_model_gives_the_same_temperatures() {
+    let mut worst = 0.0f64;
+    for (kind, id) in heat_cases() {
+        let mesh = block(kind, [4, 2, 2], [1.0, 0.5, 0.5], 0.0);
+        let r = if kind.dim() == 3 { rotation(0.3, -0.7, 1.1) } else { rotation(0.0, 0.0, 0.9) };
+        let rotated = rotate_mesh(&mesh, &r);
+        let (sets, rsets) = (sets_of(&mesh), sets_of(&rotated));
+        let bodies = one_body();
+        let (p, q) = (heated(&mesh, &sets, &bodies, id.clone()), heated(&rotated, &rsets, &bodies, id.clone()));
+        for step in [steady(), transient_step()] {
+            let (a, b) = (run_step(&p, &step).expect("conducts"), run_step(&q, &step).expect("rotated conducts"));
+            worst = worst.max(same_result(&a, &b, &format!("{kind:?} {id:?} {}", step.name())));
+        }
+    }
+    eprintln!("K7 heat frame invariance: worst relative disagreement {worst:e}");
+}
+
+/// A Model built by dispatching `cmds` (JSON, one Command each) into a fresh Engine.
+fn engine_with(cmds: &[&str]) -> Engine {
+    let mut e = Engine::new(None, Box::new(NoClock), 2);
+    for c in cmds {
+        let cmd: Command = serde_json::from_str(c).expect("valid Command JSON");
+        let ack = pollster::block_on(e.dispatch(cmd, &mut nop));
+        assert!(ack.is_ok(), "{c}: {ack:?}");
+    }
+    e
+}
+
+/// K5: unit invariance. The same model authored in millimetres, megapascals, kilonewtons and
+/// tonnes — lengths, stresses, forces, densities, accelerations, conductivities, fluxes,
+/// films, sources and Celsius temperatures — and in SI has the same Model hash and
+/// bit-identical displacements, stresses, reactions and temperatures.
+///
+/// Fails on a conversion applied twice or not at all in any Command's apply arm, on a
+/// quantity stored in its display unit rather than SI, and on a unit factor that is not the
+/// correctly rounded SI value (which would change the hash without changing the physics).
+#[test]
+fn a_model_authored_in_millimetres_hashes_and_solves_like_one_in_metres() {
+    let si = [
+        r#"{"cmd":"model.new","name":"units"}"#,
+        r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","0.1 m","0.1 m"]}"#,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3","alpha":"1.2e-5 1/K","k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+        r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"0.05 m"},"order":1}"#,
+        r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin"}"#,
+        r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 N","0 N","-1000 N"]}"#,
+        r#"{"cmd":"load.pressure","name":"top","on":"beam.zmax","value":"200000 Pa"}"#,
+        r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#,
+        r#"{"cmd":"load.temperature","name":"warm","bodies":["beam"],"value":"373.15 K"}"#,
+        r#"{"cmd":"constraint.temperature","name":"cold","on":"beam.xmin","value":"273.15 K"}"#,
+        r#"{"cmd":"load.heatFlux","name":"flux","on":"beam.ymax","q":"1000 W/m^2"}"#,
+        r#"{"cmd":"load.convection","name":"film","on":"beam.xmax","h":"25 W/(m^2 K)","tInf":"300 K"}"#,
+        r#"{"cmd":"load.heatSource","name":"src","bodies":["beam"],"q":"50000 W/m^3"}"#,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":["tip","top","g","warm"]}"#,
+        r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["cold"],"loads":["flux","film","src"]}"#,
+        r#"{"cmd":"solve.run","step":"static"}"#,
+        r#"{"cmd":"solve.run","step":"heat"}"#,
+    ];
+    let mm = [
+        r#"{"cmd":"model.new","name":"units"}"#,
+        r#"{"cmd":"geometry.addBox","name":"beam","size":["1000 mm","100 mm","100 mm"]}"#,
+        r#"{"cmd":"material.add","name":"steel","E":"210000 MPa","nu":0.3,"rho":"7.85e-9 t/mm^3","alpha":"1.2e-5 1/K","k":"0.045 W/(mm K)","cp":"460000 J/(t K)"}"#,
+        r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"50 mm"},"order":1}"#,
+        r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin"}"#,
+        r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 kN","0 kN","-1 kN"]}"#,
+        r#"{"cmd":"load.pressure","name":"top","on":"beam.zmax","value":"0.2 MPa"}"#,
+        r#"{"cmd":"load.gravity","name":"g","g":["0 mm/s^2","0 mm/s^2","-9810 mm/s^2"]}"#,
+        r#"{"cmd":"load.temperature","name":"warm","bodies":["beam"],"value":"100 degC"}"#,
+        r#"{"cmd":"constraint.temperature","name":"cold","on":"beam.xmin","value":"0 degC"}"#,
+        r#"{"cmd":"load.heatFlux","name":"flux","on":"beam.ymax","q":"0.001 W/mm^2"}"#,
+        r#"{"cmd":"load.convection","name":"film","on":"beam.xmax","h":"2.5e-5 W/(mm^2 K)","tInf":"300 K"}"#,
+        r#"{"cmd":"load.heatSource","name":"src","bodies":["beam"],"q":"5e-5 W/mm^3"}"#,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root"],"loads":["tip","top","g","warm"]}"#,
+        r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["cold"],"loads":["flux","film","src"]}"#,
+        r#"{"cmd":"solve.run","step":"static"}"#,
+        r#"{"cmd":"solve.run","step":"heat"}"#,
+    ];
+    let (a, b) = (engine_with(&si), engine_with(&mm));
+    assert_eq!(
+        a.model_hash(),
+        b.model_hash(),
+        "the SI Model differs from the millimetre one:\n{:#?}\n{:#?}",
+        a.model(),
+        b.model()
+    );
+    for (step, field) in [
+        ("static", Field::Displacement),
+        ("static", Field::Stress),
+        ("static", Field::Reaction),
+        ("heat", Field::Temperature),
+        ("heat", Field::Reaction),
+    ] {
+        let (x, y) = (a.field(Some(step), field).expect("solved"), b.field(Some(step), field).expect("solved"));
+        let differing = x.data.iter().zip(&y.data).filter(|(p, q)| p.to_bits() != q.to_bits()).count();
+        assert_eq!(differing, 0, "{step} {field:?}: {differing} of {} values differ between mm and m", x.data.len());
+    }
+}
+
+/// Bit-for-bit equality of two Results: every field, scalar, reaction, frequency, mode and
+/// history frame.
+fn assert_bitwise(a: &StepResult, b: &StepResult, label: &str) {
+    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<u64>>();
+    assert_eq!(a.fields.keys().collect::<Vec<_>>(), b.fields.keys().collect::<Vec<_>>(), "{label}");
+    for (field, f) in &a.fields {
+        assert_eq!(bits(&f.data), bits(&b.fields[field].data), "{label} {field:?}");
+    }
+    for (k, v) in &a.scalars {
+        assert_eq!(v.to_bits(), b.scalars[k].to_bits(), "{label} scalar {k}");
+    }
+    assert_eq!(a.reactions, b.reactions, "{label} reactions");
+    assert_eq!(bits(&a.frequencies), bits(&b.frequencies), "{label} frequencies");
+    assert_eq!(a.modes.len(), b.modes.len(), "{label} modes");
+    for (i, (m, n)) in a.modes.iter().zip(&b.modes).enumerate() {
+        assert_eq!(bits(&m.data), bits(&n.data), "{label} mode {}", i + 1);
+    }
+    let history = |r: &StepResult| r.history.as_ref().map(|h| (bits(&h.times), bits(&h.values.concat())));
+    assert_eq!(history(a), history(b), "{label} history");
+}
+
+/// K9 (A8 extended): every procedure — static, modal, explicit, steady and transient heat —
+/// is bit-identical at one and many threads, in every field, scalar, reaction, frequency,
+/// mode and retained frame.
+///
+/// Fails on any reduction whose order depends on the thread count: a parallel scatter, a
+/// chunk size read from the pool, a dot product summed per thread.
+#[test]
+fn every_procedure_is_bit_identical_at_one_and_many_threads() {
+    let many = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(2);
+    let mesh = block(ElementKind::Hex8, [4, 2, 2], [1.0, 0.5, 0.5], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let t = varying_temperature(&mesh);
+    let sp = loaded(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::IncompatibleModes,
+        &IDENTITY,
+        1.0,
+        1.0,
+        &t,
+        vec![],
+    );
+    let hp = heated(&mesh, &sets, &bodies, Idealisation::Solid3d);
+    let dt_crit = critical_step(&sp);
+    let runs: [(&Problem<'_>, Step); 5] = [
+        (&sp, static_step(SolveOptions::default())),
+        (&sp, Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default() }),
+        (&sp, Step::Explicit { t_end: 18.0 * dt_crit, dt_factor: 0.9, initial_velocity: None, output_every: 5 }),
+        (&hp, steady()),
+        (&hp, transient_step()),
+    ];
+    for (p, step) in &runs {
+        let run = |threads: usize| {
+            pollster::block_on(procedure::run(p, step, &Pool::new(threads), None, None, &mut nop)).expect("solves")
+        };
+        assert_bitwise(&run(1), &run(many), step.name());
+    }
+}
+
+// ------------------------------------------- mesh independence and refinement rates (K8, D4)
+
+/// K8: mesh independence of exact fields. The patch test A1 runs on the engine's own meshers
+/// — the lattice for every kind (with the Kuhn split for the simplex kinds), interior nodes
+/// pushed off the grid, and the free triangle mesher at both orders — so a mesher whose
+/// connectivity, node ordering or face sets are not conforming cannot pass.
+#[test]
+fn every_mesher_passes_the_patch_test_for_every_kind() {
+    let mut meshes: Vec<(String, Mesh)> = ALL_KINDS
+        .iter()
+        .map(|&kind| {
+            let mut m = lattice_block(kind, 2);
+            perturb_interior(&mut m, 0.075, 7);
+            straighten(&mut m);
+            (format!("lattice {kind:?}"), m)
+        })
+        .collect();
+    for quadratic in [false, true] {
+        meshes.push((format!("free quadratic={quadratic}"), free_square(quadratic, 0.3)));
+    }
+    for (label, mesh) in &meshes {
+        let sets = sets_of(mesh);
+        for id in idealisations(mesh.kind_of(0)) {
+            let axi = id == Idealisation::Axisymmetric;
+            for (i, e) in patch_modes(&id).into_iter().enumerate() {
+                // constant γ_rz is not an axisymmetric equilibrium state (see A1)
+                if axi && i == 2 {
+                    continue;
+                }
+                patch_check(mesh, &sets, &id, &e, &format!("{label} {id:?}"));
+            }
+        }
+    }
+}
+
+/// A harmonic potential `φ` for the manufactured solutions: `u = ∇φ` solves Navier's
+/// equations with no body force (`div u = Δφ = 0`, `Δu = ∇Δφ = 0`) in every idealisation,
+/// and `T = φ` solves Laplace's equation.
+#[derive(Clone, Copy, PartialEq)]
+enum Harmonic {
+    /// `sin x cosh y`, harmonic in the plane.
+    Plane,
+    /// `sin x sin y cosh(√2 z)`, harmonic in space.
+    Solid,
+    /// `r⁴ − 8 r² z² + 8/3 z⁴`, harmonic in space and independent of the angle; a quartic, so
+    /// quadratic elements do not reproduce it and a rate can be observed.
+    Axi,
+}
+
+/// `φ`, `∇φ` and `∇∇φ` at `x` (`x = (r, z)` for the axisymmetric potential).
+fn harmonic(h: Harmonic, x: [f64; 3]) -> (f64, [f64; 3], [[f64; 3]; 3]) {
+    match h {
+        Harmonic::Plane => {
+            let (s, c, ch, sh) = (libm::sin(x[0]), libm::cos(x[0]), libm::cosh(x[1]), libm::sinh(x[1]));
+            (s * ch, [c * ch, s * sh, 0.0], [[-s * ch, c * sh, 0.0], [c * sh, s * ch, 0.0], [0.0; 3]])
+        }
+        Harmonic::Solid => {
+            let k = std::f64::consts::SQRT_2;
+            let (sx, cx, sy, cy) = (libm::sin(x[0]), libm::cos(x[0]), libm::sin(x[1]), libm::cos(x[1]));
+            let (ch, sh) = (libm::cosh(k * x[2]), libm::sinh(k * x[2]));
+            let phi = sx * sy * ch;
+            let g = [cx * sy * ch, sx * cy * ch, k * sx * sy * sh];
+            let hs = [
+                [-phi, cx * cy * ch, k * cx * sy * sh],
+                [cx * cy * ch, -phi, k * sx * cy * sh],
+                [k * cx * sy * sh, k * sx * cy * sh, 2.0 * phi],
+            ];
+            (phi, g, hs)
+        }
+        Harmonic::Axi => {
+            let (r, z) = (x[0], x[1]);
+            let phi = r * r * r * r - 8.0 * r * r * z * z + 8.0 / 3.0 * z * z * z * z;
+            let g = [4.0 * r * r * r - 16.0 * r * z * z, -16.0 * r * r * z + 32.0 / 3.0 * z * z * z, 0.0];
+            let hs = [
+                [12.0 * r * r - 16.0 * z * z, -32.0 * r * z, 0.0],
+                [-32.0 * r * z, -16.0 * r * r + 32.0 * z * z, 0.0],
+                [0.0; 3],
+            ];
+            (phi, g, hs)
+        }
+    }
+}
+
+fn harmonic_of(id: &Idealisation) -> Harmonic {
+    match id {
+        Idealisation::Solid3d => Harmonic::Solid,
+        Idealisation::Axisymmetric => Harmonic::Axi,
+        Idealisation::PlaneStrain | Idealisation::PlaneStress { .. } => Harmonic::Plane,
+    }
+}
+
+/// The exact displacement `∇φ` and its engineering Voigt strain `∇∇φ` — with the hoop strain
+/// `u_r / r` in axisymmetry. In plane stress the thickness strain is `−ν/(1−ν)(ε₁₁+ε₂₂) = 0`
+/// because `φ` is harmonic, so the six components are exact in every idealisation.
+fn exact_u(h: Harmonic, x: [f64; 3]) -> ([f64; 3], [f64; VOIGT]) {
+    let (_, g, hs) = harmonic(h, x);
+    let mut e = [hs[0][0], hs[1][1], hs[2][2], 2.0 * hs[0][1], 2.0 * hs[0][2], 2.0 * hs[1][2]];
+    if h == Harmonic::Axi {
+        e[2] = g[0] / x[0];
+    }
+    (g, e)
+}
+
+/// A rule denser than the element's own, so no Gauss-point superconvergence flatters the H1
+/// error: the 4-point Gauss–Legendre tensor rules on quadrilaterals and hexahedra, the 25- and
+/// 125-point simplex rules on triangles and tetrahedra.
+fn error_rule(kind: ElementKind) -> (Vec<[f64; 3]>, Vec<f64>) {
+    let gl = gauss_legendre(4);
+    let mut points = Vec::new();
+    let mut weights = Vec::new();
+    match kind {
+        ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Truss2 => {
+            for &(a, wa) in gl {
+                for &(b, wb) in gl {
+                    for &(c, wc) in gl {
+                        points.push([a, b, c]);
+                        weights.push(wa * wb * wc);
+                    }
+                }
+            }
+        }
+        ElementKind::Quad4 | ElementKind::Quad8 => {
+            for &(a, wa) in gl {
+                for &(b, wb) in gl {
+                    points.push([a, b, 0.0]);
+                    weights.push(wa * wb);
+                }
+            }
+        }
+        ElementKind::Tri3 | ElementKind::Tri6 => {
+            points.extend_from_slice(TRI_25.points);
+            weights.extend_from_slice(TRI_25.weights);
+        }
+        ElementKind::Tet4 | ElementKind::Tet10 => {
+            points.extend_from_slice(TET_125.points);
+            weights.extend_from_slice(TET_125.weights);
+        }
+    }
+    (points, weights)
+}
+
+/// The adjugate inverse and determinant of a 3 × 3 matrix.
+fn invert3(m: &[[f64; 3]; 3]) -> ([[f64; 3]; 3], f64) {
+    let c = |i: usize, j: usize| {
+        let (i1, i2) = ((i + 1) % 3, (i + 2) % 3);
+        let (j1, j2) = ((j + 1) % 3, (j + 2) % 3);
+        m[j1][i1] * m[j2][i2] - m[j1][i2] * m[j2][i1]
+    };
+    let det = m[0][0] * c(0, 0) + m[0][1] * c(1, 0) + m[0][2] * c(2, 0);
+    let mut inv = [[0.0; 3]; 3];
+    for (i, row) in inv.iter_mut().enumerate() {
+        for (j, v) in row.iter_mut().enumerate() {
+            *v = c(i, j) / det;
+        }
+    }
+    (inv, det)
+}
+
+/// Position, `w · det J`, shape values and physical shape gradients at the reference point
+/// `xi` of one element (a 2D Jacobian is padded with `∂z/∂ζ = 1`).
+fn kinematics_at(kind: ElementKind, coords: &[f64], xi: [f64; 3], w: f64) -> ([f64; 3], f64, Vec<f64>, Vec<[f64; 3]>) {
+    let (nn, dim) = (kind.n_nodes(), kind.dim());
+    let mut sh = vec![0.0; nn];
+    let mut dn = vec![[0.0; 3]; nn];
+    shape_of(kind, xi, &mut sh);
+    dshape_of(kind, xi, &mut dn);
+    let mut x = [0.0; 3];
+    let mut j = [[0.0; 3]; 3];
+    for a in 0..nn {
+        for i in 0..3 {
+            x[i] += sh[a] * coords[3 * a + i];
+            for k in 0..dim {
+                j[k][i] += dn[a][k] * coords[3 * a + i];
+            }
+        }
+    }
+    if dim == 2 {
+        j[2][2] = 1.0;
+    }
+    let (inv, det) = invert3(&j);
+    let g = dn.iter().map(|d| [0, 1, 2].map(|i| (0..dim).map(|k| d[k] * inv[i][k]).sum())).collect();
+    (x, w * det, sh, g)
+}
+
+/// `(‖u_h − u‖_L2, |u_h − u|_H1)` of a nodal solution against the manufactured field: the
+/// temperature and its gradient when `heat`, else the displacement and its engineering
+/// strain, integrated with [`error_rule`].
+fn manufactured_errors(mesh: &Mesh, u: &[f64], h: Harmonic, heat: bool) -> (f64, f64) {
+    let dpn = u.len() / mesh.n_nodes();
+    let (mut l2, mut h1) = (0.0, 0.0);
+    let mut coords = Vec::new();
+    for elem in 0..mesh.n_elems() as u32 {
+        let kind = mesh.kind_of(elem);
+        coords.resize(kind.n_nodes() * 3, 0.0);
+        mesh.elem_coords(elem, &mut coords);
+        let (points, weights) = error_rule(kind);
+        for (&xi, &w) in points.iter().zip(&weights) {
+            let (x, wd, sh, g) = kinematics_at(kind, &coords, xi, w);
+            let mut val = vec![0.0; dpn];
+            let mut du = [[0.0; 3]; 3];
+            for (a, &n) in mesh.elem_nodes(elem).iter().enumerate() {
+                for c in 0..dpn {
+                    let ua = u[n as usize * dpn + c];
+                    val[c] += sh[a] * ua;
+                    for k in 0..3 {
+                        du[c][k] += g[a][k] * ua;
+                    }
+                }
+            }
+            let (exact_val, exact_grad, grad): (Vec<f64>, Vec<f64>, Vec<f64>) = if heat {
+                let (phi, gr, _) = harmonic(h, x);
+                (vec![phi], gr.to_vec(), du[0].to_vec())
+            } else {
+                let (ue, ee) = exact_u(h, x);
+                let mut e =
+                    [du[0][0], du[1][1], du[2][2], du[0][1] + du[1][0], du[0][2] + du[2][0], du[1][2] + du[2][1]];
+                if h == Harmonic::Axi {
+                    e[2] = val[0] / x[0];
+                }
+                (ue[..dpn].to_vec(), ee.to_vec(), e.to_vec())
+            };
+            l2 += wd * val.iter().zip(&exact_val).map(|(a, b)| (a - b) * (a - b)).sum::<f64>();
+            h1 += wd * grad.iter().zip(&exact_grad).map(|(a, b)| (a - b) * (a - b)).sum::<f64>();
+        }
+    }
+    (l2.sqrt(), h1.sqrt())
+}
+
+/// The manufactured problem on one mesh — the exact field on every boundary DOF, no load —
+/// solved and measured: `(L2 error, H1 error)`.
+fn manufactured_solve(mesh: &Mesh, id: &Idealisation, form: Formulation, heat: bool) -> (f64, f64) {
+    let sets = sets_of(mesh);
+    let bodies = one_body();
+    let h = harmonic_of(id);
+    let dpn = if heat { 1 } else { mesh.dim };
+    let exact: Vec<f64> = (0..mesh.n_nodes() as u32)
+        .flat_map(|n| {
+            let x = mesh.node(n);
+            if heat {
+                vec![harmonic(h, x).0]
+            } else {
+                exact_u(h, x).0[..dpn].to_vec()
+            }
+        })
+        .collect();
+    let k = if heat {
+        let p = heat_problem(mesh, &sets, &bodies, id.clone(), steel(), Vec::new(), Vec::new());
+        heat::assemble(&p, &pattern(mesh, 1)).expect("conductivity assembles").k
+    } else {
+        let p = problem(mesh, &sets, &bodies, id.clone(), form, Vec::new());
+        assemble_stiffness(&p, &pattern(mesh, mesh.dim)).expect("stiffness assembles").k
+    };
+    let rc = boundary_constraints(mesh, &exact);
+    let red = reduce(&k, &vec![0.0; k.n], &rc, &[]);
+    let (u_f, _) =
+        pollster::block_on(solve(&red.k_ff, &red.f_f, &SolveOptions::default(), &Pool::new(2), None, &mut nop))
+            .expect("the manufactured system is positive definite");
+    manufactured_errors(mesh, &expand(&red, &u_f), h, heat)
+}
+
+/// The observed L2 and H1 rates over the two finest of a series `(h, L2, H1)`, gated at
+/// `p + 1` and `p` within 0.1 for an element of degree `p`.
+fn assert_rates(series: &[(f64, f64, f64)], p: f64, label: &str) {
+    let hs: Vec<f64> = series.iter().map(|s| s.0).collect();
+    let l2: Vec<f64> = series.iter().map(|s| s.1).collect();
+    let h1: Vec<f64> = series.iter().map(|s| s.2).collect();
+    let n = series.len();
+    let (rl2, rh1) = (observed_rate(&hs[n - 2..], &l2[n - 2..]), observed_rate(&hs[n - 2..], &h1[n - 2..]));
+    eprintln!("D4 {label}: h {hs:?} L2 {l2:?} H1 {h1:?} → rates L2 {rl2:.3} (want {}) H1 {rh1:.3} (want {p})", p + 1.0);
+    assert!((rl2 - (p + 1.0)).abs() <= 0.1, "{label}: L2 rate {rl2:.3}, expected {}", p + 1.0);
+    assert!((rh1 - p).abs() <= 0.1, "{label}: H1 rate {rh1:.3}, expected {p}");
+}
+
+fn degree(kind: ElementKind) -> f64 {
+    if kind.n_nodes() > kind.n_corners() {
+        2.0
+    } else {
+        1.0
+    }
+}
+
+/// D4: manufactured-solution refinement rates. For every element kind on the lattice mesher
+/// (Kuhn-split for the simplex kinds) in every idealisation, and for both triangle orders on
+/// the free mesher, the L2 error of the field converges at `p + 1` and the H1 error at `p`
+/// within 0.1 — elasticity with `u = ∇φ` and conduction with `T = φ` for a harmonic `φ`.
+///
+/// A rate that is right with a wrong constant is caught by the answer benchmarks; a rate that
+/// is wrong means an element is not what it claims to be: a quadrature rule too weak for its
+/// degree, a shape function of the wrong order, a mid-node placed off the edge, a strain
+/// term missing from `B` that a constant-strain patch test cannot see.
+#[test]
+fn manufactured_solutions_converge_at_p_plus_one_in_l2_and_p_in_h1() {
+    for kind in ALL_KINDS {
+        let p = degree(kind);
+        let forms = if kind == ElementKind::Hex8 || kind == ElementKind::Quad4 {
+            vec![Formulation::Full, Formulation::IncompatibleModes]
+        } else {
+            vec![Formulation::Full]
+        };
+        let meshes: Vec<(f64, Mesh)> =
+            [2usize, 4, 8].iter().map(|&n| (1.0 / n as f64, lattice_block(kind, n))).collect();
+        for id in idealisations(kind) {
+            for &form in &forms {
+                let series: Vec<(f64, f64, f64)> = meshes
+                    .iter()
+                    .map(|(h, m)| {
+                        let (l2, h1) = manufactured_solve(m, &id, form, false);
+                        (*h, l2, h1)
+                    })
+                    .collect();
+                assert_rates(&series, p, &format!("{kind:?} {id:?} {form:?}"));
+            }
+            let series: Vec<(f64, f64, f64)> = meshes
+                .iter()
+                .map(|(h, m)| {
+                    let (l2, h1) = manufactured_solve(m, &id, Formulation::Full, true);
+                    (*h, l2, h1)
+                })
+                .collect();
+            assert_rates(&series, p, &format!("{kind:?} {id:?} heat"));
+        }
+    }
+    for quadratic in [false, true] {
+        let p = if quadratic { 2.0 } else { 1.0 };
+        // the unit square has area 1, so √(1 / n_elems) is the mean element size
+        let meshes: Vec<(f64, Mesh)> = [0.25, 0.125, 0.0625]
+            .iter()
+            .map(|&size| {
+                let m = free_square(quadratic, size);
+                ((1.0 / m.n_elems() as f64).sqrt(), m)
+            })
+            .collect();
+        for heat in [false, true] {
+            let series: Vec<(f64, f64, f64)> = meshes
+                .iter()
+                .map(|(h, m)| {
+                    let (l2, h1) = manufactured_solve(m, &Idealisation::PlaneStrain, Formulation::Full, heat);
+                    (*h, l2, h1)
+                })
+                .collect();
+            assert_rates(&series, p, &format!("free quadratic={quadratic} heat={heat}"));
+        }
     }
 }
