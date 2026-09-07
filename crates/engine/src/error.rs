@@ -57,6 +57,8 @@ pub enum ErrorCode {
     MeshFailed,
     #[serde(rename = "model.no-material")]
     ModelNoMaterial,
+    #[serde(rename = "model.no-section")]
+    ModelNoSection,
     #[serde(rename = "model.ill-posed")]
     ModelIllPosed,
     #[serde(rename = "result.stale")]
@@ -83,6 +85,8 @@ pub enum ErrorCode {
     GpuTooLarge,
     #[serde(rename = "explicit.unstable")]
     ExplicitUnstable,
+    #[serde(rename = "newton.diverged")]
+    NewtonDiverged,
 }
 
 impl std::fmt::Display for ErrorCode {
@@ -166,6 +170,7 @@ mod tests {
             ErrorCode::MeshInverted,
             ErrorCode::MeshFailed,
             ErrorCode::ModelNoMaterial,
+            ErrorCode::ModelNoSection,
             ErrorCode::ModelIllPosed,
             ErrorCode::ResultStale,
             ErrorCode::ConstraintConflict,

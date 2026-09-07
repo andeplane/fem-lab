@@ -25,6 +25,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [contact.add](#commands-contact-add)
 - [geometry.add](#commands-geometry-add)
 - [geometry.addBox](#commands-geometry-addBox)
+- [geometry.addLine](#commands-geometry-addLine)
 - [geometry.import](#commands-geometry-import)
 - [geometry.nameFace](#commands-geometry-nameFace)
 - [geometry.nameRegion](#commands-geometry-nameRegion)
@@ -55,6 +56,9 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [model.setName](#commands-model-setName)
 - [model.setUnits](#commands-model-setUnits)
 - [plugin.load](#commands-plugin-load)
+- [section.add](#commands-section-add)
+- [section.assign](#commands-section-assign)
+- [section.remove](#commands-section-remove)
 - [solve.run](#commands-solve-run)
 - [step.add](#commands-step-add)
 - [step.remove](#commands-step-remove)
@@ -186,6 +190,28 @@ directly in constraints and loads. Re-issuing with an existing name replaces the
 | size | yes | <code>{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
 | at | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"geometry.addBox"}</code> |  |
+
+<a id="commands-geometry-addLine"></a>
+
+### geometry.addLine
+
+Add a Body made of straight line members: a truss. `points` are the joints, in order,
+and `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.
+Each member is cut into `divisions` elements of equal length (default 1). Joint `i`
+becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,
+and joints of different line Bodies that sit at the same point are welded into one node
+when the Mesh is built. A member carries axial force only, so give the Body a Section
+with section.assign as well as a Material, and hold enough joints that none of them can
+drift sideways — an under-braced truss is singular and fails in the solver, not here.
+Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| points | yes | <code>{"type":"array","items":{"type":"array","items":{"$ref":"#/$defs/Q_length"},"minItems":3,"maxItems":3}}</code> |  |
+| members | no | <code>{"type":["array","null"],"items":{"type":"array","items":{"type":"integer","format":"uint32","minimum":0},"minItems":2,"maxItems":2}}</code> |  |
+| divisions | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"geometry.addLine"}</code> |  |
 
 <a id="commands-geometry-import"></a>
 
@@ -680,6 +706,49 @@ content hash. Not available yet: returns unsupported until the plugin phase land
 | manifest | no | <code>{}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"plugin.load"}</code> |  |
 
+<a id="commands-section-add"></a>
+
+### section.add
+
+Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,
+I, channel, or the properties given directly. A line member has no cross-section
+geometry of its own, so the Section is where its area, second moments, torsion constant,
+shear factors and extreme-fibre distances come from. Re-issuing with an existing name
+edits the section in place. Assign it to Bodies with section.assign.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| shape | yes | <code>{"$ref":"#/$defs/SectionSpec"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"section.add"}</code> |  |
+
+<a id="commands-section-assign"></a>
+
+### section.assign
+
+Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
+one without it is reported by query.model warnings and blocks solve.run with
+model.no-section. A Section on a solid or sheet Body is carried but never used: those
+Bodies get their cross-section from their geometry.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| section | yes | <code>{"type":"string"}</code> |  |
+| bodies | yes | <code>{"type":"array","items":{"type":"string"}}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"section.assign"}</code> |  |
+
+<a id="commands-section-remove"></a>
+
+### section.remove
+
+Remove a Section that is not assigned to any Body. Fails with in-use listing the Bodies
+that still use it; assign them another Section first with section.assign.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"section.remove"}</code> |  |
+
 <a id="commands-solve-run"></a>
 
 ### solve.run
@@ -716,17 +785,21 @@ Step whose Result this one continues — a static Step after a heat Step picks u
 temperature field and turns it into thermal stress. The remaining fields belong to one
 procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
-`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and
+`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
+`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and
 prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
 defaulting to the whole of it, so a table written in step fraction works unchanged) and
 keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
 scaled, so its thermal strain is present in full at every increment. Without an
 `amplitude` a static Step is the single solve it has always been and retains nothing.
+A static-nonlinear Step always steps, over `increments` equal pieces of the same
+pseudo-time, and keeps every converged one.
 Heat-steady requires a finite positive material conductivity `k`; heat-transient also
 requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
 `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
-on its own answer — today a radiation load — and are ignored by a Step that is linear.
+on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
+Step that is linear.
 Heat Results report net applied power, positive removed heat and stored-energy rate;
 transient powers belong to the last θ-method integration stage (radiation uses weighted
 endpoint fluxes), while temperature fields belong to its endpoint.
@@ -748,8 +821,10 @@ endpoint fluxes), while temperature fields belong to its endpoint.
 | dtFactor | no | <code>{"type":["number","null"],"format":"double"}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
 | amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}]}</code> |  |
 | initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
-| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Convergence tolerance for a Step that must iterate: the relative sup-norm change of the solution between two passes. Default 1e-6. |
-| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iteration budget for a Step that must iterate; exceeding it is &#96;solve.diverged&#96;. Default 50. |
+| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
+| maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
+| nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Convergence tolerance for a Step that must iterate, relative in both cases: the sup-norm change of the solution between two passes for a radiating heat Step (default 1e-6), and the residual force and the displacement correction of one Newton increment for static-nonlinear (default 1e-8). It is never the *linear* solver's tolerance, which is &#96;solve.run&#96;'s. |
+| nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iteration budget for a Step that must iterate. Exceeding it is &#96;solve.diverged&#96; for a heat Step (default 50); for static-nonlinear it is what makes an increment cut back and try again at half the load (default 20, and full Newton reaches 1e-8 in four or five iterations from a good starting point). |
 | cmd | yes | <code>{"type":"string","const":"step.add"}</code> |  |
 
 <a id="commands-step-remove"></a>
@@ -1532,6 +1607,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "enum": [
     "body",
     "material",
+    "section",
     "set",
     "constraint",
     "load",
@@ -1795,6 +1871,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "const": "static"
     },
     {
+      "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
+      "type": "string",
+      "const": "static-nonlinear"
+    },
+    {
       "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
       "type": "string",
       "const": "modal"
@@ -1828,6 +1909,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A acceleration with unit, e.g. \"9.81 m/s^2\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "acceleration"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_area</summary>
+
+```json
+{
+  "description": "A area with unit, e.g. \"2000 mm^2\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "area"
 }
 ```
 
@@ -1932,6 +2026,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "length"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_second_moment</summary>
+
+```json
+{
+  "description": "A second moment with unit, e.g. \"1.7e6 mm^4\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "second_moment"
 }
 ```
 
@@ -2305,6 +2412,199 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "kind",
         "name"
+      ]
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>SectionSpec</summary>
+
+```json
+{
+  "description": "A cross-section for line members (trusses and frames). The library turns the shape into the\narea, the two second moments, the St Venant torsion constant, the shear correction factors\nand the extreme-fibre distances a line element integrates with.\n\nLocal axes: `y` is the section's width direction and `z` its height, both through the\ncentroid. `iY` bends about local y (deflection along z, the strong axis of an I-section) and\n`iZ` about local z. The shear centre and warping torsion are not modelled, so an open\nsection (`i`, `channel`) gets the thin-strip torsion constant only, which under-predicts the\ntorsional stiffness of a channel and ignores the twist a load through the centroid causes.\n`kY`/`kZ` are the classical Timoshenko-Reissner shear factors (5/6 for a rectangle, 0.9 for\na circle, 0.5 for a thin tube, area ratios for the I and the channel), not Cowper's\nnu-dependent values, which at nu = 0.3 are 0.850 and 0.886.",
+  "oneOf": [
+    {
+      "description": "Solid rectangle, `width` along local y and `height` along local z.",
+      "type": "object",
+      "properties": {
+        "width": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "height": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "rectangle"
+        }
+      },
+      "required": [
+        "kind",
+        "width",
+        "height"
+      ]
+    },
+    {
+      "description": "Solid circle.",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "circle"
+        }
+      },
+      "required": [
+        "kind",
+        "radius"
+      ]
+    },
+    {
+      "description": "Circular tube of outer `radius` and wall `thickness` (which must be below the radius).",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "tube"
+        }
+      },
+      "required": [
+        "kind",
+        "radius",
+        "thickness"
+      ]
+    },
+    {
+      "description": "Doubly symmetric I-section: total `height` along local z, flange `width` along local y,\na web of `webThickness` and two flanges of `flangeThickness`.",
+      "type": "object",
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "width": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "webThickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "flangeThickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "i"
+        }
+      },
+      "required": [
+        "kind",
+        "height",
+        "width",
+        "webThickness",
+        "flangeThickness"
+      ]
+    },
+    {
+      "description": "Channel: a web of `height` and `webThickness` at local y = 0 with two flanges of\n`width` and `flangeThickness` reaching out along +y. Its centroid is offset from the\nweb, which the properties account for; its shear centre is not modelled.",
+      "type": "object",
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "width": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "webThickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "flangeThickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "channel"
+        }
+      },
+      "required": [
+        "kind",
+        "height",
+        "width",
+        "webThickness",
+        "flangeThickness"
+      ]
+    },
+    {
+      "description": "The properties given directly, which is how a published benchmark section is entered.\n`kY`/`kZ` default to 5/6; `cY`/`cZ` default to zero, and a section without them reports\nno bending stress rather than a wrong one.",
+      "type": "object",
+      "properties": {
+        "a": {
+          "$ref": "#/$defs/Q_area"
+        },
+        "iY": {
+          "$ref": "#/$defs/Q_second_moment"
+        },
+        "iZ": {
+          "$ref": "#/$defs/Q_second_moment"
+        },
+        "j": {
+          "$ref": "#/$defs/Q_second_moment"
+        },
+        "kY": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "kZ": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "cY": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_length"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cZ": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_length"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "generic"
+        }
+      },
+      "required": [
+        "kind",
+        "a",
+        "iY",
+        "iZ",
+        "j"
       ]
     }
   ]
@@ -3534,6 +3834,59 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
+      "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "members": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "divisions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cmd": {
+          "type": "string",
+          "const": "geometry.addLine"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "points"
+      ]
+    },
+    {
       "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
       "type": "object",
       "properties": {
@@ -3832,6 +4185,68 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd": {
           "type": "string",
           "const": "material.remove"
+        }
+      },
+      "required": [
+        "cmd",
+        "name"
+      ]
+    },
+    {
+      "description": "Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,\nI, channel, or the properties given directly. A line member has no cross-section\ngeometry of its own, so the Section is where its area, second moments, torsion constant,\nshear factors and extreme-fibre distances come from. Re-issuing with an existing name\nedits the section in place. Assign it to Bodies with section.assign.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "shape": {
+          "$ref": "#/$defs/SectionSpec"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "section.add"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "shape"
+      ]
+    },
+    {
+      "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry.",
+      "type": "object",
+      "properties": {
+        "section": {
+          "type": "string"
+        },
+        "bodies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cmd": {
+          "type": "string",
+          "const": "section.assign"
+        }
+      },
+      "required": [
+        "cmd",
+        "section",
+        "bodies"
+      ]
+    },
+    {
+      "description": "Remove a Section that is not assigned to any Body. Fails with in-use listing the Bodies\nthat still use it; assign them another Section first with section.assign.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "section.remove"
         }
       },
       "required": [
@@ -4348,7 +4763,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — today a radiation load — and are ignored by a Step that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
       "type": "object",
       "properties": {
         "name": {
@@ -4463,8 +4878,26 @@ Expand a definition to inspect its complete schema. Definition names are local t
             }
           ]
         },
+        "increments": {
+          "description": "Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "maxCutbacks": {
+          "description": "Halvings a static-nonlinear Step may use when an increment does not converge\n(default 5, at most 20). After the last one the Step fails with `newton.diverged`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
         "nonlinearTolerance": {
-          "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.",
+          "description": "Convergence tolerance for a Step that must iterate, relative in both cases: the\nsup-norm change of the solution between two passes for a radiating heat Step\n(default 1e-6), and the residual force and the displacement correction of one Newton\nincrement for static-nonlinear (default 1e-8). It is never the *linear* solver's\ntolerance, which is `solve.run`'s.",
           "type": [
             "number",
             "null"
@@ -4472,7 +4905,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
           "format": "double"
         },
         "nonlinearMaxIterations": {
-          "description": "Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.\nDefault 50.",
+          "description": "Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a\nheat Step (default 50); for static-nonlinear it is what makes an increment cut back\nand try again at half the load (default 20, and full Newton reaches 1e-8 in four or\nfive iterations from a good starting point).",
           "type": [
             "integer",
             "null"
@@ -5490,6 +5923,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "enum": [
     "body",
     "material",
+    "section",
     "set",
     "constraint",
     "load",
@@ -5753,6 +6187,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "const": "static"
     },
     {
+      "description": "Static equilibrium with geometric nonlinearity: large displacement and large rotation,\nsolved by Newton–Raphson over `increments` load increments. The strain measure is\nGreen–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so\nthe linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**\nstress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.\nSolid and plane-strain idealisations only. Incompatible modes are switched off, so\nhex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not\nfollow the deformation (a pressure keeps its reference direction and area) and a\ntemperature field is applied in full rather than ramped with the load factor.",
+      "type": "string",
+      "const": "static-nonlinear"
+    },
+    {
       "description": "Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.",
       "type": "string",
       "const": "modal"
@@ -5786,6 +6225,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A acceleration with unit, e.g. \"9.81 m/s^2\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "acceleration"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_area</summary>
+
+```json
+{
+  "description": "A area with unit, e.g. \"2000 mm^2\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "area"
 }
 ```
 
@@ -5890,6 +6342,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A length with unit, e.g. \"100 mm\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "length"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_second_moment</summary>
+
+```json
+{
+  "description": "A second moment with unit, e.g. \"1.7e6 mm^4\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "second_moment"
 }
 ```
 
@@ -6322,6 +6787,199 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "The Journal as JSON and as the script that replays it.",
       "type": "string",
       "const": "journal"
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>SectionSpec</summary>
+
+```json
+{
+  "description": "A cross-section for line members (trusses and frames). The library turns the shape into the\narea, the two second moments, the St Venant torsion constant, the shear correction factors\nand the extreme-fibre distances a line element integrates with.\n\nLocal axes: `y` is the section's width direction and `z` its height, both through the\ncentroid. `iY` bends about local y (deflection along z, the strong axis of an I-section) and\n`iZ` about local z. The shear centre and warping torsion are not modelled, so an open\nsection (`i`, `channel`) gets the thin-strip torsion constant only, which under-predicts the\ntorsional stiffness of a channel and ignores the twist a load through the centroid causes.\n`kY`/`kZ` are the classical Timoshenko-Reissner shear factors (5/6 for a rectangle, 0.9 for\na circle, 0.5 for a thin tube, area ratios for the I and the channel), not Cowper's\nnu-dependent values, which at nu = 0.3 are 0.850 and 0.886.",
+  "oneOf": [
+    {
+      "description": "Solid rectangle, `width` along local y and `height` along local z.",
+      "type": "object",
+      "properties": {
+        "width": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "height": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "rectangle"
+        }
+      },
+      "required": [
+        "kind",
+        "width",
+        "height"
+      ]
+    },
+    {
+      "description": "Solid circle.",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "circle"
+        }
+      },
+      "required": [
+        "kind",
+        "radius"
+      ]
+    },
+    {
+      "description": "Circular tube of outer `radius` and wall `thickness` (which must be below the radius).",
+      "type": "object",
+      "properties": {
+        "radius": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "thickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "tube"
+        }
+      },
+      "required": [
+        "kind",
+        "radius",
+        "thickness"
+      ]
+    },
+    {
+      "description": "Doubly symmetric I-section: total `height` along local z, flange `width` along local y,\na web of `webThickness` and two flanges of `flangeThickness`.",
+      "type": "object",
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "width": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "webThickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "flangeThickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "i"
+        }
+      },
+      "required": [
+        "kind",
+        "height",
+        "width",
+        "webThickness",
+        "flangeThickness"
+      ]
+    },
+    {
+      "description": "Channel: a web of `height` and `webThickness` at local y = 0 with two flanges of\n`width` and `flangeThickness` reaching out along +y. Its centroid is offset from the\nweb, which the properties account for; its shear centre is not modelled.",
+      "type": "object",
+      "properties": {
+        "height": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "width": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "webThickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "flangeThickness": {
+          "$ref": "#/$defs/Q_length"
+        },
+        "kind": {
+          "type": "string",
+          "const": "channel"
+        }
+      },
+      "required": [
+        "kind",
+        "height",
+        "width",
+        "webThickness",
+        "flangeThickness"
+      ]
+    },
+    {
+      "description": "The properties given directly, which is how a published benchmark section is entered.\n`kY`/`kZ` default to 5/6; `cY`/`cZ` default to zero, and a section without them reports\nno bending stress rather than a wrong one.",
+      "type": "object",
+      "properties": {
+        "a": {
+          "$ref": "#/$defs/Q_area"
+        },
+        "iY": {
+          "$ref": "#/$defs/Q_second_moment"
+        },
+        "iZ": {
+          "$ref": "#/$defs/Q_second_moment"
+        },
+        "j": {
+          "$ref": "#/$defs/Q_second_moment"
+        },
+        "kY": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "kZ": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "cY": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_length"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cZ": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_length"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "const": "generic"
+        }
+      },
+      "required": [
+        "kind",
+        "a",
+        "iY",
+        "iZ",
+        "j"
+      ]
     }
   ]
 }
