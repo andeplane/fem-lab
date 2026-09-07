@@ -339,7 +339,7 @@ textarea:focus {
 
 /* Keep the complete desktop action set in the 46 px row. These tighter values preserve the
    text labels while giving the flexible model and command fields the remaining room.
-   Linux needs 1616 px at the wide settings; keep this allocation until 1700 px. */
+   Keep the wide settings above 1700 px so Compare fits beside the document actions. */
 @media (min-width: 1180px) and (max-width: 1699px) {
   .topbar {
     gap: 4px;
@@ -374,10 +374,10 @@ textarea:focus {
 }
 
 /* Linux fallback fonts need more room than macOS at 1200 px. Keep the tight allocation
-   through 1299 px so the next breakpoint has space for every fixed-width action. */
-@media (min-width: 1180px) and (max-width: 1299px) {
+   through 1399 px so Compare and the other fixed-width actions fit before it gives way. */
+@media (min-width: 1180px) and (max-width: 1399px) {
   .topbar {
-    gap: 3px;
+    gap: 2px;
     padding-inline: 6px;
   }
   /* Two more actions than #137 measured (Projects, Save). The engine chip gives up their width
@@ -389,7 +389,7 @@ textarea:focus {
     max-width: 76px;
   }
   .topbar > .chip {
-    max-width: 90px;
+    max-width: 60px;
   }
   .palette-field {
     min-width: 80px;
@@ -2387,7 +2387,7 @@ input.model-name:focus {
 @media (min-width: 1180px) and (max-width: 1699px) {
   .model-title { flex-basis: 140px; max-width: 140px; }
 }
-@media (min-width: 1180px) and (max-width: 1299px) {
+@media (min-width: 1180px) and (max-width: 1399px) {
   .model-title { flex-basis: 96px; max-width: 96px; }
 }
 .palette-intent { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-divider); }
