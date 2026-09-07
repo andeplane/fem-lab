@@ -111,7 +111,7 @@ landing pages render. Cornell SimCafe lives under the Confluence space key `SIMU
 | 49 | [In-Plane and Space Truss](https://www.comsol.com/model/in-plane-truss-8526) | Truss elements (axial force only), linear static, 2D and 3D | **cannot** — no truss elements |
 | 50 | [Pratt Truss Bridge](https://www.comsol.com/model/pratt-truss-bridge-8511) | 3D beam elements for the members, shell deck, linear static, distributed load | **cannot** — no beam elements, no shells |
 | 51 | [Necking of an Elastoplastic Metal Bar](https://www.comsol.com/model/necking-of-an-elastoplastic-metal-bar-12607) | Large-strain plasticity with nonlinear isotropic hardening, axisymmetric bar, tension to necking | **cannot** — no plasticity, no geometric nonlinearity |
-| 52 | [Pressurized Orthotropic Container](https://www.comsol.com/model/pressurized-orthotropic-container-12669) | Thin-walled vessel, internal pressure, Hill orthotropic plasticity | **cannot** — no orthotropic material, no plasticity |
+| 52 | [Pressurized Orthotropic Container](https://www.comsol.com/model/pressurized-orthotropic-container-12669) | Thin-walled vessel, internal pressure, Hill orthotropic plasticity | **partly** — orthotropic elasticity shipped with #68; still needs Hill plasticity (#60) |
 | 53 | [Steady-State 2D Axisymmetric Heat Transfer with Conduction](https://www.comsol.com/model/steady-state-2d-axisymmetric-heat-transfer-with-conduction-453) | Pure steady conduction, axisymmetric, NAFEMS thermal benchmark | **can do** — `axisymmetric` + `mesh.set{mapped}` + `constraint.temperature` + `step.add{heat-steady}` |
 
 ### NAFEMS benchmark collections
@@ -304,10 +304,16 @@ consumer-product engineers actually simulate.
 
 **12. Composites, orthotropic and layered materials — 4 tutorials.**
 Tutorials 34, 47, 52, 56.
-Scope: PLAN 8.5 (orthotropic elasticity with an orientation) plus, for laminates, a layered
-section on top of #4. Two separable issues: an orthotropic *solid* material with an orientation
-is self-contained and useful alone (wood, rolled steel, 3D-printed parts); layered-shell
-lamination theory needs shells first.
+The orthotropic *solid* half **shipped** with #68: `material.add` takes an `orthotropic` block of
+nine constants and an axis-and-angle `orientation`, with per-material-axis `alpha` and `k`, so
+wood, rolled steel, printed parts and a unidirectional lamina are analysable today (benchmarks
+A11–A15 and C10). Tutorial 52 additionally needs Hill orthotropic plasticity (#60).
+Laminates are **not** covered and were deliberately not faked: `mesh.rs::lattice_bodies` never
+welds coincident nodes between Bodies, so stacked plies as separate Bodies would be mechanically
+disconnected, and the mapped/swept mesher welds across blocks but gives them all one implicit
+Body, so per-ply materials are unreachable there. Filed as #347 (stacked solids need node welding
+or ties, #61); equivalent-single-layer and layerwise shell sections are deferred to #64, which
+reuses `orthotropic_d` and `voigt_rotation` unchanged in its section integral.
 
 **13. Temperature-dependent properties — 1 tutorial.**
 Tutorial 23.

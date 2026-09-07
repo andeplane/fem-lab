@@ -92,7 +92,7 @@ const GROUP_OF: Record<string, string> = {
 };
 
 type Valued = { value: number; unit: string } | undefined;
-const q = (v: Valued): string => (v ? `${Number(v.value.toPrecision(4))} ${v.unit}` : '');
+const q = (v: Valued | null | undefined): string => (v ? `${Number(v.value.toPrecision(4))} ${v.unit}` : '');
 
 export type DropEdge = 'before' | 'after';
 
@@ -203,7 +203,7 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
         glyph: '●',
         glyphClass: 'glyph mat',
         name: x.name,
-        summary: `E ${q(x.E)} · ν ${x.nu}${x.rho ? ` · ρ ${q(x.rho)}` : ''} · on ${x.assignedTo.join(', ') || 'nothing'}`,
+        summary: `${x.orthotropic ? `E1 ${q(x.orthotropic.E1)} · E2 ${q(x.orthotropic.E2)}` : `E ${q(x.E)} · ν ${x.nu}`}${x.orientation ? ` · axes ${Number(x.orientation.degrees.toPrecision(4))}°` : ''}${x.rho ? ` · ρ ${q(x.rho)}` : ''} · on ${x.assignedTo.join(', ') || 'nothing'}`,
         select: { bodies: x.assignedTo },
         remove: 'material.remove',
       })),

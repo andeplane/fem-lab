@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::units::{
-    Acceleration, Area, Conductivity, Density, Force, Frequency, HeatFlux, HeatSource, HeatTransfer, Length, Mass,
-    SecondMoment, SpecificHeat, Stress, Temperature, ThermalExpansion, Time, UnitSet, Velocity, Q,
+    Acceleration, Area, Conductivity, Density, Dimensionless, Force, Frequency, HeatFlux, HeatSource, HeatTransfer,
+    Length, Mass, SecondMoment, SpecificHeat, Stress, Temperature, ThermalExpansion, Time, UnitSet, Velocity, Q,
 };
 
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
@@ -78,6 +78,58 @@ impl Axis {
             Axis::Z => 2,
         }
     }
+}
+
+/// Orthotropic stiffness in the material axes: three Young's moduli, three shear moduli and the
+/// three *major* Poisson ratios, which follow `nu_ij / E_i = nu_ji / E_j`, so `nu12` is the
+/// contraction along axis 2 caused by a pull along axis 1. Axis 1 is the strong direction — the
+/// fibre, the grain, the rolling direction — and `orientation` says where it points. The nine
+/// numbers must leave the compliance positive definite: roughly `|nu12| < sqrt(E1/E2)` and the
+/// same for the other two pairs, and `material.add` says so if they do not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Orthotropic {
+    #[serde(rename = "E1")]
+    pub e1: Q<Stress>,
+    #[serde(rename = "E2")]
+    pub e2: Q<Stress>,
+    #[serde(rename = "E3")]
+    pub e3: Q<Stress>,
+    #[serde(rename = "G12")]
+    pub g12: Q<Stress>,
+    #[serde(rename = "G13")]
+    pub g13: Q<Stress>,
+    #[serde(rename = "G23")]
+    pub g23: Q<Stress>,
+    pub nu12: f64,
+    pub nu13: f64,
+    pub nu23: f64,
+    /// Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on
+    /// `material.add`, never both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<[Q<ThermalExpansion>; 3]>,
+    /// Conductivity along the three material axes. Give this *or* the isotropic `k` on
+    /// `material.add`, never both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k: Option<[Q<Conductivity>; 3]>,
+}
+
+/// Rotate the material axes by `angle` (e.g. `"30 deg"`) about `axis`, a global direction that
+/// is normalised for you and defaults to `[0, 0, 1]`. Material axis 1 is the one `E1`, `alpha`'s
+/// first component and `k`'s first component belong to, and a positive angle turns it towards
+/// the second axis. In a 2D idealisation — plane stress, plane strain or axisymmetric — the
+/// rotation axis must be the out-of-plane one, `[0, 0, 1]`, because any other rotation would
+/// couple the in-plane strains to the out-of-plane shears the idealisation does not carry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Orientation {
+    #[serde(default = "out_of_plane_axis")]
+    pub axis: [f64; 3],
+    pub angle: Q<Dimensionless>,
+}
+
+fn out_of_plane_axis() -> [f64; 3] {
+    [0.0, 0.0, 1.0]
 }
 
 /// Kinds of nameable objects in a Model.
@@ -1015,16 +1067,25 @@ pub enum Command {
     #[serde(rename = "geometry.addMass", rename_all = "camelCase")]
     GeometryAddMass { name: String, at: [Q<Length>; 3], mass: Q<Mass> },
 
-    /// Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio
-    /// `nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for
-    /// thermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came
-    /// from. Re-issuing with an existing name edits the material in place.
+    /// Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's
+    /// ratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one
+    /// of the two. `orientation` turns the material axes (wood grain, fibre direction, rolling
+    /// direction) away from the global axes; without it they are the global axes. Density `rho`
+    /// is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
+    /// heat transfer; `source` records where the numbers came from. Re-issuing with an existing
+    /// name edits the material in place, so an omitted `orientation` clears the previous one.
     #[serde(rename = "material.add", rename_all = "camelCase")]
     MaterialAdd {
         name: String,
-        #[serde(rename = "E")]
-        e: Q<Stress>,
-        nu: f64,
+        #[serde(rename = "E", default, skip_serializing_if = "Option::is_none")]
+        e: Option<Q<Stress>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nu: Option<f64>,
+        // Boxed: the nine quantities are much larger than any other Command's payload.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        orthotropic: Option<Box<Orthotropic>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        orientation: Option<Orientation>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rho: Option<Q<Density>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
