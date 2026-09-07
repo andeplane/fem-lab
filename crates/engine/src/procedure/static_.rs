@@ -18,7 +18,7 @@ use crate::fem::{assembly, checks, loads, mpc};
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, stress, FieldData, Per};
 use crate::procedure::{report, retained_frame_count, time_grid, vector_field, Amplitude, History, StepResult};
-use crate::solve::{solve, SolveOptions};
+use crate::solve::{solve, solve_reusable, SolveOptions};
 
 /// The retained frames of an amplituded Step, from the two solved parts of `u(t) = u_th + g·u_L`.
 ///
@@ -41,6 +41,65 @@ fn ramp(u: &[f64], u_th: &[f64], amp: &Amplitude, steps: usize, dt: f64, t_end: 
         }
     }
     history
+}
+
+/// Everything the static solve produced and a caller that wants more than a Result needs: the
+/// operator, the reduced system it was solved against, and the displacement.
+///
+/// Linear buckling is that caller. It reuses all of this rather than assembling and factorising
+/// a second time, and reduces its geometric stiffness against the very same `pat`, `rc` and
+/// `mpc`, so both operators of the eigenproblem carry identical row numbering.
+pub(crate) struct Statics {
+    pub pat: assembly::Pattern,
+    pub a: assembly::Assembled,
+    pub applied: loads::LoadTotals,
+    /// The load vector the reactions are measured against; an amplitude scales it in [`post`].
+    pub f: Vec<f64>,
+    pub rc: assembly::ResolvedConstraints,
+    pub mpc: mpc::Mpc,
+    pub red: assembly::Reduced,
+    pub u: Vec<f64>,
+    pub solver: crate::solve::SolveInfo,
+    /// The factorisation the direct path built, so a caller that needs many more right-hand
+    /// sides against `red.k_ff` pays for one. `None` when an iterative solver ran.
+    pub factored: Option<crate::solve::direct::Direct>,
+}
+
+/// Assemble, constrain, reduce and solve `K u = f` once.
+pub(crate) async fn statics(
+    p: &Problem<'_>,
+    opts: &SolveOptions,
+    pool: &Pool,
+    gpu: Option<&crate::gpu::Gpu>,
+    progress: &mut OnProgress<'_>,
+) -> Result<Statics, Error> {
+    // `solve.run` refuses with the first failing check; `query.model.warnings` lists them all.
+    if let Some(e) = checks::all(p).into_iter().next() {
+        return Err(e);
+    }
+    report(progress, "assemble", 0.1, "building the sparsity pattern")?;
+    let dpn = p.dofs_per_node();
+    let pat = assembly::pattern(p.mesh, dpn);
+    // One `?`: the loads and the stiffness fail on the same materials and the same Sets, both
+    // of which `checks::all` has already looked at, so a second one would be an arm no test
+    // could take.
+    let (a, applied, f) = pool.install(|| {
+        assembly::assemble_stiffness(p, &pat).and_then(|a| {
+            let mut f = a.f_thermal.clone();
+            loads::assemble_loads(p, &mut f).map(|applied| (a, applied, f))
+        })
+    })?;
+    // `checks::all` has already resolved these and paired every contact.
+    let rc = assembly::resolve(p).expect("the checks resolved the constraints");
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    // `TᵀKT v = Tᵀf` with the slaves dropped from the free set; the GPU never sees this step,
+    // because what reaches a solver is still a plain reduced `k_ff` (plan B §1).
+    let (kt, ft) = pool.install(|| mpc::transform(&a.k, &f, &mpc));
+    let red = assembly::reduce(&kt, &ft, &rc, &mpc.slaves);
+    let (u_f, solver, factored) = solve_reusable(&red.k_ff, &red.f_f, opts, pool, gpu, progress).await?;
+    let mut u = assembly::expand(&red, &u_f);
+    mpc::recover(&mpc, &mut u);
+    Ok(Statics { pat, a, applied, f, rc, mpc, red, u, solver, factored })
 }
 
 /// The stress, strain, von Mises and principal fields recovered from a displacement `u`, for
@@ -74,32 +133,32 @@ pub async fn run(
     gpu: Option<&crate::gpu::Gpu>,
     mut progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
-    // `solve.run` refuses with the first failing check; `query.model.warnings` lists them all.
-    if let Some(e) = checks::all(p).into_iter().next() {
-        return Err(e);
-    }
-    report(&mut progress, "assemble", 0.1, "building the sparsity pattern")?;
+    let s = statics(p, opts, pool, gpu, &mut progress).await?;
+    post(p, s, opts, dt, t_end, amplitude, output_every, pool, gpu, progress).await
+}
+
+/// The amplitude schedule, the reactions and the recovered fields of a solved static state.
+///
+/// A buckling Step reports the same static Result, so this is shared rather than copied: what
+/// the two procedures disagree about is only what they add on top.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn post(
+    p: &Problem<'_>,
+    s: Statics,
+    opts: &SolveOptions,
+    dt: f64,
+    t_end: f64,
+    amplitude: Option<&Amplitude>,
+    output_every: usize,
+    pool: &Pool,
+    gpu: Option<&crate::gpu::Gpu>,
+    mut progress: OnProgress<'_>,
+) -> Result<StepResult, Error> {
+    let Statics { pat: _, a, applied, mut f, rc, mpc, red, mut u, mut solver, factored } = s;
+    // A supernodal factor is the largest thing a solve allocates, and nothing below reads it.
+    // Release it before the recovery buffers are allocated rather than at the end of the scope.
+    drop(factored);
     let dpn = p.dofs_per_node();
-    let pat = assembly::pattern(p.mesh, dpn);
-    // One `?`: the loads and the stiffness fail on the same materials and the same Sets, both
-    // of which `checks::all` has already looked at, so a second one would be an arm no test
-    // could take.
-    let (a, applied, mut f) = pool.install(|| {
-        assembly::assemble_stiffness(p, &pat).and_then(|a| {
-            let mut f = a.f_thermal.clone();
-            loads::assemble_loads(p, &mut f).map(|applied| (a, applied, f))
-        })
-    })?;
-    // `checks::all` has already resolved these and paired every contact.
-    let rc = assembly::resolve(p).expect("the checks resolved the constraints");
-    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
-    // `TᵀKT v = Tᵀf` with the slaves dropped from the free set; the GPU never sees this step,
-    // because what reaches a solver is still a plain reduced `k_ff` (plan B §1).
-    let (kt, ft) = pool.install(|| mpc::transform(&a.k, &f, &mpc));
-    let red = assembly::reduce(&kt, &ft, &rc, &mpc.slaves);
-    let (u_f, mut solver) = solve(&red.k_ff, &red.f_f, opts, pool, gpu, &mut progress).await?;
-    let mut u = assembly::expand(&red, &u_f);
-    mpc::recover(&mpc, &mut u);
     let mut scalars = BTreeMap::new();
     // Everything the amplitude scales: the applied totals, the load vector the reactions are
     // measured against, and `u_L`. One without an amplitude leaves all three exactly as they
@@ -161,6 +220,7 @@ pub async fn run(
         extremes: ex,
         reactions,
         frequencies: Vec::new(),
+        buckling_factors: Vec::new(),
         modes: Vec::new(),
         history,
         sweep: None,

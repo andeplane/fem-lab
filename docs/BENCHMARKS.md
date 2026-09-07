@@ -47,6 +47,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 |---|---|---|---|---|---|
 | amplitude-ramped-cantilever | green | 9/9 | -0.190407 | -0.191962 | 0.81 % |
 | axisymmetric-thermal-stress | green | 4/4 | 1 | 1 | 0.00 % |
+| buckling-plate-uniaxial-hex20 | green | 3/3 | 74.486975 | 75.92 | 1.89 % |
 | cantilever-hex20 | green | 6/6 | -0.190407 | -0.191962 | 0.81 % |
 | cantilever-hex8-full | green | 6/6 | -0.18378 | -0.18378 | 0.00 % |
 | cantilever-hex8-im | green | 6/6 | -0.190113 | -0.191962 | 0.96 % |
@@ -55,6 +56,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cook-membrane-plane-strain-quad8 | green | 3/3 | 21.50184 | 21.5262 | 0.11 % |
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
 | couple-distributed-cantilever | green | 6/6 | -0.190113 | -0.190113 | 0.00 % |
+| euler-column-fixed-free-hex20 | green | 4/4 | 17.399614 | 17.2718 | 0.74 % |
+| euler-column-pinned-quad8 | green | 3/3 | 68.798751 | 69.0872 | 0.42 % |
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | explicit-free-fall-thrown | green | 4/4 | 0.3 | 0.3 | 0.00 % |
 | explicit-sdof-step | green | 4/4 | 0.001002 | 0.001 | 0.20 % |
@@ -260,7 +263,9 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B2 | MacNeal–Harder straight cantilever, in-plane shear, regular / trapezoidal / parallelogram meshes | 0.1081 in (regular) | regular mesh 2 % at both orders; the two distorted meshes recorded, not gated | mesh-distortion sensitivity | green |
 | B3 | MacNeal–Harder twisted beam (90° twist, 12 elements) | 0.005424 in (in-plane), 0.001754 in (out-of-plane) — **verify against the paper** | 2 % | warped elements | |
 | B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (modes 2 and 3, Timoshenko drift) | mass matrix, eigen solver | engine test + green |
-| B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
+| B5 | Euler column buckling: pinned–pinned (quad8 plane stress), fixed–free and fixed–fixed (hex20) | P_cr = π²EI/(κL)², κ = 1, 2 and ½ | 1 % | linear buckling: K_σ from the static stress state | engine test + green |
+| B5b | Simply supported square plate, uniaxial compression, hex20 | σ_cr = kπ²D/(b²t) with k = 4 → 75.920 MPa | 3 % | plate buckling; the 2D form of the same K_σ | green |
+| B5c | Two-bar (von Mises) truss, apex load | λ = 2EAh³/(P L³), derived in the test | exact to 1e-6 | the truss form of the same K_σ | engine test |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | green as **K2** (end force). The end-moment half needs a moment load, which no Command applies; filed separately |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
 | B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
@@ -367,6 +372,80 @@ on a parallelogram, whose Jacobian is constant, and collapse on the trapezoid, w
 quadratic element has no such cliff but loses 10 % and 19 % to the distortion; refined to 4 × 4
 per block it recovers 0.10791, 0.10791 and 0.10428 — the last is not 0.1081 because MacNeal and
 Harder's parallelogram specimen *is* a parallelogram, whose own converged answer is 0.1061.
+
+### B5 and B5b: linear buckling (#58)
+
+Every buckling case uses E = 210 GPa, ν = 0.3 and a **1 MPa reference pressure** on the loaded
+face, so the reported load factor λ reads directly as the critical end stress in MPa and needs
+no area to interpret. λ multiplies the Step's Loads: `P_cr = λ · P_ref`.
+
+| Case | Model | Reference | Measured | Tolerance |
+|---|---|---|---|---|
+| `euler-column-pinned-quad8` | 20 × 1000 mm, 10 mm thick, quad8 plane stress, lower half by symmetry | π²EI/L² = 13817.45 N over P_ref = 200 N → **λ = 69.0872** | 68.7988 (0.42 % low) | 1 % |
+| `euler-column-fixed-free-hex20` | 20 × 20 × 1000 mm hex20, 16 elements long | π²EI/(4L²) = 6908.72 N over P_ref = 400 N → **λ = 17.2718** | 17.3996 twice (0.74 % high) | 1 % |
+| `buckling-plate-uniaxial-hex20` | 1000 × 1000 × 10 mm, one quarter by symmetry, 10 × 10 × 1 hex20 | 4π²D/(b²t) = 75.920 MPa → **λ = 75.920** | 74.4870 (1.89 % low) | 3 % |
+| fixed–fixed column (`a_fixed_fixed_column_buckles_at_four_times_the_euler_load`) | 20 × 20 × 1000 mm hex20 | 4π²EI/L² over the reaction the Result reports | engine test | 1 % |
+| convergence (`the_euler_load_factor_converges_as_the_column_is_refined`) | the fixed–free column at 4, 8 and 16 elements | the error falls monotonically from above and the finest is within 1 % | engine test | — |
+
+**Why plane stress for the pinned–pinned column.** A solid column pinned on a *line* is free to
+spin about its own axis: that is a rigid-body mode, and it would be the answer rather than the
+buckling mode. Plane stress has no such rotation, so the pinned case is the 2D one and the solid
+cases are the ones whose ends are clamped.
+
+**How a pin is modelled.** Holding a whole end face in its transverse components is a *pin*, not
+a clamp: rotating a section at constant `x` moves it along `x` alone, so the transverse hold does
+not resist the rotation. Holding it axially as well *is* a clamp. That distinction decides every
+one of these cases:
+
+- pinned–pinned is the lower half of the column, `ux = 0` on the `y = 0` edge (which holds the
+  section laterally and leaves it free to rotate) and `uy = 0` at mid-height, which is the
+  symmetry condition of the `sin(πy/L)` fundamental mode. Fixing `uy` on the end edge instead
+  would clamp that section and give the fixed–pinned load, 2.046 π²EI/L², not π²EI/L².
+- fixed–free is the plain cantilever: `xmin` clamped, 1 MPa on `xmax`.
+- fixed–fixed cannot be loaded by a pressure at all, because clamping the far end means holding
+  its axial component too and then no load reaches the column. It is driven by a prescribed axial
+  shortening, and its reference is compared against the reaction the Result reports rather than an
+  assumed `EAδ/L` — the clamped ends restrain Poisson contraction, so those two differ slightly.
+
+The pinned column lands *below* its closed form and the fixed–free one above: the two errors
+have different sources and the sizes say so. Both cases carry the same 0.10 % shear correction,
+which pulls the answer down; the fixed–free case is meshed 16 elements along its length and its
+discretisation error (up, always) is the larger of the two, while the pinned case at 40 elements
+along a half model has spent most of its discretisation error and the shear term shows through.
+The 20-node fixed–free pair agrees to ten digits, which is the degenerate-pair check.
+
+**The closed forms are slightly high.** Euler's formula neglects shear. At L/b = 50 the
+Timoshenko correction `P/(1 + P/κGA)` puts π²EI/L² about **0.10 %** above the exact critical
+load, so a converged model is expected to sit just below the reference rather than on it.
+
+**The plate coefficient.** `σ_cr = kπ²D/(b²t)` with `D = Et³/(12(1−ν²))` and
+`k = (mb/a + a/mb)²` (Timoshenko & Gere, *Theory of Elastic Stability*, 2nd ed., §9.2). A square
+plate takes `a = b` and `m = 1`, so `k = (1 + 1)² = 4` — the value is derived here rather than
+copied. `D = 19230.77 N·m` gives `σ_cr = 75.920 MPa`. The quarter model puts the two real plate
+edges at `xmin` and `ymin` (simply supported, `uz = 0`, in-plane free) and the two centrelines of
+the `sin(πx/a) sin(πy/b)` mode at `xmax` and `ymax` (`ux = 0` and `uy = 0` respectively). The
+unloaded edge stays free in-plane, so the pre-buckling state is uniaxial — `σ_yy = 0` — which is
+the state `k = 4` belongs to. The 3 % gate is what a single quadratic element through a 10 mm
+thickness earns.
+
+**The kernel's own oracle** (`the_geometric_stiffness_matches_its_closed_form_for_every_kind`)
+does not go through a procedure at all. For a uniform stress state and a linear displacement
+field `u_i = A_ij x_j`, both integrands of `½ uᵀ K_σ u` are constant, so the integral collapses to
+`½ V σ_ij (AᵀA)_ij` — a closed form sharing no line with the kernel, checked on an affine element
+of every one of the eight kinds and every idealisation that has a geometric stiffness. The same
+matrices assert that `K_σ` is symmetric, that a rigid translation lies in its null space, and
+that it scales linearly with the stress. `a_column_in_tension_reports_a_negative_load_factor`
+pins the sign convention: reversing the load reverses `K_σ` and the factor with it, to the last
+bit.
+
+**What linear buckling is not.** The factor is an upper bound. It ignores imperfections,
+pre-buckling rotation and yielding, every one of which lowers the real capacity — a real column
+carries less. It is not a safety factor, and `query.result` and the calculation note both say so.
+
+**The axisymmetric idealisation is refused**, with `unsupported` naming it: a ring's stress
+stiffening carries a hoop term `σ_θθ N_a N_b / r²` on the radial degree of freedom that the
+Cartesian gradient form does not contain, and integrating the Cartesian part alone would silently
+under-stiffen the ring.
 
 ## C. Two-dimensional and axisymmetric (phase 3)
 
