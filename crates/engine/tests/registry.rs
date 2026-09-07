@@ -4877,6 +4877,13 @@ fn the_tet_mesher_refuses_bad_settings_and_geometry_it_cannot_resolve() {
     let error = err(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"tet","size":"0.3 m","maxElements":0}}"#);
     assert_eq!(error.code, ErrorCode::Schema);
     assert!(error.cause.contains("maxElements"), "{}", error.cause);
+    assert_eq!(where_(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"tet","size":"1 kg"}}"#), "mesher.size");
+    // `size` is the one field the spec cannot do without, and its hand-written deserializer
+    // says so, and says what it wanted when handed something that is not a spec at all.
+    let missing = err(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"tet"}}"#);
+    assert!(missing.cause.contains("missing field `size`"), "{}", missing.cause);
+    let not_a_map = serde_json::from_str::<femlab_engine::command::TetSpec>("5").unwrap_err().to_string();
+    assert!(not_a_map.contains("a tet mesher spec with `size`"), "{not_a_map}");
     assert_eq!(e.model(), &before, "no schema error above touched the Model");
 
     // Everything past the settings needs the actual Solid, so it is refused only when the Mesh

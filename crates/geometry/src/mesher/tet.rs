@@ -418,12 +418,13 @@ impl<'a> Stuffing<'a> {
         }
         let tagger = Tagger::new(self.solid);
         let mut face_sets: BTreeMap<String, Vec<Face>> = BTreeMap::new();
-        for face in mesh.boundary_faces() {
+        // A boundary face the Solid has no face for (nothing within 45°) joins no auto Set.
+        let tagged = mesh.boundary_faces().into_iter().filter_map(|face| {
             let (centroid, normal) = face_centroid_normal(&mesh, face);
-            // A boundary face the Solid has no face for (nothing within 45°) joins no auto Set.
-            if let Some(tag) = tagger.nearest(centroid, normal) {
-                face_sets.entry(tag.to_string()).or_default().push(face);
-            }
+            tagger.nearest(centroid, normal).map(|tag| (tag.to_string(), face))
+        });
+        for (tag, face) in tagged {
+            face_sets.entry(tag).or_default().push(face);
         }
         for set in face_sets.values_mut() {
             set.sort_unstable();
@@ -557,4 +558,35 @@ fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 
 fn det3(u: [f64; 3], v: [f64; 3], w: [f64; 3]) -> f64 {
     u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0]) + u[2] * (v[0] * w[1] - v[1] * w[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shape::Shape;
+
+    #[test]
+    fn a_warped_quadrilateral_dedups_to_a_triangle_or_to_nothing() {
+        assert_eq!(dedup_cycle(&[1, 2, 3, 4]), [1, 2, 3, 4]);
+        assert_eq!(dedup_cycle(&[1, 1, 3, 4]), [1, 3, 4]);
+        assert_eq!(dedup_cycle(&[1, 1, 3, 3]), [1, 3]);
+        assert!(dedup_cycle(&[5, 5, 5, 5]).is_empty());
+        assert_eq!(triangulate(&[7, 8, 9]), [[7, 8, 9]]);
+        assert_eq!(triangulate(&[9, 2, 7, 5]), [[2, 7, 5], [2, 5, 9]]);
+        assert!(triangulate(&[1, 3]).is_empty());
+        assert!(triangulate(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_mid_edge_node_with_no_surface_in_reach_stays_put() {
+        let cube = Solid::evaluate(&Shape::Box { size: [1.0, 1.0, 1.0] }).unwrap();
+        // From the centre, a quarter of a 0.1 edge along +z reaches nowhere near the top face.
+        let x = [0.5, 0.5, 0.5];
+        assert_eq!(project(&cube, x, [0.0, 0.0, 1.0], 0.1), x);
+        // With the whole edge in reach the node lands on the face, from inside and from outside.
+        let on = project(&cube, x, [0.0, 0.0, 1.0], 4.0);
+        assert!((on[2] - 1.0).abs() < 1e-9, "{on:?}");
+        let back = project(&cube, [0.5, 0.5, 1.2], [0.0, 0.0, 1.0], 4.0);
+        assert!((back[2] - 1.0).abs() < 1e-9, "{back:?}");
+    }
 }
