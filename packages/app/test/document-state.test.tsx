@@ -126,7 +126,7 @@ it('does not include an edit made while an opened example restores its Result', 
   await pending;
 
   expect(store.state.savedJournal).toBe(journalIdentity(opened));
-  expect(store.state.benchmark?.journalHash).toBe(completeJournalHash({ entries: opened, hash: 'opened' }));
+  expect(store.state.benchmark?.journalHash).toBe(completeJournalHash({ entries: opened, hash: 'opened', revision: 1, canUndo: true, canRedo: false }));
   expect(store.state.benchmark?.journalHash).not.toBe(completeJournalHash(store.state.journal));
   expect(unsaved(store.state)).toBe(true);
 });
