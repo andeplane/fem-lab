@@ -97,6 +97,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 | tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
+| tie-nonmatching-patch-refined | green | 9/9 | 16 | 16 | 0.00 % |
+| tie-nonmatching-patch | green | 9/9 | 4 | 4 | 0.00 % |
 | tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
 | tip-mass-cantilever-modal | green | 4/4 | 2.609294 | 2.601925 | 0.28 % |
 | truss-axial-patch | green | 8/8 | 1 | 1 | 0.00 % |
@@ -645,9 +647,10 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F3b | Benchmark B4's cantilever under a step tip load, α = 0 and −0.05 | first-mode period from B4's 41.91 Hz; peak tip deflection twice B1's static value; E − fᵀu conserved at α = 0 | 3 % period, 5 % peak; HHT within 1 % of the Newmark period, dissipating ≥ 15 % of the residual mesh-mode energy | multi-DOF Newmark/HHT, numerical damping of the high modes | green + engine test |
 | F3c | Fixed–free bar suddenly loaded at its end, ν = 0, three (mesh, Δt) refinements | u_tip(t) = (PL/EA)[1 − (8/π²)Σ_{n odd} n⁻² cos(nπct/2L)], c = √(E/ρ), an independent Fourier series; plus the observed Δt convergence rate on one mesh against a 64× finer reference | 2 % at every refinement, errors decreasing; rate > 1.9 | wave propagation through the consistent mass, second order in time | green + engine test |
 | F4 | Two-block tie / bonded contact patch test, matched meshes | uniform tension: σ constant across the tie, u exactly the linear field, Σ reactions = applied | 1e-8 | bonded contact between Bodies (#61) | green |
-| F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
+| F4b | The same patch test with master/slave sizes 500/250 mm and 250/125 mm | as F4, including node-to-face projections with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | green + engine test |
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
 | F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+| F4e | `contact.thermal` on a bonded pair: two conductors in series with a finite interface resistance | `q = ΔT / (L1/k1 + 1/hc + L2/k2)`, interface jump `q/hc` | 1e-9 rel | thermal contact resistance (#85) | green |
 | F5 | The integrator's own period error, predicted exactly: SDOF free vibration over 100 cycles at ωΔt = 0.25, 0.5, 1 | period = `2π / ((2/Δt) asin(ωΔt/2))` at each step; the coefficient of `(ωΔt)²` in ΔT/T fitted from the three is **−1/24** (central differences *shorten* the period; the trapezoidal rule lengthens it by 1/12) | 1e-4 on each period, 1 % on the coefficient | a start-up kick of the wrong half-step, a lagging velocity update or a wrongly scaled mass all keep a clean sinusoid and fail this | engine test |
 | F6 | Discrete energy `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`, SDOF at ωΔt = 1 for 100 cycles and the F2 cantilever with a random initial velocity for 500 steps | exactly constant: `½ m v₀²` for the SDOF, its own initial value for the beam | 1e-12 (SDOF), 1e-10 (beam) relative wander | central differences conserve a modified energy exactly for linear systems; the `½vᵀMv + ½uᵀKu` monitor only bounds it | engine test |
 | F7 | The stability boundary is sharp: SDOF at ωΔt = 1.96 and 2.04 for 1000 steps | below: bounded, sampled amplitude = `v₀ / (ω √(1 − (ωΔt/2)²))`; above: `explicit.unstable` | 1 % on the amplitude, the error code above | the boundary is at 2, not merely somewhere near it | engine test |
@@ -674,16 +677,16 @@ and F4c gate at roundoff rather than at an engineering tolerance. F4c's referenc
 `cantilever-hex8-im` measures on the single Body beside it, not a published number: it is an
 equivalence, and the published Timoshenko value is the one that case is gated against.
 
-**F4b is an engine test, not an installed case, because the Command API cannot yet build it.**
-`mesh.set` takes one element size for the whole Model, and the lattice mesher divides each Body's
-bounding box by it, so two prismatic Bodies that share a face are always meshed compatibly
-across it: a non-conforming interface cannot be expressed from a Journal today. The engine test
-(`crates/engine/tests/fem.rs`) builds one directly, with the slave block meshed at half the
-master's size, and runs the same three assertions. It is deliberately a *nested* refinement:
-node-to-face ties reproduce a constant stress state exactly when the fine grid's cell edges
-include the coarse grid's, and only approximately when they do not — which is what mortar
-methods exist for and what no tutorial in TUTORIAL-COVERAGE needs. Per-Body mesh sizes would
-make F4b an installed case: #359.
+F4b is installed as `tie-nonmatching-patch` and `tie-nonmatching-patch-refined`.
+The public Command `mesh.set` uses `mesher: { kind: "lattice", size: "500 mm",
+sizes: { b: "250 mm" } }` to give the slave Body half the master's element size;
+the refined case halves both sizes. The cases gate the unequal interface face counts,
+the analytical displacement and stress, and global reaction balance. Registry tests
+also check constant stress at every node. The refinement is deliberately *nested*:
+node-to-face ties reproduce a constant stress state exactly when the fine grid's cell
+edges include the coarse grid's, and only approximately when they do not — which is
+what mortar methods exist for. The original direct engine patch test remains as an
+independent check of the coupling itself.
 
 F4d covers a trap the elimination hides. The solved system enforces equilibrium of the retained
 combination, `Tᵀ(Ku − f) = 0`, so at a DOF that is both held by a Constraint and a master of a
@@ -692,6 +695,17 @@ adds the tie term back (`mpc::master_forces`), which is what makes both the per-
 reaction and the global `balance` right when a tie reaches a support. Without it the global sum
 is wrong too, so F4's `balance` check alone would not have caught it — F4d compares the
 per-constraint reactions of a tied assembly against the single Body it stands for.
+
+F4e (#85) is a different Coupling role from F4-F4d: `contact.thermal` names the same bonded
+contact and replaces its perfect thermal tie with a finite conductance `h_c`, assembled into the
+heat operator exactly as `load.convection` is rather than eliminated by `mpc::transform`.
+`mpc::build` skips the tie rows of a contact a `contact.thermal` names — the tie and the
+resistance are never both applied — and the mechanical tie of the same Coupling is untouched, so
+a Model can bond two parts structurally while giving them a Biot-number interface thermally. Two
+Bodies of different conductivity, joined by `contact.add` and overridden by `contact.thermal`,
+reproduce `q = ΔT / (L1/k1 + 1/hc + L2/k2)` to roundoff at every node on both sides, with the
+temperature dropping by exactly `q/hc` at the interface — an oracle from series thermal
+resistance, not a comparison against the engine's own perfect-tie or convection paths.
 
 F12 and F13 are the point mass and the coupling of #67. A `distributed` coupling weights its face
 by the lumped areas `a_i = ∫ N_i dS` the heat kernel's face integral already produces, and
