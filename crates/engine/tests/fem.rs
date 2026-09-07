@@ -5184,6 +5184,381 @@ fn the_critical_time_step_separates_a_ringing_beam_from_a_diverging_one() {
     assert!(e.cause.contains("diverged at step"), "{}", e.cause);
 }
 
+// ------------------------------------------------------ F5–F10: dynamics verification (#396)
+//
+// A time integrator with a sign error, an off-by-one in the start-up or a wrong mass scaling
+// still produces smooth, plausible curves. Every gate below is chosen to tell a right
+// integrator from a nearly-right one: each compares against a closed form derived in the
+// test, and the strongest compare the integrator's *own* error against what theory predicts.
+
+/// A rod-like Material: ν = 0, so the wave speed is exactly `√(E/ρ)` and a hex8 corner's
+/// diagonal stiffness is a closed form. Structural Steps never read `k` or `cp`.
+fn rod_material(e: f64, rho: f64) -> Material {
+    Material {
+        law: builtin_law("linear-elastic").expect("built in"),
+        props: vec![e, 0.0],
+        rho,
+        alpha: 0.0,
+        k: 45.0,
+        cp: 460.0,
+    }
+}
+
+const SDOF_E: f64 = 225e9;
+const SDOF_RHO: f64 = 8000.0;
+const SDOF_SIDE: f64 = 0.1;
+const SDOF_V0: f64 = 1.0;
+
+/// One hex8 cube with every DOF held except `ux` of the corner at `(a, a, a)`: a single
+/// degree of freedom whose stiffness and mass are closed forms. With ν = 0 the corner's
+/// diagonal stiffness is `∫ E (∂N/∂x)² + G (∂N/∂y)² + G (∂N/∂z)² dV = a (E + 2G)/9 = 2Ea/9`
+/// (the integrand is quadratic per direction, so 2×2×2 Gauss is exact) and its HRZ mass is
+/// `ρa³/8`, so `ω = (4/3) √(E/ρ) / a`. Both are asserted against the assembly once.
+struct Sdof {
+    mesh: Mesh,
+    sets: BTreeMap<String, ResolvedSet>,
+    bodies: Vec<String>,
+    dof: usize,
+    k: f64,
+    m: f64,
+    omega: f64,
+}
+
+fn sdof() -> Sdof {
+    let a = SDOF_SIDE;
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([a; 3]);
+    let sets = sets_of(&mesh);
+    let corner = node_at(&mesh, [a; 3]) as usize;
+    let (k, m) = (2.0 * SDOF_E * a / 9.0, SDOF_RHO * a * a * a / 8.0);
+    let s = Sdof { mesh, sets, bodies: one_body(), dof: corner * 3, k, m, omega: (k / m).sqrt() };
+    let p = sdof_problem(&s);
+    let (pat, a) = assemble(&p);
+    let lumped = femlab_engine::procedure::modal::assemble_mass(&p, &pat, true).expect("a lumped mass").diag();
+    assert!((a.k.diag()[s.dof] - k).abs() <= 1e-12 * k, "corner stiffness {} vs closed form {k}", a.k.diag()[s.dof]);
+    assert!((lumped[s.dof] - m).abs() <= 1e-12 * m, "corner mass {} vs closed form {m}", lumped[s.dof]);
+    s
+}
+
+fn sdof_problem(s: &Sdof) -> Problem<'_> {
+    let constraints = vec![
+        fix("x0", "xmin", [true; 3], 0.0),
+        fix("y0", "ymin", [true; 3], 0.0),
+        fix("z0", "zmin", [true; 3], 0.0),
+        fix("axial", "xmax", [false, true, true], 0.0),
+    ];
+    let mut p = problem(&s.mesh, &s.sets, &s.bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+    p.materials = vec![rod_material(SDOF_E, SDOF_RHO)];
+    p
+}
+
+/// Integrate the oscillator from `u = 0, v = V0` until `t_end` at `ωΔt` as close to `x` as the
+/// endpoint allows, every step retained. Returns the step actually taken, the times and the
+/// free DOF's history.
+fn sdof_run(s: &Sdof, x: f64, t_end: f64) -> Result<(f64, Vec<f64>, Vec<f64>), Error> {
+    let p = sdof_problem(s);
+    let dt_factor = x / s.omega / critical_step(&p);
+    let mut v0 = vec![0.0; s.mesh.n_nodes() * 3];
+    v0[s.dof] = SDOF_V0;
+    let step = Step::Explicit { t_end, dt_factor, initial_velocity: Some(v0), output_every: 1 };
+    let res = run_step(&p, &step)?;
+    let h = res.history.expect("every step is retained");
+    let u = h.values.iter().map(|frame| frame[s.dof]).collect();
+    Ok((res.scalars["dt"], h.times, u))
+}
+
+/// The mean period between the upward zero crossings of a sampled oscillation, each crossing
+/// placed by linear interpolation. A sinusoid has no curvature at its zeros, so the placement
+/// error is third order in the sample spacing — `(ωΔt)²Δt/16` per crossing — and is amortised
+/// over every cycle in the record: below 1e-4 of the period at `ωΔt = 1` over a hundred cycles.
+fn zero_crossing_period(times: &[f64], u: &[f64]) -> f64 {
+    let crossings: Vec<f64> = (1..u.len())
+        .filter(|&i| u[i - 1] < 0.0 && u[i] >= 0.0)
+        .map(|i| times[i - 1] + (times[i] - times[i - 1]) * u[i - 1] / (u[i - 1] - u[i]))
+        .collect();
+    assert!(crossings.len() >= 2, "not enough cycles: {} crossings", crossings.len());
+    (crossings[crossings.len() - 1] - crossings[0]) / (crossings.len() - 1) as f64
+}
+
+/// The least-squares line through `(x, y)`: `(slope, intercept)`.
+fn line_fit(x: &[f64], y: &[f64]) -> (f64, f64) {
+    let n = x.len() as f64;
+    let (mx, my) = (x.iter().sum::<f64>() / n, y.iter().sum::<f64>() / n);
+    let sxy: f64 = x.iter().zip(y).map(|(a, b)| (a - mx) * (b - my)).sum();
+    let sxx: f64 = x.iter().map(|a| (a - mx).powi(2)).sum();
+    let slope = sxy / sxx;
+    (slope, my - slope * mx)
+}
+
+/// Benchmark F5: the integrator's own period error, predicted exactly. Central differences on
+/// `ü = −ω²u` obey `sin(ω̃Δt/2) = ωΔt/2`, so the period is *shorter* than `2π/ω` by
+/// `(ωΔt)²/24` to leading order (the trapezoidal rule lengthens it by twice that). The period
+/// measured over a hundred cycles must match the dispersion relation at each of three steps,
+/// and the coefficient fitted from the three must be −1/24. A start-up kick of the wrong
+/// half-step, a velocity update lagging one step, or a mass off by a factor all keep a clean
+/// sinusoid and fail here.
+#[test]
+fn central_differences_shorten_the_period_by_omega_dt_squared_over_24() {
+    let s = sdof();
+    let cycles = 100.0 * 2.0 * PI / s.omega;
+    let (mut xx, mut yy) = (Vec::new(), Vec::new());
+    for x in [0.25, 0.5, 1.0] {
+        let (dt, times, u) = sdof_run(&s, x, cycles).expect("a stable oscillator");
+        let x = s.omega * dt;
+        let period = zero_crossing_period(&times, &u);
+        let dispersion = PI * dt / libm::asin(0.5 * x);
+        assert!((period - dispersion).abs() <= 1e-4 * dispersion, "ωΔt = {x}: T = {period}, theory {dispersion}");
+        xx.push(x * x);
+        yy.push((period * s.omega / (2.0 * PI) - 1.0) / (x * x));
+    }
+    // ΔT/T ÷ (ωΔt)² = c + d (ωΔt)² + …: the intercept of the fitted line is the coefficient.
+    let (_, c) = line_fit(&xx, &yy);
+    let want = -1.0 / 24.0;
+    assert!((c - want).abs() <= 0.01 * want.abs(), "ΔT/T = c (ωΔt)² with c = {c}; theory {want}");
+    println!("F5 period coefficient: measured {c:.6}, theory {want:.6}, ratio {}", c / want);
+}
+
+/// Benchmark F6: central differences conserve a discrete energy *exactly* for a linear
+/// system. `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}` is the same number at every step, to
+/// round-off (the integrator's own `½vᵀMv + ½uᵀKu` monitor oscillates by O(Δt²) and is only
+/// bounded, which is why it is not the gate). The oscillator starts at `½ m v₀²` and keeps
+/// exactly that for a hundred cycles at `ωΔt = 1`; the F2 cantilever with a random initial
+/// velocity keeps its own, computed from the retained frames and the assembled `K` and `M`.
+#[test]
+fn central_differences_conserve_the_discrete_energy_to_round_off() {
+    let s = sdof();
+    let (dt, _, u) = sdof_run(&s, 1.0, 100.0 * 2.0 * PI / s.omega).expect("stable at ωΔt = 1");
+    let q0 = 0.5 * s.m * SDOF_V0 * SDOF_V0;
+    let worst = u
+        .windows(2)
+        .map(|w| {
+            let v = (w[1] - w[0]) / dt;
+            (0.5 * s.m * v * v + 0.5 * s.k * w[0] * w[1] - q0).abs()
+        })
+        .fold(0.0, f64::max);
+    assert!(worst <= 1e-12 * q0, "the discrete energy wanders by {worst} of {q0}");
+
+    let mesh = cantilever_mesh([8, 2, 2], ElementKind::Hex8);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let root = vec![fix("root", "xmin", [true; 3], 0.0)];
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root);
+    let (pat, a) = assemble(&p);
+    let mass = femlab_engine::procedure::modal::assemble_mass(&p, &pat, true).expect("a lumped mass").diag();
+    let v0 = lcg_vec(mesh.n_nodes() * 3, 396);
+    let dt = 0.9 * critical_step(&p);
+    let step = Step::Explicit { t_end: 500.0 * dt, dt_factor: 0.9, initial_velocity: Some(v0), output_every: 1 };
+    let res = run_step(&p, &step).expect("a ringing beam");
+    let (dt, h) = (res.scalars["dt"], res.history.expect("frames"));
+    let mut ku = vec![0.0; a.k.n];
+    let q: Vec<f64> = h
+        .values
+        .windows(2)
+        .map(|w| {
+            a.k.spmv(&w[1], &mut ku);
+            let strain: f64 = w[0].iter().zip(&ku).map(|(u, ku)| 0.5 * u * ku).sum();
+            let kinetic: f64 =
+                mass.iter().zip(w[0].iter().zip(&w[1])).map(|(m, (u0, u1))| 0.5 * m * ((u1 - u0) / dt).powi(2)).sum();
+            strain + kinetic
+        })
+        .collect();
+    let (lo, hi) = q.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &e| (lo.min(e), hi.max(e)));
+    assert!(hi - lo <= 1e-10 * q[0], "the beam's discrete energy spans [{lo}, {hi}]");
+    println!("F6 discrete energy: SDOF wander {:.2e}, beam wander {:.2e}", worst / q0, (hi - lo) / q[0]);
+}
+
+/// Benchmark F7: the stability boundary is sharp at `ωΔt = 2`. Two per cent below it the
+/// oscillator is bounded and its sampled amplitude is the closed form
+/// `v₀ / (ω √(1 − (ωΔt/2)²))`, which is already five times the continuum amplitude; two per
+/// cent above it the integration diverges and the Step says `explicit.unstable`. F2 checks
+/// the estimator on a beam at 0.9 and 1.25; this checks the integrator against the number.
+#[test]
+fn the_stability_boundary_is_sharp_at_omega_dt_two() {
+    let s = sdof();
+    let steps = 1000.0;
+    let (dt, _, u) = sdof_run(&s, 1.96, steps * 1.96 / s.omega).expect("bounded below the boundary");
+    let x = s.omega * dt;
+    assert!(x > 1.95 && x < 2.0, "ωΔt = {x}");
+    let amplitude = SDOF_V0 / (s.omega * (1.0 - 0.25 * x * x).sqrt());
+    let peak = u.iter().fold(0.0, |m: f64, v| m.max(v.abs()));
+    assert!(peak <= amplitude * (1.0 + 1e-9), "sampled peak {peak} exceeds the closed form {amplitude}");
+    assert!(peak >= 0.99 * amplitude, "sampled peak {peak} never reaches the closed form {amplitude}");
+    let e = sdof_run(&s, 2.04, steps * 2.04 / s.omega).expect_err("diverges above the boundary");
+    assert_eq!(e.code, ErrorCode::ExplicitUnstable);
+    println!("F7 stability: ωΔt = {x} peak/closed-form = {}, ωΔt = 2.04 → {}", peak / amplitude, e.code);
+}
+
+/// Benchmark F8: second order in Δt. Against the exact `u = (v₀/ω) sin ωt` at `t = 5⅛ T`,
+/// where the phase error is what shows, halving the step from `ωΔt = 0.2` to `0.05` must
+/// quarter the error: the observed rate is gated above 1.9. A first-order start-up (a missing
+/// half-step kick) shows here as a rate near one.
+#[test]
+fn explicit_dynamics_converges_at_second_order_in_dt() {
+    let s = sdof();
+    let t_end = 5.125 * 2.0 * PI / s.omega;
+    let exact = SDOF_V0 / s.omega * libm::sin(s.omega * t_end);
+    let (mut dts, mut errs) = (Vec::new(), Vec::new());
+    for x in [0.2, 0.1, 0.05] {
+        let (dt, _, u) = sdof_run(&s, x, t_end).expect("a stable oscillator");
+        dts.push(dt);
+        errs.push((u[u.len() - 1] - exact).abs());
+    }
+    let rate = observed_rate(&dts, &errs);
+    assert!(rate >= 1.9, "observed rate {rate} from errors {errs:?}");
+    println!("F8 convergence in Δt: rate {rate:.4}, errors {errs:?}");
+}
+
+const ROD_E: f64 = 200e9;
+const ROD_RHO: f64 = 8000.0;
+
+/// A bar of `n` hex8 along x with ν = 0 and every lateral DOF held is exactly the 1-D rod
+/// `ρü = Eu''` with `c = √(E/ρ) = 5000 m/s`: uniform-over-the-section motion strains only
+/// `ε_xx`, and each section's four nodes carry a quarter of the rod's force and mass.
+fn rod_mesh(n: usize, length: f64) -> (Mesh, BTreeMap<String, ResolvedSet>) {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [n, 1, 1] }.box_([length, 0.05, 0.05]);
+    let sets = sets_of(&mesh);
+    (mesh, sets)
+}
+
+fn rod_problem<'a>(mesh: &'a Mesh, sets: &'a BTreeMap<String, ResolvedSet>, bodies: &'a [String]) -> Problem<'a> {
+    let held = vec![fix("root", "xmin", [true; 3], 0.0), fix("lateral", "all", [false, true, true], 0.0)];
+    let mut p = problem(mesh, sets, bodies, Idealisation::Solid3d, Formulation::Full, held);
+    p.materials = vec![rod_material(ROD_E, ROD_RHO)];
+    p
+}
+
+/// Benchmark F9: an elastic wave arrives when the theory says. A step traction `σ₀` on the
+/// free end of a fixed-free rod sends a front toward the root at `c = √(E/ρ)`; behind it the
+/// material moves at `σ₀/(ρc)`. At mid-length the front arrives at `L/2c` and the reflection
+/// from the root returns at `3L/2c`, so a line fitted to the ramp between them gives the
+/// arrival time (its zero) and the wave speed (its slope); both are gated on two meshes.
+/// Nothing may move before the front: lumped-mass central differences have no precursor.
+#[test]
+fn a_step_front_arrives_at_l_over_c_and_ramps_at_sigma_over_rho_c() {
+    let (length, sigma) = (1.0, 200e6);
+    let c = (ROD_E / ROD_RHO).sqrt();
+    let transit = length / c;
+    let particle = sigma / (ROD_RHO * c);
+    for n in [100usize, 200] {
+        let (mesh, sets) = rod_mesh(n, length);
+        let bodies = one_body();
+        let mut p = rod_problem(&mesh, &sets, &bodies);
+        p.loads = vec![Load::Traction { faces: "xmax".into(), t: [sigma, 0.0, 0.0] }];
+        let step = Step::Explicit { t_end: 1.5 * transit, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+        let h = run_step(&p, &step).expect("a bar rings").history.expect("frames");
+        let mid = node_at(&mesh, [0.5 * length, 0.0, 0.0]) as usize * 3;
+        let u: Vec<f64> = h.values.iter().map(|f| f[mid]).collect();
+        let (t, w): (Vec<f64>, Vec<f64>) =
+            h.times.iter().zip(&u).filter(|(t, _)| (0.75 * transit..=1.25 * transit).contains(*t)).unzip();
+        let (slope, intercept) = line_fit(&t, &w);
+        let arrival = -intercept / slope;
+        assert!(
+            (arrival - 0.5 * transit).abs() <= 0.005 * 0.5 * transit,
+            "n = {n}: arrival {arrival} vs {}",
+            0.5 * transit
+        );
+        assert!((slope - particle).abs() <= 0.005 * particle, "n = {n}: particle velocity {slope} vs {particle}");
+        let quiet =
+            h.times.iter().zip(&u).filter(|(t, _)| **t <= 0.4 * transit).fold(0.0, |m: f64, (_, u)| m.max(u.abs()));
+        assert!(quiet <= 1e-6 * particle * transit, "n = {n}: {quiet} m moved before the front");
+        println!(
+            "F9 wave n = {n}: arrival {:.5} L/c (theory 0.5), c from slope {:.2} m/s (theory {c}), precursor {quiet:.1e} m",
+            arrival / transit,
+            sigma / (ROD_RHO * slope)
+        );
+    }
+}
+
+/// Cross-solver: the modal frequencies equal the spectrum of a free-vibration history. The
+/// modal Step (consistent mass, shifted inverse iteration) and the explicit Step (lumped
+/// mass, central differences) discretise the rod differently, and the j-th fixed-free mode
+/// `sin kx`, `k = (2j−1)π/2L`, is an exact eigenvector of both chains: consistent
+/// `ω² = (6c²/h²)(1 − cos kh)/(2 + cos kh)`, lumped `ω = (2c/h) sin(kh/2)`, then shortened by
+/// the F5 dispersion. Each is gated against its own closed form and the two against each
+/// other to the gap those closed forms predict. A modal solver in rad/s, or an explicit
+/// integrator with its mass scaled wrongly, disagrees with the other by far more.
+#[test]
+fn modal_frequencies_equal_the_spectrum_of_an_explicit_free_vibration() {
+    let (n, length) = (20usize, 1.0);
+    let (mesh, sets) = rod_mesh(n, length);
+    let bodies = one_body();
+    let p = rod_problem(&mesh, &sets, &bodies);
+    let (c, h) = ((ROD_E / ROD_RHO).sqrt(), length / n as f64);
+    let modal = Step::Modal { n_modes: 3, shift: None, solver: SolveOptions::default() };
+    let modal = run_step(&p, &modal).expect("three rod modes");
+    let tip = node_at(&mesh, [length, 0.0, 0.0]) as usize * 3;
+    for j in 0..3 {
+        let k = (2 * j + 1) as f64 * PI / (2.0 * length);
+        let ck = libm::cos(k * h);
+        let w_consistent = c / h * (6.0 * (1.0 - ck) / (2.0 + ck)).sqrt();
+        let w_lumped = 2.0 * c / h * libm::sin(0.5 * k * h);
+        let w_modal = 2.0 * PI * modal.frequencies[j];
+        assert!((w_modal - w_consistent).abs() <= 1e-6 * w_consistent, "mode {j}: modal {w_modal} vs {w_consistent}");
+        let mut v0 = vec![0.0; mesh.n_nodes() * 3];
+        for node in 0..mesh.n_nodes() {
+            v0[node * 3] = libm::sin(k * mesh.node(node as u32)[0]);
+        }
+        let t_end = 20.0 * 2.0 * PI / w_lumped;
+        let step = Step::Explicit { t_end, dt_factor: 0.9, initial_velocity: Some(v0), output_every: 1 };
+        let res = run_step(&p, &step).expect("a rod rings in one mode");
+        let (dt, hist) = (res.scalars["dt"], res.history.expect("frames"));
+        let u: Vec<f64> = hist.values.iter().map(|f| f[tip]).collect();
+        let w_explicit = 2.0 * PI / zero_crossing_period(&hist.times, &u);
+        let w_discrete = 2.0 / dt * libm::asin(0.5 * w_lumped * dt);
+        assert!(
+            (w_explicit - w_discrete).abs() <= 1e-4 * w_discrete,
+            "mode {j}: explicit {w_explicit} vs {w_discrete}"
+        );
+        let (gap, got) = ((w_consistent - w_discrete).abs(), (w_modal - w_explicit).abs());
+        assert!((got - gap).abs() <= 1e-4 * w_lumped, "mode {j}: solvers differ by {got}, the closed forms by {gap}");
+        println!(
+            "F11 mode {}: modal {:.4} Hz, explicit {:.4} Hz, continuum {:.4} Hz, gap {:.2e} (theory {:.2e})",
+            j + 1,
+            modal.frequencies[j],
+            w_explicit / (2.0 * PI),
+            c * k / (2.0 * PI),
+            got / w_lumped,
+            gap / w_lumped
+        );
+    }
+}
+
+/// Benchmark F10: impulse. A free hex8 pushed at one corner by a constant force `F` for a
+/// time `τ` carries momentum `Δp = ∫F dt = F(τ + Δt/2)` (the reported velocity is the
+/// half-step one) and its mass centre has moved `Fτ²/2M`, both to round-off, while the block
+/// itself deforms. Both hold because `Ku` sums to zero over a rigid translation; a stiffness
+/// that does not annihilate translation, or a nodal load scattered against the wrong mass,
+/// breaks them.
+#[test]
+fn a_short_push_transfers_exactly_the_impulse() {
+    let (a, force) = (0.1, 1e6);
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([a; 3]);
+    let mut sets = sets_of(&mesh);
+    let corner = node_at(&mesh, [a; 3]);
+    sets.insert(
+        "corner".into(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![corner], elems: Vec::new() },
+    );
+    let bodies = one_body();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.loads = vec![Load::NodalForce { nodes: "corner".into(), f: [force, 0.0, 0.0] }];
+    let tau = 500.0 * 0.9 * critical_step(&p);
+    let step = Step::Explicit { t_end: tau, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let res = run_step(&p, &step).expect("a free block");
+    let impulse = force * (tau + 0.5 * res.scalars["dt"]);
+    let got = res.scalars["momentum_x"];
+    assert!((got - impulse).abs() <= 1e-10 * impulse, "p = {got}, ∫F dt = {impulse}");
+    assert!(res.scalars["momentum_y"].abs() <= 1e-12 * impulse && res.scalars["momentum_z"].abs() <= 1e-12 * impulse);
+    let mass = DENSITY * a * a * a;
+    let centre = res.fields[&Field::Displacement].component(0).iter().sum::<f64>() / 8.0;
+    let want = force * tau * tau / (2.0 * mass);
+    assert!((centre - want).abs() <= 1e-10 * want, "mass centre moved {centre}, Fτ²/2M = {want}");
+    println!(
+        "F10 impulse: p/∫F dt − 1 = {:.2e}, centre/(Fτ²/2M) − 1 = {:.2e}",
+        got / impulse - 1.0,
+        centre / want - 1.0
+    );
+}
+
 /// An explicit Step with no clock is a schema error naming the field.
 #[test]
 fn an_explicit_step_needs_a_positive_end_time() {

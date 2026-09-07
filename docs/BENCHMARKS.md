@@ -55,6 +55,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cook-membrane-plane-strain-quad8 | green | 3/3 | 21.50184 | 21.5262 | 0.11 % |
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
+| explicit-sdof-step | green | 4/4 | 0.001002 | 0.001 | 0.20 % |
+| explicit-wave-bar | green | 4/4 | 1.001437 | 1 | 0.14 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
 | imported-mesh-prism | green | 6/6 | 6.24289 | 6.24289 | 0.00 % |
 | kirsch-quarter-quad8 | green | 4/4 | 302.187087 | 300 | 0.73 % |
@@ -72,6 +74,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | nafems-le1-quad8 | green | 3/3 | 92.582436 | 92.7 | 0.13 % |
 | le10-full-face-hex20 | green | 3/3 | -5.234137 | -5.25 | 0.30 % |
 | le10-full-face-hex8 | green | 3/3 | -5.400396 | -5.400396 | 0.00 % |
+| nafems-le10-tet10 | green | 3/3 | -5.163953 | -5.25 | 1.64 % |
 | nafems-t3-transient | green | 4/4 | 36.792975 | 36.6 | 0.53 % |
 | nafems-t4-conduction | green | 2/2 | 18.254191 | 18.3 | 0.25 % |
 | near-incompressible-049 | green | 4/4 | 5.9894e-5 | 5.9898e-5 | 0.01 % |
@@ -549,11 +552,18 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F1 | Linear momentum conservation, free body, 2000 explicit steps | Δp = 0, energy drift = 0 | 1e-6 | explicit integrator symmetry (Blast Wall's test) | engine test |
 | F2 | Critical time step | 0.9 Δt_crit stable for 5000 steps, 1.25 Δt_crit is `explicit.unstable` | as stated | Δt estimator really is critical | engine test |
 | F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
-| F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) | |
+| F3 | SDOF under step load, `u = (F/k)(1 − cos ωt)`; one hex8 with one free DOF, `k = 2Ea/9`, `m = ρa³/8` at ν = 0 | F/k at T/4, 2F/k at T/2, 0 at T | 1 % | the explicit path from a Journal against a phase-sensitive closed form; the cantilever and Newmark/HHT forms wait on #72 | green |
 | F4 | Two-block tie / bonded contact patch test, matched meshes | uniform tension: σ constant across the tie, u exactly the linear field, Σ reactions = applied | 1e-8 | bonded contact between Bodies (#61) | green |
 | F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
 | F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+| F5 | The integrator's own period error, predicted exactly: SDOF free vibration over 100 cycles at ωΔt = 0.25, 0.5, 1 | period = `2π / ((2/Δt) asin(ωΔt/2))` at each step; the coefficient of `(ωΔt)²` in ΔT/T fitted from the three is **−1/24** (central differences *shorten* the period; the trapezoidal rule lengthens it by 1/12) | 1e-4 on each period, 1 % on the coefficient | a start-up kick of the wrong half-step, a lagging velocity update or a wrongly scaled mass all keep a clean sinusoid and fail this | engine test |
+| F6 | Discrete energy `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`, SDOF at ωΔt = 1 for 100 cycles and the F2 cantilever with a random initial velocity for 500 steps | exactly constant: `½ m v₀²` for the SDOF, its own initial value for the beam | 1e-12 (SDOF), 1e-10 (beam) relative wander | central differences conserve a modified energy exactly for linear systems; the `½vᵀMv + ½uᵀKu` monitor only bounds it | engine test |
+| F7 | The stability boundary is sharp: SDOF at ωΔt = 1.96 and 2.04 for 1000 steps | below: bounded, sampled amplitude = `v₀ / (ω √(1 − (ωΔt/2)²))`; above: `explicit.unstable` | 1 % on the amplitude, the error code above | the boundary is at 2, not merely somewhere near it | engine test |
+| F8 | Second-order convergence in Δt: SDOF against `(v₀/ω) sin ωt` at t = 5⅛ T for ωΔt = 0.2, 0.1, 0.05 | observed rate 2 | rate ≥ 1.9 | a first-order start-up shows as a rate near one | engine test |
+| F9 | Wave arrival: step traction σ₀ on the free end of a fixed-free rod (hex8, ν = 0, lateral DOFs held), 100 and 200 elements | front at mid-length at `t = L/2c`, `c = √(E/ρ)`; particle velocity `σ₀/(ρc)` from the ramp's slope; nothing moves before the front; free end at `σ₀ c t/E` | 0.5 % on arrival and speed (engine test), 1 % on the probes (case) | the wave speed and the arrival time, not only a tip history | green + engine test |
+| F10 | Impulse: a free hex8 pushed at one corner by `F` for `τ` | `p = F(τ + Δt/2)` (half-step velocity), mass centre at `Fτ²/2M`, transverse momentum zero | 1e-10 relative | `Δp = ∫F dt` while the block deforms; `Ku` sums to zero over a rigid mode | engine test |
+| F11 | Cross-solver: modal frequencies against the spectrum of an explicit free vibration, fixed-free rod of 20 hex8, modes 1–3 | consistent chain `ω² = (6c²/h²)(1 − cos kh)/(2 + cos kh)` for modal, lumped chain `ω = (2c/h) sin(kh/2)` with the F5 dispersion for explicit, `k = (2j−1)π/2L`; the two solvers differ by exactly the gap between those closed forms (0.08 % at mode 1) | 1e-6 (modal), 1e-4 (explicit), 1e-4 on the gap | two integrators, two mass matrices, one spectrum | engine test |
 
 The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
 the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
@@ -584,6 +594,40 @@ per-constraint reactions of a tied assembly against the single Body it stands fo
 contact, gapping and sliding; nobody on this change has read the publication, and a benchmark
 whose reference value has not been read from its source is not a benchmark. It belongs to
 frictionless contact (#62) if it turns out to be the frictionless patch test.
+
+**F5–F10 (#396) exist to tell a right integrator from a nearly-right one.** A sign error, an
+off-by-one in the start-up or a wrong damping coefficient still produces smooth, plausible
+curves, so every gate compares against a closed form derived in the test and the strongest
+compare the integrator's *own* error with what theory predicts. The single-degree-of-freedom
+model is one hex8 with every DOF held except `ux` of one corner: at ν = 0 the corner's
+diagonal stiffness is `∫ E(∂N/∂x)² + G(∂N/∂y)² + G(∂N/∂z)² dV = 2Ea/9`, exact under 2×2×2
+Gauss, and its HRZ mass is `ρa³/8`; the test asserts both against the assembly before using
+them. Central differences on `ü = −ω²u` have the exact discrete frequency
+`sin(ω̃Δt/2) = ωΔt/2`, so the period is *shorter* than `2π/ω` by `(ωΔt)²/24 + 0.00295 (ωΔt)⁴`
+— the issue's magnitude 1/24 with the sign the dispersion relation gives (the trapezoidal rule
+*lengthens* it by `(ωΔt)²/12`, which is the gate #72 adds). F5 measures the period by linear
+interpolation of the upward zero crossings over 100 cycles, which is third-order accurate
+because a sinusoid has no curvature at its zeros, checks each against the dispersion relation
+and fits `ΔT/T ÷ (ωΔt)² = c + d(ωΔt)²` through three steps for the coefficient. F6's invariant
+is the one central differences conserve exactly, `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`
+(with `− ½ fᵀ(u_n + u_{n+1})` under a constant load), computed from the retained frames alone;
+the integrator's monitor `½vᵀMv + ½uᵀKu` uses the staggered velocity and oscillates by O(Δt²),
+which is why it is bounded rather than constant. F7's closed-form amplitude
+`v₀/(ω√(1 − (ωΔt/2)²))` diverges at the boundary, so a 2 % margin on either side is a sharp
+test. F9 and F11 use a hex8 bar with ν = 0 and every lateral DOF held, which is *exactly* the
+1-D rod: uniform-over-the-section motion strains only `ε_xx`, and each section's four nodes
+carry a quarter of the rod's force and mass, so the consistent and lumped chains' eigenvalues
+are closed forms and `sin kx` is an exact eigenvector of both. The modal Step (consistent mass)
+and the explicit Step (lumped mass, then the F5 shortening) therefore disagree by an amount
+the test derives, and F11 gates their difference against that number rather than against a
+tolerance loose enough to hide a bug.
+
+**Waiting on #72 (implicit dynamics):** the Newmark period elongation against 1/12, HHT
+amplitude decay against its spectral radius, harmonic forcing against the closed-form
+magnification, explicit-versus-implicit agreement at small Δt, a damped implicit run converging
+to the static solution, free fall with initial velocity through both procedures, and the
+direct/iterative/GPU linear solvers agreeing under the implicit integrator. Explicit dynamics
+has no linear solve, so the last row has nothing to compare today.
 
 F2b's endpoint regression adds `u(t) = v₀t + gt²/2` on two mesh sizes at end times of 0.25,
 1.6 and 2.25 nominal stable steps. The final history time is exactly the requested endpoint,
