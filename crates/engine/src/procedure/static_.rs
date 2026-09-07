@@ -171,6 +171,20 @@ pub async fn run(
 /// solves one (assemble, factorise, solve) would cost N full static solves for an operator that
 /// never moves, which is what the first cut of this plan got wrong.
 ///
+/// One frame's raw nodal values in, `solve_run`'s per-Body composed `(nodal, reference)` out —
+/// exactly [`Problem::temperature`]'s own shape.
+pub type ComposeTemperature<'a> = &'a mut dyn FnMut(&[f64]) -> Result<Option<(Vec<f64>, f64)>, Error>;
+
+/// Everything [`run_history`] keeps from its last retained frame, once, to build the fields a
+/// plain [`run`] would answer for that frame alone.
+struct FinalFrame {
+    u: Vec<f64>,
+    reactions: Vec<f64>,
+    stress: FieldData,
+    strain: FieldData,
+    unaveraged: FieldData,
+}
+
 /// `compose` is `solve_run`'s per-Body temperature composition (`thermal_field`), called once
 /// per frame with that frame's raw nodal values so a chained Step reads the same reference
 /// handling an unchained one already does; `p.temperature` carries whatever it answers and is
@@ -184,7 +198,7 @@ pub async fn run(
 pub fn run_history(
     p: &mut Problem<'_>,
     history: &History,
-    compose: &mut dyn FnMut(&[f64]) -> Result<Option<(Vec<f64>, f64)>, Error>,
+    compose: ComposeTemperature<'_>,
     pool: &Pool,
     mut progress: OnProgress<'_>,
 ) -> Result<StepResult, Error> {
@@ -219,7 +233,7 @@ pub fn run_history(
     let mut u_f = vec![0.0; red.free.len()];
     let mut worst_residual = 0.0f64;
     let mut solver = SolveInfo { solver: "cpu-direct", iterations: 0, rel_residual: 0.0, time_ms: 0.0 };
-    let mut last: Option<(Vec<f64>, Vec<f64>, FieldData, FieldData, FieldData)> = None;
+    let mut last: Option<FinalFrame> = None;
     for (idx, (&time, values)) in history.times.iter().zip(&history.values).enumerate() {
         p.temperature = compose(values)?;
         let mut f = pool.install(|| assembly::thermal_load(p))?;
@@ -244,15 +258,16 @@ pub fn run_history(
         von_mises_frames.push(von_mises.data);
         if idx + 1 == n {
             let nodal_strain = stress::average_at_nodes(p, &stress::gp_to_nodes(p.mesh, &gp_strain));
-            let r = assembly::reactions(&a.k, &u, &f, &red.fixed, &mpc);
-            last = Some((u, r, nodal_stress, nodal_strain, unaveraged));
+            let reactions = assembly::reactions(&a.k, &u, &f, &red.fixed, &mpc);
+            last = Some(FinalFrame { u, reactions, stress: nodal_stress, strain: nodal_strain, unaveraged });
         }
         report(&mut progress, "solve", 0.1 + 0.8 * (idx + 1) as f64 / n as f64, "solving a retained frame")?;
     }
     solver.rel_residual = worst_residual;
     // `history` is never empty: `solve_run` only takes this path for a predecessor History,
     // and `retained_frame_count` never answers zero.
-    let (u, r, nodal_stress, nodal_strain, unaveraged) = last.expect("a retained History has at least one frame");
+    let FinalFrame { u, reactions: r, stress: nodal_stress, strain: nodal_strain, unaveraged } =
+        last.expect("a retained History has at least one frame");
     report(&mut progress, "post", 0.9, "recovering fields")?;
 
     let mut fields = BTreeMap::new();
