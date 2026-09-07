@@ -56,6 +56,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
+| imported-mesh-prism | green | 6/6 | 6.24289 | 6.24289 | 0.00 % |
 | kirsch-quarter-quad8 | green | 4/4 | 302.187087 | 300 | 0.73 % |
 | lame-3d-revolve-hex20 | green | 5/5 | 99.816731 | 100 | 0.18 % |
 | lame-axisymmetric | green | 4/4 | 99.588311 | 100 | 0.41 % |
@@ -598,6 +599,38 @@ payload caches on every Solve Ack even when that hash is unchanged.
 | H2 | J2 plasticity as TS, WGSL and wasm (C and Fortran-via-f2c) Plugins | identical to built-in J2 to 1e-12 (TS/wasm) and f32 rounding (WGSL) | three languages, one law |
 | H3 | Plugin hash mismatch on load | refused with message | reproducibility |
 
+## J. Imported geometry (#350)
+
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| J1 | Regular 32-gon prism as an ASCII STL, imported by `geometry.import` | V = (n/2) R² sin(2π/n) h = 6.2428903045 mm³, mass 4.9006688890e-5 kg, bbox 1 mm × 2 mm | 1e-12 rel | a tessellated import is welded into a solid whose volume, mass and extent are exactly the polyhedron's; patches are named; a plane rule resolves on its lattice mesh | green |
+
+J1's oracle owes nothing to the importer: a regular n-gon of circumradius R has area
+(n/2) R² sin(2π/n), so the prism of height h holds (n/2) R² sin(2π/n) h and its side is n
+chords of 2R sin(π/n) by h. The mesh *is* the polyhedron, so these are matched to 1e-12
+relative rather than approached, and `unitLength: "1 mm"` is what turns the file's unitless
+1 and 2 into millimetres — an STL records no units, so getting that wrong is the one way an
+import silently gives a body a thousand times the mass it should have.
+
+The rest of the import is checked in the two crates' test binaries rather than as Benchmark
+rows, because their oracles are the geometry itself:
+
+- **Round trip.** Our own `write_stl` output for a box, a 64-facet cylinder, a 32-facet sphere
+  and a revolve is read back by `read_stl` and re-evaluated; volume, area and bounding box agree
+  with the shape it came from to 1e-9, and the patch counts are 6, 3, 1 and 3.
+- **Topology.** `genus` is the oracle a volume cannot be: 0 for an imported cube, 1 for an
+  imported torus, 1 for a plate with a through bore — and the bore's wall comes back as one
+  smooth patch of exactly n·2R sin(π/n)·h, with the two faces it pierces still whole.
+- **Feature angle.** An imported octagonal prism turns 45° per facet, so at 30° it has 8 + 2
+  patches, at 50° three, and at 91° one.
+- **Meshing.** A lattice over an imported cube gives 64 hexes of total volume 1 and six face
+  Sets of 16 faces each; a `geometry.nameFace` plane rule keeps its Set across a re-import at
+  four times the tessellation, which is why the doc string steers at predicates and not at
+  `face7`.
+- **Never panics.** A proptest sends random triangle soups through `Solid::evaluate`, the ray
+  cast and the lattice mesher; any `Err` is a pass and a panic is the failure, the same rule
+  the free mesher's sketches live under.
+
 ## I. Cross-solver checks (phase 3, manual, documented)
 
 | # | Case | Method |
@@ -695,6 +728,82 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+### Immutable solve records (#280)
+
+`retained_cases` uses independent Fourier conduction `T(x)=273.15+q*x/k` on a one-metre
+bar at 2, 4 and 8 divisions with conductivity 45, 90 and 180 W/(m K). The same engine retains
+each solve, changes the live mesh and display units, then reads every old nodal field, probe
+and path against its own analytical solution and saved Celsius metadata. Exact mesh counts
+and numeric payload dimensions prevent attaching an old array to a newer mesh.
+
+A second three-mesh series uses `rho*cp*dT/dt=q`, giving uniform `T=300+2*t` K with
+rho=10 kg/m³, cp=2 J/(kg K), q=40 W/m³ and a matching prescribed-temperature ramp.
+Every retained index and exact physical-time selection carries the same solve identity,
+mesh and temperature, including Celsius scientific probes after the live Model switches to
+Kelvin. These fields are exactly representable on all three meshes, so no mesh-dependent
+reference is substituted for the conservation law.
+
+Lifecycle checks retain equal-input solves as distinct instances, verify FIFO eviction at
+eight records, reject absent or mismatched selectors, preserve records on failed solves,
+and prove Model new/import/replay do not recycle old ids or change Journal hashes.
+
+## Cost-query memory benchmark (#122)
+
+The estimator is tested against every small element-family assembly pattern at one, two and
+three DOFs per node, including shared nodes and unused nodes. Its mandatory-storage lower
+bound equals the actual lengths of two CSR arrays, element slots and their offsets, and one
+RHS; it makes no claim about unknown factor fill or solver workspace.
+
+A synthetic 50 × 50 × 100 Hex8 grid (250,000 elements) has exactly
+`9 × (3×50+1) × (3×50+1) × (3×100+1) = 61,767,909` directed scalar matrix entries at three
+DOFs per node. The independent tensor-neighbour graph formula checks the count while a
+per-thread allocator measures peak live scratch **after** mesh construction: at most 16 MiB,
+compared with 576 MB for element slots alone. A 750,000-element repeated overlapping-clique
+mesh forces the bounded fallback; its known graph count lies within the returned interval,
+the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
+1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
+These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.
+
+### Transient retention and peak phases (#244)
+
+For `S` integration steps and normalized stride `E = max(outputEvery, 1)`, the retained-frame
+count is exactly `1 + floor(S/E) + (S mod E != 0)`: the initial state, every requested stride,
+and one final endpoint only when the endpoint is not already a stride. Tests cover divisible and
+non-divisible schedules, `outputEvery` beyond the step count, zero's established normalization,
+and checked count/byte overflow. The logical retained payload matches `query.frames`:
+`8 × frames × (1 + nodes × storedComponents)` bytes for f64 times and raw primary values.
+Vec headers, spare capacity and allocator overhead are deliberately separate; History reserves
+the exact outer frame count and remains the only full-series allocation.
+
+The cost Query reports two phases. The integration phase counts the #122 assembly lower bound,
+the retained payload and a conservative full-field f64 working allowance: `5 × nodes × 8` bytes
+for heat and `6 × nodes × storedComponents × 8` bytes for explicit dynamics. Heat's free-DOF
+vectors are charged at the full nodal length; the five-field allowance covers the temporary old
+and new temperature vectors during `expand`. The frame-read phase counts retained payload plus one
+normalized three-component f64 response (`24 × nodes` bytes) for a native Query. WASM/Worker transport has two
+normalized numeric payloads alive at once: the current JSON path's parsed source and structured
+clone, or #245's transferred `Float64Array` and final schema-owned `number[]`. Its separately
+reported known numeric staging is therefore at least `48 × nodes` bytes. Rust/JavaScript strings,
+array/object headers and engine-specific number storage remain value- and runtime-dependent; the
+schema marks the WASM staging estimate incomplete and `bytes` remains a counted conservative
+estimate rather than a complete host-memory claim. #245 measures those copies when it changes the browser route. Solver
+factor fill/workspace, final derived fields, the resident Mesh/Model and allocator overhead also
+remain excluded, so a counted peak below the fixed 1.5 GiB planning budget is still feasibility
+unknown.
+
+An end-to-end heat regression first stores a valid Result, then requests 1,000,000,001 frames.
+`query.cost` reports the exact count and an over-budget peak; `solve.run` returns structured
+`solve.too-large` before History allocation, suggests a larger `outputEvery`, and leaves the prior
+Result intact. Restoring the original Step makes that Result current and a later solve succeeds.
+An explicit regression independently checks that the pre-solve count equals the history rows
+produced by its element-frequency-derived integration schedule.
+
+Retained-Result budget checks (#280) run 2-, 4- and 8-division conduction meshes through
+nine successful solves. After each solve, `query.cost` includes every live record's numeric
+field and Mesh payload, plus the new Mesh snapshot. At the eight-record limit the oldest
+record remains charged during preparation; reads and rejected solves cannot advance eviction.
+These are payload accounting checks, not estimates of allocator or serialized Model overhead.
 
 ### Loaded boundary area (Properties pressure preview)
 
@@ -801,6 +910,11 @@ with one fully fixed end and one single-component force at the opposite end.
 Other geometries and boundary conditions explicitly report no applicable
 automatic reference; their verification belongs to a dedicated Benchmark.
 
+The retained thermal-reaction case (#280 with #120) applies 900 W/m² over 0.01 m²:
+all retained SI reaction values sum to 9 W, and each cold corner carries 2.25 W at
+2, 4 and 8 axial divisions. After the live Model changes to kW and a different mesh,
+explicit Result fields, summaries, probes and paths still use the solved watt convention.
+
 ## Cost-query memory benchmark (#122)
 
 The estimator is tested against every small element-family assembly pattern at one, two and
@@ -817,7 +931,45 @@ mesh forces the bounded fallback; its known graph count lies within the returned
 the estimator allocates less than 1 KiB, and mandatory element slots alone exceed the fixed
 1.5 GiB planning budget. Both cases report over budget; small cases report feasibility unknown.
 These tests live in `crates/engine/tests/fem.rs`; they measure memory, never software-GPU timing.
+### Retained Result difference fields (#281)
 
+`difference_fields_project_closed_form_temperature_between_unequal_linear_and_quadratic_meshes`
+uses the E1 Fourier bar with the same 900 W/m² boundary flux on two independently retained
+meshes. The left Result has two linear elements and `k = 45 W/(m K)`, hence
+`T_left = 273.15 + 20x` K. The right Result has four quadratic elements and
+`k = 90 W/(m K)`, hence `T_right = 273.15 + 10x` K. Projection in either direction must
+therefore give the closed form
+
+```text
+T_left - T_right = 10x K
+```
+
+at every comparison node within 1e-8 K. Reversing the operands gives `-10x` K, comparing a
+Result with itself gives exact zero, and the two stored zero components remain exactly zero.
+The live Model changes temperature display units from Celsius to kelvin between solves; the
+difference remains the retained f64 SI delta in K without an absolute-temperature offset.
+A third quadratic Result uses `k = 45 W/(m K)` and raises the cold boundary from 0 °C to 10 °C,
+so its field minus the first linear Result is the nonzero constant `10 K` at every target node.
+
+This is an exact polynomial-reproduction benchmark rather than an asymptotic convergence
+study. Degree-one and degree-two isoparametric elements both reproduce constants and affine
+fields exactly: partition of unity conserves the constant component, and linear completeness
+reproduces `10x` on both the 2/4-element pair and every refinement of it up to floating-point
+roundoff. The interpolation error is already zero to the stated tolerance, so an observed
+log-error convergence rate is undefined and would not be a meaningful gate.
+
+Coverage cases translate one bar by 0.5 m and compute the analytically known intersection in
+both directions: nodes outside the other physical domain are the exact sorted set selected by
+`x < 0.5 m` or `x > 1 m`, every component at those nodes is null, and every covered value is
+the closed-form `10 K`. Moving an order-two bar to start at 2 m gives zero overlap, zero inside
+nodes, and an all-null field; it must not turn ordinary distance into a locator error. A plane-stress square
+with the exact hole `(0.3, 0.7) × (0.3, 0.7) m²` independently checks that full-sheet nodes
+strictly inside that open square are the outside set when projected onto the holed quadratic
+mesh. These cases verify no extrapolation or zero filling across missing material. A positively
+oriented curved Quad8 additionally places an interior edge point beyond every nodal x bound;
+Bernstein control-hull rejection must retain that point while positively rejecting a distant
+point. Structured failures separately cover incompatible dimensions, layouts, components,
+singular/nonconvergent maps, and finite operands whose subtraction overflows f64.
 ### Transient retention and peak phases (#244)
 
 For `S` integration steps and normalized stride `E = max(outputEvery, 1)`, the retained-frame

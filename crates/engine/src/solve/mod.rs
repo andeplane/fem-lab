@@ -220,7 +220,7 @@ pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostE
     // Device availability and constraints are not known here; Auto reports its CPU choice.
     let chosen = solver_name(resolve_solver(solver, usize::try_from(dofs).unwrap_or(usize::MAX), false));
     CostEstimate {
-        dofs, nnz, nnz_lower, bytes, assembly_bytes, retained_frames: 0,
+        dofs, nnz, nnz_lower, bytes, assembly_bytes, resident_result_bytes: 0, result_mesh_bytes: 0, retained_frames: 0,
         retained_bytes: 0, transient_work_bytes: 0, transport_staging_bytes: 0,
         wasm_transport_staging_bytes: 0, wasm_transport_staging_complete: true,
         budget_bytes: PLANNING_BUDGET, feasible,
@@ -308,9 +308,11 @@ pub(crate) fn enforce_transient_budget(
         return Ok(());
     }
     let frame_bytes = cost.retained_bytes / cost.retained_frames;
-    let solve_fixed = cost.assembly_bytes.saturating_add(cost.transient_work_bytes);
+    let resident = cost.resident_result_bytes.saturating_add(cost.result_mesh_bytes);
+    let solve_fixed = cost.assembly_bytes.saturating_add(cost.transient_work_bytes).saturating_add(resident);
     let max_solve = cost.budget_bytes.saturating_sub(solve_fixed) / frame_bytes;
-    let max_transport = cost.budget_bytes.saturating_sub(cost.wasm_transport_staging_bytes) / frame_bytes;
+    let max_transport =
+        cost.budget_bytes.saturating_sub(cost.wasm_transport_staging_bytes.saturating_add(resident)) / frame_bytes;
     let max_frames = max_solve.min(max_transport);
     let suggestion = if max_frames >= 2 {
         let intervals = (max_frames - 1) as usize;
@@ -348,6 +350,8 @@ mod transient_cost_tests {
             nnz_lower: 0,
             bytes: assembly_bytes,
             assembly_bytes,
+            resident_result_bytes: 0,
+            result_mesh_bytes: 0,
             retained_frames: 0,
             retained_bytes: 0,
             transient_work_bytes: 0,
@@ -384,6 +388,25 @@ mod transient_cost_tests {
         assert!(error.suggestion.as_deref().unwrap().contains("outputEvery at least 5"));
         let error = enforce_transient_budget(&limited, "warm", "heat-transient", usize::MAX, 1).unwrap_err();
         assert!(error.suggestion.as_deref().unwrap().contains("shorter tEnd or larger dt"));
+    }
+
+    #[test]
+    fn retained_records_reduce_the_available_stride_budget() {
+        let mut cost = base(100, 1000);
+        cost.retained_frames = 101;
+        cost.retained_bytes = 808;
+        cost.transient_work_bytes = 100;
+        cost.wasm_transport_staging_bytes = 100;
+        cost.resident_result_bytes = 400;
+        cost.result_mesh_bytes = 100;
+        cost.feasible = Some(false);
+        // 700 fixed solve bytes leave room for 37 eight-byte frames. Over 100
+        // intervals, stride 2 needs 51 frames; stride 3 needs 35 and is the first fit.
+        let error = enforce_transient_budget(&cost, "warm", "heat-transient", 100, 1).unwrap_err();
+        assert!(error.suggestion.as_deref().unwrap().contains("outputEvery at least 3"));
+        cost.resident_result_bytes = 800;
+        let error = enforce_transient_budget(&cost, "warm", "heat-transient", 100, 1).unwrap_err();
+        assert!(error.suggestion.as_deref().unwrap().contains("coarser size"));
     }
 
     #[test]

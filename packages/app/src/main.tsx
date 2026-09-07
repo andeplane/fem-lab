@@ -13,6 +13,7 @@ import '@fontsource/ibm-plex-sans/latin-600.css';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
+import { clearsBenchmark } from './benchmark';
 import { devApiKeys } from './dev-keys';
 import { appHostCommands, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
 import { ResultsView } from './results';
@@ -63,7 +64,7 @@ async function boot(): Promise<void> {
     schedule: (callback, ms) => setTimeout(callback, ms),
     cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   });
-  const ctx = makeHostContext(store, transport, viewer, host, scripts, results);
+  const ctx = makeHostContext(store, transport, viewer, host, scripts, results, undefined, undefined, undefined, () => refresh());
   // One sink is enough: the transport runs one Command at a time, so `Solving n %` can only
   // ever be about the Command the person is waiting for.
   transport.onProgress((p) => store.set({ progress: { phase: p.phase, fraction: p.fraction ?? 0 } }));
@@ -104,26 +105,30 @@ async function boot(): Promise<void> {
   const REPLACES_MODEL = new Set(['model.new', 'file.open', 'file.openExample', 'example.open']);
   /**
    * Host Commands after which the Model, the Journal or the project has changed and the shell
-   * has to catch up. `file.open` and `example.open` replace the whole Model through the
+   * has to catch up. `file.open` replaces the whole Model through the
    * transport, so without this the tree, the Journal and the new project all lag a Command
-   * behind; `file.openExample` refreshes on its own way out and needs no row here.
+   * behind; both example-open Commands refresh internally and need no row here.
+   * `geometry.importFile` reads a file the host owns and dispatches `geometry.import`, so the
+   * Model gains a Body the tree and the viewer have to see.
    */
-  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'example.open', 'project.new', 'project.open']);
+  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'project.new', 'project.open', 'geometry.importFile']);
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
   const dispatch: Registry['dispatch'] = async (cmd) => {
     store.set({ lastError: null });
-    // Before, not after: `file.openExample` refreshes on its own way out, and by then the fork
-    // has to have happened or the example is written over the project it replaced.
-    if (cmd.cmd === 'file.openExample') forkProject();
-    if (registry.describe(cmd.cmd).provider === 'engine' || ['file.open', 'file.restore', 'example.open', 'script.run'].includes(cmd.cmd)) results.invalidateTransient();
+    // Both example Commands refresh internally, so the fork must happen before dispatch: it
+    // prevents that refresh from writing over the project being replaced.
+    const opensExample = cmd.cmd === 'file.openExample' || cmd.cmd === 'example.open';
+    if (opensExample) forkProject();
+    if (registry.describe(cmd.cmd).provider === 'engine' || ['file.open', 'file.restore', 'example.open', 'script.run', 'geometry.importFile'].includes(cmd.cmd)) results.invalidateTransient();
     // A long Command owns the Solve button and the solving card until it settles either way.
     const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
       const ack = await registry.dispatch(cmd);
-      if (REPLACES_MODEL.has(cmd.cmd) && cmd.cmd !== 'file.openExample') forkProject();
+      if (REPLACES_MODEL.has(cmd.cmd) && !opensExample) forkProject();
       store.log('command', cmd.cmd);
+      if (clearsBenchmark(cmd.cmd, ack)) store.set({ benchmark: null });
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, and `file.open` / `example.open` replace the engine Model and
       // Journal outright, so the store, viewer and Results have to catch up after those too.

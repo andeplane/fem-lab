@@ -67,7 +67,7 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
     await expect(page.locator('.rtable', { hasText: 'displacement' })).toContainText(String(Number(uz.value.toPrecision(4))));
 
     // 5 · the balance line: the reactions carry exactly the applied load.
-    await expect(page.locator('.surface.pass')).toContainText('Σ reactions = −Σ loads · 0.0000 %');
+    await expect(page.locator('.surface.pass[data-balance]')).toContainText('Σ reactions = −Σ loads · 0.0000 %');
     await shot(page, '10-solved');
 
     // 6 · a screenshot of the viewer, with the legend burned into the PNG.
