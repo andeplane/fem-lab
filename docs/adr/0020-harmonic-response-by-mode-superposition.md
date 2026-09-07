@@ -53,9 +53,9 @@ therefore a shared helper — a constant modal ratio plus Rayleigh `C = αM + β
 
 - A harmonic Step **requires** `after` naming a solved `modal` Step. `solve.run` already
   hash-checks that predecessor for staleness and hands its Result in, so this is free.
-- Accuracy depends on the eigen solve and on `nModes`. The Benchmarks gate both ends: **F12** is a
+- Accuracy depends on the eigen solve and on `nModes`. The Benchmarks gate both ends: **F14** is a
   single-degree-of-freedom magnification curve where the modal basis is complete, so it isolates
-  the superposition arithmetic and is gated at 1e-8 against the closed form; **F13** puts a
+  the superposition arithmetic and is gated at 1e-8 against the closed form; **F15** puts a
   cantilever's sweep peak on the independent Euler–Bernoulli frequency of B4.
 - A later phase may add `method: 'direct'` behind the same Command when someone needs
   non-proportional damping or a frequency-dependent material. This ADR records what that costs —

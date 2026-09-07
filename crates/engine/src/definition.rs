@@ -175,6 +175,9 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 ConstraintKind::Temperature { value } => {
                     Command::ConstraintTemperature { name, on, value: Q::new(*value, "K") }
                 }
+                ConstraintKind::Couple { point, coupling } => {
+                    Command::ConstraintCouple { name, point: point.clone(), on, kind: *coupling }
+                }
                 ConstraintKind::Bonded { master, tol } => Command::ContactAdd {
                     name,
                     master: master.clone(),
