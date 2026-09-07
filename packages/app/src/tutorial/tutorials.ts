@@ -14,6 +14,7 @@ import readAResult from '../../tutorials/read-a-result.json';
 import solveCostAndSolvers from '../../tutorials/solve-cost-and-solvers.json';
 import symmetryAnd2d from '../../tutorials/symmetry-and-2d.json';
 import thermalBar from '../../tutorials/thermal-bar.json';
+import thermalStressChaining from '../../tutorials/thermal-stress-chaining.json';
 import transientHeat from '../../tutorials/transient-heat.json';
 import type { Tutorial } from './types';
 
@@ -31,6 +32,7 @@ export const TUTORIALS: Tutorial[] = [
   meshConvergence,
   symmetryAnd2d,
   journalAsProgram,
+  thermalStressChaining,
   pressureVessel,
   compositeBlockShear,
   solveCostAndSolvers,
