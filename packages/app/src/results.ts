@@ -8,8 +8,8 @@
 import { FemError, type FrameResult, type FramesResult, type ResultSummary, type StudyReport, type Warning } from '@femlab/registry';
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, modeCount, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
-import type { Store } from './store';
-import type { WorkerTransport } from './worker-transport';
+import type { Store, ViewMode } from './store';
+import type { EngineTransport } from '@femlab/registry';
 import { TransientPlayback, type PlaybackClock, type TransientInput } from './transient';
 
 /** `view.setDeformScale`'s argument. */
@@ -70,7 +70,7 @@ export class ResultsView {
 
   constructor(
     private readonly store: Store,
-    private readonly transport: WorkerTransport,
+    private readonly transport: EngineTransport,
     private readonly viewer: ViewerRef,
     clock?: PlaybackClock,
   ) {
@@ -109,7 +109,7 @@ export class ResultsView {
       this.displacement = displacement;
       this.viewer.current?.setField(null, [0, 1]);
       this.viewer.current?.setDeformed(null, 0);
-      this.viewer.current?.setSurface(surface);
+      this.viewer.current?.setSurface({ ...surface, source: 'mesh' });
       this.viewer.current?.animate(false);
       this.viewer.current?.setDim(false);
       this.viewer.current?.setMode('results');
@@ -208,6 +208,13 @@ export class ResultsView {
     await this.load(result);
   }
 
+  async setMode(mode: ViewMode): Promise<void> {
+    this.invalidateTransient();
+    this.store.set({ viewMode: mode });
+    this.viewer.current?.setMode(mode);
+    await this.refresh(true);
+  }
+
   private async readResult(): Promise<ResultSummary | null> {
     // No Step has been solved is a normal state, not a failure: `query.result` says so with
     // `not-found`, which is the one error this call swallows.
@@ -229,7 +236,8 @@ export class ResultsView {
     v.setField(null, [0, 1]);
     v.setDeformed(null, 0);
     v.setDim(false);
-    v.setSurface(surface);
+    v.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
+    v.setMode(this.store.state.viewMode);
     this.store.set({ playing: false });
   }
 
@@ -257,7 +265,8 @@ export class ResultsView {
     this.displacement = displacement;
     v.setField(null, [0, 1]);
     v.setDeformed(null, 0);
-    v.setSurface(surface);
+    v.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
+    v.setMode(this.store.state.viewMode);
     v.setDim(result.stale);
     v.setField(values, range);
     this.store.set({ legend: { min: range[0], max: range[1], unit }, lengthFactor });
@@ -286,10 +295,7 @@ export class ResultsView {
   /** `view.showField`: `{ field: null }` turns contours off, anything else picks a scalar. */
   async showField(f: { field: string | null; component?: number | null }): Promise<void> {
     if (f.field === null) {
-      this.invalidateTransient();
-      this.store.set({ viewMode: 'geometry' });
-      this.viewer.current?.setMode('geometry');
-      await this.refresh(true);
+      await this.setMode('geometry');
       return;
     }
     const key = fieldKeyOf(f.field, f.component ?? null);

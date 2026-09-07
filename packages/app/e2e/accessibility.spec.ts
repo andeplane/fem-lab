@@ -2,7 +2,6 @@ import { expect, test, type Page } from '@playwright/test';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 test.describe('@cpu accessibility and small screens', () => {

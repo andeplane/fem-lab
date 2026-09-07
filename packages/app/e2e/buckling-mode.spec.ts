@@ -9,7 +9,7 @@ const CASE = JSON.parse(readFileSync(path.join(import.meta.dirname, '../../../cr
 async function ready(page: Page): Promise<void> {
   await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
+  await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
 }
 
 test('@cpu solves the Euler fixed-free buckling benchmark and animates mode 1', async ({ page }) => {

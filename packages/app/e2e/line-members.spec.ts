@@ -17,7 +17,7 @@ const commands = [
 ];
 
 async function ready(page: Page): Promise<void> {
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
+  await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
 }
 
 async function patch(page: Page, x: number, y: number): Promise<{ bright: number; maxSat: number; mean: [number, number, number] }> {

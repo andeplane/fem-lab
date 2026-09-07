@@ -30,7 +30,7 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { ViewMode } from '../store';
-import type { AppSurface } from '../worker-transport';
+import type { AppSurface } from '../surface';
 import { MAPS, type ColormapName, sample } from './colormap';
 import { fitsSurface, nice, niceTick } from './scale';
 

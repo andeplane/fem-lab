@@ -10433,6 +10433,11 @@ fn an_import_that_is_not_a_solid_is_refused_without_touching_the_model() {
     assert_eq!(err(&mut e, &import_cmd("a.b", open, "")).code, ErrorCode::Schema);
 }
 
+#[path = "registry/session_owner.rs"]
+mod session_owner;
+
+#[path = "registry/replacement.rs"]
+mod replacement;
 /// A slender steel cantilever, quadratic elements, loaded far enough to bend visibly.
 ///
 /// `PL²/EI = 1.3791547` is the elastica whose tip slope is 0.6 rad, which puts the tip at

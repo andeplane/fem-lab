@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { batchModule } from './checked-batch.mjs';
 // #282: the registry Query is shared by native and WASM; transfers own only staging arrays.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -9,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const native = process.env.FEMLAB_NATIVE ?? path.join(root, 'target/release/femlab');
-const { Engine } = createRequire(import.meta.url)(path.join(root, 'tools/wasm-node/femlab_engine_wasm.js'));
+const { Engine } = batchModule(createRequire(import.meta.url)(path.join(root, 'tools/wasm-node/femlab_engine_wasm.js')));
 const scratch = mkdtempSync(path.join(tmpdir(), 'femlab-retained-replay-'));
 const engine = new Engine(1);
 const query = q => JSON.parse(engine.query(JSON.stringify(q)));

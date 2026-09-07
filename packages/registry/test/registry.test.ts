@@ -453,9 +453,9 @@ describe('Registry', () => {
     const host = fakeHost();
     const run = vi.fn(() => 'ok');
     const { z } = await import('zod');
-    const registry = new Registry({ schema: engineSchema, host, hostCommands: [{ name: 'x.y', description: 'd', schema: z.object({}), tool: true, run }], hostQueries: [] });
+    const registry = new Registry({ schema: engineSchema, host, hostCommands: [{ name: 'x.y', execution: 'workspace', description: 'd', schema: z.object({}), tool: true, run }], hostQueries: [] });
     await expect(registry.dispatch({ cmd: 'x.y' })).resolves.toBe('ok');
-    expect(run).toHaveBeenCalledWith({}, host);
+    expect(run).toHaveBeenCalledWith({}, expect.objectContaining({ view: host.view }));
     expect(registry.list().commands).toHaveLength(schemaCommands.length + 1);
   });
 });
@@ -532,4 +532,26 @@ it('rejects script source and deadlines outside the documented bounds before val
   await expect(registry.dispatch({ cmd: 'script.run', code: ' '.repeat(64001) })).rejects.toMatchObject({ code: 'schema' });
   expect(host.script.validate).not.toHaveBeenCalled();
   expect(host.script.run).not.toHaveBeenCalled();
+});
+
+it('requires an explicit valid execution policy for every engine and host definition', async () => {
+  const { registry } = make();
+  expect(registry.describe('model.new').execution).toBe('replacement');
+  expect(registry.describe('geometry.remove').execution).toBe('modelWrite');
+  expect(registry.describe('query.model').execution).toBe('modelRead');
+  expect(registry.describe('selection.set').execution).toBe('sessionView');
+  expect(registry.describe('script.run').execution).toBe('producer');
+  expect(registry.describe('solve.cancel').execution).toBe('control');
+  expect(registry.describe('view.setTheme').execution).toBe('workspace');
+  const { z } = await import('zod');
+  for (const execution of [undefined, 'magic-current-model']) {
+    const unclassified = { name: 'unclassified', description: 'bad', schema: z.object({}), tool: true, run: vi.fn(), execution };
+    expect(() => new Registry({ schema: engineSchema, host: fakeHost(), hostCommands: [unclassified as never] })).toThrow('execution policy');
+    const broken = structuredClone(engineSchema);
+    broken.commands.oneOf[0]!['x-execution'] = execution as never;
+    expect(() => new Registry({ schema: broken, host: fakeHost() })).toThrow('execution policy');
+    const brokenQuery = structuredClone(engineSchema);
+    brokenQuery.queries.oneOf[0]!['x-execution'] = execution as never;
+    expect(() => new Registry({ schema: brokenQuery, host: fakeHost() })).toThrow('execution policy');
+  }
 });

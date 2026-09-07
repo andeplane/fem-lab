@@ -36,7 +36,7 @@ test('@cpu unmeshed transformed Sheet outlines are visible and named outer/hole 
   test.setTimeout(120_000);
   await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
+  await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
   await page.evaluate(async (commands) => {
     for (const cmd of commands) await window.fem.dispatch(cmd);
     await window.fem.dispatch({ cmd: 'view.setProjection', projection: 'orthographic' });
@@ -102,7 +102,7 @@ test('@cpu meshed Sheet boundaries survive order, visibility and Results transit
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
+  await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
   await page.evaluate(async (fixture) => {
     for (const cmd of fixture) await window.fem.dispatch(cmd);
     await window.fem.dispatch({ cmd: 'view.setMode', mode: 'mesh' });

@@ -27,6 +27,7 @@ pub enum Query {
     /// their totals, steps, mesh settings, and the well-posedness warnings that would block a
     /// solve. Read this before changing anything.
     #[serde(rename = "query.model")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ModelSummary"))]
     Model {},
 
@@ -35,12 +36,14 @@ pub enum Query {
     /// to apply. Display summaries are rounded and must never be used to reconstruct edits.
     /// Auto-generated Sets and mesher-owned Bodies have no editable object definition.
     #[serde(rename = "query.definition", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ObjectDefinition"))]
     Definition { kind: ObjectKind, name: String },
 
     /// Counts and sanity of the current Mesh (nodes, elements, element kind, DOF, bounding box,
     /// edge lengths, Sets with their resolved sizes, quality). Builds the Mesh if needed.
     #[serde(rename = "query.mesh")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "MeshSummary"))]
     Mesh {},
 
@@ -49,6 +52,7 @@ pub enum Query {
     /// including thickness or radial weighting (plane strain: one metre of depth). Pressure
     /// times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
     #[serde(rename = "query.set", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "SetInfo"))]
     Set { name: String },
 
@@ -57,6 +61,7 @@ pub enum Query {
     /// whether the Result is stale (the Model changed after it was solved). Check the reaction
     /// balance and assumptions first.
     #[serde(rename = "query.result", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ResultSummary"))]
     Result {
         /// Omit for the current per-Step selection; an explicit id uses its solved context.
@@ -69,6 +74,7 @@ pub enum Query {
     /// Catalogue of the eight most recent successful solve instances, oldest first. Reads do
     /// not extend retention. Evicted ids are unavailable; Model import/new clears records.
     #[serde(rename = "query.results")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "RetainedResults"))]
     Results {},
 
@@ -78,6 +84,7 @@ pub enum Query {
     /// compatible Result for step (or the last solved Step), rejecting stale or missing Results.
     /// This never substitutes the current Mesh or a geometry preview. Use query.results for ids.
     #[serde(rename = "query.surface", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ResultSurface"))]
     Surface {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +97,7 @@ pub enum Query {
     /// Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
     /// omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
     #[serde(rename = "query.field", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ResultField"))]
     Field {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,6 +112,7 @@ pub enum Query {
     /// null values; nonfinite arithmetic is a structured error. No current Result, display
     /// conversion, or node-number pairing is implied.
     #[serde(rename = "query.difference", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "DifferenceField"))]
     Difference { left: DifferenceOperand, right: DifferenceOperand, onto: DifferenceOnto },
 
@@ -111,6 +120,7 @@ pub enum Query {
     /// Index 0 is the initial state; indices count retained frames, not integration steps.
     /// Metadata remains available for stale Results. No nodal values are copied by this Query.
     #[serde(rename = "query.frames", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "FramesResult"))]
     Frames {
         /// Omit for the current per-Step selection; an explicit id uses its solved context.
@@ -128,6 +138,7 @@ pub enum Query {
     /// displacement has zero z; temperature occupies x with zero y/z. Defaults to the retained
     /// primary field. Derived fields were not retained and are refused. Omitted resultId refuses result.stale.
     #[serde(rename = "query.frame", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "FrameResult"))]
     Frame {
         /// Omit for the current per-Step selection; an explicit id uses its solved context.
@@ -148,6 +159,7 @@ pub enum Query {
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.probe", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ProbeResult"))]
     Probe {
         /// Omit for the current per-Step selection; an explicit id uses its solved context.
@@ -167,6 +179,7 @@ pub enum Query {
     /// Optional sample selects a retained primary-field frame; omitted means the final field.
     /// Omitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.
     #[serde(rename = "query.path", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "PathResult"))]
     Path {
         /// Omit for the current per-Step selection; an explicit id uses its solved context.
@@ -190,12 +203,14 @@ pub enum Query {
     /// allocator overhead and host serialization are excluded.
     /// Use before large solves; this query does not promise that a solve fits the current host.
     #[serde(rename = "query.cost", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "CostEstimate"))]
     Cost { step: String },
 
     /// The Journal: every applied Command with the Model hash after it, and whether undo or
     /// redo is possible. `fromSeq` returns only entries at or after that sequence number.
     #[serde(rename = "query.journal", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "JournalDump"))]
     Journal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -208,18 +223,21 @@ pub enum Query {
     /// only a displayed location and is ignored. Entries after the first divergence are not
     /// re-aligned. This read never replays either Journal.
     #[serde(rename = "query.journalDiff", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "JournalDiff"))]
     JournalDiff { base: crate::journal::Journal },
 
     /// The Journal as a TypeScript script against the `fem` API that reproduces the Model line by
     /// line; what the Script panel shows and what script.run accepts back.
     #[serde(rename = "query.script")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ScriptText"))]
     Script {},
 
     /// Convert a quantity to another unit of the same dimension ("2 MPa" to "psi"); an error
     /// names the dimensions when they differ. Handy for checking inputs before using them.
     #[serde(rename = "query.convert", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "Converted"))]
     Convert { quantity: Quantity, to: String },
 
@@ -229,6 +247,7 @@ pub enum Query {
     /// never infer them before material.add. Copy the entry's `materialAddSource` into that
     /// Command's `source` so the Journal preserves provenance.
     #[serde(rename = "query.materialLibrary", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "MaterialLibrary"))]
     MaterialLibrary {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -238,6 +257,7 @@ pub enum Query {
     /// Every nameable thing in the Model as `@`-mention references (`body:beam`, `set:beam.top`,
     /// `material:steel`, `journal:12`), with a one-line summary each; the mention picker's index.
     #[serde(rename = "query.objects", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ObjectList"))]
     Objects {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,6 +273,7 @@ pub enum Query {
     /// box with one fully clamped end and one single-component force on the opposite end;
     /// other cases explicitly report no applicable automatic reference. Formulas are `$$…$$` for KaTeX.
     #[serde(rename = "query.report", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "ReportText"))]
     Report {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,6 +285,7 @@ pub enum Query {
     /// What this engine can do here: GPU presence and adapter name, thread count, engine and
     /// schema versions. Hosts add browser facts (cross-origin isolation, local or remote engine).
     #[serde(rename = "query.capabilities")]
+    #[schemars(extend("x-execution" = "modelRead"))]
     #[schemars(extend("x-returns" = "Capabilities"))]
     Capabilities {},
 }
@@ -1030,6 +1052,15 @@ pub fn schema_document() -> serde_json::Value {
         "ack": schemars::schema_for!(Ack),
         "error": schemars::schema_for!(crate::error::Error),
         "modelFile": schemars::schema_for!(crate::journal::ModelFile),
+        "writeRequest": schemars::schema_for!(crate::session::WriteRequest),
+        "readRequest": schemars::schema_for!(crate::session::ReadRequest),
+        "stamp": schemars::schema_for!(crate::session::Stamp),
+        "executionPolicy": schemars::schema_for!(crate::session::ExecutionPolicy),
+        "writeReply": schemars::schema_for!(crate::session_owner::WriteReply),
+        "readReply": schemars::schema_for!(crate::session_owner::ReadReply),
+        "runLease": schemars::schema_for!(crate::session_owner::RunLease),
+        "documentSnapshot": schemars::schema_for!(crate::session_owner::DocumentSnapshot),
+        "replacementTicket": schemars::schema_for!(crate::replacement::ReplacementTicket),
     })
 }
 
@@ -1050,6 +1081,7 @@ mod tests {
         for v in variants {
             let desc = v["description"].as_str().unwrap_or("");
             let name = v["properties"]["cmd"]["const"].as_str().unwrap();
+            assert!(v["x-execution"].is_string(), "{name}: execution policy required");
             let dl = desc.len();
             assert!(dl >= 80, "{name}: description too short ({dl}): {desc}");
         }
@@ -1058,6 +1090,7 @@ mod tests {
         for q in qs {
             let name = q["properties"]["query"]["const"].as_str().unwrap();
             assert!(q["description"].as_str().unwrap_or("").len() >= 80, "{name}");
+            assert_eq!(q["x-execution"], "modelRead");
             let ret = q["x-returns"].as_str().expect("every Query names its response type");
             assert!(defs.contains_key(ret), "{name}: {ret}");
         }

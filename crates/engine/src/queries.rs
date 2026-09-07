@@ -689,7 +689,7 @@ impl Engine {
         }
     }
 
-    fn query_objects(&self, kinds: Option<&[ObjectKind]>) -> ObjectList {
+    pub(crate) fn query_objects(&self, kinds: Option<&[ObjectKind]>) -> ObjectList {
         let want = |k: ObjectKind| kinds.is_none_or(|ks| ks.contains(&k));
         let m = &self.model;
         let mut objects = Vec::new();

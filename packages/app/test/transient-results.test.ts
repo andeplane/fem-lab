@@ -4,7 +4,7 @@ import type { FieldData, FrameResult, FramesResult, Query, QueryResult, ResultSu
 import { ResultsView } from '../src/results';
 import { Store } from '../src/store';
 import type { Viewer } from '../src/viewer/viewer';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const metres = (value: number): Valued => ({ value, unit: 'm' });
 const origin: [Valued, Valued, Valued] = [metres(0), metres(0), metres(0)];

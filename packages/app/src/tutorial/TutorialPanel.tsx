@@ -1,3 +1,5 @@
+import { acquireRegistryProducer, type RegistryProducer } from '../producer-registry';
+import { useStore } from '../ui/cmd';
 // The compact side card of DESIGN-BRIEF §5.8b: step n of m, the explanation, "do it for me",
 // Skip, Next. Not part of the `[data-cmd]`-enforced App shell (ADR 0003) — it is a self
 // contained panel the coordinator mounts once `<TutorialPanel registry={registry} store={store}
@@ -33,20 +35,37 @@ function useRunnerTick(runner: TutorialRunner | null): void {
 }
 
 export function TutorialPanel({ registry, store }: { registry: Registry; store: Store }) {
-  const [s, setS] = useState(store.state);
-  useEffect(() => store.subscribe(() => setS(store.state)), [store]);
+  const s = useStore(store);
+  const owner = useRef<Promise<RegistryProducer> | null>(null);
   const [runner, setRunner] = useState<TutorialRunner | null>(null);
   useRunnerTick(runner);
 
   const open = s.panels['tutorial'] === true;
-  // The app's own dispatch when the shell has provided it (it journals, refreshes the tree, the
-  // viewer and the results); the bare registry otherwise (tests mount this panel alone).
-  const deps = { dispatch: (cmd: { cmd: string } & Record<string, unknown>) => (store.dispatch ?? ((c) => registry.dispatch(c)))(cmd) };
-  // Picking a tutorial from the list starts it *here*, so the baseline is the Journal's current
-  // length: whatever is already in the Model cannot satisfy a step of the tutorial about to
-  // begin (issue #87). Resuming derives its own baseline from the entries that proved the step.
-  const makeRunner = (tutorial: Parameters<typeof TutorialRunner.resume>[0], startAt?: number): TutorialRunner =>
-    startAt === undefined ? TutorialRunner.resume(tutorial, deps, s.journal?.entries ?? []) : new TutorialRunner(tutorial, deps, startAt, s.journal?.entries.length ?? 0);
+  const makeRunner = (tutorial: Parameters<typeof TutorialRunner.resume>[0], startAt?: number): TutorialRunner => {
+    if (owner.current) void owner.current.then(value => value.release()).catch(() => undefined);
+    const producer = acquireRegistryProducer(registry);
+    void producer.catch(() => undefined);
+    owner.current = producer;
+    const deps = { dispatch: async (command: { cmd: string } & Record<string, unknown>) => {
+      const lease = await producer;
+      await lease.registry.query({ query: 'query.journal' }); // observe the visible step, including edits made by hand
+      const result = await lease.registry.dispatch(command);
+      lease.store()?.togglePanel('tutorial', true);
+      return result;
+    } };
+    return startAt === undefined ? TutorialRunner.resume(tutorial, deps, s.journal?.entries ?? []) : new TutorialRunner(tutorial, deps, startAt, s.journal?.entries.length ?? 0);
+  };
+  useEffect(() => {
+    const pending = owner.current;
+    if (!pending) return;
+    void pending.then(lease => {
+      if (owner.current !== pending) return;
+      if (lease.signal.aborted || lease.store() && lease.store() !== store) {
+        owner.current = null; setRunner(null); void lease.release();
+      }
+    }).catch(() => { if (owner.current === pending) { owner.current = null; setRunner(null); } });
+  }, [store]);
+  useEffect(() => () => { if (owner.current) void owner.current.then(lease => lease.release()).catch(() => undefined); }, []);
 
   // Resume from the URL hash (Tour's "start the cantilever tutorial" sets it) or localStorage
   // the moment the panel opens, if nothing is running yet.
@@ -91,6 +110,8 @@ export function TutorialPanel({ registry, store }: { registry: Registry; store: 
   const card = spot ? { class: 'tutorial-panel anchored', style: `left:${spot.left}px;top:${spot.top}px`, 'data-side': spot.side } : { class: 'tutorial-panel' };
 
   const close = (): void => {
+    if (owner.current) void owner.current.then(lease => lease.release()).catch(() => undefined);
+    owner.current = null;
     if (runner) TutorialRunner.forget(runner.tutorial.id);
     setRunner(null);
     store.togglePanel('tutorial', false);

@@ -1,0 +1,202 @@
+import { checkResultIdentity, isBulkQuery, scientificQuery } from './result-transfer';
+import type { ResultSelector } from '@femlab/registry';
+// A channel never changes Workers. A producer never acquires a different session implicitly.
+import { decodeBulk, FemError, type Ack, type Command, type DocumentSnapshot, type EngineTransport, type ExecutionContext, type ExportedFile, type ExportSpec, type Field, type FieldData, type ImportAck, type JournalEntry, type ModelFile, type Progress, type Query, type QueryResult, type RunLease, type SessionRef, type Stamp } from '@femlab/registry';
+import type { AppSurface } from './surface';
+import type { ReplacementSource, SessionMessage, SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
+
+export const sameSession = (a: SessionRef, b: SessionRef): boolean => a.backendEpoch === b.backendEpoch && a.sessionId === b.sessionId;
+export const sameStamp = (a: Stamp, b: Stamp): boolean => sameSession(a.session, b.session) && a.stateVersion === b.stateVersion;
+const expired = (): FemError => new FemError('session.expired', 'this handle belongs to an inactive model session', 'context.session');
+const sameContext = (a: ExecutionContext | null, b: ExecutionContext | null): boolean => a === b || !!a && !!b && sameSession(a.session, b.session) && a.runId === b.runId && a.operationId === b.operationId;
+interface Answer { stamp: Stamp; value: unknown }
+interface Pending {
+  context: ExecutionContext | null;
+  message: SessionMessage;
+  resolve(reply: Answer): void;
+  reject(error: unknown): void;
+  progress?: (p: Progress) => void;
+}
+
+/** Owns one immutable Worker endpoint; closing it revokes pending and future traffic. */
+export class SessionChannel {
+  private readonly lifetime = new AbortController();
+  get signal(): AbortSignal { return this.lifetime.signal; }
+  private nextId = 0;
+  private closed = false;
+  private history: { stamp: Stamp; entries: JournalEntry[]; revision: number } | undefined;
+  private readonly pending = new Map<number, Pending>();
+  constructor(private readonly worker: Worker, private readonly onFailure?: (error: unknown) => void) {
+    worker.onmessage = (event: MessageEvent<SessionResponse>) => {
+      if (this.closed) return;
+      const message = event.data;
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      if (!sameContext(pending.context, message.context)) {
+        this.pending.delete(message.id);
+        pending.reject(new FemError('internal', 'Worker reply has the wrong execution context', 'context'));
+        return;
+      }
+      if ('progress' in message) { pending.progress?.(message.progress); return; }
+      this.pending.delete(message.id);
+      if (!message.ok) {
+        const error = Object.assign(new FemError(message.error.code, message.error.cause, message.error.where, message.error.suggestion), { context: message.context });
+        pending.reject(error);
+        if (/recursive use of an object|unreachable/.test(message.error.cause)) this.failed(error);
+        return;
+      }
+      try {
+        if (pending.message.op === 'dispatch') this.record(pending.message.command, message.value as Ack, message.stamp);
+        pending.resolve({ stamp: message.stamp, value: message.raw ? decodeBulk(message, message.raw) : message.value });
+      }
+      catch (error) { pending.reject(error); }
+    };
+    worker.onerror = (event: ErrorEvent) => this.failed(new FemError('internal', `session Worker failed: ${event.message}`, 'engine.worker'));
+  }
+  request(message: SessionMessage, progress?: (p: Progress) => void): Promise<Answer> {
+    if (this.closed) return Promise.reject(expired());
+    const id = ++this.nextId;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { context: 'context' in message ? message.context : null, message: structuredClone(message), resolve, reject, ...(progress ? { progress } : {}) });
+      try { this.worker.postMessage({ ...message, id } satisfies SessionRequest); }
+      catch (error) { this.pending.delete(id); reject(error); }
+    });
+  }
+  seed(snapshot: DocumentSnapshot, source?: ReplacementSource): void {
+    if (this.history && !source) return;
+    this.history = { stamp: structuredClone(snapshot.stamp),
+      entries: structuredClone(source?.kind === 'journal' ? source.entries : snapshot.journal.entries), revision: snapshot.model.revision };
+  }
+  recoveryJournal(): ReplacementSource {
+    if (!this.history) throw new FemError('internal', 'no acknowledged journal is available for recovery');
+    return structuredClone({ kind: 'journal', entries: this.history.entries, revision: this.history.revision, skipSolves: true });
+  }
+  private record(command: Command, ack: Ack, stamp: Stamp): void {
+    if (this.history && BigInt(stamp.stateVersion) <= BigInt(this.history.stamp.stateVersion)) return;
+    const entries = this.history?.entries ?? [];
+    if (command.cmd !== 'journal.undo' && command.cmd !== 'journal.redo') {
+      entries.length = ack.seq;
+      entries.push({ seq: ack.seq, cmd: structuredClone(command), hashAfter: ack.hash });
+    }
+    this.history = { stamp: structuredClone(stamp), entries, revision: ack.revision };
+  }
+  private failed(error: unknown): void { if (this.closed) return; this.close(error); this.onFailure?.(error); }
+  close(error: unknown = expired()): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.lifetime.abort(error);
+    this.worker.terminate();
+    for (const item of this.pending.values()) item.reject(error);
+    this.pending.clear();
+  }
+}
+
+export type Replace = (origin: SessionTransport, source: ReplacementSource) => Promise<SessionTransport>;
+/** One revocable producer. Only its own successful explicit replacement can advance it. */
+export class SessionTransport implements EngineTransport {
+  private sequence = 0n;
+  private tail: Promise<unknown> = Promise.resolve();
+  private replacementListener: ((next: SessionTransport) => void) | undefined;
+  private sink: ((p: Progress) => void) | undefined;
+  constructor(readonly channel: SessionChannel, private lease: RunLease, private readonly replace: Replace, private readonly recover: (origin: SessionTransport) => Promise<void> = async origin => origin.release()) {}
+  onReplacement(listener: (next: SessionTransport) => void): void { this.replacementListener = listener; }
+  async replaceWith(source: ReplacementSource): Promise<SessionTransport> {
+    return this.replace(this, source);
+  }
+  /** Called at the activation commit, before the previous endpoint is revoked. */
+  adopted(next: SessionTransport): void { this.replacementListener?.(next); }
+  get stamp(): Stamp { return structuredClone(this.lease.stamp); }
+  get runId(): string { return this.lease.runId; }
+  onProgress(sink: (p: Progress) => void): void { this.sink = sink; }
+  private context(): ExecutionContext { return { session: this.stamp.session, runId: this.lease.runId, operationId: String(++this.sequence) }; }
+  private ordered<T>(run: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(run);
+    this.tail = result.catch(() => undefined);
+    return result;
+  }
+  private accept(reply: Answer): unknown {
+    if (!sameSession(reply.stamp.session, this.lease.stamp.session)) throw expired();
+    // Reads within this session explicitly observe current state; they never follow activation.
+    this.lease.stamp = structuredClone(reply.stamp);
+    return reply.value;
+  }
+  async assertActive(): Promise<void> {
+    const reply = await this.channel.request({ op: 'query', context: this.context(), query: { query: 'query.capabilities' } });
+    if (!sameSession(reply.stamp.session, this.stamp.session)) throw expired();
+  }
+  async fork(): Promise<SessionTransport> {
+    const reply = await this.channel.request({ op: 'forkRun', context: this.context() });
+    const lease = reply.value as RunLease;
+    if (!sameSession(lease.stamp.session, this.stamp.session)) throw expired();
+    return new SessionTransport(this.channel, lease, this.replace, this.recover);
+  }
+  async release(): Promise<void> {
+    await this.channel.request({ op: 'cancelRun', context: this.context() });
+  }
+  async snapshot(): Promise<DocumentSnapshot> {
+    return this.ordered(async () => {
+      const snapshot = this.accept(await this.channel.request({ op: 'snapshot', context: this.context() })) as DocumentSnapshot;
+      this.channel.seed(snapshot);
+      return snapshot;
+    });
+  }
+  dispatch(input: Command, onProgress?: (p: Progress) => void): Promise<Ack> {
+    const command = structuredClone(input);
+    if (command.cmd === 'model.new') return this.replaceWith({ kind: 'commands', commands: [structuredClone(command)] }).then(async (next) => {
+      const snapshot = await next.snapshot();
+      return { seq: 0, revision: snapshot.model.revision, hash: snapshot.model.hash!, warnings: [], output: { type: 'none' } } as Ack;
+    });
+    return this.ordered(async () => {
+      const context = this.context();
+      const reply = await this.channel.request({ op: 'dispatch', context, expectedVersion: this.stamp.stateVersion, command: structuredClone(command) }, (p) => { this.sink?.(p); onProgress?.(p); });
+      return this.accept(reply) as Ack;
+    });
+  }
+  query(input: Query): Promise<QueryResult> {
+    const query = structuredClone(input);
+    return this.ordered(async () => {
+      const value = this.accept(await this.channel.request({ op: 'query', context: this.context(), query })) as Record<string, unknown>;
+      if (isBulkQuery(query)) return scientificQuery(query, value);
+      return value as unknown as QueryResult;
+    });
+  }
+  surface(selector?: ResultSelector): Promise<AppSurface> {
+    const captured = selector === undefined ? undefined : structuredClone(selector);
+    return this.ordered(async () => {
+      const value = this.accept(await this.channel.request({ op: 'surface', context: this.context(), ...(captured === undefined ? {} : { selector: captured }) })) as AppSurface;
+      if (captured !== undefined) checkResultIdentity({ query: 'query.surface', ...captured }, value);
+      return value;
+    });
+  }
+  field(step: string, field: Field, component?: number, resultId?: string): Promise<FieldData> {
+    return this.ordered(async () => {
+      const value = this.accept(await this.channel.request({ op: 'field', context: this.context(), field: { step, field, component, resultId } })) as FieldData;
+      checkResultIdentity({ query: 'query.field', step, field, resultId }, value);
+      return value;
+    });
+  }
+  async export(spec: ExportSpec): Promise<ExportedFile> {
+    const ack = await this.dispatch({ cmd: 'mesh.export', ...spec } as Command);
+    if (ack.output.type !== 'export') throw new FemError('internal', 'mesh.export did not return a file');
+    return { filename: ack.output.filename, mime: ack.output.mime, bytes: new TextEncoder().encode(ack.output.text) };
+  }
+  async exportFile(): Promise<ModelFile> { return (await this.snapshot()).file; }
+  async importFile(file: ModelFile): Promise<ImportAck> {
+    const next = await this.replaceWith({ kind: 'file', file: structuredClone(file) });
+    const snapshot = await next.snapshot();
+    return { seq: -1, revision: snapshot.model.revision, hash: snapshot.model.hash!, warnings: [], output: { type: 'none' }, journal: snapshot.file.journal };
+  }
+  async gpuSelfTest(n: number): Promise<number> {
+    return this.ordered(async () => this.accept(await this.channel.request({ op: 'gpuSelfTest', context: this.context(), n })) as number);
+  }
+  async reserve(): Promise<string> {
+    return this.ordered(async () => this.accept(await this.channel.request({ op: 'reserve', context: this.context(), expectedVersion: this.stamp.stateVersion })) as string);
+  }
+  async prepare(source: ReplacementSource, options: SessionOptions): Promise<DocumentSnapshot> {
+    const reply = await this.channel.request({ op: 'prepare', context: this.context(), expectedVersion: this.stamp.stateVersion, source, options });
+    this.lease.stamp = structuredClone(reply.stamp); // This private candidate initiated the transition.
+    this.channel.seed(reply.value as DocumentSnapshot, source);
+    return reply.value as DocumentSnapshot;
+  }
+  cancel(): Promise<void> { return this.recover(this); }
+}

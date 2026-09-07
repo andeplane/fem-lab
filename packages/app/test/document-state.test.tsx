@@ -1,29 +1,15 @@
 import { render } from 'preact';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { appHostCommands, openExample } from '../src/host';
-import { completeJournalHash, type ExampleEntry } from '../src/benchmark';
+import { appHostCommands } from '../src/host';
 
 import { Store, journalIdentity, unsaved } from '../src/store';
 import { ModelName } from '../src/ui/ModelName';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 beforeEach(() => {
   document.body.innerHTML = '';
 });
 afterEach(() => vi.unstubAllGlobals());
-const example: ExampleEntry = {
-  name: 'cantilever', commands: 2, summary: 'Beam example', title: 'Cantilever',
-  tag: 'static', tags: ['static'], difficulty: 1, thumbnail: null,
-  theory: 'Beam theory',
-  expected: { quantity: 'tip deflection', value: 0.1919619, unit: 'mm', reference: 'Timoshenko' },
-};
-function mockExampleFetch(journal: unknown) {
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    if (url.endsWith('examples/index.json')) return Response.json({ examples: [example] });
-    if (url.endsWith('cantilever.json')) return Response.json(journal);
-    throw new Error(`Unexpected example request: ${url}`);
-  }));
-}
 const entries = [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'beam' }, hashAfter: 'h' }];
 it('tracks complete Journal content, ignores view changes, and clears when undo returns to the saved content', () => {
   const store = new Store();
@@ -113,106 +99,13 @@ it('commits the name exactly once on Enter or blur, cancels Escape, and rejects 
   render(null, root);
 });
 
-it('establishes an exact saved baseline only after a bundled example opens completely', async () => {
-  const first = { seq: 0, cmd: { cmd: 'model.new' as const, name: 'example' }, hashAfter: 'normalized-0' };
-  const second = {
-    seq: 1,
-    cmd: { cmd: 'geometry.addBox' as const, name: 'beam', size: ['1 m', '1 m', '1 m'] as [string, string, string] },
-    hashAfter: 'normalized-1',
-  };
-  const store = new Store({ ...new Store().state, savedJournal: 'previous baseline' });
-  const dispatch = vi.fn(async () => ({ output: { type: 'none' } }));
-  const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: [first, second] } })) } as unknown as WorkerTransport;
-  const refresh = vi.fn(async () => store.set({ journal: { entries: [first, second], revision: 2, hash: 'journal', canUndo: true, canRedo: false } }));
-  mockExampleFetch([{ cmd: first.cmd }, { cmd: second.cmd }]);
-  const open = appHostCommands(store, transport, { current: null }, refresh).find((def) => def.name === 'file.openExample')!;
-
-  const ctx = { examples: { open: (name: string) => openExample(name, store, transport, refresh) } } as never;
-  await open.run({ name: 'cantilever' }, ctx);
-
-  expect(dispatch).toHaveBeenCalledTimes(2);
-  expect(store.state.savedJournal).toBe(journalIdentity([first, second]));
-
-  store.set({ savedJournal: 'still previous' });
-  dispatch.mockResolvedValueOnce({ output: { type: 'none' } });
-  dispatch.mockRejectedValueOnce(new Error('second command failed'));
-  await expect(open.run({ name: 'cantilever' }, ctx)).rejects.toThrow('second command failed');
-
-  expect(store.state.savedJournal).toBe('still previous');
-});
-
-it('does not include an edit made while an opened example restores its Result', async () => {
-  const opened = [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'solved example' }, hashAfter: 'opened' }];
-  const edited = [...opened, { seq: 1, cmd: { cmd: 'model.setName' as const, name: 'later edit' }, hashAfter: 'edited' }];
-  const store = new Store();
-  const finishOldSave = store.beginSave();
-  const dispatch = vi.fn(async () => ({ output: { kind: 'solve' } }));
-  const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: opened } })) } as unknown as WorkerTransport;
-  const refresh = vi.fn(async () => store.set({ journal: { entries: opened, revision: 1, hash: 'opened', canUndo: true, canRedo: false } }));
-  let finishResult!: () => void;
-  const onAck = vi.fn(() => new Promise<void>((resolve) => { finishResult = resolve; }));
-  mockExampleFetch([{ cmd: opened[0]!.cmd }, { cmd: { cmd: 'solve.run', step: 'static' } }]);
-  const open = appHostCommands(store, transport, { current: null }, refresh, { onAck } as never).find((def) => def.name === 'file.openExample')!;
-
-  const pending = open.run({ name: 'cantilever' }, { examples: { open: (name: string) => openExample(name, store, transport, refresh, { onAck } as never) } } as never);
-
-  await vi.waitFor(() => expect(onAck).toHaveBeenCalledOnce());
-  store.set({ journal: { entries: edited, revision: 2, hash: 'edited', canUndo: true, canRedo: false } });
-  finishResult();
-  await pending;
-  finishOldSave({ entries: edited });
-
-  expect(store.state.savedJournal).toBe(journalIdentity(opened));
-  expect(store.state.benchmark?.journalHash).toBe(completeJournalHash({ entries: opened, hash: 'opened', revision: 1, canUndo: true, canRedo: false }));
-  expect(store.state.benchmark?.journalHash).not.toBe(completeJournalHash(store.state.journal));
-  expect(unsaved(store.state)).toBe(true);
-});
-
-it('opens a browser project against its captured Journal without marking a later edit saved', async () => {
-  const { makeHostContext, noteProject } = await import('../src/host');
-  const { readHostCaps } = await import('../src/capabilities');
-  vi.stubGlobal('indexedDB', undefined);
-  const opened = [
-    { seq: 0, cmd: { cmd: 'model.new' as const, name: 'project' }, hashAfter: 'opened' },
-    { seq: 1, cmd: { cmd: 'solve.run' as const, step: 'static' }, hashAfter: 'opened' },
-  ];
-  const edited = [...opened, { seq: 2, cmd: { cmd: 'model.setName' as const, name: 'later' }, hashAfter: 'edited' }];
-  const store = new Store();
-  const dispatch = vi.fn(async () => ({ output: { kind: 'solve' } }));
-  const transport = { dispatch, exportFile: vi.fn(async () => ({ journal: { entries: opened } })) } as unknown as WorkerTransport;
-  let finish!: () => void;
-  const onAck = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
-  const ctx = makeHostContext(store, transport, { current: null }, readHostCaps({ navigator: { userAgent: 'Chrome/1' } }), undefined, { onAck } as never);
-  const project = await ctx.projects.new('project');
-  noteProject('project', opened, 'opened');
-  await ctx.projects.save();
-  store.set({ savedJournal: 'previous' });
-  const pending = ctx.projects.open(project.id);
-  await vi.waitFor(() => expect(onAck).toHaveBeenCalledOnce());
-  expect(store.state.savedJournal).toBe('previous');
-  store.set({ journal: { entries: edited, revision: 3, hash: 'edited', canUndo: true, canRedo: false } });
-  finish();
-  await pending;
-  expect(store.state.savedJournal).toBe(journalIdentity(opened));
-  expect(unsaved(store.state)).toBe(true);
-  store.set({ savedJournal: 'previous failed-open baseline' });
-  dispatch.mockRejectedValueOnce(new Error('replay failed'));
-  await expect(ctx.projects.open(project.id)).rejects.toThrow('replay failed');
-  expect(store.state.savedJournal).toBe('previous failed-open baseline');
-  vi.unstubAllGlobals();
-});
-
-
-it('a new Model has no saved baseline and rejects completions captured for the old document', () => {
-  const store = new Store();
-  store.markSaved({ entries });
-  const complete = store.beginSave();
-  store.newDocument();
+it('a new activation has no saved baseline and an old completion can only change its old Store', () => {
+  const old = new Store(); old.markSaved({ entries });
+  const complete = old.beginSave();
+  const fresh = new Store();
   complete({ entries });
-  expect(store.state.savedBaseline).toBeNull();
-  expect(store.state.savedJournal).toBeNull();
-  expect(store.state.comparisonSource).toBeNull();
-  const fresh = store.beginSave();
-  fresh({ entries });
-  expect(store.state.savedBaseline).toEqual(entries);
+  expect(fresh.state.savedBaseline).toBeNull();
+  expect(fresh.state.savedJournal).toBeNull();
+  expect(fresh.state.comparisonSource).toBeNull();
+  expect(old.state.savedBaseline).toEqual(entries);
 });

@@ -3,7 +3,7 @@ import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCap
 import { makeHostContext } from '../src/host';
 import { Store } from '../src/store';
 import type { Viewer } from '../src/viewer/viewer';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 function controlled() {
   let callbacks: CaptureCallbacks | null = null;

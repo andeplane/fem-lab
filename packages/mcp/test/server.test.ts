@@ -5,7 +5,7 @@ import { mkdtemp, readFile, symlink, mkdir, writeFile, readdir } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { handleOf, missingEngine, wasmCandidates, WASM_ENTRY, loadEngine, type EngineHandle } from '../src/engine';
+import { missingEngine, wasmCandidates, WASM_ENTRY, loadEngine, type EngineHandle, type EngineProvider } from '../src/engine';
 import { projectFrom, start } from '../src/cli';
 import { describe as describeError, runScript } from '../src/script';
 import {
@@ -24,10 +24,12 @@ import {
 const MODEL = { name: 'beam', revision: 1, hash: 'abc', bodies: [], warnings: [] };
 
 /** An engine that records what it was asked and answers plausibly. */
-function fakeEngine(): EngineHandle & { seen: unknown[] } {
+function fakeEngine(): EngineHandle & EngineProvider & { seen: unknown[] } {
   const seen: unknown[] = [];
   return {
     seen,
+    acquire: async function () { return this; },
+    release: async () => undefined,
     dispatch: (cmd) => {
       seen.push(cmd);
       if (cmd['cmd'] === 'material.add' && (cmd['nu'] === undefined || Number(cmd['nu']) < 0)) {
@@ -245,19 +247,6 @@ describe('errors an editor sees', () => {
 });
 
 describe('the engine handle', () => {
-  it('is JSON in, JSON out over the wasm module', async () => {
-    const wasm = {
-      dispatch: vi.fn(() => Promise.resolve('{"hash":"h"}')),
-      query: vi.fn(() => '{"name":"beam"}'),
-      export_file: vi.fn(() => '{"format":"femlab/1"}'),
-    };
-    const handle = handleOf(wasm);
-    expect(await handle.dispatch({ cmd: 'model.new', name: 'beam' })).toEqual({ hash: 'h' });
-    expect(wasm.dispatch).toHaveBeenCalledWith('{"cmd":"model.new","name":"beam"}');
-    expect(await handle.query({ query: 'query.model' })).toEqual({ name: 'beam' });
-    expect(handle.modelFile()).toEqual({ format: 'femlab/1' });
-  });
-
   it('looks in the override, next to dist and in the checkout, and says so when it finds nothing', () => {
     delete process.env['FEMLAB_WASM'];
     const plain = wasmCandidates('/opt/femlab/dist');
@@ -279,7 +268,7 @@ describe('start-up', () => {
     expect(() => projectFrom(['--project'])).toThrow('--project needs a directory');
     expect(() => projectFrom(['--project', '--verbose'])).toThrow('--project needs a directory');
     const transport = { start: vi.fn(() => Promise.resolve()), send: vi.fn(() => Promise.resolve()), close: vi.fn(() => Promise.resolve()) };
-    const load = vi.fn((): EngineHandle => fakeEngine());
+    const load = vi.fn((): EngineProvider => fakeEngine());
     await start(['--project', '.'], '/here', load, () => transport);
     expect(load).toHaveBeenCalledWith('/here');
     expect(transport.start).toHaveBeenCalled();
@@ -291,4 +280,11 @@ describe('start-up', () => {
     expect(server).toBeDefined();
     expect(toolList(registry).length).toBeGreaterThan(30);
   });
+});
+
+
+it('refuses executing a described export handler outside request admission', async () => {
+  const registry = createRegistry({ engine: fakeEngine() });
+  await expect(registry.describe('export.file').run!({ format: 'journal', path: 'model.json' }))
+    .rejects.toMatchObject({ code: 'session.expired' });
 });

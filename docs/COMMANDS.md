@@ -3976,7 +3976,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "name"
-      ]
+      ],
+      "x-execution": "replacement"
     },
     {
       "description": "Choose the display units used by Queries and the UI (for example mm, kN, MPa, kW). Storage\nstays SI and every input may still use any unit of the right dimension; this only\nchanges how values are reported back.",
@@ -3993,7 +3994,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "units"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Change the Model's display name without resetting geometry, history or solved Results.\nA name-only edit is undoable and changes the full Model/Journal identity, but does not\nchange the Result-validity fingerprint. Whitespace-only names are rejected.",
@@ -4010,7 +4012,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "name"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,\nor axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs\nsolid bodies; mixing them makes the Model ill-posed.",
@@ -4027,7 +4030,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "idealisation"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body\nrename also renames its auto faces (`<name>.xmin` …). Fails with name.taken if `to`\nalready exists in that kind. Mapped and swept mapped Bodies also rename their mesher\ngeometry, named Face/Body-region selectors and material association.",
@@ -4052,7 +4056,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "kind",
         "name",
         "to"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Copy an object under a new name. A Body copy shares nothing with the original; a Step\ncopy references the same Constraints and Loads. Useful for \"the same load case but\ntwice the pressure\": duplicate, then re-issue the create Command with the new value.\nA mapped or swept mapped Body cannot be copied: the Model has one mesher geometry\nslot. Returns unsupported without changing the Model; use model.rename or mesh.set.",
@@ -4077,7 +4082,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "kind",
         "name",
         "as"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the Body\nwhile preserving its material, section and cuts; incompatible or consuming cuts reject\nthe replacement without changing the Model.",
@@ -4114,7 +4120,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "name",
         "size"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Cut an axis-aligned box out of the Body `from` (a hole, notch or opening). The cut's\nwalls are auto-named `<name>.xmin` … and refer to the faces of the hole, so a pressure\non `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
@@ -4153,7 +4160,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "from",
         "size",
         "at"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.\nReplacing an existing Body preserves its material, section and cuts, and validates the\nresulting shape before changing the Model.",
@@ -4174,7 +4182,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "name",
         "shape"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.\nReplacing a Body that has cuts therefore fails without changing the Model.",
@@ -4227,7 +4236,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "name",
         "points"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a\ncylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape\nis positioned in world coordinates, so use its `at` or a transform to place it.\nMapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.",
@@ -4252,7 +4262,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "from",
         "shape"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Re-import preserves the Body's material, section and cuts, and validates the\nresulting shape before changing the Model. Give `sha256` to have the engine verify the\ndata is the file you meant.",
@@ -4319,7 +4330,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "format",
         "data",
         "unitLength"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
@@ -4344,7 +4356,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "of",
         "where"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Name a node/element Set by a region rule (a box or a whole Body), for point-like\nconstraints, nodal forces and probes. Node sets from regions are exact at mesh nodes;\nuse a box slightly larger than the points you mean. A whole-Body rule also accepts\nthe implicit Body defined by a mapped or swept mapped mesher.",
@@ -4365,7 +4378,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "name",
         "where"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Remove a Body, a cut, or a named Set. Fails with in-use listing the constraints, loads\n(including temperature and volumetric heat sources), named selectors or free-mesher\ngeometry references that still use a Body; remove or retarget those first. Removing\na mapped or swept mapped Body clears its mesher and material association, preserving\nunrelated explicit geometry and Materials.",
@@ -4382,7 +4396,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "name"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
@@ -4412,7 +4427,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "at",
         "mass"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's\nratio `nu` (0 ≤ ν < 0.5), or orthotropic, by the `orthotropic` block — give exactly one\nof the two. `orientation` turns the material axes (wood grain, fibre direction, rolling\ndirection) away from the global axes; without it they are the global axes. Density `rho`\nis needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for\nheat transfer; `source` records where the numbers came from. Re-issuing with an existing\nname edits the material in place, so an omitted `orientation` clears the previous one.",
@@ -4522,7 +4538,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "name"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Assign a Material to one or more Bodies. Every Body needs a Material before solving;\na Body without one is reported by query.model and blocks solve.run.",
@@ -4546,7 +4563,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "material",
         "bodies"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Remove a Material that is not assigned to any Body. Fails with in-use listing the Bodies\nthat still use it; assign them another Material first with material.assign.",
@@ -4563,7 +4581,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "name"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,\nI, channel, or the properties given directly. A line member has no cross-section\ngeometry of its own, so the Section is where its area, second moments, torsion constant,\nshear factors and extreme-fibre distances come from. Re-issuing with an existing name\nedits the section in place. Assign it to Bodies with section.assign.",
@@ -4584,7 +4603,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "name",
         "shape"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Assign a Section to one or more Bodies. Every line Body needs a Section before solving;\none without it is reported by query.model warnings and blocks solve.run with\nmodel.no-section. A Section on a solid or sheet Body is carried but never used: those\nBodies get their cross-section from their geometry.",
@@ -4608,7 +4628,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "section",
         "bodies"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Remove a Section that is not assigned to any Body. Fails with in-use listing the Bodies\nthat still use it; assign them another Section first with section.assign.",
@@ -4625,7 +4646,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "name"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes.",
@@ -4667,7 +4689,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "mesher"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Write the current Mesh out as text the host saves; the Mesh is built first if it is\nstale. `vtu` is the VTK XML UnstructuredGrid that ParaView opens, carrying the element\nid and the Body index as cell data. Name a `step` to add that Step's result fields as\npoint data — displacement, reaction, stress and von Mises — so ParaView colours by them.\nResult fields require the Model state they were solved on; `result.stale` means run\n`solve.run` on that Step again before exporting it with the current Mesh.\n`msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).",
@@ -4690,7 +4713,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "format"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Fix displacement components to zero on a Set (default: all components, a clamped\nsupport). For a roller give only the normal component. Fixing every node of a Body\nmakes the solve trivial; fix faces, not bodies.",
@@ -4720,7 +4744,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "name",
         "on"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Prescribe a non-zero displacement of one component on a Set, for example a settlement\nof \"2 mm\" in uy. Reactions on prescribed Sets are reported like any other constraint.",
@@ -4749,7 +4774,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "on",
         "dof",
         "value"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Symmetry plane: fixes the displacement component along `normal` on the Set (the cut\nface of a half or quarter model). Model a half and say so in the report; loads on the\nsymmetry plane itself must be halved by you.",
@@ -4774,7 +4800,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "on",
         "normal"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Hold a Set at a fixed temperature in a heat Step (the Dirichlet boundary of conduction).\nA heat Step needs either one of these or a convection boundary, or the temperature is\nonly defined up to a constant and the solve is singular. In a transient Step the value is\nmultiplied by the Step's `amplitude`, so \"100 K\" with a sine amplitude is a driven end.",
@@ -4799,7 +4826,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "on",
         "value"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the\npoint it projects onto in `master`, in every displacement component. It is a linear\nconstraint inside the same operator — no iteration, no gap opening, no sliding — so a\nbonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the\nslave side: a node-to-face tie passes the patch test that way round. `tol` is the largest\ngap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the\nmaster than that is `contact.unpaired`. In a heat Step the same tie carries temperature,\nso the two parts are in perfect thermal contact. A tie is listed in a Step's\n`constraints` like any other, and is removed with constraint.remove. Ties add stiffness\nbetween Bodies that share no element, which query.cost does not count.",
@@ -4838,7 +4866,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "master",
         "slave",
         "kind"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Tie two sector faces related by a rotation: u(to) = R·u(from), with R the rotation of\n`angleDeg` about `axis` through `through` (default the origin). This is the zero-harmonic\ncondition: a static solve is exact for loading that repeats sector by sector, and a modal\nStep finds only the harmonic-index-0 family. Non-zero harmonics need a complex\neigenproblem and are not implemented. The two faces must mesh identically — use the\nrevolve mesher, whose `<body>.theta0` and `<body>.theta1` Sets are what this Command is\nfor. The tie is node to node, not node to face, because a matching sector mesh is the\nonly case in scope. Because the coefficients are a rotation rather than a partition of\nunity, a cyclic model's global reaction sum is not the applied load — read\nquery.result's per-Constraint reactions, never its balance, on a Step that lists this\nCommand. Refused in an explicit Step, like a bonded contact.",
@@ -4893,7 +4922,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "to",
         "axis",
         "angleDeg"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a\nload introduction is idealised. `distributed` makes the point follow the face's weighted\nmean displacement and adds no stiffness at all, so a force at the point spreads over the\nface in exactly the weights a uniform traction would produce, and a mass at the point\nloads the face the same way; that is the one to reach for. `rigid` is the opposite:\nevery node of the face takes the point's displacement, so the face cannot deform and the\npart around it is stiffer than the real one. Nodes carry translations only, so **neither\nkind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling\ndoes not rotate its face — it translates it. It is a linear multipoint constraint inside\nthe same operator, needs no iteration, is listed in a Step's `constraints` like any\nother Constraint, and is removed with constraint.remove.",
@@ -4922,7 +4952,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "point",
         "on",
         "kind"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without\nit first. Removing a constraint makes existing Results of that Step stale.",
@@ -4939,7 +4970,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "name"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.",
@@ -4964,7 +4996,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "on",
         "value"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "A total force vector spread uniformly over a face Set's area (\"10 kN downward on this\nface\"). Use this instead of nodal forces on solids: point loads give singular stresses.",
@@ -4994,7 +5027,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "on",
         "total"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "A total force split equally over the nodes of a node Set. Point loads on solids give\nsingular stresses near the node; prefer load.traction on a face unless you mean a point.",
@@ -5024,7 +5058,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "on",
         "total"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Gravity (or any uniform acceleration) as a body force on every Body whose Material has\na density; Bodies without one are skipped and listed in the warnings. Explicit Steps\napply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.",
@@ -5050,7 +5085,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "cmd",
         "name",
         "g"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),\nproducing thermal strain α·ΔT in a static Step. Needs `alpha` on the Material.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher.\nDisjoint Bodies compose independently, each using its own reference. Overlapping\nassignments must produce exactly the same increment; otherwise `solve.run` returns\n`model.ill-posed` naming both Loads and the Body. Equal increments are not added.\nWhen continuing a heat Step, its nodal temperatures replace `value`; these per-Body\nreferences still apply, with 293.15 K on Bodies without a temperature Load.",
@@ -5088,7 +5124,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "bodies",
         "value"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Newton cooling on a face Set: heat `h (T − tInf)` leaves the surface per unit area. This\nis the usual \"exposed to air\" boundary and, unlike a flux, it also stiffens the system,\nso a heat Step with a convection face needs no fixed temperature to be well posed.",
@@ -5117,7 +5154,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "on",
         "h",
         "tInf"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated\nface needs no Command at all: zero flux is what a face with no boundary condition does.",
@@ -5142,7 +5180,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "on",
         "q"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses\n`sigma * emissivity * (T^4 - tInf^4)` per unit area, with the Stefan-Boltzmann constant\nsigma = 5.670374419e-8 W/(m^2 K^4) built in. Both temperatures are absolute, so a Model\ndisplayed in degC is converted to kelvin before the fourth power is taken. `emissivity`\nis dimensionless and must lie in (0, 1]; 1 is a black body. Like a convection face this\nholds the temperature, so a heat Step whose only boundary is radiation is still well\nposed. Radiation makes a heat Step nonlinear: it is solved by repeated assembly and\nsolution, governed by step.add's nonlinearTolerance and nonlinearMaxIterations. A\nheat-steady Result reports the number of passes as its solver iteration count, and a Step\nthat runs out of them fails with solve.diverged rather than returning a wrong answer.",
@@ -5172,7 +5211,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "on",
         "emissivity",
         "tInf"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).\nIt is a density, not a total: the heat delivered is `q` times each Body's volume.\nTargets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;\nfor a plane-stress Sheet, the volume includes its specified thickness.",
@@ -5200,7 +5240,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "bodies",
         "q"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "A torsional load on a face Set of an axisymmetric Model with twist: a circumferential\ntraction `t_theta = c r` at every Gauss point, with `c` chosen so the net torque about\nthe axis equals `total` exactly, curved faces included. Outside the axisymmetric\nidealisation with twist this is `unsupported`; enable it with model.setIdealisation.",
@@ -5225,7 +5266,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "on",
         "total"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
@@ -5250,7 +5292,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "of",
         "conductance"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it\nfirst. Removing a load makes existing Results of that Step stale.",
@@ -5267,7 +5310,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "name"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`\nalone (default 1) to buckling, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,\n`rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to\nimplicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `rayleighAlpha`,\n`rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An\nimplicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]\n(default 0, Newmark average acceleration: second order, unconditionally stable and\nenergy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and\nRayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal\ndamping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).\nIts `amplitude` scales the Loads only and is refused with a non-zero prescribed\ndisplacement; its initial acceleration is solved from the loads at t = 0, so a suddenly\napplied load is exactly that. Its reactions include the inertia and damping forces and\nits applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the\nscalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.\nA harmonic Step requires `after` to name a Step whose `modal` Result is current: it\nsuperposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is\nbounded by that Step's `nModes`. It drives its own Loads at each swept frequency and\nanswers a nodal amplitude and a phase lag per retained frequency; `displacement` is the\namplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero\n— a moving support is base excitation, which this procedure does not do.",
@@ -5521,7 +5565,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "procedure",
         "constraints",
         "loads"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Remove a Step and the Result it produced, if any. Constraints and Loads it referenced\nstay in the Model and can be reused by other Steps. Fails with `in-use` while another\nStep names it in `after`; re-issue that dependent Step without the reference first.",
@@ -5538,7 +5583,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "name"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
@@ -5558,7 +5604,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "order"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
@@ -5600,7 +5647,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "step"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Re-mesh at each size, re-solve the Step and report the quantity of interest per size,\nthe observed convergence rate and a Richardson estimate of the converged value. Sizes\nmay have unequal refinement ratios. Three distinct positive sizes are needed for a\nfinite limit of the form q(h) = q* + C h^p with p > 0; otherwise the estimate and rate\nare unavailable. Restores the previous mesh settings afterwards unless `restore` is false.\nUses the Step's actual procedure: static and steady heat measure equilibrium fields;\ntransient heat and explicit dynamics measure the final field at the configured tEnd\nwith the Step's time settings unchanged. Modal Steps are unsupported because a mode\namplitude is not a mesh-independent quantity; compare frequencies with\nsolve.run/query.result instead. Steps with after are unsupported: solve their\ndependencies and target at each mesh explicitly.",
@@ -5634,7 +5682,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "step",
         "sizes",
         "quantity"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Undo the last `steps` Commands (default 1), restoring the Model and orphaning any\nResult produced after that point. Not recorded in the Journal. If `expectedJournal` is\nsupplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise\nnothing is undone. Use this guard for a saved turn boundary while other callers can edit.",
@@ -5661,7 +5710,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       },
       "required": [
         "cmd"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Redo the last `steps` undone Commands (default 1) by re-applying them; a redone solve\nre-solves. Not recorded in the Journal; any new Command after an undo clears the redo stack.",
@@ -5682,7 +5732,8 @@ Expand a definition to inspect its complete schema. Definition names are local t
       },
       "required": [
         "cmd"
-      ]
+      ],
+      "x-execution": "modelWrite"
     },
     {
       "description": "Load a Plugin filling one Extension Point (a material law, element, load, post\nquantity, mesher or procedure) in TypeScript, WGSL or wasm; recorded in the Journal by\ncontent hash. Not available yet: returns unsupported until the plugin phase lands.",
@@ -5713,6 +5764,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "language",
         "source"
       ],
+      "x-execution": "modelWrite",
       "x-status": "stub"
     }
   ]

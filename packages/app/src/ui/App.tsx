@@ -33,6 +33,7 @@ const Report = lazy(() => import('./Report').then((m) => m.Report));
 
 export interface AppProps {
   store: Store;
+  sessionKey?: string;
   dispatch: Dispatch;
   viewer: ViewerRef;
   /** Reads for the live parts of the form (`query.convert`); defaults to a no-op for tests. */
@@ -674,11 +675,8 @@ function ResizeHandle({ panel, axis, direction, store, dispatch, fixed = false }
   );
 }
 
-export function App({ store, dispatch, viewer, query, commands = [], registry }: AppProps) {
+function DocumentApp({ store, dispatch, viewer, query, commands = [] }: AppProps) {
   const s = useStore(store);
-  // Collapse hides the drawer, but keeps the conversation and any running turn alive.
-  const assistantOpened = useRef(false);
-  assistantOpened.current ||= s.panels['assistant'] === true;
   const started = s.model !== null && (s.model.bodies.length > 0 || s.revision > 0);
   const read = useMemo<Query>(() => query ?? (async () => ({ value: 0, unit: '' })), [query]);
 
@@ -727,16 +725,23 @@ export function App({ store, dispatch, viewer, query, commands = [], registry }:
       <ExportModal s={s} store={store} dispatch={dispatch} query={read} />
       {s.panels['report'] ? <Report s={s} store={store} dispatch={dispatch} query={read} /> : null}
       <Palette s={s} dispatch={dispatch} commands={commands} />
-      {registry ? <TutorialPanel registry={registry} store={store} /> : null}
-      {/* Issue #40: a fixed slot in this fragment, not a column of `.workspace`, so the drawer
-          opens on the start screen and keeps its conversation when the workspace comes up around
-          it. `.under-bar.with-assistant` reserves its 392 px, which is what keeps the five-column
-          layout of the design while the top bar stays full-width. Collapsing only hides the
-          drawer, preserving the conversation and any running turn. */}
-      {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
-      {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
       {/* The tour's stops are shell regions, so it waits for the shell. */}
       {started ? <Tour store={store} /> : null}
     </>
   );
+}
+
+/** Conversations and tutorial runs outlive their model's presentation subtree. Their producer
+ * lease, rather than mounting/unmounting a component, decides whether execution may continue. */
+export function App(props: AppProps) {
+  const { store, registry, dispatch } = props;
+  const s = useStore(store);
+  const assistantOpened = useRef(false);
+  assistantOpened.current ||= s.panels['assistant'] === true;
+  return <>
+    <DocumentApp key={props.sessionKey} {...props} />
+    {registry ? <TutorialPanel registry={registry} store={store} /> : null}
+    {registry && assistantOpened.current ? <AssistantPanel registry={registry} store={store} hidden={!s.panels['assistant']} panelWidth={s.panelSizes.assistant} /> : null}
+    {registry && assistantOpened.current && s.panels['assistant'] === true ? <ResizeHandle panel="assistant" axis="x" direction={-1} store={store} dispatch={dispatch} fixed /> : null}
+  </>;
 }

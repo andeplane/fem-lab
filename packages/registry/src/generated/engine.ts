@@ -2290,6 +2290,540 @@ export type FrameSample =
  */
 export type TimeSampling = "exact" | "nearest";
 /**
+ * A number with a unit, as text or as parts.
+ */
+export type Quantity =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * One section of the Markdown report. `query.report` writes the ones asked for in this order.
+ */
+export type ReportSection =
+  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
+/**
+ * Any Query response.
+ */
+export type QueryResult =
+  | ModelSummary
+  | ObjectDefinition
+  | MeshSummary
+  | SetInfo
+  | ResultSummary
+  | RetainedResults
+  | ResultSurface
+  | ResultField
+  | DifferenceField
+  | FramesResult
+  | FrameResult
+  | ProbeResult
+  | PathResult
+  | CostEstimate
+  | JournalDump
+  | JournalDiff
+  | ScriptText
+  | Converted
+  | MaterialLibrary
+  | ObjectList
+  | Capabilities
+  | ReportText;
+/**
+ * Mesher settings, SI.
+ */
+export type MesherSettings =
+  | {
+      size?: number | null;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      counts?: [number, number, number] | null;
+      sizes?: {
+        [k: string]: number | undefined;
+      };
+      kind: "lattice";
+    }
+  | {
+      body: string;
+      blocks: QuadBlock[];
+      kind: "mapped";
+    }
+  | {
+      of: string;
+      size: number;
+      refine: RefineBox[];
+      kind: "free";
+    }
+  | {
+      base: MesherSettings;
+      sweep: Sweep;
+      kind: "sweep";
+    }
+  | {
+      size: number;
+      max_elements: number;
+      kind: "tet";
+    };
+/**
+ * The shape of one block edge between its two corners.
+ */
+export type Curve =
+  | {
+      kind: "line";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      ccw: boolean;
+      kind: "arc";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      semi_axes: [number, number];
+      kind: "ellipse";
+    };
+/**
+ * How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
+ */
+export type Sweep =
+  | {
+      layers: number;
+      height: number;
+      kind: "extrude";
+    }
+  | {
+      segments: number;
+      angle_deg: number;
+      kind: "revolve";
+    };
+/**
+ * An omitted optional material property that a successful solve read as its resolved zero.
+ * The value is kept in SI with the Result, so later unit, name and material edits cannot
+ * rewrite the assumption under an already-computed answer.
+ */
+export type AssumedMaterialProperty = "rho" | "alpha";
+/**
+ * What a Command produced beyond changing the Model.
+ */
+export type Output =
+  | {
+      type: "none";
+    }
+  | {
+      kind: ObjectKind;
+      name: string;
+      type: "replaced";
+    }
+  | {
+      summary: ResultSummary;
+      type: "solve";
+    }
+  | {
+      report: StudyReport;
+      type: "study";
+    }
+  | {
+      format: ExportFormat;
+      filename: string;
+      mime: string;
+      text: string;
+      type: "export";
+    }
+  | {
+      steps: number;
+      type: "undo";
+    }
+  | {
+      steps: number;
+      type: "redo";
+    };
+/**
+ * Idealisation in SI.
+ */
+export type Idealisation =
+  | {
+      kind: "solid3d";
+    }
+  | {
+      thickness: number;
+      kind: "planeStress";
+    }
+  | {
+      kind: "planeStrain";
+    }
+  | {
+      /**
+       * Adds a third degree of freedom, the circumferential displacement u_theta, so the
+       * section can carry torsion. With twist, the third component of a vector Command is
+       * the circumferential direction. Defaults to false, so every Journal and saved Model
+       * written before this field existed still loads, and an untwisted axisymmetric Model
+       * serialises byte-identically to before (`MeshSettings::simplices`'s convention).
+       */
+      twist?: boolean;
+      kind: "axisymmetric";
+    };
+/**
+ * A shape: a primitive, a sketch made into a body, or a boolean/transform of shapes.
+ * All lengths are SI metres, angles degrees.
+ */
+export type Shape =
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      size: [number, number, number];
+      kind: "box";
+    }
+  | {
+      radius: number;
+      height: number;
+      segments?: number | null;
+      kind: "cylinder";
+    }
+  | {
+      radius: number;
+      segments?: number | null;
+      kind: "sphere";
+    }
+  | {
+      sketch: Sketch;
+      kind: "sheet";
+    }
+  | {
+      sketch: Sketch;
+      height: number;
+      kind: "extrude";
+    }
+  | {
+      sketch: Sketch;
+      angle: number;
+      segments?: number | null;
+      kind: "revolve";
+    }
+  | {
+      shapes: Shape[];
+      kind: "union";
+    }
+  | {
+      from: Shape;
+      cut: Shape[];
+      kind: "subtract";
+    }
+  | {
+      shapes: Shape[];
+      kind: "intersect";
+    }
+  | {
+      shape: Shape;
+      at: Affine3;
+      kind: "transform";
+    }
+  | {
+      name: string;
+      shape: Shape;
+      kind: "named";
+    }
+  | {
+      points: [number, number, number][];
+      members: [number, number][];
+      divisions: number;
+      kind: "polyline";
+    }
+  | {
+      /**
+       * Vertex positions in metres.
+       */
+      positions: [number, number, number][];
+      /**
+       * Triangles as vertex indices, counter-clockwise seen from outside.
+       */
+      triangles: [number, number, number][];
+      /**
+       * Dihedral angle in degrees above which an edge splits two face patches; 30 by default.
+       */
+      feature_angle?: number | null;
+      /**
+       * Collapse mesh features smaller than this many metres before use.
+       */
+      simplify_below?: number | null;
+      kind: "mesh";
+    };
+/**
+ * One edge of a loop. A loop is a closed sequence: segment k runs from the previous
+ * segment's `to` (segment 0 from the last segment's `to`) to its own `to`.
+ */
+export type Segment =
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      to: [number, number];
+      tag?: string | null;
+      kind: "line";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      to: [number, number];
+      ccw: boolean;
+      tag?: string | null;
+      kind: "arc";
+    };
+/**
+ * How a named Set is defined.
+ */
+export type SetSource =
+  | {
+      of: string;
+      where: ModelFile_FacePredicate;
+      kind: "face";
+    }
+  | {
+      where: ModelFile_RegionPredicate;
+      kind: "region";
+    };
+/**
+ * Selects boundary faces (3D) or boundary edges (2D) of a mesh by geometry.
+ */
+export type ModelFile_FacePredicate =
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      normal: [number, number, number];
+      offset: number;
+      tol?: number | null;
+      kind: "plane";
+    }
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      normal: [number, number, number];
+      max_angle_deg?: number | null;
+      kind: "normal";
+    }
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      min: [number, number, number];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      max: [number, number, number];
+      kind: "bbox";
+    }
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      point: [number, number, number];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      axis: [number, number, number];
+      radius: number;
+      tol?: number | null;
+      kind: "cylinder";
+    }
+  | {
+      of: ModelFile_FacePredicate[];
+      kind: "any";
+    };
+/**
+ * Selects nodes or elements of a mesh by region.
+ */
+export type ModelFile_RegionPredicate =
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      min: [number, number, number];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      max: [number, number, number];
+      kind: "bbox";
+    }
+  | {
+      name: string;
+      kind: "body";
+    };
+/**
+ * A property given once (isotropic: every material axis the same) or once per material axis.
+ * It is stored as it was given, so an isotropic Material serialises the single number it always
+ * had and saved files, Journal hashes and the tree editor see no change from orthotropic support.
+ */
+export type Axial = number | [number, number, number];
+/**
+ * A Constraint on a Set.
+ */
+export type Constraint = {
+  name: string;
+  on: string;
+} & Constraint1;
+export type Constraint1 =
+  | {
+      dofs: Dof[];
+      kind: "fix";
+    }
+  | {
+      dof: Dof;
+      value: number;
+      kind: "prescribe";
+    }
+  | {
+      normal: Axis;
+      kind: "symmetry";
+    }
+  | {
+      value: number;
+      kind: "temperature";
+    }
+  | {
+      master: string;
+      tol?: number | null;
+      kind: "bonded";
+    }
+  | {
+      from: string;
+      axis: Axis;
+      angleDeg: number;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      through?: [number, number, number] | null;
+      tol?: number | null;
+      kind: "cyclic";
+    }
+  | {
+      point: string;
+      coupling: CoupleKind;
+      kind: "couple";
+    };
+/**
+ * A Load.
+ */
+export type Load = {
+  name: string;
+} & Load1;
+export type Load1 =
+  | {
+      on: string;
+      value: number;
+      kind: "pressure";
+    }
+  | {
+      on: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      total: [number, number, number];
+      kind: "traction";
+    }
+  | {
+      on: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      total: [number, number, number];
+      kind: "force";
+    }
+  | {
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      g: [number, number, number];
+      kind: "gravity";
+    }
+  | {
+      bodies: string[];
+      value: number;
+      reference: number;
+      kind: "temperature";
+    }
+  | {
+      on: string;
+      h: number;
+      t_inf: number;
+      kind: "convection";
+    }
+  | {
+      on: string;
+      emissivity: number;
+      t_inf: number;
+      kind: "radiation";
+    }
+  | {
+      on: string;
+      q: number;
+      kind: "heatFlux";
+    }
+  | {
+      bodies: string[];
+      q: number;
+      kind: "heatSource";
+    }
+  | {
+      on: string;
+      total: number;
+      kind: "torque";
+    }
+  | {
+      of: string;
+      h: number;
+      kind: "thermalContact";
+    };
+/**
+ * A time function scaling the prescribed temperatures of a transient Step, SI.
+ */
+export type Amplitude =
+  | {
+      amplitude: number;
+      period: number;
+      kind: "sine";
+    }
+  | {
+      t: number[];
+      value: number[];
+      kind: "table";
+    };
+/**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  *
  * `step.add` is much the largest variant, and by design: it is the union of every procedure's
@@ -3468,324 +4002,32 @@ export type RegionPredicate2 =
       kind: "body";
     };
 /**
- * A number with a unit, as text or as parts.
+ * Monotonic committed state counter, encoded as a decimal string for lossless JS transport.
+ * It is neither Journal length nor a content hash; undo and repeated solves advance it.
  */
-export type Quantity =
-  | string
-  | {
-      value: number;
-      unit: string;
-    };
+export type StateVersion = string;
 /**
- * One section of the Markdown report. `query.report` writes the ones asked for in this order.
+ * Required registry classification. Session view actions are scoped but never engine writes.
  */
-export type ReportSection =
-  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
-/**
- * Any Query response.
- */
-export type QueryResult =
-  | ModelSummary
-  | ObjectDefinition
-  | MeshSummary
-  | SetInfo
-  | ResultSummary
-  | RetainedResults
-  | ResultSurface
-  | ResultField
-  | DifferenceField
-  | FramesResult
-  | FrameResult
-  | ProbeResult
-  | PathResult
-  | CostEstimate
-  | JournalDump
-  | JournalDiff
-  | ScriptText
-  | Converted
-  | MaterialLibrary
-  | ObjectList
-  | Capabilities
-  | ReportText;
-/**
- * Mesher settings, SI.
- */
-export type MesherSettings =
-  | {
-      size?: number | null;
-      /**
-       * @minItems 3
-       * @maxItems 3
-       */
-      counts?: [number, number, number] | null;
-      sizes?: {
-        [k: string]: number | undefined;
-      };
-      kind: "lattice";
-    }
-  | {
-      body: string;
-      blocks: QuadBlock[];
-      kind: "mapped";
-    }
-  | {
-      of: string;
-      size: number;
-      refine: RefineBox[];
-      kind: "free";
-    }
-  | {
-      base: MesherSettings;
-      sweep: Sweep;
-      kind: "sweep";
-    }
-  | {
-      size: number;
-      max_elements: number;
-      kind: "tet";
-    };
-/**
- * The shape of one block edge between its two corners.
- */
-export type Curve =
-  | {
-      kind: "line";
-    }
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      center: [number, number];
-      ccw: boolean;
-      kind: "arc";
-    }
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      center: [number, number];
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      semi_axes: [number, number];
-      kind: "ellipse";
-    };
-/**
- * How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
- */
-export type Sweep =
-  | {
-      layers: number;
-      height: number;
-      kind: "extrude";
-    }
-  | {
-      segments: number;
-      angle_deg: number;
-      kind: "revolve";
-    };
-/**
- * An omitted optional material property that a successful solve read as its resolved zero.
- * The value is kept in SI with the Result, so later unit, name and material edits cannot
- * rewrite the assumption under an already-computed answer.
- */
-export type AssumedMaterialProperty = "rho" | "alpha";
-/**
- * What a Command produced beyond changing the Model.
- */
-export type Output =
-  | {
-      type: "none";
-    }
-  | {
-      kind: ObjectKind;
-      name: string;
-      type: "replaced";
-    }
-  | {
-      summary: ResultSummary;
-      type: "solve";
-    }
-  | {
-      report: StudyReport;
-      type: "study";
-    }
-  | {
-      format: ExportFormat;
-      filename: string;
-      mime: string;
-      text: string;
-      type: "export";
-    }
-  | {
-      steps: number;
-      type: "undo";
-    }
-  | {
-      steps: number;
-      type: "redo";
-    };
-/**
- * Idealisation in SI.
- */
-export type Idealisation =
-  | {
-      kind: "solid3d";
-    }
-  | {
-      thickness: number;
-      kind: "planeStress";
-    }
-  | {
-      kind: "planeStrain";
-    }
-  | {
-      /**
-       * Adds a third degree of freedom, the circumferential displacement u_theta, so the
-       * section can carry torsion. With twist, the third component of a vector Command is
-       * the circumferential direction. Defaults to false, so every Journal and saved Model
-       * written before this field existed still loads, and an untwisted axisymmetric Model
-       * serialises byte-identically to before (`MeshSettings::simplices`'s convention).
-       */
-      twist?: boolean;
-      kind: "axisymmetric";
-    };
-/**
- * A shape: a primitive, a sketch made into a body, or a boolean/transform of shapes.
- * All lengths are SI metres, angles degrees.
- */
-export type Shape =
-  | {
-      /**
-       * @minItems 3
-       * @maxItems 3
-       */
-      size: [number, number, number];
-      kind: "box";
-    }
-  | {
-      radius: number;
-      height: number;
-      segments?: number | null;
-      kind: "cylinder";
-    }
-  | {
-      radius: number;
-      segments?: number | null;
-      kind: "sphere";
-    }
-  | {
-      sketch: Sketch;
-      kind: "sheet";
-    }
-  | {
-      sketch: Sketch;
-      height: number;
-      kind: "extrude";
-    }
-  | {
-      sketch: Sketch;
-      angle: number;
-      segments?: number | null;
-      kind: "revolve";
-    }
-  | {
-      shapes: Shape[];
-      kind: "union";
-    }
-  | {
-      from: Shape;
-      cut: Shape[];
-      kind: "subtract";
-    }
-  | {
-      shapes: Shape[];
-      kind: "intersect";
-    }
-  | {
-      shape: Shape;
-      at: Affine3;
-      kind: "transform";
-    }
-  | {
-      name: string;
-      shape: Shape;
-      kind: "named";
-    }
-  | {
-      points: [number, number, number][];
-      members: [number, number][];
-      divisions: number;
-      kind: "polyline";
-    }
-  | {
-      /**
-       * Vertex positions in metres.
-       */
-      positions: [number, number, number][];
-      /**
-       * Triangles as vertex indices, counter-clockwise seen from outside.
-       */
-      triangles: [number, number, number][];
-      /**
-       * Dihedral angle in degrees above which an edge splits two face patches; 30 by default.
-       */
-      feature_angle?: number | null;
-      /**
-       * Collapse mesh features smaller than this many metres before use.
-       */
-      simplify_below?: number | null;
-      kind: "mesh";
-    };
-/**
- * One edge of a loop. A loop is a closed sequence: segment k runs from the previous
- * segment's `to` (segment 0 from the last segment's `to`) to its own `to`.
- */
-export type Segment =
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      to: [number, number];
-      tag?: string | null;
-      kind: "line";
-    }
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      center: [number, number];
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      to: [number, number];
-      ccw: boolean;
-      tag?: string | null;
-      kind: "arc";
-    };
+export type ExecutionPolicy =
+  "modelRead" | "modelWrite" | "sessionView" | "workspace" | "replacement" | "producer" | "control";
 /**
  * How a named Set is defined.
  */
-export type SetSource =
+export type DocumentSnapshot_SetSource =
   | {
       of: string;
-      where: ModelFile_FacePredicate;
+      where: DocumentSnapshot_FacePredicate2;
       kind: "face";
     }
   | {
-      where: ModelFile_RegionPredicate;
+      where: DocumentSnapshot_RegionPredicate;
       kind: "region";
     };
 /**
  * Selects boundary faces (3D) or boundary edges (2D) of a mesh by geometry.
  */
-export type ModelFile_FacePredicate =
+export type DocumentSnapshot_FacePredicate2 =
   | {
       /**
        * @minItems 3
@@ -3834,13 +4076,13 @@ export type ModelFile_FacePredicate =
       kind: "cylinder";
     }
   | {
-      of: ModelFile_FacePredicate[];
+      of: DocumentSnapshot_FacePredicate2[];
       kind: "any";
     };
 /**
  * Selects nodes or elements of a mesh by region.
  */
-export type ModelFile_RegionPredicate =
+export type DocumentSnapshot_RegionPredicate =
   | {
       /**
        * @minItems 3
@@ -3859,147 +4101,954 @@ export type ModelFile_RegionPredicate =
       kind: "body";
     };
 /**
- * A property given once (isotropic: every material axis the same) or once per material axis.
- * It is stored as it was given, so an isotropic Material serialises the single number it always
- * had and saved files, Journal hashes and the tree editor see no change from orthotropic support.
+ * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
+ *
+ * `step.add` is much the largest variant, and by design: it is the union of every procedure's
+ * arguments, so it grows with each new procedure while the rest stay put. Boxing it would put
+ * a heap indirection on the Journal's replay path — the one place a Command is actually read
+ * in bulk — to save a few hundred kilobytes across a Journal of a few hundred entries.
  */
-export type Axial = number | [number, number, number];
-/**
- * A Constraint on a Set.
- */
-export type Constraint = {
-  name: string;
-  on: string;
-} & Constraint1;
-export type Constraint1 =
+export type DocumentSnapshot_Command =
   | {
-      dofs: Dof[];
-      kind: "fix";
+      name: string;
+      description?: string | null;
+      cmd: "model.new";
     }
   | {
-      dof: Dof;
-      value: number;
-      kind: "prescribe";
+      units: UnitSet;
+      cmd: "model.setUnits";
     }
   | {
-      normal: Axis;
-      kind: "symmetry";
+      name: string;
+      cmd: "model.setName";
     }
   | {
-      value: number;
-      kind: "temperature";
+      idealisation: IdealisationSpec;
+      cmd: "model.setIdealisation";
     }
   | {
-      master: string;
-      tol?: number | null;
-      kind: "bonded";
+      kind: ObjectKind;
+      name: string;
+      to: string;
+      cmd: "model.rename";
     }
   | {
+      kind: ObjectKind;
+      name: string;
+      as: string;
+      cmd: "model.duplicate";
+    }
+  | {
+      name: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      size: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      at?:
+        | [
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          ]
+        | null;
+      cmd: "geometry.addBox";
+    }
+  | {
+      name: string;
       from: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      size: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      at: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      cmd: "geometry.subtractBox";
+    }
+  | {
+      name: string;
+      shape: ShapeSpec;
+      cmd: "geometry.add";
+    }
+  | {
+      name: string;
+      points: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ][];
+      members?: [number, number][] | null;
+      divisions?: number | null;
+      cmd: "geometry.addLine";
+    }
+  | {
+      name: string;
+      from: string;
+      shape: ShapeSpec;
+      cmd: "geometry.subtract";
+    }
+  | {
+      name: string;
+      format: MeshFormat;
+      /**
+       * The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
+       * what a binary STL needs.
+       */
+      data: string;
+      encoding?: DataEncoding | null;
+      /**
+       * Hex sha256 of the decoded file, checked before it is read.
+       */
+      sha256?: string | null;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      unitLength:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * Dihedral angle in degrees above which an edge splits two face patches.
+       */
+      featureAngle?: number | null;
+      /**
+       * Collapse mesh features smaller than this before use.
+       */
+      simplifyBelow?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "geometry.import";
+    }
+  | {
+      name: string;
+      of: string;
+      where: FacePredicate;
+      cmd: "geometry.nameFace";
+    }
+  | {
+      name: string;
+      where: RegionPredicate2;
+      cmd: "geometry.nameRegion";
+    }
+  | {
+      name: string;
+      cmd: "geometry.remove";
+    }
+  | {
+      name: string;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       *
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      at: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      /**
+       * A mass with unit, e.g. "2 kg". Any unit of the right dimension is accepted.
+       */
+      mass:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "geometry.addMass";
+    }
+  | {
+      name: string;
+      E?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      nu?: number | null;
+      orthotropic?: Orthotropic2 | null;
+      orientation?: Orientation2 | null;
+      rho?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      alpha?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      k?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cp?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      yield?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      source?: string | null;
+      cmd: "material.add";
+    }
+  | {
+      material: string;
+      bodies: string[];
+      cmd: "material.assign";
+    }
+  | {
+      name: string;
+      cmd: "material.remove";
+    }
+  | {
+      name: string;
+      shape: SectionSpec;
+      cmd: "section.add";
+    }
+  | {
+      section: string;
+      bodies: string[];
+      cmd: "section.assign";
+    }
+  | {
+      name: string;
+      cmd: "section.remove";
+    }
+  | {
+      mesher: MesherSpec;
+      order?: number | null;
+      formulation?: Formulation | null;
+      simplices?: boolean | null;
+      cmd: "mesh.set";
+    }
+  | {
+      format: ExportFormat;
+      step?: string | null;
+      cmd: "mesh.export";
+    }
+  | {
+      name: string;
+      on: string;
+      dofs?: Dof[] | null;
+      cmd: "constraint.fix";
+    }
+  | {
+      name: string;
+      on: string;
+      dof: Dof;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      value:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "constraint.prescribe";
+    }
+  | {
+      name: string;
+      on: string;
+      normal: Axis;
+      cmd: "constraint.symmetry";
+    }
+  | {
+      name: string;
+      on: string;
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      value:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "constraint.temperature";
+    }
+  | {
+      name: string;
+      master: string;
+      slave: string;
+      kind: ContactKind;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "contact.add";
+    }
+  | {
+      name: string;
+      from: string;
+      to: string;
       axis: Axis;
       angleDeg: number;
       /**
        * @minItems 3
        * @maxItems 3
        */
-      through?: [number, number, number] | null;
-      tol?: number | null;
-      kind: "cyclic";
+      through?:
+        | [
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            ),
+            (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          ]
+        | null;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "constraint.cyclic";
     }
   | {
+      name: string;
       point: string;
-      coupling: CoupleKind;
-      kind: "couple";
-    };
-/**
- * A Load.
- */
-export type Load = {
-  name: string;
-} & Load1;
-export type Load1 =
-  | {
       on: string;
-      value: number;
-      kind: "pressure";
+      kind: CoupleKind;
+      cmd: "constraint.couple";
     }
   | {
+      name: string;
+      cmd: "constraint.remove";
+    }
+  | {
+      name: string;
+      on: string;
+      /**
+       * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+       */
+      value:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.pressure";
+    }
+  | {
+      name: string;
       on: string;
       /**
        * @minItems 3
        * @maxItems 3
+       *
+       * Items: A force with unit, e.g. "10 kN". Any unit of the right dimension is accepted.
        */
-      total: [number, number, number];
-      kind: "traction";
+      total: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      cmd: "load.traction";
     }
   | {
+      name: string;
       on: string;
       /**
        * @minItems 3
        * @maxItems 3
+       *
+       * Items: A force with unit, e.g. "10 kN". Any unit of the right dimension is accepted.
        */
-      total: [number, number, number];
-      kind: "force";
+      total: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      cmd: "load.force";
     }
   | {
+      name: string;
       /**
        * @minItems 3
        * @maxItems 3
+       *
+       * Items: A acceleration with unit, e.g. "9.81 m/s^2". Any unit of the right dimension is accepted.
        */
-      g: [number, number, number];
-      kind: "gravity";
+      g: [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ];
+      cmd: "load.gravity";
     }
   | {
+      name: string;
       bodies: string[];
-      value: number;
-      reference: number;
-      kind: "temperature";
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      value:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      reference?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "load.temperature";
     }
   | {
+      name: string;
       on: string;
-      h: number;
-      t_inf: number;
-      kind: "convection";
+      /**
+       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       */
+      h:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.convection";
     }
   | {
+      name: string;
+      on: string;
+      /**
+       * A heat flux with unit, e.g. "1 kW/m^2". Any unit of the right dimension is accepted.
+       */
+      q:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.heatFlux";
+    }
+  | {
+      name: string;
       on: string;
       emissivity: number;
-      t_inf: number;
-      kind: "radiation";
+      /**
+       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+       */
+      tInf:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.radiation";
     }
   | {
-      on: string;
-      q: number;
-      kind: "heatFlux";
-    }
-  | {
+      name: string;
       bodies: string[];
-      q: number;
-      kind: "heatSource";
+      /**
+       * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
+       */
+      q:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.heatSource";
     }
   | {
+      name: string;
       on: string;
-      total: number;
-      kind: "torque";
+      /**
+       * A torque with unit, e.g. "100 N m". Any unit of the right dimension is accepted.
+       */
+      total:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "load.torque";
     }
   | {
+      name: string;
       of: string;
-      h: number;
-      kind: "thermalContact";
-    };
-/**
- * A time function scaling the prescribed temperatures of a transient Step, SI.
- */
-export type Amplitude =
-  | {
-      amplitude: number;
-      period: number;
-      kind: "sine";
+      /**
+       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       */
+      conductance:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "contact.thermal";
     }
   | {
-      t: number[];
-      value: number[];
-      kind: "table";
+      name: string;
+      cmd: "load.remove";
+    }
+  | {
+      name: string;
+      procedure: Procedure;
+      constraints: string[];
+      loads: string[];
+      output?: Field[] | null;
+      after?: string | null;
+      nModes?: number | null;
+      shift?: number | null;
+      /**
+       * Maximum time increment of a heat-transient Step, or of a static Step with an
+       * amplitude. A uniform increment no larger than dt is chosen to finish exactly at
+       * tEnd; the Result reports the increment actually used.
+       */
+      dt?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      tEnd?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      theta?: number | null;
+      outputEvery?: number | null;
+      /**
+       * Maximum fraction of the explicit critical time step (usually 0.9). The increment
+       * may be reduced uniformly to finish exactly at tEnd.
+       */
+      dtFactor?: number | null;
+      amplitude?: AmplitudeSpec | null;
+      initial?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark
+       * average acceleration, no numerical damping); -0.05 is the usual choice when the
+       * mesh-frequency ringing of a sudden load should die out.
+       */
+      alpha?: number | null;
+      /**
+       * Mass-proportional Rayleigh damping α of `C = αM + βK`, read by an implicit Step
+       * (directly) and a harmonic one (as `ζ = α / (2ω)`, most of it at low frequency).
+       * Default "0 Hz"; must be non-negative, e.g. "0.5 1/s".
+       */
+      rayleighAlpha?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Stiffness-proportional Rayleigh damping β of `C = αM + βK`, read by an implicit Step
+       * (directly) and a harmonic one (as `ζ = βω / 2`, most of it at high frequency).
+       * Default "0 s"; must be non-negative, e.g. "1e-5 s".
+       */
+      rayleighBeta?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Initial velocities of an explicit or implicit Step, one uniform vector per Set of
+       * nodes; nodes in no entry start from rest.
+       */
+      initialVelocity?: InitialVelocitySpec[] | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
+       * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
+       * (default 10). More increments cost proportionally more but start each Newton solve
+       * closer to equilibrium, which is what makes a stiffening or buckling model converge.
+       */
+      increments?: number | null;
+      /**
+       * Halvings a static-nonlinear Step may use when an increment does not converge
+       * (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
+       */
+      maxCutbacks?: number | null;
+      /**
+       * Convergence tolerance for a Step that must iterate, relative in both cases: the
+       * sup-norm change of the solution between two passes for a radiating heat Step
+       * (default 1e-6), and the residual force and the displacement correction of one Newton
+       * increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
+       * tolerance, which is `solve.run`'s.
+       */
+      nonlinearTolerance?: number | null;
+      /**
+       * Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
+       * heat Step (default 50); for static-nonlinear it is what makes an increment cut back
+       * and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
+       * five iterations from a good starting point).
+       */
+      nonlinearMaxIterations?: number | null;
+      /**
+       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       */
+      fStart?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Last frequency of a harmonic sweep; must be above fStart.
+       */
+      fStop?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * How many frequencies the sweep evaluates, including both endpoints. At least 2.
+       */
+      points?: number | null;
+      /**
+       * Frequency spacing of a harmonic sweep; default linear.
+       */
+      sweep?: SweepSpacing | null;
+      /**
+       * Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
+       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+       */
+      dampingRatio?: number | null;
+      cmd: "step.add";
+    }
+  | {
+      name: string;
+      cmd: "step.remove";
+    }
+  | {
+      order: string[];
+      cmd: "step.reorder";
+    }
+  | {
+      step: string;
+      solver?: Solver | null;
+      tolerance?: number | null;
+      maxIterations?: number | null;
+      cmd: "solve.run";
+    }
+  | {
+      step: string;
+      /**
+       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      sizes: (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )[];
+      quantity: QuantityOfInterest;
+      restore?: boolean | null;
+      cmd: "study.converge";
+    }
+  | {
+      steps?: number | null;
+      expectedJournal?: string | null;
+      cmd: "journal.undo";
+    }
+  | {
+      steps?: number | null;
+      cmd: "journal.redo";
+    }
+  | {
+      name: string;
+      kind: PluginKind;
+      language: PluginLanguage;
+      source: PluginSource;
+      manifest?: unknown;
+      cmd: "plugin.load";
     };
 
 /**
@@ -4012,6 +5061,15 @@ export interface Engine {
   ack: Ack;
   error: EngineError;
   modelFile: ModelFile;
+  writeRequest: WriteRequest;
+  readRequest: ReadRequest;
+  stamp: Stamp;
+  executionPolicy: ExecutionPolicy;
+  writeReply: WriteReply;
+  readReply: ReadReply;
+  runLease: RunLease;
+  documentSnapshot: DocumentSnapshot;
+  replacementTicket: ReplacementTicket;
 }
 /**
  * Display units, all optional; SI defaults.
@@ -4455,163 +5513,8 @@ export interface Journal {
  */
 export interface JournalEntry {
   seq: number;
-  cmd: ModelFile_Command;
+  cmd: Command;
   hashAfter: string;
-}
-/**
- * Orthotropic stiffness in the material axes: three Young's moduli, three shear moduli and the
- * three *major* Poisson ratios, which follow `nu_ij / E_i = nu_ji / E_j`, so `nu12` is the
- * contraction along axis 2 caused by a pull along axis 1. Axis 1 is the strong direction — the
- * fibre, the grain, the rolling direction — and `orientation` says where it points. The nine
- * numbers must leave the compliance positive definite: roughly `|nu12| < sqrt(E1/E2)` and the
- * same for the other two pairs, and `material.add` says so if they do not.
- */
-export interface Orthotropic2 {
-  /**
-   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-   */
-  E1:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
-  /**
-   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-   */
-  E2:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
-  /**
-   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-   */
-  E3:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
-  /**
-   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-   */
-  G12:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
-  /**
-   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-   */
-  G13:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
-  /**
-   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-   */
-  G23:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
-  nu12: number;
-  nu13: number;
-  nu23: number;
-  /**
-   * Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on
-   * `material.add`, never both.
-   *
-   * @minItems 3
-   * @maxItems 3
-   */
-  alpha?:
-    | [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ]
-    | null;
-  /**
-   * Conductivity along the three material axes. Give this *or* the isotropic `k` on
-   * `material.add`, never both.
-   *
-   * @minItems 3
-   * @maxItems 3
-   */
-  k?:
-    | [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ]
-    | null;
-}
-/**
- * Rotate the material axes by `angle` (e.g. `"30 deg"`) about `axis`, a global direction that
- * is normalised for you and defaults to `[0, 0, 1]`. Material axis 1 is the one `E1`, `alpha`'s
- * first component and `k`'s first component belong to, and a positive angle turns it towards
- * the second axis. In a 2D idealisation — plane stress, plane strain or axisymmetric — the
- * rotation axis must be the out-of-plane one, `[0, 0, 1]`, because any other rotation would
- * couple the in-plane strains to the out-of-plane shears the idealisation does not carry.
- */
-export interface Orientation2 {
-  /**
-   * @minItems 3
-   * @maxItems 3
-   */
-  axis?: [number, number, number];
-  /**
-   * A dimensionless with unit, e.g. "0.3". Any unit of the right dimension is accepted.
-   */
-  angle:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
 }
 /**
  * `query.model` response.
@@ -5805,6 +6708,11 @@ export interface EngineError {
    * Stable machine-readable code, namespaced (`unit.dimension`, `mesh.inverted`, ...).
    */
   code:
+    | "session.expired"
+    | "session.conflict"
+    | "session.transitioning"
+    | "operation.reused"
+    | "operation.unknown"
     | "schema"
     | "unit.dimension"
     | "unit.unknown"
@@ -5860,7 +6768,7 @@ export interface ModelFile {
   format: string;
   engineVersion: string;
   model: Model;
-  journal: Journal;
+  journal: ModelFile_Journal;
 }
 /**
  * The Model.
@@ -6134,4 +7042,398 @@ export interface InitialVelocity {
 export interface PluginRecord {
   name: string;
   sha256: string;
+}
+/**
+ * Append-only list of applied Commands (undo truncates it).
+ */
+export interface ModelFile_Journal {
+  entries: ModelFile_JournalEntry[];
+}
+/**
+ * One applied Command and the Model hash after it.
+ */
+export interface ModelFile_JournalEntry {
+  seq: number;
+  cmd: ModelFile_Command;
+  hashAfter: string;
+}
+/**
+ * Orthotropic stiffness in the material axes: three Young's moduli, three shear moduli and the
+ * three *major* Poisson ratios, which follow `nu_ij / E_i = nu_ji / E_j`, so `nu12` is the
+ * contraction along axis 2 caused by a pull along axis 1. Axis 1 is the strong direction — the
+ * fibre, the grain, the rolling direction — and `orientation` says where it points. The nine
+ * numbers must leave the compliance positive definite: roughly `|nu12| < sqrt(E1/E2)` and the
+ * same for the other two pairs, and `material.add` says so if they do not.
+ */
+export interface Orthotropic2 {
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  E1:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  E2:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  E3:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  G12:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  G13:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  G23:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+  nu12: number;
+  nu13: number;
+  nu23: number;
+  /**
+   * Thermal expansion along the three material axes. Give this *or* the isotropic `alpha` on
+   * `material.add`, never both.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  alpha?:
+    | [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ]
+    | null;
+  /**
+   * Conductivity along the three material axes. Give this *or* the isotropic `k` on
+   * `material.add`, never both.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  k?:
+    | [
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        ),
+        (
+          | string
+          | {
+              value: number;
+              unit: string;
+            }
+        )
+      ]
+    | null;
+}
+/**
+ * Rotate the material axes by `angle` (e.g. `"30 deg"`) about `axis`, a global direction that
+ * is normalised for you and defaults to `[0, 0, 1]`. Material axis 1 is the one `E1`, `alpha`'s
+ * first component and `k`'s first component belong to, and a positive angle turns it towards
+ * the second axis. In a 2D idealisation — plane stress, plane strain or axisymmetric — the
+ * rotation axis must be the out-of-plane one, `[0, 0, 1]`, because any other rotation would
+ * couple the in-plane strains to the out-of-plane shears the idealisation does not carry.
+ */
+export interface Orientation2 {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  axis?: [number, number, number];
+  /**
+   * A dimensionless with unit, e.g. "0.3". Any unit of the right dimension is accepted.
+   */
+  angle:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+}
+/**
+ * Every write names both its owner and the state it expects. Missing scope is never current.
+ */
+export interface WriteRequest {
+  context: ExecutionContext;
+  expectedVersion: StateVersion;
+  command: Command;
+}
+/**
+ * A producer captures this scope before awaiting; children inherit it without rebinding.
+ */
+export interface ExecutionContext {
+  session: SessionRef;
+  runId: string;
+  operationId: string;
+}
+/**
+ * Runtime identity of one activation, including reopen of identical saved bytes.
+ * The host injects a fresh backend epoch on restart; the owner issues session ids within it.
+ */
+export interface SessionRef {
+  backendEpoch: string;
+  sessionId: string;
+}
+export interface ReadRequest {
+  context: ExecutionContext;
+  query: Query;
+}
+export interface Stamp {
+  session: SessionRef;
+  stateVersion: StateVersion;
+}
+/**
+ * Replies carry the request identity even when a successful replacement issues a fresh stamp.
+ */
+export interface WriteReply {
+  context: ExecutionContext;
+  stamp: Stamp;
+  ack: Ack;
+}
+export interface ReadReply {
+  context: ExecutionContext;
+  stamp: Stamp;
+  value: QueryResult;
+}
+/**
+ * A producer's initial binding. It advances only from its own replies or an explicit read.
+ */
+export interface RunLease {
+  stamp: Stamp;
+  runId: string;
+}
+/**
+ * One coherent publication; no await or mutator can interleave its constituent reads.
+ */
+export interface DocumentSnapshot {
+  stamp: Stamp;
+  model: ModelSummary;
+  file: DocumentSnapshot_ModelFile;
+  journal: DocumentSnapshot_JournalDump;
+  objects: ObjectList;
+  results: RetainedResults;
+  script: string;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+/**
+ * The saved file: a Model snapshot plus its Journal.
+ */
+export interface DocumentSnapshot_ModelFile {
+  /**
+   * Always `"femlab/1"`.
+   */
+  format: string;
+  engineVersion: string;
+  model: DocumentSnapshot_Model;
+  journal: DocumentSnapshot_Journal;
+}
+/**
+ * The Model.
+ */
+export interface DocumentSnapshot_Model {
+  name: string;
+  description?: string | null;
+  units?: UnitSet2;
+  idealisation: Idealisation;
+  bodies?: Body[];
+  cuts?: Cut[];
+  /**
+   * Lumped point masses, each also a node Set of its own name. Omitted when empty, so a
+   * Model without one hashes exactly as it did before point masses existed.
+   */
+  points?: PointMass[];
+  sets?: DocumentSnapshot_NamedSet[];
+  materials?: DocumentSnapshot_Material[];
+  /**
+   * Skipped when empty, so a Model with no line members hashes exactly as it did before
+   * Sections existed and every committed Journal hash still holds.
+   */
+  sections?: NamedSection[];
+  constraints?: Constraint[];
+  loads?: Load[];
+  steps?: Step[];
+  mesh?: MeshSettings | null;
+  /**
+   * The material of the mesher's implicit Body. The mapped mesher *is* its own geometry, so
+   * there is no [`Body`] record to carry the assignment; `material.assign` names that Body
+   * like any other and the name lands here.
+   */
+  mesherMaterial?: string | null;
+  plugins?: PluginRecord[];
+}
+/**
+ * Display units, all optional; SI defaults.
+ */
+export interface UnitSet2 {
+  length?: string | null;
+  force?: string | null;
+  /**
+   * Thermal reaction and applied power display unit; defaults to W, independently of force.
+   */
+  power?: string | null;
+  stress?: string | null;
+  mass?: string | null;
+  density?: string | null;
+  time?: string | null;
+  temperature?: string | null;
+  acceleration?: string | null;
+}
+/**
+ * A named Set from a predicate (auto face Sets are not stored: they follow the shapes).
+ */
+export interface DocumentSnapshot_NamedSet {
+  name: string;
+  source: DocumentSnapshot_SetSource;
+}
+/**
+ * A material, SI: isotropic or orthotropic, with optional axes.
+ */
+export interface DocumentSnapshot_Material {
+  name: string;
+  /**
+   * Isotropic stiffness; `None` exactly when `orthotropic` is given.
+   */
+  e?: number | null;
+  nu?: number | null;
+  /**
+   * Orthotropic stiffness in the material axes; `None` exactly when `e`/`nu` are given.
+   */
+  orthotropic?: DocumentSnapshot_Orthotropic | null;
+  /**
+   * Where the material axes point; `None` means they are the global axes.
+   */
+  orientation?: DocumentSnapshot_Orientation | null;
+  rho?: number | null;
+  /**
+   * Thermal expansion, one value or one per material axis.
+   */
+  alpha?: Axial | null;
+  /**
+   * Conductivity, one value or one per material axis.
+   */
+  k?: Axial | null;
+  cp?: number | null;
+  yield?: number | null;
+  source?: string | null;
+}
+/**
+ * Orthotropic stiffness in the material axes, SI, major Poisson convention.
+ */
+export interface DocumentSnapshot_Orthotropic {
+  E1: number;
+  E2: number;
+  E3: number;
+  G12: number;
+  G13: number;
+  G23: number;
+  nu12: number;
+  nu13: number;
+  nu23: number;
+}
+/**
+ * Where a Material's axes point: `angle` radians about the unit `axis`, SI.
+ */
+export interface DocumentSnapshot_Orientation {
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  axis: [number, number, number];
+  angle: number;
+}
+/**
+ * Append-only list of applied Commands (undo truncates it).
+ */
+export interface DocumentSnapshot_Journal {
+  entries: DocumentSnapshot_JournalEntry[];
+}
+/**
+ * One applied Command and the Model hash after it.
+ */
+export interface DocumentSnapshot_JournalEntry {
+  seq: number;
+  cmd: DocumentSnapshot_Command;
+  hashAfter: string;
+}
+/**
+ * `query.journal` response.
+ */
+export interface DocumentSnapshot_JournalDump {
+  /**
+   * Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
+   */
+  hash: string;
+  entries: DocumentSnapshot_JournalEntry[];
+  revision: number;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+export interface ReplacementTicket {
+  context: ExecutionContext;
+  expected: Stamp;
+  target: Stamp;
+  nonce: StateVersion;
 }

@@ -985,6 +985,7 @@ pub enum Command {
     /// Results and the undo history; it is the first entry of every Journal, so call it once
     /// at the start, never to "reset" mid-way (use journal.undo for that).
     #[serde(rename = "model.new", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "replacement"))]
     ModelNew {
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -995,18 +996,21 @@ pub enum Command {
     /// stays SI and every input may still use any unit of the right dimension; this only
     /// changes how values are reported back.
     #[serde(rename = "model.setUnits", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ModelSetUnits { units: UnitSet },
 
     /// Change the Model's display name without resetting geometry, history or solved Results.
     /// A name-only edit is undoable and changes the full Model/Journal identity, but does not
     /// change the Result-validity fingerprint. Whitespace-only names are rejected.
     #[serde(rename = "model.setName", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ModelSetName { name: String },
 
     /// Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,
     /// or axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs
     /// solid bodies; mixing them makes the Model ill-posed.
     #[serde(rename = "model.setIdealisation", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ModelSetIdealisation { idealisation: IdealisationSpec },
 
     /// Rename a Body, Material, Set, Constraint, Load or Step and every reference to it. A Body
@@ -1014,6 +1018,7 @@ pub enum Command {
     /// already exists in that kind. Mapped and swept mapped Bodies also rename their mesher
     /// geometry, named Face/Body-region selectors and material association.
     #[serde(rename = "model.rename", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ModelRename { kind: ObjectKind, name: String, to: String },
 
     /// Copy an object under a new name. A Body copy shares nothing with the original; a Step
@@ -1022,6 +1027,7 @@ pub enum Command {
     /// A mapped or swept mapped Body cannot be copied: the Model has one mesher geometry
     /// slot. Returns unsupported without changing the Model; use model.rename or mesh.set.
     #[serde(rename = "model.duplicate", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ModelDuplicate {
         kind: ObjectKind,
         name: String,
@@ -1035,6 +1041,7 @@ pub enum Command {
     /// while preserving its material, section and cuts; incompatible or consuming cuts reject
     /// the replacement without changing the Model.
     #[serde(rename = "geometry.addBox", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryAddBox {
         name: String,
         size: [Q<Length>; 3],
@@ -1047,6 +1054,7 @@ pub enum Command {
     /// on `hole.zmin` acts on the hole's floor. Cuts that remove everything are an error.
     /// Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
     #[serde(rename = "geometry.subtractBox", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometrySubtractBox { name: String, from: String, size: [Q<Length>; 3], at: [Q<Length>; 3] },
 
     /// Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a
@@ -1055,6 +1063,7 @@ pub enum Command {
     /// Replacing an existing Body preserves its material, section and cuts, and validates the
     /// resulting shape before changing the Model.
     #[serde(rename = "geometry.add", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryAdd { name: String, shape: ShapeSpec },
 
     /// Add a Body made of straight line members: a truss. `points` are the joints, in order,
@@ -1068,6 +1077,7 @@ pub enum Command {
     /// Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
     /// Replacing a Body that has cuts therefore fails without changing the Model.
     #[serde(rename = "geometry.addLine", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryAddLine {
         name: String,
         points: Vec<[Q<Length>; 3]>,
@@ -1082,6 +1092,7 @@ pub enum Command {
     /// is positioned in world coordinates, so use its `at` or a transform to place it.
     /// Mapped and swept mapped Bodies return unsupported; edit their blocks with mesh.set.
     #[serde(rename = "geometry.subtract", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometrySubtract { name: String, from: String, shape: ShapeSpec },
 
     /// Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command
@@ -1099,6 +1110,7 @@ pub enum Command {
     /// resulting shape before changing the Model. Give `sha256` to have the engine verify the
     /// data is the file you meant.
     #[serde(rename = "geometry.import", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryImport {
         name: String,
         format: MeshFormat,
@@ -1126,6 +1138,7 @@ pub enum Command {
     /// implicit Body defined by a mapped or swept mapped mesher. The rule selects only that
     /// Body's actual mesh boundary. Prefer the auto face names when one fits.
     #[serde(rename = "geometry.nameFace", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryNameFace {
         name: String,
         of: String,
@@ -1138,6 +1151,7 @@ pub enum Command {
     /// use a box slightly larger than the points you mean. A whole-Body rule also accepts
     /// the implicit Body defined by a mapped or swept mapped mesher.
     #[serde(rename = "geometry.nameRegion", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryNameRegion {
         name: String,
         #[serde(rename = "where")]
@@ -1150,6 +1164,7 @@ pub enum Command {
     /// a mapped or swept mapped Body clears its mesher and material association, preserving
     /// unrelated explicit geometry and Materials.
     #[serde(rename = "geometry.remove", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryRemove { name: String },
 
     /// Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing
@@ -1161,6 +1176,7 @@ pub enum Command {
     /// it; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —
     /// so it models a compact mass, not a flywheel.
     #[serde(rename = "geometry.addMass", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryAddMass { name: String, at: [Q<Length>; 3], mass: Q<Mass> },
 
     /// Define a linear-elastic Material: either isotropic, by Young's modulus `E` and Poisson's
@@ -1171,6 +1187,7 @@ pub enum Command {
     /// heat transfer; `source` records where the numbers came from. Re-issuing with an existing
     /// name edits the material in place, so an omitted `orientation` clears the previous one.
     #[serde(rename = "material.add", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     MaterialAdd {
         name: String,
         #[serde(rename = "E", default, skip_serializing_if = "Option::is_none")]
@@ -1199,11 +1216,13 @@ pub enum Command {
     /// Assign a Material to one or more Bodies. Every Body needs a Material before solving;
     /// a Body without one is reported by query.model and blocks solve.run.
     #[serde(rename = "material.assign", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     MaterialAssign { material: String, bodies: Vec<String> },
 
     /// Remove a Material that is not assigned to any Body. Fails with in-use listing the Bodies
     /// that still use it; assign them another Material first with material.assign.
     #[serde(rename = "material.remove", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     MaterialRemove { name: String },
 
     /// Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,
@@ -1212,6 +1231,7 @@ pub enum Command {
     /// shear factors and extreme-fibre distances come from. Re-issuing with an existing name
     /// edits the section in place. Assign it to Bodies with section.assign.
     #[serde(rename = "section.add", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     SectionAdd { name: String, shape: SectionSpec },
 
     /// Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
@@ -1219,11 +1239,13 @@ pub enum Command {
     /// model.no-section. A Section on a solid or sheet Body is carried but never used: those
     /// Bodies get their cross-section from their geometry.
     #[serde(rename = "section.assign", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     SectionAssign { section: String, bodies: Vec<String> },
 
     /// Remove a Section that is not assigned to any Body. Fails with in-use listing the Bodies
     /// that still use it; assign them another Section first with section.assign.
     #[serde(rename = "section.remove", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     SectionRemove { name: String },
 
     /// Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
@@ -1240,6 +1262,7 @@ pub enum Command {
     /// `simplices` is true, or under the `tet` mesher, because simplex elements have no
     /// incompatible modes.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     MeshSet {
         mesher: MesherSpec,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1258,6 +1281,7 @@ pub enum Command {
     /// `solve.run` on that Step again before exporting it with the current Mesh.
     /// `msh`, `inp` and `stl` write the Mesh alone (Gmsh, Abaqus/CalculiX, an STL skin).
     #[serde(rename = "mesh.export", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     MeshExport {
         format: ExportFormat,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1268,6 +1292,7 @@ pub enum Command {
     /// support). For a roller give only the normal component. Fixing every node of a Body
     /// makes the solve trivial; fix faces, not bodies.
     #[serde(rename = "constraint.fix", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintFix {
         name: String,
         on: SetRef,
@@ -1278,12 +1303,14 @@ pub enum Command {
     /// Prescribe a non-zero displacement of one component on a Set, for example a settlement
     /// of "2 mm" in uy. Reactions on prescribed Sets are reported like any other constraint.
     #[serde(rename = "constraint.prescribe", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintPrescribe { name: String, on: SetRef, dof: Dof, value: Q<Length> },
 
     /// Symmetry plane: fixes the displacement component along `normal` on the Set (the cut
     /// face of a half or quarter model). Model a half and say so in the report; loads on the
     /// symmetry plane itself must be halved by you.
     #[serde(rename = "constraint.symmetry", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintSymmetry { name: String, on: SetRef, normal: Axis },
 
     /// Hold a Set at a fixed temperature in a heat Step (the Dirichlet boundary of conduction).
@@ -1291,6 +1318,7 @@ pub enum Command {
     /// only defined up to a constant and the solve is singular. In a transient Step the value is
     /// multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driven end.
     #[serde(rename = "constraint.temperature", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintTemperature { name: String, on: SetRef, value: Q<Temperature> },
 
     /// Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
@@ -1304,6 +1332,7 @@ pub enum Command {
     /// `constraints` like any other, and is removed with constraint.remove. Ties add stiffness
     /// between Bodies that share no element, which query.cost does not count.
     #[serde(rename = "contact.add", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ContactAdd {
         name: String,
         master: SetRef,
@@ -1325,6 +1354,7 @@ pub enum Command {
     /// query.result's per-Constraint reactions, never its balance, on a Step that lists this
     /// Command. Refused in an explicit Step, like a bonded contact.
     #[serde(rename = "constraint.cyclic", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintCyclic {
         name: String,
         from: SetRef,
@@ -1348,33 +1378,39 @@ pub enum Command {
     /// the same operator, needs no iteration, is listed in a Step's `constraints` like any
     /// other Constraint, and is removed with constraint.remove.
     #[serde(rename = "constraint.couple", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintCouple { name: String, point: String, on: SetRef, kind: CoupleKind },
 
     /// Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without
     /// it first. Removing a constraint makes existing Results of that Step stale.
     #[serde(rename = "constraint.remove", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintRemove { name: String },
 
     /// Uniform pressure on a face Set, positive into the surface (a negative value pulls).
     /// Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
     /// force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
     #[serde(rename = "load.pressure", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadPressure { name: String, on: SetRef, value: Q<Stress> },
 
     /// A total force vector spread uniformly over a face Set's area ("10 kN downward on this
     /// face"). Use this instead of nodal forces on solids: point loads give singular stresses.
     #[serde(rename = "load.traction", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadTraction { name: String, on: SetRef, total: [Q<Force>; 3] },
 
     /// A total force split equally over the nodes of a node Set. Point loads on solids give
     /// singular stresses near the node; prefer load.traction on a face unless you mean a point.
     #[serde(rename = "load.force", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadForce { name: String, on: SetRef, total: [Q<Force>; 3] },
 
     /// Gravity (or any uniform acceleration) as a body force on every Body whose Material has
     /// a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
     /// apply gravity with their lumped inertia (m_i g); static Steps use consistent body forces.
     #[serde(rename = "load.gravity", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadGravity { name: String, g: [Q<Acceleration>; 3] },
 
     /// A uniform temperature on the listed Bodies relative to `reference` (default 293.15 K),
@@ -1386,6 +1422,7 @@ pub enum Command {
     /// When continuing a heat Step, its nodal temperatures replace `value`; these per-Body
     /// references still apply, with 293.15 K on Bodies without a temperature Load.
     #[serde(rename = "load.temperature", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadTemperature {
         name: String,
         bodies: Vec<String>,
@@ -1398,11 +1435,13 @@ pub enum Command {
     /// is the usual "exposed to air" boundary and, unlike a flux, it also stiffens the system,
     /// so a heat Step with a convection face needs no fixed temperature to be well posed.
     #[serde(rename = "load.convection", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadConvection { name: String, on: SetRef, h: Q<HeatTransfer>, t_inf: Q<Temperature> },
 
     /// A prescribed heat flux into a face Set, in W/m² (negative flows outward). An insulated
     /// face needs no Command at all: zero flux is what a face with no boundary condition does.
     #[serde(rename = "load.heatFlux", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadHeatFlux { name: String, on: SetRef, q: Q<HeatFlux> },
 
     /// Grey-body radiation from a face Set to a large surrounding at `tInf`: the surface loses
@@ -1416,6 +1455,7 @@ pub enum Command {
     /// heat-steady Result reports the number of passes as its solver iteration count, and a Step
     /// that runs out of them fails with solve.diverged rather than returning a wrong answer.
     #[serde(rename = "load.radiation", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadRadiation { name: String, on: SetRef, emissivity: f64, t_inf: Q<Temperature> },
 
     /// A volumetric heat source on whole Bodies, in W/m³ (ohmic heating, hydration, a reaction).
@@ -1423,6 +1463,7 @@ pub enum Command {
     /// Targets may be explicit geometry or the Body defined by a mapped or swept mapped mesher;
     /// for a plane-stress Sheet, the volume includes its specified thickness.
     #[serde(rename = "load.heatSource", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadHeatSource { name: String, bodies: Vec<String>, q: Q<HeatSource> },
 
     /// A torsional load on a face Set of an axisymmetric Model with twist: a circumferential
@@ -1430,6 +1471,7 @@ pub enum Command {
     /// the axis equals `total` exactly, curved faces included. Outside the axisymmetric
     /// idealisation with twist this is `unsupported`; enable it with model.setIdealisation.
     #[serde(rename = "load.torque", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadTorque { name: String, on: SetRef, total: Q<Torque> },
 
     /// A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the
@@ -1438,11 +1480,13 @@ pub enum Command {
     /// two temperature fields instead of one field to tInf. Naming a contact here replaces its
     /// perfect thermal tie; the mechanical tie is unaffected.
     #[serde(rename = "contact.thermal", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     ContactThermal { name: String, of: String, conductance: Q<HeatTransfer> },
 
     /// Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it
     /// first. Removing a load makes existing Results of that Step stale.
     #[serde(rename = "load.remove", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     LoadRemove { name: String },
 
     /// Define an analysis Step: the procedure, and which Constraints and Loads are active in
@@ -1492,6 +1536,7 @@ pub enum Command {
     /// — a moving support is base excitation, which this procedure does not do.
 
     #[serde(rename = "step.add", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     StepAdd {
         name: String,
         procedure: Procedure,
@@ -1589,12 +1634,14 @@ pub enum Command {
     /// stay in the Model and can be reused by other Steps. Fails with `in-use` while another
     /// Step names it in `after`; re-issue that dependent Step without the reference first.
     #[serde(rename = "step.remove", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     StepRemove { name: String },
 
     /// Set the run order of Steps; `order` must list every Step name exactly once and keep each
     /// Step after the prerequisite named by its `after` field. Steps run in this order and a
     /// later Step may inherit state (a temperature field) from an earlier one.
     #[serde(rename = "step.reorder", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     StepReorder { order: Vec<String> },
 
     /// Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,
@@ -1610,6 +1657,7 @@ pub enum Command {
     /// On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
     /// assembly and triangular solves retain the engine thread count.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     SolveRun {
         step: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1632,6 +1680,7 @@ pub enum Command {
     /// solve.run/query.result instead. Steps with after are unsupported: solve their
     /// dependencies and target at each mesh explicitly.
     #[serde(rename = "study.converge", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     StudyConverge {
         step: String,
         sizes: Vec<Q<Length>>,
@@ -1645,6 +1694,7 @@ pub enum Command {
     /// supplied, it must equal the complete-history `hash` from `query.journal` at execution time; otherwise
     /// nothing is undone. Use this guard for a saved turn boundary while other callers can edit.
     #[serde(rename = "journal.undo", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     JournalUndo {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<u32>,
@@ -1655,6 +1705,7 @@ pub enum Command {
     /// Redo the last `steps` undone Commands (default 1) by re-applying them; a redone solve
     /// re-solves. Not recorded in the Journal; any new Command after an undo clears the redo stack.
     #[serde(rename = "journal.redo", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     JournalRedo {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<u32>,
@@ -1664,6 +1715,7 @@ pub enum Command {
     /// quantity, mesher or procedure) in TypeScript, WGSL or wasm; recorded in the Journal by
     /// content hash. Not available yet: returns unsupported until the plugin phase lands.
     #[serde(rename = "plugin.load", rename_all = "camelCase")]
+    #[schemars(extend("x-execution" = "modelWrite"))]
     #[schemars(extend("x-status" = "stub"))]
     PluginLoad {
         name: String,

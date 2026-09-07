@@ -68,12 +68,11 @@ fn run_replays_the_cantilever_journal_in_every_form() {
         .success()
         .stdout(contains("revision 10"));
     // a saved file round-trips: run --json gives the summary; write a femlab/1 file and run it
-    let mut engine = femlab_engine::Engine::new(None, Box::new(femlab_engine::NoClock), 1);
-    let entries: Vec<femlab_engine::JournalEntry> =
-        serde_json::from_str(&std::fs::read_to_string(&journal).unwrap()).unwrap();
-    pollster::block_on(engine.replay(&entries, false, true)).unwrap();
     let file = dir.join("model.json");
-    std::fs::write(&file, serde_json::to_string(&engine.export_file()).unwrap()).unwrap();
+    femlab()
+        .args(["export", journal.to_str().unwrap(), "--format", "journal", "--out", file.to_str().unwrap(), "--cpu"])
+        .assert()
+        .success();
     femlab()
         .args(["run", file.to_str().unwrap(), "--verify"])
         .assert()
@@ -126,8 +125,12 @@ fn run_replays_the_cantilever_journal_in_every_form() {
     file_v["model"]["bodies"][0]["shape"]["size"] = serde_json::json!([0.0, 1.0, 1.0]);
     file_v["journal"]["entries"] = serde_json::json!([]);
     std::fs::write(dir.join("broken.json"), serde_json::to_string(&file_v).unwrap()).unwrap();
-    // an empty journal replays to an empty model, so the summary succeeds; broken shapes only bite after import
-    femlab().args(["run", dir.join("broken.json").to_str().unwrap()]).assert().success();
+    // A saved snapshot may no longer bypass Journal validation, even without --verify.
+    femlab()
+        .args(["run", dir.join("broken.json").to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stderr(contains("Model snapshot and Journal describe different models"));
     let _ = std::fs::remove_dir_all(dir);
 }
 

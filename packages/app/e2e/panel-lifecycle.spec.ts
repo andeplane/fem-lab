@@ -23,7 +23,7 @@ test('@cpu every panel, disclosure and tab survives two open/close cycles', asyn
   });
   await page.goto('./');
   await page.waitForFunction(() => typeof window.fem !== 'undefined');
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
+  await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
 
   const topbar = page.locator('.topbar');

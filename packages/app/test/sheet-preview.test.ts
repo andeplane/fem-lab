@@ -1,3 +1,4 @@
+import { batchModule } from '../../../tools/checked-batch.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -6,7 +7,7 @@ import { expect, it } from 'vitest';
 const root = path.resolve(import.meta.dirname, '../../..');
 const commands = JSON.parse(readFileSync(path.join(root, 'crates/engine/tests/fixtures/sheet-preview.json'), 'utf8'));
 const meshCommands = JSON.parse(readFileSync(path.join(root, 'packages/app/e2e/fixtures/sheet-static.json'), 'utf8')) as Array<{ cmd: string } & Record<string, unknown>>;
-const wasm = createRequire(import.meta.url)(path.join(root, 'tools/wasm-node/femlab_engine_wasm.js'));
+const wasm = batchModule(createRequire(import.meta.url)(path.join(root, 'tools/wasm-node/femlab_engine_wasm.js')));
 
 interface WasmSurface {
   positions: Float32Array;
