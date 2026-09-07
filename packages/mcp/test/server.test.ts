@@ -63,8 +63,16 @@ describe('the tool list', () => {
     for (const t of tools) {
       expect(t.name).toMatch(/^[a-zA-Z0-9_-]{1,128}$/);
       expect(t.description.length).toBeGreaterThanOrEqual(80);
-      expect(JSON.stringify(t.inputSchema)).not.toContain('"cmd"');
+      expect(t.inputSchema.properties).not.toHaveProperty('cmd');
+      expect(t.inputSchema.required ?? []).not.toContain('cmd');
+      expect(t.inputSchema.properties).not.toHaveProperty('query');
+      expect(t.inputSchema.required ?? []).not.toContain('query');
     }
+    // Journal inputs retain their nested Command discriminators; only the tool's own
+    // discriminator is supplied by its MCP name instead of an argument.
+    const diff = tools.find((t) => t.name === toolNameFor('query.journalDiff'))!;
+    expect(diff.inputSchema.properties).toHaveProperty('base');
+    expect(JSON.stringify(diff.inputSchema)).toContain('"cmd"');
   });
 });
 

@@ -103,13 +103,13 @@
         },
         "sweep": {
           "kind": "extrude",
-          "layers": 4,
+          "layers": 8,
           "height": "0.6 m"
         }
       },
       "order": 2
     },
-    "hashAfter": "b03a37e3a316fb122020a03c44f92491efb96fd6c93ef1d435f670d883a40300"
+    "hashAfter": "96643546461b3c580458ae39b5e2864eac63bdce7de6272a9acc9bc5b7730686"
   },
   {
     "seq": 4,
@@ -120,7 +120,7 @@
         "plate"
       ]
     },
-    "hashAfter": "2a99a8192bee11faeb91465f529b0d51a26a52d4fc61dd992efd4116b0d18d44"
+    "hashAfter": "f0afe8df814802df0449c9c53978f0c80371d7126414d2d44d71efe869f4edb5"
   },
   {
     "seq": 5,
@@ -130,7 +130,7 @@
       "on": "plate.x0",
       "normal": "x"
     },
-    "hashAfter": "0539c7386a1f454f0da8ace408db4cac09f586c17ecb49565c5b04a6fd401040"
+    "hashAfter": "83f3f516685b973a07bfc2b9619fa8709c0c5764bede4da36bdeab29b5619327"
   },
   {
     "seq": 6,
@@ -140,7 +140,7 @@
       "on": "plate.y0",
       "normal": "y"
     },
-    "hashAfter": "02d253069dfb0d1e19a345e61b61d76b6bd28787e61b62c3c56154dabf619c19"
+    "hashAfter": "e89336eaa155e57b39c191cc777f2acc1f47a08602f6f552fc7c6dcb369d8cd3"
   },
   {
     "seq": 7,
@@ -149,7 +149,7 @@
       "name": "rim",
       "on": "plate.outer"
     },
-    "hashAfter": "0afcfc26c8fbc8e80a1dd37c59a63df0666eb90d47cf80a6d84fc8a1b2477a93"
+    "hashAfter": "edd721c1bdcc85a682dcbc4b864383cd9f4a05a77d6a2b646f9b1509ccc779f9"
   },
   {
     "seq": 8,
@@ -159,7 +159,7 @@
       "on": "plate.top",
       "value": "1 MPa"
     },
-    "hashAfter": "0e170b3d9e06d6bdd2fb875ead97f54ca069126d94701224f347a1607334bf56"
+    "hashAfter": "647fb3048821338e98eedbad606bd200856ee9760e083a6eeb6a05e39ce3b2e5"
   },
   {
     "seq": 9,
@@ -176,7 +176,7 @@
         "top"
       ]
     },
-    "hashAfter": "c9f41ad6c17141069eb9a4992cb8834b3f4af09b590028680471f9659074c4d7"
+    "hashAfter": "29696ee61b8c498fae1f7a61e8d9bd2adc2ce0ddcf4a65a16b25c88c4dfcf0ff"
   },
   {
     "seq": 10,
@@ -184,6 +184,6 @@
       "cmd": "solve.run",
       "step": "static"
     },
-    "hashAfter": "c9f41ad6c17141069eb9a4992cb8834b3f4af09b590028680471f9659074c4d7"
+    "hashAfter": "29696ee61b8c498fae1f7a61e8d9bd2adc2ce0ddcf4a65a16b25c88c4dfcf0ff"
   }
 ]

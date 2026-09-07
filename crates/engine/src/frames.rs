@@ -1,4 +1,4 @@
-//! Retained transient output through the same headless registry as final Results.
+//! Retained output through the same headless registry as final Results.
 
 use crate::command::Field;
 use crate::engine::{display, Engine};
