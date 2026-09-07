@@ -1263,3 +1263,18 @@ transient net input equals minus the θ-weighted endpoint fourth-power radiation
 and equals the change in the two bodies' integrated thermal energy divided by the
 last increment. Interface flux is internal and never appears as a support reaction.
 These are integration oracles; they must pass before this combined change is accepted.
+
+### Retained surface and Worker transfer parity (#282)
+
+`tools/test-retained-replay.mjs` exercises the E1 Fourier bar through native replay
+(at one and four threads) and WASM. Two solves of the same Step use three linear
+and four quadratic axial elements, with the second domain translated by 0.5 m.
+The independent temperature is `273.15 + (1000/45) (x - x_origin)` K. On their
+overlap, the first-minus-second temperature is `1000/90` K; outside nodes remain
+null, in either comparison direction. Surface coordinates, topology, Set membership,
+Result IDs and Journal hashes match exactly between hosts; solved values satisfy
+the closed form within 1e-9 K. The app's real WASM Worker tests transfer fresh buffers,
+verify detachment and repeated exact f64 reads, and isolate f32 casts to renderer staging.
+`surface()` retains the current geometry-preview route; `surface({})` and
+`query.surface` require a compatible solved Result, while explicit IDs permit stale
+retained solves. Replies identify the immutable solve even when selected by Step.

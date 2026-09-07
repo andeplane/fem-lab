@@ -1,5 +1,6 @@
 //! Immutable solve instances. Records own the context needed to interpret their fields.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::engine::Engine;
@@ -273,6 +274,65 @@ impl Engine {
             self.current_result(step)?;
         }
         self.result_record(step, id)
+    }
+
+    pub(crate) fn query_surface(
+        &self,
+        step: Option<&str>,
+        id: Option<&str>,
+    ) -> Result<crate::query::ResultSurface, Error> {
+        let record = self.selected_record(step, id)?;
+        let built = &record.built;
+        let mesh = &built.mesh;
+        let surface = mesh.surface();
+        let mut membership: BTreeMap<femlab_geometry::Face, BTreeSet<u32>> = BTreeMap::new();
+        for (i, set) in built.sets.values().enumerate() {
+            for &face in &set.faces {
+                membership.entry(face).or_default().insert(i as u32);
+            }
+        }
+        let mut tri_set_offsets = vec![0];
+        let mut tri_sets = Vec::new();
+        for face in &surface.tri_face {
+            if let Some(members) = face.and_then(|i| membership.get(&surface.faces[i as usize])) {
+                tri_sets.extend(members.iter().copied());
+            }
+            tri_set_offsets.push(tri_sets.len() as u32);
+        }
+        Ok(crate::query::ResultSurface {
+            result_id: record.id.clone(),
+            step: record.step.clone(),
+            node_count: mesh.n_nodes(),
+            unit: "m".into(),
+            positions: surface.positions.iter().flatten().copied().collect(),
+            indices: surface.triangles.iter().flatten().copied().collect(),
+            tri_body: surface.tri_elem.iter().map(|&e| mesh.block_of(e).0 as u32).collect(),
+            tri_face: surface
+                .tri_face
+                .iter()
+                .map(|f| f.and_then(|i| surface.set_of_face[i as usize]).unwrap_or(u32::MAX))
+                .collect(),
+            face_names: surface.set_names,
+            set_names: built.sets.keys().cloned().collect(),
+            tri_set_offsets,
+            tri_sets,
+            body_names: built.body_of_block.clone(),
+            edges: surface.edges.iter().chain(&surface.lines).flatten().copied().collect(),
+            edge_face: surface
+                .set_of_face
+                .iter()
+                .take(surface.edges.len())
+                .map(|f| f.unwrap_or(u32::MAX))
+                .chain(surface.lines.iter().map(|_| u32::MAX))
+                .collect(),
+            edge_body: surface
+                .faces
+                .iter()
+                .take(surface.edges.len())
+                .map(|f| mesh.block_of(f.elem).0 as u32)
+                .chain(surface.line_elem.iter().map(|&e| mesh.block_of(e).0 as u32))
+                .collect(),
+        })
     }
 
     pub(crate) fn query_field(

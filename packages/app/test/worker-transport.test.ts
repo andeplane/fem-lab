@@ -324,3 +324,55 @@ it('commits the normalized import Journal before cancellation can snapshot it', 
   const replay = workers.at(-1)!.sent.find((r) => r.op === 'replay');
   expect(replay?.payload).toMatchObject({ entries: journal.entries, revision: 1 });
 });
+
+it('rejects stale result identities and wrong Steps on retained scientific and renderer routes', async () => {
+  const value = { resultId: 'other', step: 'other-step' };
+  const { transport } = make((req, reply) => reply(ok(req.id, value)));
+  await expect(transport.surface({ resultId: 'wanted' })).rejects.toMatchObject({ code: 'result.stale' });
+  await expect(transport.surface({ step: 'wanted-step' })).rejects.toMatchObject({ code: 'result.stale' });
+  await expect(transport.field('other-step', 'temperature', 0, 'wanted')).rejects.toMatchObject({ code: 'result.stale' });
+  await expect(transport.field('wanted-step', 'temperature')).rejects.toMatchObject({ code: 'result.stale' });
+  await expect(transport.query({ query: 'query.surface', resultId: 'wanted' })).rejects.toMatchObject({ code: 'result.stale' });
+  await expect(transport.query({ query: 'query.field', resultId: 'wanted', field: 'temperature' })).rejects.toMatchObject({ code: 'result.stale' });
+  const frames = make((req, reply) => reply(ok(req.id, { sample: value })));
+  await expect(frames.transport.query({ query: 'query.frame', resultId: 'wanted', field: 'temperature', index: 0 })).rejects.toMatchObject({ code: 'result.stale' });
+});
+
+it('guards both difference operands and the comparison mesh identity', async () => {
+  for (const [left, right, comparison] of [['wrong', 'right', 'left'], ['left', 'wrong', 'left'], ['left', 'right', 'wrong']]) {
+    const { transport } = make((req, reply) => reply(ok(req.id, {
+      left: { resultId: left }, right: { resultId: right }, comparisonResultId: comparison,
+    })));
+    await expect(transport.query({ query: 'query.difference', left: { resultId: 'left', field: 'temperature' }, right: { resultId: 'right', field: 'temperature' }, onto: 'left' })).rejects.toMatchObject({ code: 'result.stale' });
+  }
+});
+
+it('snapshots queued Result selectors before callers mutate them', async () => {
+  const { transport, workers } = make((req, reply) => {
+    if (req.op === 'surface') reply(ok(req.id, { resultId: 'first', step: 'heat' }));
+    if (req.op === 'query') reply(ok(req.id, { resultId: 'first', step: 'heat', values: new Float64Array([1 + 2 ** -40]) }));
+  });
+  const selector = { resultId: 'first' };
+  const query = { query: 'query.field' as const, resultId: 'first', field: 'temperature' };
+  const surface = transport.surface(selector);
+  const field = transport.query(query);
+  selector.resultId = 'second';
+  query.resultId = 'second';
+  expect((await surface).resultId).toBe('first');
+  expect(await field).toMatchObject({ resultId: 'first', values: [1 + 2 ** -40] });
+  expect(workers[0]!.sent.map(req => req.payload)).toEqual([{ resultId: 'first' }, { query: 'query.field', resultId: 'first', field: 'temperature' }]);
+});
+
+it('ignores out-of-order messages from the retired Worker even if they claim an active request ID', async () => {
+  const { transport, workers } = make((req, reply) => {
+    if (req.op === 'create' || req.op === 'replay') reply(ok(req.id, {}));
+  });
+  await transport.cancel();
+  const pending = transport.surface({ resultId: 'new' });
+  await Promise.resolve();
+  await Promise.resolve();
+  const request = workers[1]!.sent.at(-1)!;
+  workers[0]!.onmessage?.({ data: ok(request.id, { resultId: 'old' }) } as MessageEvent<AppRes>);
+  workers[1]!.onmessage?.({ data: ok(request.id, { resultId: 'new' }) } as MessageEvent<AppRes>);
+  expect((await pending).resultId).toBe('new');
+});
