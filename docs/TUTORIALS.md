@@ -25,6 +25,7 @@ satisfying the steps of a tutorial you are only now beginning.
 | [`transient-heat`](../packages/app/tutorials/transient-heat.json) | 9 | NAFEMS T3 twice: once with Crank–Nicolson, once with backward Euler at the same Δt. | The θ-method, order vs damping, and why Crank–Nicolson rings |
 | [`mesh-convergence`](../packages/app/tutorials/mesh-convergence.json) | 7 | The cantilever plus one `study.converge` over three sizes. | Observed rate p, Richardson extrapolation, and when to stop |
 | [`symmetry-and-2d`](../packages/app/tutorials/symmetry-and-2d.json) | 9 | The `kirsch-quarter-plate` example: plane stress, two symmetry planes, mapped blocks on the hole. | Kirsch's field, plane stress vs plane strain, what symmetry costs you |
+| [`journal-as-program`](../packages/app/tutorials/journal-as-program.json) | 8 | The `cantilever` example again, then exported, edited and replayed as a script instead of clicked. | L³ scaling of a doubled beam, and the CLI `--verify` check against the committed fixture |
 | [`pressure-vessel`](../packages/app/tutorials/pressure-vessel.json) | 10 | A thick cylinder revolved into an axisymmetric slice instead of meshed as a 3D solid (the `lame-cylinder-axisymmetric` example). | Lamé's σθθ(a) = 100 MPa, σrr(a) = −60 MPa against the pr/t thin-wall shortcut, which breaks at this vessel's t/a = 1 |
 
 The first four are the phase-1 set. The rest each own one procedure, one idealisation or one
