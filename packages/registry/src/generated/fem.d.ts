@@ -357,7 +357,8 @@ export interface Fem {
      * reactions). Steps run in the order given by step.reorder, and `after` names an earlier
      * Step whose Result this one continues — a static Step after a heat Step picks up its
      * temperature field and turns it into thermal stress. The remaining fields belong to one
-     * procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
+     * procedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`
+     * alone (default 1) to buckling, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
      * `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
      * `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
