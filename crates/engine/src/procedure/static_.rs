@@ -43,6 +43,24 @@ fn ramp(u: &[f64], u_th: &[f64], amp: &Amplitude, steps: usize, dt: f64, t_end: 
     history
 }
 
+/// The stress, strain, von Mises and principal fields recovered from a displacement `u`, for
+/// every procedure that ends on a displacement field.
+///
+/// The stiffness integral has already called this material on these elements, so the recovery
+/// cannot fail here; `stress_gp` still reports it for a caller that skipped it.
+pub(crate) fn stress_fields(p: &Problem<'_>, u: &[f64], pool: &Pool, fields: &mut BTreeMap<Field, FieldData>) {
+    let (gp_stress, gp_strain) =
+        pool.install(|| stress::stress_gp(p, u)).expect("the stiffness integral accepted this material");
+    let unaveraged = stress::gp_to_nodes(p.mesh, &gp_stress);
+    let nodal_stress = stress::average_at_nodes(p, &unaveraged);
+    let nodal_strain = stress::average_at_nodes(p, &stress::gp_to_nodes(p.mesh, &gp_strain));
+    fields.insert(Field::VonMises, stress::von_mises(&nodal_stress));
+    fields.insert(Field::Principal, stress::principal(&nodal_stress));
+    fields.insert(Field::Stress, nodal_stress);
+    fields.insert(Field::StressUnaveraged, unaveraged);
+    fields.insert(Field::Strain, nodal_strain);
+}
+
 /// Solve one linear static Step, over one increment or over an amplitude's schedule.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -121,21 +139,10 @@ pub async fn run(
     let r = assembly::reactions(&a.k, &u, &f, &red.fixed, &mpc);
     report(&mut progress, "post", 0.9, "recovering fields")?;
 
-    // The stiffness integral above already called this material on these elements, so the
-    // recovery cannot fail here; `stress_gp` still reports it for a caller that skipped it.
-    let (gp_stress, gp_strain) =
-        pool.install(|| stress::stress_gp(p, &u)).expect("the stiffness integral accepted this material");
-    let unaveraged = stress::gp_to_nodes(p.mesh, &gp_stress);
-    let nodal_stress = stress::average_at_nodes(p, &unaveraged);
-    let nodal_strain = stress::average_at_nodes(p, &stress::gp_to_nodes(p.mesh, &gp_strain));
     let mut fields = BTreeMap::new();
     fields.insert(Field::Displacement, vector_field(&u, dpn));
     fields.insert(Field::Reaction, vector_field(&r, dpn));
-    fields.insert(Field::VonMises, stress::von_mises(&nodal_stress));
-    fields.insert(Field::Principal, stress::principal(&nodal_stress));
-    fields.insert(Field::Stress, nodal_stress);
-    fields.insert(Field::StressUnaveraged, unaveraged);
-    fields.insert(Field::Strain, nodal_strain);
+    stress_fields(p, &u, pool, &mut fields);
     scalars.insert("min_det_j".to_string(), a.min_det_j);
     for (c, axis) in ["x", "y", "z"].iter().enumerate() {
         scalars.insert(format!("applied_total_{axis}"), applied.force[c] * g_end);

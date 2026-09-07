@@ -195,6 +195,8 @@ between Bodies that share no element, which query.cost does not count.
 Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a
 2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape
 (`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.
+Replacing an existing Body preserves its material, section and cuts, and validates the
+resulting shape before changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -208,7 +210,9 @@ Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch
 
 Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its
 six faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used
-directly in constraints and loads. Re-issuing with an existing name replaces the body.
+directly in constraints and loads. Re-issuing with an existing name replaces the Body
+while preserving its material, section and cuts; incompatible or consuming cuts reject
+the replacement without changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -230,6 +234,7 @@ when the Mesh is built. A member carries axial force only, so give the Body a Se
 with section.assign as well as a Material, and hold enough joints that none of them can
 drift sideways — an under-braced truss is singular and fails in the solver, not here.
 Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
+Replacing a Body that has cuts therefore fails without changing the Model.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -274,7 +279,9 @@ file changes, so for anything you will re-import, name the faces you need with
 geometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every
 remesh and survive a re-import. `simplifyBelow` collapses features smaller than the
 given length, which is the honest half of defeaturing; there is no fillet, chamfer or
-shell. Give `sha256` to have the engine verify the data is the file you meant.
+shell. Re-import preserves the Body's material, section and cuts, and validates the
+resulting shape before changing the Model. Give `sha256` to have the engine verify the
+data is the file you meant.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -826,9 +833,20 @@ Step whose Result this one continues — a static Step after a heat Step picks u
 temperature field and turns it into thermal stress. The remaining fields belong to one
 procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and
-`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
-`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and
+`dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
+`rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
+implicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and
+`increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An
+implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
+(default 0, Newmark average acceleration: second order, unconditionally stable and
+energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
+Rayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal
+damping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).
+Its `amplitude` scales the Loads only and is refused with a non-zero prescribed
+displacement; its initial acceleration is solved from the loads at t = 0, so a suddenly
+applied load is exactly that. Its reactions include the inertia and damping forces and
+its applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the
+scalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and
 prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
 defaulting to the whole of it, so a table written in step fraction works unchanged) and
 keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
@@ -862,7 +880,11 @@ endpoint fluxes), while temperature fields belong to its endpoint.
 | dtFactor | no | <code>{"type":["number","null"],"format":"double"}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
 | amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}]}</code> |  |
 | initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
-| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
+| alpha | no | <code>{"type":["number","null"],"format":"double"}</code> | HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark average acceleration, no numerical damping); -0.05 is the usual choice when the mesh-frequency ringing of a sudden load should die out. |
+| rayleighAlpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | Mass-proportional Rayleigh damping coefficient of an implicit Step, &#96;C = a·M + b·K&#96;. Default "0 Hz"; must be non-negative. |
+| rayleighBeta | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default "0 s"; must be non-negative. |
+| initialVelocity | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/InitialVelocitySpec"}}</code> | Initial velocities of an explicit or implicit Step, one uniform vector per Set of nodes; nodes in no entry start from rest. |
+| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Convergence tolerance for a Step that must iterate: the relative sup-norm change of the solution between two passes. Default 1e-6. Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
 | maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
 | nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Convergence tolerance for a Step that must iterate, relative in both cases: the sup-norm change of the solution between two passes for a radiating heat Step (default 1e-6), and the residual force and the displacement correction of one Newton increment for static-nonlinear (default 1e-8). It is never the *linear* solver's tolerance, which is &#96;solve.run&#96;'s. |
 | nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iteration budget for a Step that must iterate. Exceeding it is &#96;solve.diverged&#96; for a heat Step (default 50); for static-nonlinear it is what makes an increment cut back and try again at half the load (default 20, and full Newton reaches 1e-8 in four or five iterations from a good starting point). |
@@ -1496,6 +1518,35 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>InitialVelocitySpec</summary>
+
+```json
+{
+  "description": "A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start\nfrom rest. Constrained components are held at zero whatever this says; two entries that\ngive one node different velocities are `model.ill-posed`.",
+  "type": "object",
+  "properties": {
+    "on": {
+      "type": "string"
+    },
+    "value": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_velocity"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "required": [
+    "on",
+    "value"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>LatticeSize</summary>
 
 ```json
@@ -1843,6 +1894,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
       "const": "explicit"
+    },
+    {
+      "description": "Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on\nthe consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,\n`rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.",
+      "type": "string",
+      "const": "implicit"
     }
   ]
 }
@@ -1910,6 +1966,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "force"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_frequency</summary>
+
+```json
+{
+  "description": "A frequency with unit, e.g. \"50 Hz\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "frequency"
 }
 ```
 
@@ -2053,6 +2122,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "time"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_velocity</summary>
+
+```json
+{
+  "description": "A velocity with unit, e.g. \"1 m/s\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "velocity"
 }
 ```
 
@@ -3686,7 +3768,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the body.",
+      "description": "Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its\nsix faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used\ndirectly in constraints and loads. Re-issuing with an existing name replaces the Body\nwhile preserving its material, section and cuts; incompatible or consuming cuts reject\nthe replacement without changing the Model.",
       "type": "object",
       "properties": {
         "name": {
@@ -3762,7 +3844,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.",
+      "description": "Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a\n2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape\n(`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.\nReplacing an existing Body preserves its material, section and cuts, and validates the\nresulting shape before changing the Model.",
       "type": "object",
       "properties": {
         "name": {
@@ -3783,7 +3865,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.",
+      "description": "Add a Body made of straight line members: a truss. `points` are the joints, in order,\nand `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.\nEach member is cut into `divisions` elements of equal length (default 1). Joint `i`\nbecomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,\nand joints of different line Bodies that sit at the same point are welded into one node\nwhen the Mesh is built. A member carries axial force only, so give the Body a Section\nwith section.assign as well as a Material, and hold enough joints that none of them can\ndrift sideways — an under-braced truss is singular and fails in the solver, not here.\nLine Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.\nReplacing a Body that has cuts therefore fails without changing the Model.",
       "type": "object",
       "properties": {
         "name": {
@@ -3861,7 +3943,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Give `sha256` to have the engine verify the data is the file you meant.",
+      "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Re-import preserves the Body's material, section and cuts, and validates the\nresulting shape before changing the Model. Give `sha256` to have the engine verify the\ndata is the file you meant.",
       "type": "object",
       "properties": {
         "name": {
@@ -4743,7 +4825,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,\n`rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to\nimplicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and\n`increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An\nimplicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]\n(default 0, Newmark average acceleration: second order, unconditionally stable and\nenergy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and\nRayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal\ndamping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).\nIts `amplitude` scales the Loads only and is refused with a non-zero prescribed\ndisplacement; its initial acceleration is solved from the loads at t = 0, so a suddenly\napplied load is exactly that. Its reactions include the inertia and damping forces and\nits applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the\nscalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
       "type": "object",
       "properties": {
         "name": {
@@ -4858,8 +4940,48 @@ Expand a definition to inspect its complete schema. Definition names are local t
             }
           ]
         },
+        "alpha": {
+          "description": "HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark\naverage acceleration, no numerical damping); -0.05 is the usual choice when the\nmesh-frequency ringing of a sudden load should die out.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "rayleighAlpha": {
+          "description": "Mass-proportional Rayleigh damping coefficient of an implicit Step, `C = a·M + b·K`.\nDefault \"0 Hz\"; must be non-negative.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_frequency"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rayleighBeta": {
+          "description": "Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default\n\"0 s\"; must be non-negative.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "initialVelocity": {
+          "description": "Initial velocities of an explicit or implicit Step, one uniform vector per Set of\nnodes; nodes in no entry start from rest.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/InitialVelocitySpec"
+          }
+        },
         "increments": {
-          "description": "Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
+          "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.\nEqual load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
           "type": [
             "integer",
             "null"
@@ -5698,6 +5820,35 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>InitialVelocitySpec</summary>
+
+```json
+{
+  "description": "A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start\nfrom rest. Constrained components are held at zero whatever this says; two entries that\ngive one node different velocities are `model.ill-posed`.",
+  "type": "object",
+  "properties": {
+    "on": {
+      "type": "string"
+    },
+    "value": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_velocity"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "required": [
+    "on",
+    "value"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>Journal</summary>
 
 ```json
@@ -6098,6 +6249,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
       "const": "explicit"
+    },
+    {
+      "description": "Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on\nthe consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,\n`rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.",
+      "type": "string",
+      "const": "implicit"
     }
   ]
 }
@@ -6165,6 +6321,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "force"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_frequency</summary>
+
+```json
+{
+  "description": "A frequency with unit, e.g. \"50 Hz\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "frequency"
 }
 ```
 
@@ -6308,6 +6477,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "time"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_velocity</summary>
+
+```json
+{
+  "description": "A velocity with unit, e.g. \"1 m/s\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "velocity"
 }
 ```
 
