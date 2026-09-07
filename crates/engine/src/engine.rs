@@ -596,7 +596,7 @@ impl Engine {
                 self.model.materials.retain(|m| m.name != *name);
                 Ok(Output::None)
             }
-            Command::MeshSet { mesher, order, formulation } => {
+            Command::MeshSet { mesher, order, formulation, simplices } => {
                 let order = order.unwrap_or(1);
                 if !(1..=2).contains(&order) {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
@@ -621,8 +621,12 @@ impl Engine {
                     }
                     self.model.mesher_material = None;
                 }
-                self.model.mesh =
-                    Some(MeshSettings { mesher: settings, order, formulation: formulation.unwrap_or_default() });
+                self.model.mesh = Some(MeshSettings {
+                    mesher: settings,
+                    order,
+                    formulation: formulation.unwrap_or_default(),
+                    simplices: simplices.unwrap_or(false),
+                });
                 Ok(Output::None)
             }
             Command::MeshExport { format, step } => self.mesh_export(*format, step.as_deref()),
