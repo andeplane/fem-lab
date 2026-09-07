@@ -527,11 +527,15 @@ describe('the shell', () => {
     expect(journalTarget({ cmd: 'solve.run', step: 'static' }, current, refs)).toBeNull();
   });
 
-  it('selects and highlights a Journal target while keeping copy separate', async () => {
+  it.each([false, true])('selects and highlights a Journal target while keeping copy separate (comparison=%s)', async (comparison) => {
     const dispatch = vi.fn<Dispatch>(async () => undefined);
     const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m', '1 m'] }, { cmd: 'geometry.addBox', name: 'deleted', size: ['1 m', '1 m', '1 m'] });
-    const { root, store } = mount({ tab: 'journal', journal: entries }, dispatch);
+    const { root, store } = mount({ tab: 'journal', journal: entries, ...(comparison ? {
+      journalComparison: { baseHash: 'base', currentHash: 'current', sharedEntries: 1, added: entries.entries.slice(1), removed: [entries.entries[1]!] },
+      comparisonSource: 'imported' as const,
+    } : {}) }, dispatch);
     const row = root.querySelector<HTMLElement>('[data-target-ref="body:beam"]')!;
+    expect(row.closest('.comparison-added') !== null).toBe(comparison);
     const select = row.querySelector<HTMLButtonElement>('.jrow-main')!;
 
     row.dispatchEvent(new MouseEvent('mouseenter'));
@@ -548,6 +552,22 @@ describe('the shell', () => {
     row.querySelector<HTMLButtonElement>('.jcopy')!.click();
     expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
     expect(store.state.journal).toBe(entries);
+    if (comparison) {
+      // The same live body name in an imported, removed row must never select or highlight
+      // the current object. Copy still exports that baseline Command independently.
+      const removed = root.querySelector<HTMLElement>('.comparison-removed .jrow')!;
+      expect(removed.dataset['targetRef']).toBeUndefined();
+      expect(removed.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+      expect(removed.querySelector('.jwho')!.textContent).toBe('unknown');
+      expect(removed.querySelector('.jtime')!.textContent).toBe('');
+      expect(removed.parentElement!.querySelector('.boundary')).toBeNull();
+      dispatch.mockClear();
+      removed.dispatchEvent(new MouseEvent('mouseenter'));
+      removed.querySelector<HTMLButtonElement>('.jrow-main')!.click();
+      expect(dispatch).not.toHaveBeenCalled();
+      removed.querySelector<HTMLButtonElement>('.jcopy')!.click();
+      expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
+    }
 
     const unavailable = [...root.querySelectorAll<HTMLElement>('.jrow')].find((item) => item.textContent?.includes('deleted'))!;
     expect(unavailable.dataset['targetRef']).toBeUndefined();

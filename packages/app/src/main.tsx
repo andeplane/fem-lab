@@ -3,7 +3,7 @@ import { browserScriptValidator } from './script-validation-host';
 // Boot (plan B §7.4): capabilities → engine Worker → Registry → `window.fem` → `<App/>`.
 // The shell renders first and the engine arrives into it, so the start screen is on screen
 // before the 3.2 MB wasm module has finished downloading.
-import { HOST_COMMANDS, Registry, makeFemProxy, type Capabilities, type EngineSchema, type Fem } from '@femlab/registry';
+import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, type Capabilities, type EngineSchema, type Fem } from '@femlab/registry';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-500.css';
 import '@fontsource/ibm-plex-mono/latin-600.css';
@@ -15,7 +15,7 @@ import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { clearsBenchmark } from './benchmark';
 import { devApiKeys } from './dev-keys';
-import { appHostCommands, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
+import { appHostCommands, appHostQueries, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
 import { ResultsView } from './results';
 import { ScriptHost } from './script-host';
 import { openShared } from './share';
@@ -82,6 +82,7 @@ async function boot(): Promise<void> {
     const script = ((await transport.query({ query: 'query.script' })) as { text: string }).text;
     const objects = ((await transport.query({ query: 'query.objects' })) as { objects: never[] }).objects;
     store.set({ model, journal, script, objects, revision: (model as { revision: number }).revision });
+    await store.refreshJournalComparison();
     viewer.current?.setSurface(await transport.surface());
     await results.refresh();
     // Where a project comes from: with none open and a non-empty Journal this creates one named
@@ -94,6 +95,7 @@ async function boot(): Promise<void> {
     schema: schema as unknown as EngineSchema,
     host: ctx,
     hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport, viewer, refresh, results, () => registry)],
+    hostQueries: [...HOST_QUERIES, ...appHostQueries(store)],
   });
 
   /**
@@ -111,7 +113,7 @@ async function boot(): Promise<void> {
    * `geometry.importFile` reads a file the host owns and dispatches `geometry.import`, so the
    * Model gains a Body the tree and the viewer have to see.
    */
-  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'project.new', 'project.open', 'geometry.importFile']);
+  const REFRESHES = new Set(['file.restore', 'file.export', 'file.save', 'file.open', 'project.new', 'project.open', 'geometry.importFile']);
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
   const dispatch: Registry['dispatch'] = async (cmd) => {
@@ -126,6 +128,7 @@ async function boot(): Promise<void> {
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
     try {
       const ack = await registry.dispatch(cmd);
+      if (cmd.cmd === 'model.new') store.newDocument();
       if (REPLACES_MODEL.has(cmd.cmd) && !opensExample) forkProject();
       store.log('command', cmd.cmd);
       if (clearsBenchmark(cmd.cmd, ack)) store.set({ benchmark: null });

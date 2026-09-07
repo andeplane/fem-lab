@@ -145,6 +145,9 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <Cmd dispatch={dispatch} cmd="project.save" class="tbutton" title="Write the open project now and take a fresh thumbnail">
         Save
       </Cmd>
+      <Cmd dispatch={dispatch} cmd="file.compare" class="tbutton" args={{ picker: true }} title="Compare a saved femlab/1 file without opening it">
+        Compare
+      </Cmd>
       <Cmd dispatch={dispatch} cmd="file.save" class="tbutton" title="Download the Model and its Journal as a femlab/1 file">
         Save as file
       </Cmd>

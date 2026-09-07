@@ -2684,6 +2684,30 @@ fn assert_stale_mesh_consumers(e: &mut Engine) {
 }
 
 #[test]
+fn renamed_results_remain_compatible_for_probe_path_and_vtu() {
+    let mut e = engine();
+    solved_cantilever(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+    let tip = tip_uz(&mut e);
+    let path = r#"{"query":"query.path","field":"displacement","component":2,"from":["0 m","50 mm","50 mm"],"to":["1 m","50 mm","50 mm"],"n":3}"#;
+    let values = e.query(serde_json::from_str(path).unwrap()).unwrap();
+    let export = r#"{"cmd":"mesh.export","format":"vtu","step":"static"}"#;
+    let before = ok(&mut e, export).output;
+    let Output::Export { text, .. } = before else { panic!("VTU export") };
+    let before = vtkio::Vtk::parse_xml(text.as_bytes()).unwrap();
+    ok(&mut e, r#"{"cmd":"model.setName","name":"display name only"}"#);
+    assert_eq!(tip_uz(&mut e), tip);
+    assert_eq!(e.query(serde_json::from_str(path).unwrap()).unwrap(), values);
+    let after = ok(&mut e, export).output;
+    let Output::Export { text, .. } = after else { panic!("VTU export") };
+    let after = vtkio::Vtk::parse_xml(text.as_bytes()).unwrap();
+    assert_eq!(after.data, before.data);
+    // A real physics edit still invalidates all consumers, even after another display rename.
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"changed-physics","on":"beam.zmax","value":"1 Pa"}"#);
+    ok(&mut e, r#"{"cmd":"model.setName","name":"still stale"}"#);
+    assert_stale_mesh_consumers(&mut e);
+}
+
+#[test]
 fn result_mesh_consumers_reject_changed_counts_and_same_count_geometry() {
     let changes = [
         (r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"25 mm"},"order":1}"#, false),

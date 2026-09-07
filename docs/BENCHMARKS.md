@@ -138,6 +138,10 @@ checks reusable factors at 65/129/257 unknowns, two right-hand sides, one/four-t
 construction and concurrent callers; no solve may mutate faer's global setting.
 The unchanged Windows Hex20/Tet10 stress and force-balance checks still gate the fix.
 
+The Result-validity integration check also holds probe/path values and independently parsed
+VTU datasets identical across a display-only Model rename; a subsequent physics edit still
+refuses all three consumers as stale, including after another rename (#123, #133).
+
 Direct-solver acceptance (#266) is also checked independently of factorization success.
 `a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer` supplies a full operator whose
 one-triangle factorization gives `(2/3,-1/3)` but whose actual residual is exactly `(0,-2/3)`
