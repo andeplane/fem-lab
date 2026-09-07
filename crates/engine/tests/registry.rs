@@ -3709,8 +3709,8 @@ fn an_over_budget_transient_preserves_the_prior_result_and_engine() {
         panic!()
     };
     assert_eq!(radiating.transient_work_bytes, radiating.dofs * 13 * 8);
-    ok(&mut e, r#"{"cmd":"model.remove","kind":"step","name":"radiating-cost"}"#);
-    ok(&mut e, r#"{"cmd":"model.remove","kind":"load","name":"sink"}"#);
+    ok(&mut e, r#"{"cmd":"step.remove","name":"radiating-cost"}"#);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"sink"}"#);
 
     ok(
         &mut e,
