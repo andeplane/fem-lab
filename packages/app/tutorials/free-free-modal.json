@@ -1,0 +1,70 @@
+{
+  "id": "free-free-modal",
+  "title": "Free-free modal: rigid-body modes and the eigen shift",
+  "minutes": 9,
+  "summary": "Run a modal analysis on a beam with no constraints at all, meet the six zero-frequency rigid-body modes everyone mistakes for a broken model the first time, and check the first real one against its closed form.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "The `modal-analysis` tutorial clamps its beam at one end. This one clamps nothing. A completely unrestrained structure is not a mistake to be fixed — it is a legitimate model of a part in free flight, on a shaker table, or simply not yet bolted to anything — and it is the case that surprises people the first time they run it, so it earns its own tutorial.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "free-free-beam-modal" }
+    },
+    {
+      "title": "Units",
+      "explain": "Millimetres, kilonewtons, megapascals; frequencies always come back in hertz regardless.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "mm", "force": "kN", "stress": "MPa" } }
+    },
+    {
+      "title": "The beam",
+      "explain": "The same 1 m beam as the clamped tutorial, 50 mm by 25 mm — a rectangular section, not a square one, so its two bending planes have different stiffness and their frequencies don't collide.",
+      "expect": { "cmd": "geometry.addBox", "match": { "name": "beam" } },
+      "highlight": "geometry.addBox",
+      "doIt": { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "50 mm", "25 mm"] }
+    },
+    {
+      "title": "Steel, with density",
+      "explain": "A modal Step is nothing but stiffness against mass, so `rho` is required just as it was in the clamped tutorial.",
+      "expect": { "cmd": "material.add", "match": { "name": "steel" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7800 kg/m^3", "source": "EN 10025" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material, one Body.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] }
+    },
+    {
+      "title": "Mesh it, quadratic",
+      "explain": "20 elements along the beam, 2 across each section dimension, `order: 2` — identical to the clamped tutorial's mesh, so the only variable between the two tutorials is the constraint list.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": { "nx": 20, "ny": 2, "nz": 2 } }, "order": 2 }
+    },
+    {
+      "title": "No constraints at all",
+      "explain": "`constraints: []`. A static Step given this beam and no restraint refuses outright — it raises `ConstraintRigidModes` and names the exact rigid motion nothing is stopping, because a static solve divides by a stiffness matrix that a rigid body makes singular. A modal Step does not perform that check. That is a deliberate exception, not an oversight: a free body is a real structure to ask \"what does it like to vibrate in\" about, and the engine lets you ask, rather than assuming an unconstrained Model is always a mistake.",
+      "expect": { "cmd": "step.add", "match": { "name": "modes" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "modes", "procedure": "modal", "constraints": [], "loads": [], "output": ["displacement"], "nModes": 8 }
+    },
+    {
+      "title": "Solve, and meet six near-zero frequencies",
+      "explain": "The first six frequencies come back at roughly 0, 0, 0, 0, 0.0006 and 0.0012 Hz — not one clean zero repeated, six distinct tiny numbers, because the eigen solver has no reason to land on exactly 0.0 and every reason to land somewhere within its own numerical tolerance of it. These are the six rigid-body modes of a free 3D body: three translations (x, y, z) and three rotations, none of which strain the beam at all, so none of them cost any elastic energy and all six are indistinguishable from zero motion at zero cost. The seventh frequency, by contrast, is nowhere near zero — about 133 Hz — because it is the first shape that actually bends the beam.",
+      "expect": { "cmd": "solve.run", "match": { "step": "modes" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "modes" }
+    },
+    {
+      "title": "The shift, the shape test, and the closed form",
+      "explain": "Why this needed a shift, how to tell a rigid mode from a real one, and the number this tutorial actually checks.",
+      "expect": null,
+      "theory": "A modal Step solves $K\\varphi = \\omega^2 M \\varphi$ by factorising $K - \\sigma M$ for a shift $\\sigma$ and iterating from there; that factorisation is what fails outright if $K$ itself is singular, which a free body's stiffness always is; six rigid modes mean $K$ has a six-dimensional null space; $K - \\sigma M$ for any $\\sigma \\neq 0$ does not, so the shift is not a tuning knob, it is what makes the eigenproblem solvable at all. Leaving `shift` unset (as this tutorial does) uses a small automatic negative value for exactly that reason; you can pass your own when you want the solver to converge on modes near a particular frequency instead of the lowest ones.\n\n**Tell a rigid mode from a real one by its shape, not its position in the list.** A rigid mode moves every point of the beam by the same rigid translation or rotation — no point stretches relative to any other, so the strain energy, and hence the frequency, is zero. A real mode bends: displacement varies along the beam and reverses sign, and neighbouring points move relative to each other, which is exactly what costs elastic energy and gives the mode a nonzero frequency. Six near-zero numbers *and* six visibly non-deforming shapes is what confirms them as rigid; six near-zero numbers alone is not proof — a genuinely unstable or badly under-integrated model can also produce a spurious near-zero mode with a shape that is not a rigid motion at all, and the shape is the only way to tell the two apart.\n\n**The checked number.** For a free-free prismatic beam, $f_n = \\dfrac{\\beta_n^2}{2\\pi}\\sqrt{\\dfrac{EI}{\\rho A L^4}}$ with $\\beta_1 = 4.730041$ — a different constant from the clamped-free beam's $1.8751$, because it comes from a different pair of boundary conditions, not a different formula. For this beam's thin bending plane that gives $f_1 = 133.3\\,\\mathrm{Hz}$; the mesh above computes mode 7 at $133.1\\,\\mathrm{Hz}$, within $0.2\\,\\%$. Mode 8, at $264.4\\,\\mathrm{Hz}$ against a closed form of $266.7\\,\\mathrm{Hz}$ ($0.9\\,\\%$), is the same shape in the stiff plane — the rectangular section separates the two exactly as it did in the clamped tutorial, only now both are free-free frequencies, and both sit safely above the six rigid modes rather than being confused with them."
+    }
+  ]
+}

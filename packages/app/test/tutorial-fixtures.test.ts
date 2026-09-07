@@ -34,7 +34,7 @@ describe('tutorials/*.json', () => {
   it('bundles the four built-ins the PLAN promises plus one per procedure', () => {
     expect(files.length).toBeGreaterThanOrEqual(11);
     expect(TUTORIALS.map((t) => t.id).sort()).toEqual(
-      ['cantilever', 'composite-block-shear', 'heat-conduction', 'journal-as-program', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'pressure-vessel', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'thermal-stress-chaining', 'transient-heat', 'solve-cost-and-solvers'].sort(),
+      ['cantilever', 'heat-conduction', 'journal-as-program', 'mesh-convergence', 'modal-analysis', 'plate-with-hole', 'pressure-vessel', 'free-free-modal', 'read-a-result', 'symmetry-and-2d', 'thermal-bar', 'transient-heat', 'composite-block-shear', 'solve-cost-and-solvers', 'thermal-stress-chaining'].sort(),
     );
     // every file in the folder is registered: adding one and forgetting the import fails here
     expect(files.map((f) => path.basename(f, '.json')).sort()).toEqual(TUTORIALS.map((t) => t.id).sort());
