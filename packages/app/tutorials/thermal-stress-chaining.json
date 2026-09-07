@@ -1,0 +1,189 @@
+{
+  "id": "thermal-stress-chaining",
+  "title": "Thermal stress by chaining Steps",
+  "minutes": 14,
+  "summary": "Feed a heat Step's solved temperature field straight into a static Step's load with step.add.after, check the result against a closed form, and catch the one mistake that makes a symmetry constraint invent stress that was never there.",
+  "steps": [
+    {
+      "title": "Start a Model",
+      "explain": "A steel plate, conducted through and then read as a mechanical load. Two physics, one Model, and the point of this tutorial is the seam between them.",
+      "expect": { "cmd": "model.new" },
+      "highlight": "model.new",
+      "doIt": { "cmd": "model.new", "name": "thermal-stress-plate" }
+    },
+    {
+      "title": "Units",
+      "explain": "Metres, megapascals, and degrees Celsius for the temperature axis.",
+      "expect": { "cmd": "model.setUnits" },
+      "highlight": "model.setUnits",
+      "doIt": { "cmd": "model.setUnits", "units": { "length": "m", "stress": "MPa", "temperature": "degC" } }
+    },
+    {
+      "title": "Plane strain",
+      "explain": "A one-metre-square slab, thick enough in the missing third direction that it cannot contract through it: plane strain. That choice matters later — the closed form this tutorial checks against assumes it.",
+      "expect": { "cmd": "model.setIdealisation" },
+      "highlight": "model.setIdealisation",
+      "doIt": { "cmd": "model.setIdealisation", "idealisation": { "kind": "planeStrain" } }
+    },
+    {
+      "title": "Sketch the plate",
+      "explain": "A plain square, one edge per tag: `ymin`, `xmax`, `ymax`, `xmin`.",
+      "expect": { "cmd": "geometry.add", "match": { "name": "plate" } },
+      "highlight": "geometry.add",
+      "doIt": {
+        "cmd": "geometry.add",
+        "name": "plate",
+        "shape": {
+          "kind": "sheet",
+          "sketch": {
+            "outer": [
+              { "kind": "line", "to": ["1.0 m", "0 m"], "tag": "ymin" },
+              { "kind": "line", "to": ["1.0 m", "1.0 m"], "tag": "xmax" },
+              { "kind": "line", "to": ["0 m", "1.0 m"], "tag": "ymax" },
+              { "kind": "line", "to": ["0 m", "0 m"], "tag": "xmin" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Material, with alpha and k both",
+      "explain": "This Material is used by two different Steps for two different properties: `k` for the heat Step's conduction, `E`, `nu` and `alpha` for the static Steps' thermal stress. One Material, both physics — nothing about `material.add` knows a chained analysis is coming.",
+      "expect": { "cmd": "material.add", "match": { "name": "slab" } },
+      "highlight": "material.add",
+      "doIt": { "cmd": "material.add", "name": "slab", "E": "210 GPa", "nu": 0.3, "alpha": "1e-5 1/K", "k": "45 W/(m K)", "cp": "460 J/(kg K)" }
+    },
+    {
+      "title": "Assign it",
+      "explain": "One Material, one Body.",
+      "expect": { "cmd": "material.assign" },
+      "highlight": "material.assign",
+      "doIt": { "cmd": "material.assign", "material": "slab", "bodies": ["plate"] }
+    },
+    {
+      "title": "Mesh it",
+      "explain": "A 10 × 10 lattice at `order: 2` — plenty for a field that varies linearly in one direction.",
+      "expect": { "cmd": "mesh.set" },
+      "highlight": "mesh.set",
+      "doIt": { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": { "nx": 10, "ny": 10, "nz": 1 } }, "order": 2 }
+    },
+    {
+      "title": "Cold at the bottom",
+      "explain": "`constraint.temperature` — the same Dirichlet boundary the `heat-conduction` tutorial used. Held at 0 °C.",
+      "expect": { "cmd": "constraint.temperature", "match": { "name": "cool" } },
+      "highlight": "constraint.temperature",
+      "doIt": { "cmd": "constraint.temperature", "name": "cool", "on": "plate.ymin", "value": "0 degC" }
+    },
+    {
+      "title": "Hot at the top",
+      "explain": "100 °C at the other edge, so the plate carries a temperature field that runs linearly from 0 to 100 °C bottom to top — a real gradient, not a single number.",
+      "expect": { "cmd": "constraint.temperature", "match": { "name": "warm" } },
+      "highlight": "constraint.temperature",
+      "doIt": { "cmd": "constraint.temperature", "name": "warm", "on": "plate.ymax", "value": "100 degC" }
+    },
+    {
+      "title": "The heat Step",
+      "explain": "`procedure: \"heat-steady\"`, no mechanical Loads at all — this Step's entire job is to produce a temperature field, not a stress. It is not solved yet; a chained Step needs its own definitions in place first, so every Step in this Model gets built before any of them gets solved. (Solving `conduct` now and adding more Commands afterward would make its Result stale the moment anything downstream changed the Model — try it and the engine will say so.)",
+      "expect": { "cmd": "step.add", "match": { "name": "conduct" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "conduct", "procedure": "heat-steady", "constraints": ["cool", "warm"], "loads": [], "output": ["temperature"] }
+    },
+    {
+      "title": "A point to pin",
+      "explain": "One node at the origin, named so a constraint can target just it rather than a whole edge.",
+      "expect": { "cmd": "geometry.nameRegion", "match": { "name": "pin" } },
+      "highlight": "geometry.nameRegion",
+      "doIt": { "cmd": "geometry.nameRegion", "name": "pin", "where": { "kind": "bbox", "min": ["-0.01 m", "-0.01 m", "-0.01 m"], "max": ["0.01 m", "0.01 m", "0.01 m"] } }
+    },
+    {
+      "title": "One real wall",
+      "explain": "Suppose this plate is cast against a fixed wall on its left edge and free everywhere else in x — a slab poured against one foundation, open to the air on the other side. `dofs: [\"ux\"]` restrains only the x-displacement, leaving the plate free to bow or slide in y.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "left" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "left", "on": "plate.xmin", "dofs": ["ux"] }
+    },
+    {
+      "title": "Pin the rigid-body freedom",
+      "explain": "One edge fixed in x already stops x-translation and in-plane rotation; the plate can still slide as a whole in y. One point, fixed in `uy` only, removes that last freedom without resisting any real deformation anywhere else.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "pinned" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "pinned", "on": "pin", "dofs": ["uy"] }
+    },
+    {
+      "title": "The Load that isn't a Load",
+      "explain": "`load.temperature` with `value` equal to `reference` looks like it does nothing — it doesn't set a temperature at all. What it actually does is tell a chained static Step to read thermal strain from the Step it chains to rather than from a constant: this is the half of `step.add{after}` that lives on the Load side.",
+      "expect": { "cmd": "load.temperature", "match": { "name": "reference" } },
+      "highlight": "load.temperature",
+      "doIt": { "cmd": "load.temperature", "name": "reference", "bodies": ["plate"], "value": "0 degC", "reference": "0 degC" }
+    },
+    {
+      "title": "Chain it: the wall, and nothing else",
+      "explain": "`after: \"conduct\"` is the whole trick. This static Step does not repeat the temperature boundary conditions — once solved, it will read `conduct`'s field directly, node by node, as the thermal load. With only the one real wall in the constraint list, the right edge is left completely free.",
+      "expect": { "cmd": "step.add", "match": { "name": "stress-free" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "stress-free", "procedure": "static", "constraints": ["left", "pinned"], "loads": ["reference"], "after": "conduct" }
+    },
+    {
+      "title": "The trap: a symmetry constraint on a free edge",
+      "explain": "Now suppose, out of habit, you also constrain the right edge in a second version of the stress Step — not because there is a wall there (there isn't), but because `constraint.symmetry` \"only removes the normal displacement\" and feels harmless, or because a square plate looks like it ought to be symmetric. It is not: nothing about this temperature field or this geometry is symmetric about x = 1, which is an *edge*, not a mirror plane. This Set does not touch `stress-free` at all — it exists only for the Step defined next.",
+      "expect": { "cmd": "constraint.symmetry", "match": { "name": "wrongsym" } },
+      "highlight": "constraint.symmetry",
+      "doIt": { "cmd": "constraint.symmetry", "name": "wrongsym", "on": "plate.xmax", "normal": "x" }
+    },
+    {
+      "title": "Chain it again, with the extra constraint",
+      "explain": "Same heat field, same real wall, plus the symmetry constraint that was never justified.",
+      "expect": { "cmd": "step.add", "match": { "name": "stress-wrong" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "stress-wrong", "procedure": "static", "constraints": ["left", "pinned", "wrongsym"], "loads": ["reference"], "after": "conduct" }
+    },
+    {
+      "title": "Now make the second wall real",
+      "explain": "Suppose instead the plate genuinely is cast between two fixed abutments, restrained in x at both edges for a real, physical reason. `constraint.fix` says exactly that, and says it honestly — no symmetry argument required, because there is nothing to be symmetric about: both edges are simply walls.",
+      "expect": { "cmd": "constraint.fix", "match": { "name": "right" } },
+      "highlight": "constraint.fix",
+      "doIt": { "cmd": "constraint.fix", "name": "right", "on": "plate.xmax", "dofs": ["ux"] }
+    },
+    {
+      "title": "Chain it a third time: the real, checked model",
+      "explain": "Both walls, the one pin, the chained thermal load — this is the model `docs/EXAMPLES.md` and `BENCHMARKS.md` both check. Three static Steps now sit on this Model, all chained to `conduct`, all still unsolved.",
+      "expect": { "cmd": "step.add", "match": { "name": "stress" } },
+      "highlight": "step.add",
+      "doIt": { "cmd": "step.add", "name": "stress", "procedure": "static", "constraints": ["left", "right", "pinned"], "loads": ["reference"], "after": "conduct" }
+    },
+    {
+      "title": "Solve the heat Step first",
+      "explain": "Every Command that touches this Model is now in place, so solving can finally start — `conduct` first, since the other three all read its Result.",
+      "expect": { "cmd": "solve.run", "match": { "step": "conduct" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "conduct" }
+    },
+    {
+      "title": "Solve the free plate: no stress",
+      "explain": "σₓₓ at mid-height comes out at machine-zero. Nothing is stopping the plate from expanding into the temperature field it was just given, so it does — and free thermal expansion, however large, carries no stress at all. Only a restraint converts expansion into stress; there is only one restraint here, and it does not resist x.",
+      "expect": { "cmd": "solve.run", "match": { "step": "stress-free" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "stress-free" }
+    },
+    {
+      "title": "Solve the trap: −150 MPa, and it is fake",
+      "explain": "σₓₓ at mid-height is now −150 MPa — the same number the fully-restrained plate below is about to compute, because a symmetry constraint zeroing ux at x = 1 restrains the plate's x-expansion exactly as a second wall would. But there is no second wall in this version of the model: the −150 MPa here is an artefact of a restraint that has no physical counterpart, not a measurement of anything the real, one-walled plate would do. The number cannot tell you which case you are in; only knowing what you actually built can.",
+      "expect": { "cmd": "solve.run", "match": { "step": "stress-wrong" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "stress-wrong" }
+    },
+    {
+      "title": "Solve the real model: the same number, for real this time",
+      "explain": "σₓₓ at mid-height is −150 MPa again — identical to the trap, digit for digit. The physics that makes it real this time is that both walls actually exist; nothing about the number itself changed, or could have.",
+      "expect": { "cmd": "solve.run", "match": { "step": "stress" } },
+      "highlight": "solve.run",
+      "doIt": { "cmd": "solve.run", "step": "stress" }
+    },
+    {
+      "title": "The closed form, and which is which",
+      "explain": "One formula, and the reminder that a stress number is only as trustworthy as the restraint that produced it.",
+      "expect": null,
+      "theory": "For a plate held against x-displacement at both edges, free in y, under a temperature change $\\Delta T$ from its stress-free reference (plane strain, so $\\varepsilon_{zz}=0$ too): $\\varepsilon_{xx}=0$ and $\\sigma_{yy}=0$ give\n$$\\sigma_{xx} = \\sigma_{zz} = -\\frac{E\\,\\alpha\\,\\Delta T}{1-\\nu}.$$\nAt mid-height, $\\Delta T = 50\\,\\mathrm{K}$, $E = 210\\,\\mathrm{GPa}$, $\\alpha = 10^{-5}\\,\\mathrm{K^{-1}}$, $\\nu = 0.3$: $\\sigma_{xx} = -150\\,\\mathrm{MPa}$ exactly, and the mesh above computes it to $-0.00\\,\\%$ error.\n\n**`step.add{after}`** is what makes this a *chained* thermal-stress analysis rather than a static Step with a hand-typed `load.temperature` value: the static Step reads `conduct`'s solved nodal temperatures directly, so the stress is linear in $y$ exactly as the real temperature field is, rather than uniform because someone typed one representative number. It also has a bookkeeping cost worth knowing: a chained Step needs the Step it names to have a Result that matches the *current* Model, hash for hash — so the practical order is always build everything, then solve, rather than interleaving the two, or an edit made after an early solve will stale it before a later chained Step can use it.\n\n**Which is which.** Both `stress-wrong` and `stress` computed $-150\\,\\mathrm{MPa}$ at mid-height, and nothing in that number distinguishes them. The difference is entirely in what each restraint claims to be: `left` and `right` in `stress` are two walls that are genuinely there, so $-150\\,\\mathrm{MPa}$ is the plate's real answer to real end conditions. `wrongsym` in `stress-wrong` is a symmetry constraint invented for an edge with no wall and no mirror plane behind it, so its $-150\\,\\mathrm{MPa}$ is an artefact of that invented restraint — a measurement of the constraint, not of the plate. `stress-free`, with the same heat field and only the one real wall, is the tell: it computes zero, because a genuinely free thermal expansion carries no stress at all. Whenever a thermal-stress result looks suspiciously clean, or suspiciously large, the question is never \"is the number right\" — a correct solve of the wrong boundary conditions is still a correct solve — it is \"does every restraint in the constraint list correspond to something that is actually there.\""
+    }
+  ]
+}

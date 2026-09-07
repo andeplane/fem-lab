@@ -128,7 +128,7 @@ test.describe('@cpu accessibility and small screens', () => {
       const tutorial = page.locator('.tutorial-panel[aria-label="Tutorials"]');
       await expect(tutorial).toBeVisible();
       await assertInside('.tutorial-panel');
-      const tutorialClose = tutorial.getByRole('button', { name: 'close' });
+      const tutorialClose = tutorial.getByRole('button', { name: 'close', exact: true });
       await tutorialClose.focus();
       await tutorialClose.press('Tab');
       await expect(tutorial.locator('button').nth(1)).toBeFocused();
