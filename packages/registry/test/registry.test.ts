@@ -41,6 +41,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'script.run': { code: '1 + 1', timeoutMs: 100 },
   'script.stop': {},
   'script.setSource': { code: 'fem.model.new({ name: "a" })', append: true },
+  'script.setEditing': { editing: false },
   'chat.send': { text: 'hello @body:beam' },
   'chat.insertMention': { ref: 'body:beam' },
   'chat.clear': {},
@@ -216,6 +217,8 @@ describe('Registry', () => {
     expect(host.selection.set).toHaveBeenCalledWith({ refs: ['load:p'] });
     await registry.dispatch({ cmd: 'script.setSource', code: 'x' });
     expect(host.script.setSource).toHaveBeenCalledWith('x', undefined);
+    await registry.dispatch({ cmd: 'script.setEditing', editing: true });
+    expect(host.script.setEditing).toHaveBeenCalledWith(true);
   });
 
   it('opens the host print path for the calculation note', async () => {
@@ -457,6 +460,56 @@ describe('Registry', () => {
   });
 });
 
+it('marks only successful explicit saves and imports, using the captured normalized Journal', async () => {
+  const { registry, host, transport } = make(true);
+  const captured = { ...MODEL_FILE, journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'saved' }, hashAfter: 'saved-hash' }] } };
+  const later = { ...MODEL_FILE, journal: { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'edited' }, hashAfter: 'edited-hash' }] } };
+  vi.mocked(transport.exportFile).mockResolvedValue(captured);
+  let finish!: () => void;
+  vi.mocked(host.folder.writeText).mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const saving = registry.dispatch({ cmd: 'file.save', to: 'folder' });
+  await vi.waitFor(() => expect(host.folder.writeText).toHaveBeenCalled());
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  vi.mocked(transport.exportFile).mockResolvedValue(later);
+  finish(); await saving;
+  expect(host.files.markSaved).toHaveBeenLastCalledWith(captured.journal);
+  vi.mocked(host.files.markSaved).mockClear();
+  vi.mocked(host.folder.writeText).mockRejectedValue(new Error('write failed'));
+  await expect(registry.dispatch({ cmd: 'file.save', to: 'folder' })).rejects.toThrow('write failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  // The engine may normalize omitted/default fields; the imported receipt is authoritative.
+  vi.mocked(transport.importFile).mockResolvedValue({ ...ACK, journal: later.journal });
+  await registry.dispatch({ cmd: 'file.open', json: JSON.stringify(captured) });
+  expect(host.files.markSaved).toHaveBeenLastCalledWith(later.journal);
+  vi.mocked(host.files.markSaved).mockClear();
+  vi.mocked(transport.importFile).mockRejectedValue(new Error('import failed'));
+  await expect(registry.dispatch({ cmd: 'file.open', json: JSON.stringify(captured) })).rejects.toThrow('import failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+});
+
+it('marks exactly the successful project-save receipt, leaving failures and null saves unchanged', async () => {
+  const { registry, host, transport } = make();
+  const journal = { entries: [{ seq: 0, cmd: { cmd: 'model.new' as const, name: 'captured' }, hashAfter: 'captured' }] };
+  const receipt = { ...PROJECT, saving: false, autosave: false, journal };
+  let finish!: (value: typeof receipt) => void;
+  vi.mocked(host.projects.save).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const pending = registry.dispatch({ cmd: 'project.save' });
+  await vi.waitFor(() => expect(host.projects.save).toHaveBeenCalledOnce());
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  // A later edit must not replace the payload that the project actually persisted.
+  vi.mocked(transport.exportFile).mockResolvedValue({ ...MODEL_FILE, journal: { entries: [] } });
+  finish(receipt);
+  await expect(pending).resolves.toEqual(receipt);
+  expect(host.files.markSaved).toHaveBeenCalledExactlyOnceWith(journal);
+  expect(transport.exportFile).not.toHaveBeenCalled();
+  vi.mocked(host.files.markSaved).mockClear();
+  vi.mocked(host.projects.save).mockRejectedValueOnce(new Error('storage failed'));
+  await expect(registry.dispatch({ cmd: 'project.save' })).rejects.toThrow('storage failed');
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+  vi.mocked(host.projects.save).mockResolvedValueOnce(null);
+  await expect(registry.dispatch({ cmd: 'project.save' })).resolves.toBeNull();
+  expect(host.files.markSaved).not.toHaveBeenCalled();
+});
 
 it('rejects oversized Model files from every input route before importing', async () => {
   const { registry, host, transport } = make(true);

@@ -19,6 +19,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::assembly::{assemble_stiffness, pattern, reduce, resolve, Csr, Pattern};
 use crate::fem::checks;
 use crate::fem::element::element_for;
+use crate::fem::mpc;
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, Per};
@@ -91,9 +92,14 @@ pub fn run(
     let (a, m) =
         pool.install(|| assemble_stiffness(p, &pat).and_then(|a| assemble_mass(p, &pat, false).map(|m| (a, m))))?;
     let rc = resolve(p).expect("the checks resolved the constraints");
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
     let zeros = vec![0.0; a.k.n];
-    let red_k = reduce(&a.k, &zeros, &rc);
-    let red_m = reduce(&m, &zeros, &rc);
+    // Both operators take the same `T`, so the eigenproblem stays the generalised symmetric
+    // one the subspace iteration wants.
+    let (kt, _) = pool.install(|| mpc::transform(&a.k, &zeros, &mpc));
+    let (mt, _) = pool.install(|| mpc::transform(&m, &zeros, &mpc));
+    let red_k = reduce(&kt, &zeros, &rc, &mpc.slaves);
+    let red_m = reduce(&mt, &zeros, &rc, &mpc.slaves);
     let n = red_k.k_ff.n;
     if n == 0 {
         return Err(Error::new(
@@ -116,8 +122,10 @@ pub fn run(
         for (i, &dof) in red_k.free.iter().enumerate() {
             full[dof as usize] = shape[i];
         }
+        mpc::recover(&mpc, &mut full);
         res.modes.push(vector_field(&full, dpn));
     }
+    res.warnings = mpc.warnings;
     res.fields.insert(Field::Displacement, res.modes[0].clone());
     res.scalars.insert("min_det_j".to_string(), a.min_det_j);
     for axis in ["x", "y", "z"] {
@@ -186,9 +194,8 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>) -> Result<Spectrum, 
         sweeps = sweep;
         for c in 0..q {
             m.spmv(&x[c], &mut y);
-            // A factorised direct solve cannot fail; the trait returns a Result for the
-            // iterative solvers, which can run out of iterations.
-            factored.solve(&y, &mut bar[c]).expect("a factorised solve");
+            // A factorization may still produce an unacceptable residual.
+            factored.solve(&y, &mut bar[c])?;
         }
         // K̂ = X̄ᵀ K X̄ and M̂ = X̄ᵀ M X̄, both q × q and symmetric by construction.
         let (k_hat, m_hat) = (project(k, &bar, q, n), project(m, &bar, q, n));

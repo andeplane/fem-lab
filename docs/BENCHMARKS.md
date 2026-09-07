@@ -45,6 +45,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 
 | Benchmark | Status | Checks | Measured | Reference | Error |
 |---|---|---|---|---|---|
+| amplitude-ramped-cantilever | green | 9/9 | -0.190407 | -0.191962 | 0.81 % |
 | axisymmetric-thermal-stress | green | 4/4 | 1 | 1 | 0.00 % |
 | cantilever-hex20 | green | 6/6 | -0.190407 | -0.191962 | 0.81 % |
 | cantilever-hex8-full | green | 6/6 | -0.18378 | -0.18378 | 0.00 % |
@@ -69,8 +70,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | macneal-harder-trapezoid-quad8 | green | 3/3 | 0.097152 | 0.097152 | 0.00 % |
 | nafems-le1-quad4 | green | 3/3 | 92.480463 | 92.7 | 0.24 % |
 | nafems-le1-quad8 | green | 3/3 | 92.582436 | 92.7 | 0.13 % |
-| nafems-le10-hex20 | green | 3/3 | -5.347745 | -5.38 | 0.60 % |
-| nafems-le10-hex8 | green | 3/3 | -5.400396 | -5.400396 | 0.00 % |
+| le10-full-face-hex20 | green | 3/3 | -5.234137 | -5.25 | 0.30 % |
+| le10-full-face-hex8 | green | 3/3 | -5.400396 | -5.400396 | 0.00 % |
 | nafems-t3-transient | green | 4/4 | 36.792975 | 36.6 | 0.53 % |
 | nafems-t4-conduction | green | 2/2 | 18.254191 | 18.3 | 0.25 % |
 | near-incompressible-049 | green | 4/4 | 5.9894e-5 | 5.9898e-5 | 0.01 % |
@@ -79,6 +80,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
+| tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
+| tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
 
 <!-- bench:end -->
 
@@ -112,6 +115,27 @@ while unequal increments are rejected with both Load names and the Body. A8's nu
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
+
+Direct-solver acceptance (#266) is also checked independently of factorization success.
+`a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer` supplies a full operator whose
+one-triangle factorization gives `(2/3,-1/3)` but whose actual residual is exactly `(0,-2/3)`
+for `b=(1,0)`: returning that candidate as a successful solve fails the test. An SPD scalar
+system whose exact solution is `1e500` must return a structured error. Conversely, `3x=b`
+for `b=1e-300,1,1e300` must recover `x/b=1/3` within 1e-15 without norm overflow. A 3–4–5
+norm-ratio check verifies the same residual ratio at those scales, plus zero and nonfinite
+cases. NaN, infinite, nonpositive and allowance-overflowing tolerances are rejected before
+changing the solution vector. Direct solves reject a nonfinite residual or one above the existing
+refinement floor of `100*tolerance` (default 1e-8); this is an acceptance guard, not a replacement for D1's
+published stress and force-balance oracles. Command regressions keep Model/Journal/previous
+Result intact on rejection and ensure transient heat and modal analysis propagate the error
+without a panic. The modal case uses the first Bathe inverse iterate, whose coefficients
+scale as `rho²/E`: finite `rho=1e100 kg/m³` and `E=1e-200 Pa` exceed the f64 range.
+
+Windows uses per-call sequential numeric factorization, retaining parallel assembly and
+triangular solution ([ADR0019](adr/0019-windows-direct-factorization-parallelism.md)).
+The exact discrete harmonic Dirichlet solution `x_i=(i+1)/(n+1)` checks reusable factors
+at 65/129/257 unknowns, two right-hand sides, one/four threads and concurrent callers.
+The unchanged D1 stress and force-balance checks remain the physical acceptance gate.
 
 A9 runs the shipped CG shaders on the adapter with budgets of 2, 25 and 50 iterations,
 including matrix chunks of three rows and a vector crossing the 256-thread workgroup boundary.
@@ -184,10 +208,27 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
+| B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
 motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
 refinements n=4,8,16 give rates about 2.00 for tri3/tet4 and 4.02/4.05 for tri6/tet10.
+
+B8 (`amplitude-ramped-cantilever`) is B1's hex20 cantilever with a triangular amplitude,
+t = [0, 1, 2] s and g = [0, 1, 0] at dt = 0.25 s: eight increments, nine retained frames. The
+fully loaded frame measures 0.1904070 mm, the same value the un-amplituded `cantilever-hex20`
+case reports, and the half-loaded frames on the way up and the way down are exactly half of it.
+
+**Linear static is affine in the amplitude, not proportional.** `u(t) = u_th + g(t)·u_L`: the
+amplitude scales the Loads and the prescribed displacements, and never the temperature, because
+the thermal strain an element subtracts in `recover` belongs to the temperature field rather
+than to the load history. So a whole schedule costs at most two solves against one reduced
+system, and `an_amplitude_is_affine_in_the_loads_and_never_scales_the_temperature` in
+`tests/fem.rs` is what fails if that is ever "simplified" back into a scaling of one solve: with
+a temperature Load present, the frame at g = 0 must equal a pure thermal solve — fields, stress
+and reactions — and the frame at g = 1 the un-amplituded answer. The exactness of the scaling
+itself is what a linear procedure guarantees; when a nonlinear material, contact or large
+deflection lands, the increments become real solves and this benchmark becomes their gate.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
@@ -276,21 +317,29 @@ checked beyond aggregate counts.
 
 | # | Case | Reference | Tolerance | Proves | Status |
 |---|---|---|---|---|---|
-| D1 | NAFEMS LE10 thick plate under pressure | σyy(D) = −5.38 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark | green |
+| D1 | LE10 full-face support variant (ESRD) | σyy(D) = −5.25 MPa | 2 % (hex20); hex8 recorded as the element-order row | 3D solid benchmark; original NAFEMS line support is a different problem | green |
 | D2 | Axisymmetric thermal stress, heated solid cylinder (**substitute for NAFEMS LE11**) | σzz(0) = −58.654 MPa (Timoshenko §151) | 3 % | thermal stress in axisymmetric, chained from a heat Step | green |
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
 | D4 | Manufactured solution, elasticity and Poisson, hex/tet p=1,2 | prescribed u(x); L2 rate p+1, H1 rate p | rate ± 0.1 | convergence machinery, body loads | |
 | D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale | green |
 
-**D1's support is approximated, and the layer count matters more than the mesh.** LE10 holds the
-outer face's *mid-plane line* vertically, and no Set predicate in the registry can name a line
-where a box cannot: a box at the mid-plane catches the whole mid-surface, which suppresses the
-bending and gives −0.72 MPa. This model holds u_z on the whole outer face instead, which is the
-same support once u_x = u_y = 0 has already clamped it in plane. Through-thickness resolution
-dominates the answer: at 12 × 12 in plane, two hex20 layers give −5.576 MPa and four give
-−5.348 MPa (0.6 % from −5.38). The hex8 row with incompatible modes gives −5.400 MPa at the same
-mesh, much better than the ~−29 % a fully integrated hex8 shows. tet10 is not here: no Command
-hands out simplices, so `split_to_simplices` is reachable only from the geometry crate.
+**D1 uses ESRD's full-face support variant of LE10.** The original NAFEMS problem holds
+vertical displacement only along the outer face's mid-plane line and reports −5.38 MPa.
+Our model holds all three displacement components on the whole outer face. These boundary
+conditions are not equivalent. The [ESRD StressCheck Benchmarks Guide (2018), pp. 29–31](https://www.esrd.com/wp-content/uploads/dlm_uploads/Benchmarks-Guide-Standard-NAFEMS-Benchmarks-Linear-Elastic-Tests.pdf)
+explicitly distinguishes its full-face variant and reports a converged −5.25 MPa. D1 uses that
+independent reference with the existing **2 % tolerance unchanged**; it does not claim to
+validate the original line-supported problem.
+
+Both in-plane and thickness resolution matter for the averaged nodal stress at D. Hex20
+changes from −5.489432 MPa at 6 × 6 × 2 to −5.234137 MPa at 12 × 12 × 8: the error against
+−5.25 MPa falls from 4.56 % to 0.30 %. The previous 12 × 12 × 4 full-face result, −5.347745 MPa,
+was close to the original −5.38 MPa through discretization error; that did not establish
+boundary-condition equivalence. The hex8 incompatible-mode row remains a recorded result
+at 12 × 12 × 4 (−5.400396 MPa), not an independent stress oracle. The bundled example keeps
+its existing `nafems-le10-plate` identifier for compatibility, but its visible title and
+reference explicitly identify the full-face variant. Correction: #183; command-reachable
+Tet10 validation follows under #4.
 
 ## E. Heat transfer (phase 2)
 
@@ -358,6 +407,10 @@ The retained-frame registry checks (#243) read every uniform-heating value throu
 strides, integral and nonintegral endpoint ratios, and initial/final-only output. The values
 must equal `T=t` K within `1e-10 K`; SI arrays remain labelled K when Model display units
 are Celsius. The final frame is exactly the final primary FieldData, including zero padding.
+The document-name regression (#123) repeats both orders and 2/4 axial cells: rename,
+undo/redo and full replay preserve the original solved Model hash, frame catalogue and
+`T(0.4 s)=0.4 K` values, while sampled probes/paths stay unchanged. A subsequent heat-source
+edit remains stale even after another rename, and sampled access rejects it.
 
 An independent cooled-slab Fourier series checks every retained node at 0.05, 0.10 and 0.15 s:
 `T(x,t) = Σ_(odd n) 400/(nπ) sin(nπx) exp(−n²π²t)` K for a 1 m slab initially at 100 K,
@@ -399,7 +452,40 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F2 | Critical time step | 0.9 Δt_crit stable for 5000 steps, 1.25 Δt_crit is `explicit.unstable` | as stated | Δt estimator really is critical | engine test |
 | F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
 | F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) | |
-| F4 | Two-block tie / bonded contact patch test | continuous stress across the tie | 1e-8 | constraints between bodies (phase 6) | |
+| F4 | Two-block tie / bonded contact patch test, matched meshes | uniform tension: σ constant across the tie, u exactly the linear field, Σ reactions = applied | 1e-8 | bonded contact between Bodies (#61) | green |
+| F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
+| F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
+| F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+
+The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
+the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
+and F4c gate at roundoff rather than at an engineering tolerance. F4c's reference is the value
+`cantilever-hex8-im` measures on the single Body beside it, not a published number: it is an
+equivalence, and the published Timoshenko value is the one that case is gated against.
+
+**F4b is an engine test, not an installed case, because the Command API cannot yet build it.**
+`mesh.set` takes one element size for the whole Model, and the lattice mesher divides each Body's
+bounding box by it, so two prismatic Bodies that share a face are always meshed compatibly
+across it: a non-conforming interface cannot be expressed from a Journal today. The engine test
+(`crates/engine/tests/fem.rs`) builds one directly, with the slave block meshed at half the
+master's size, and runs the same three assertions. It is deliberately a *nested* refinement:
+node-to-face ties reproduce a constant stress state exactly when the fine grid's cell edges
+include the coarse grid's, and only approximately when they do not — which is what mortar
+methods exist for and what no tutorial in TUTORIAL-COVERAGE needs. Per-Body mesh sizes would
+make F4b an installed case: #359.
+
+F4d covers a trap the elimination hides. The solved system enforces equilibrium of the retained
+combination, `Tᵀ(Ku − f) = 0`, so at a DOF that is both held by a Constraint and a master of a
+tie, `Ku − f` is the support force *plus* the force the tie pushes into it. `assembly::reactions`
+adds the tie term back (`mpc::master_forces`), which is what makes both the per-constraint
+reaction and the global `balance` right when a tie reaches a support. Without it the global sum
+is wrong too, so F4's `balance` check alone would not have caught it — F4d compares the
+per-constraint reactions of a tied assembly against the single Body it stands for.
+
+**NAFEMS R0081 CGS-1** is not claimed here. TUTORIAL-COVERAGE row 55 lists CGS-1…CGS-10 under
+contact, gapping and sliding; nobody on this change has read the publication, and a benchmark
+whose reference value has not been read from its source is not a benchmark. It belongs to
+frictionless contact (#62) if it turns out to be the frictionless patch test.
 
 F2b's endpoint regression adds `u(t) = v₀t + gt²/2` on two mesh sizes at end times of 0.25,
 1.6 and 2.25 nominal stable steps. The final history time is exactly the requested endpoint,
@@ -613,6 +699,17 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Kirsch (1898), Lamé, Euler–Bernoulli, Timoshenko: any strength-of-materials text.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
+
+### Loaded boundary area (Properties pressure preview)
+
+`query.set.pressureArea` uses the same boundary quadrature as pressure and traction, without
+requiring a Material or appending a Command. Registry tests check both mesh orders against
+independent exact areas: a 350 mm × 300 mm solid face is 0.105 m²; a 2 m edge with 30 mm
+plane-stress thickness is 0.06 m²; plane strain uses 2 m² per metre of out-of-plane depth;
+an axisymmetric edge at r = 3 m and length 2 m sweeps 12π m². Remeshing preserves these
+areas. Multiplying by pressure yields the scalar pressure-area integral, not the net vector
+force on a curved boundary. Chromium checks the draft conversion (2.4 MPa × 0.105 m² =
+252 kN), edits and geometry changes without a load Command until Apply.
 
 ### Transformed Sheet free meshing (#230)
 

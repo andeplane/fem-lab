@@ -14,6 +14,10 @@ export type Command =
       cmd: "model.setUnits";
     }
   | {
+      name: string;
+      cmd: "model.setName";
+    }
+  | {
       idealisation: IdealisationSpec;
       cmd: "model.setIdealisation";
     }
@@ -343,6 +347,22 @@ export type Command =
     }
   | {
       name: string;
+      master: string;
+      slave: string;
+      kind: ContactKind;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "contact.add";
+    }
+  | {
+      name: string;
       cmd: "constraint.remove";
     }
   | {
@@ -563,8 +583,9 @@ export type Command =
       nModes?: number | null;
       shift?: number | null;
       /**
-       * Maximum heat-transient time increment. A uniform increment no larger than dt is
-       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       * Maximum time increment of a heat-transient Step, or of a static Step with an
+       * amplitude. A uniform increment no larger than dt is chosen to finish exactly at
+       * tEnd; the Result reports the increment actually used.
        */
       dt?:
         | (
@@ -1372,6 +1393,10 @@ export type Dof = "ux" | "uy" | "uz";
  */
 export type Axis = "x" | "y" | "z";
 /**
+ * How two faces interact where they meet.
+ */
+export type ContactKind = "bonded";
+/**
  * Analysis procedures.
  */
 export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | "explicit";
@@ -1383,7 +1408,9 @@ export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | 
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
 /**
- * A scalar `g(t)` that scales every prescribed temperature of a transient Step.
+ * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
+ * temperature of a heat-transient Step, and every Load and prescribed displacement of a
+ * static one.
  *
  * Commands are replayed from the Journal, so a time function is data, never a closure: it is
  * either a sine or a piecewise-linear table, and nothing else.
@@ -1636,6 +1663,10 @@ export type Query =
       query: "query.journal";
     }
   | {
+      base: Journal;
+      query: "query.journalDiff";
+    }
+  | {
       query: "query.script";
     }
   | {
@@ -1688,113 +1719,6 @@ export type FrameSample =
  */
 export type TimeSampling = "exact" | "nearest";
 /**
- * A number with a unit, as text or as parts.
- */
-export type Quantity =
-  | string
-  | {
-      value: number;
-      unit: string;
-    };
-/**
- * One section of the Markdown report. `query.report` writes the ones asked for in this order.
- */
-export type ReportSection =
-  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
-/**
- * Any Query response.
- */
-export type QueryResult =
-  | ModelSummary
-  | ObjectDefinition
-  | MeshSummary
-  | SetInfo
-  | ResultSummary
-  | FramesResult
-  | FrameResult
-  | ProbeResult
-  | PathResult
-  | CostEstimate
-  | JournalDump
-  | ScriptText
-  | Converted
-  | MaterialLibrary
-  | ObjectList
-  | Capabilities
-  | ReportText;
-/**
- * Mesher settings, SI.
- */
-export type MesherSettings =
-  | {
-      size?: number | null;
-      /**
-       * @minItems 3
-       * @maxItems 3
-       */
-      counts?: [number, number, number] | null;
-      kind: "lattice";
-    }
-  | {
-      body: string;
-      blocks: QuadBlock[];
-      kind: "mapped";
-    }
-  | {
-      of: string;
-      size: number;
-      refine: RefineBox[];
-      kind: "free";
-    }
-  | {
-      base: MesherSettings;
-      sweep: Sweep;
-      kind: "sweep";
-    };
-/**
- * The shape of one block edge between its two corners.
- */
-export type Curve =
-  | {
-      kind: "line";
-    }
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      center: [number, number];
-      ccw: boolean;
-      kind: "arc";
-    }
-  | {
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      center: [number, number];
-      /**
-       * @minItems 2
-       * @maxItems 2
-       */
-      semi_axes: [number, number];
-      kind: "ellipse";
-    };
-/**
- * How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
- */
-export type Sweep =
-  | {
-      layers: number;
-      height: number;
-      kind: "extrude";
-    }
-  | {
-      segments: number;
-      angle_deg: number;
-      kind: "revolve";
-    };
-/**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
  */
 export type ModelFile_Command =
@@ -1806,6 +1730,10 @@ export type ModelFile_Command =
   | {
       units: UnitSet;
       cmd: "model.setUnits";
+    }
+  | {
+      name: string;
+      cmd: "model.setName";
     }
   | {
       idealisation: IdealisationSpec;
@@ -2137,6 +2065,22 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      master: string;
+      slave: string;
+      kind: ContactKind;
+      tol?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "contact.add";
+    }
+  | {
+      name: string;
       cmd: "constraint.remove";
     }
   | {
@@ -2357,8 +2301,9 @@ export type ModelFile_Command =
       nModes?: number | null;
       shift?: number | null;
       /**
-       * Maximum heat-transient time increment. A uniform increment no larger than dt is
-       * chosen to finish exactly at tEnd; the Result reports the increment actually used.
+       * Maximum time increment of a heat-transient Step, or of a static Step with an
+       * amplitude. A uniform increment no larger than dt is chosen to finish exactly at
+       * tEnd; the Result reports the increment actually used.
        */
       dt?:
         | (
@@ -2684,6 +2629,120 @@ export type RegionPredicate2 =
       kind: "body";
     };
 /**
+ * A number with a unit, as text or as parts.
+ */
+export type Quantity =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * One section of the Markdown report. `query.report` writes the ones asked for in this order.
+ */
+export type ReportSection =
+  "header" | "assumptions" | "geometry" | "materials" | "mesh" | "loads" | "results" | "verification" | "journal";
+/**
+ * Any Query response.
+ */
+export type QueryResult =
+  | ModelSummary
+  | ObjectDefinition
+  | MeshSummary
+  | SetInfo
+  | ResultSummary
+  | FramesResult
+  | FrameResult
+  | ProbeResult
+  | PathResult
+  | CostEstimate
+  | JournalDump
+  | JournalDiff
+  | ScriptText
+  | Converted
+  | MaterialLibrary
+  | ObjectList
+  | Capabilities
+  | ReportText;
+/**
+ * Mesher settings, SI.
+ */
+export type MesherSettings =
+  | {
+      size?: number | null;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      counts?: [number, number, number] | null;
+      kind: "lattice";
+    }
+  | {
+      body: string;
+      blocks: QuadBlock[];
+      kind: "mapped";
+    }
+  | {
+      of: string;
+      size: number;
+      refine: RefineBox[];
+      kind: "free";
+    }
+  | {
+      base: MesherSettings;
+      sweep: Sweep;
+      kind: "sweep";
+    };
+/**
+ * The shape of one block edge between its two corners.
+ */
+export type Curve =
+  | {
+      kind: "line";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      ccw: boolean;
+      kind: "arc";
+    }
+  | {
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      center: [number, number];
+      /**
+       * @minItems 2
+       * @maxItems 2
+       */
+      semi_axes: [number, number];
+      kind: "ellipse";
+    };
+/**
+ * How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
+ */
+export type Sweep =
+  | {
+      layers: number;
+      height: number;
+      kind: "extrude";
+    }
+  | {
+      segments: number;
+      angle_deg: number;
+      kind: "revolve";
+    };
+/**
+ * An omitted optional material property that a successful solve read as its resolved zero.
+ * The value is kept in SI with the Result, so later unit, name and material edits cannot
+ * rewrite the assumption under an already-computed answer.
+ */
+export type AssumedMaterialProperty = "rho" | "alpha";
+/**
  * What a Command produced beyond changing the Model.
  */
 export type Output =
@@ -2958,6 +3017,11 @@ export type Constraint1 =
   | {
       value: number;
       kind: "temperature";
+    }
+  | {
+      master: string;
+      tol?: number | null;
+      kind: "bonded";
     };
 /**
  * A Load.
@@ -3283,6 +3347,20 @@ export interface RefineBoxSpec {
       };
 }
 /**
+ * Append-only list of applied Commands (undo truncates it).
+ */
+export interface Journal {
+  entries: JournalEntry[];
+}
+/**
+ * One applied Command and the Model hash after it.
+ */
+export interface JournalEntry {
+  seq: number;
+  cmd: ModelFile_Command;
+  hashAfter: string;
+}
+/**
  * `query.model` response.
  */
 export interface ModelSummary {
@@ -3295,6 +3373,7 @@ export interface ModelSummary {
   materials: MaterialRow[];
   sets: SetRow[];
   constraints: ConstraintRow[];
+  connections: ConnectionRow[];
   loads: LoadRow[];
   steps: StepRow[];
   meshSettings?: MeshSettings | null;
@@ -3348,6 +3427,18 @@ export interface SetRow {
 export interface ConstraintRow {
   name: string;
   on: string;
+  summary: string;
+}
+/**
+ * One connection between parts: a bonded contact, listed apart from the Constraints because
+ * it prescribes nothing and names two Sets. Pair counts and gaps are not here: they exist only
+ * on a built Mesh, and a Model summary must answer before there is one.
+ */
+export interface ConnectionRow {
+  name: string;
+  kind: string;
+  master: string;
+  slave: string;
   summary: string;
 }
 export interface LoadRow {
@@ -3491,6 +3582,12 @@ export interface SetInfo {
   bbox: [Valued, Valued, Valued, Valued, Valued, Valued];
   measure: Valued;
   /**
+   * Effective loaded area from the pressure/traction boundary quadrature, including plane
+   * stress thickness or axisymmetric 2πr. Plane strain uses one metre of out-of-plane depth.
+   * Null for non-face Sets. Pressure times this area is a scalar, not a net vector force.
+   */
+  pressureArea?: Valued | null;
+  /**
    * @minItems 3
    * @maxItems 3
    */
@@ -3525,6 +3622,11 @@ export interface ResultSummary {
    */
   appliedTotal: [Valued, Valued, Valued];
   /**
+   * Optional material properties the successful procedure actually read as zero because the
+   * Material omitted them. Empty when every solver-used property was explicit.
+   */
+  assumptions?: ResultAssumption[];
+  /**
    * Natural frequencies in ascending order; empty unless the Step was modal. Mode `k`'s
    * shape is the Result field named `mode:k`.
    */
@@ -3539,6 +3641,11 @@ export interface ResultSummary {
    * number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
    */
   balance: number;
+  /**
+   * What the solve wanted the user to know but would not stop for: a bonded contact tied
+   * across a gap, a slave face coarser than its master. Retained with the Result.
+   */
+  warnings?: Warning[];
 }
 /**
  * One extreme of a field component.
@@ -3566,6 +3673,21 @@ export interface ReactionRow {
    * @maxItems 3
    */
   total: [Valued, Valued, Valued];
+}
+/**
+ * One solver-used material assumption captured at solve time.
+ */
+export interface ResultAssumption {
+  step: string;
+  body: string;
+  material: string;
+  property: AssumedMaterialProperty;
+  value: Valued;
+  /**
+   * The Material provenance at solve time; null when the Material named none.
+   */
+  source?: string | null;
+  cause: string;
 }
 /**
  * One time of a transient Step's history: the extremes of the field at that instant.
@@ -3720,12 +3842,25 @@ export interface JournalDump {
   canRedo: boolean;
 }
 /**
- * One applied Command and the Model hash after it.
+ * `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
+ * comparison rather than a text diff that aligns similar Commands after histories diverge.
  */
-export interface JournalEntry {
-  seq: number;
-  cmd: ModelFile_Command;
-  hashAfter: string;
+export interface JournalDiff {
+  /**
+   * Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied
+   * `seq` can therefore change this hash without changing `sharedEntries`.
+   */
+  baseHash: string;
+  currentHash: string;
+  sharedEntries: number;
+  /**
+   * The base Journal's ordered tail after `sharedEntries`.
+   */
+  removed: JournalEntry[];
+  /**
+   * The current Journal's ordered tail after `sharedEntries`.
+   */
+  added: JournalEntry[];
 }
 /**
  * `query.script` response.
@@ -4006,6 +4141,8 @@ export interface EngineError {
     | "result.stale"
     | "constraint.conflict"
     | "constraint.rigid-modes"
+    | "constraint.dependent"
+    | "contact.unpaired"
     | "solve.not-positive-definite"
     | "solve.stalled"
     | "solve.diverged"
@@ -4174,10 +4311,4 @@ export interface Step {
 export interface PluginRecord {
   name: string;
   sha256: string;
-}
-/**
- * Append-only list of applied Commands (undo truncates it).
- */
-export interface Journal {
-  entries: JournalEntry[];
 }

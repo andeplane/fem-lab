@@ -1,7 +1,7 @@
 //! Linear solvers behind one trait, and the cost estimate a host asks for before solving.
 //!
 //! `LinearSolve` is the Extension Point: give it a right-hand side, get a solution and what it
-//! took. The sparse direct factorisation ([`direct`]) is exact; the f64 Jacobi-PCG ([`pcg`]) is
+//! took. The sparse direct factorisation ([`direct`]) verifies its residual; the f64 Jacobi-PCG ([`pcg`]) is
 //! approximate and is driven by the f64 refinement loop in [`refine`], which is also what wraps
 //! the GPU's f32 conjugate gradient (ADR 0002, plan A §5.2–§5.4).
 
@@ -20,8 +20,8 @@ use crate::query::CostEstimate;
 
 /// What a Command asked of the solver. `rel_tol` is the accuracy the *answer* must have, which
 /// the f64 refinement loop is measured against; `inner_tol` and `max_iterations` are the
-/// approximate inner solver's own, much looser, budget. The direct path is exact and reports
-/// the residual it achieved.
+/// approximate inner solver's own, much looser, budget. The direct path verifies and reports
+/// its residual against the same f64 acceptance floor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SolveOptions {
     pub solver: Solver,
@@ -117,7 +117,7 @@ pub async fn solve(
         Solver::CpuDirect => pool.install(|| {
             let mut factored = direct::Direct::factor(k)?;
             let mut x = vec![0.0; k.n];
-            factored.solve(b, &mut x).map(|info| (x, info))
+            factored.solve_with_tolerance(b, &mut x, opts.rel_tol).map(|info| (x, info))
         }),
         // The iterative paths run on rayon's global pool rather than the engine's: `progress` is
         // a `&mut dyn FnMut` and cannot cross into `Pool::install`, which needs `Send`. Every
@@ -153,6 +153,10 @@ fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
         let mut count = 0;
         for node in 0..mesh.n_nodes() {
             let tag = node as u32 + 1;
+            // Every node owns its diagonal whether or not an element touches it, exactly as
+            // `assembly::pattern` seeds it; marking it first also keeps it counted once.
+            marked[node] = tag;
+            count += 1;
             for &elem in adj.of(node) {
                 for &other in mesh.elem_nodes(elem) {
                     if marked[other as usize] != tag {
@@ -175,7 +179,9 @@ fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
             let unique = first.iter().enumerate().filter(|(i, n)| !first[..*i].contains(n)).count() as u64;
             lower = lower.max(unique * unique);
         }
-        (lower, upper.min(nodes.saturating_mul(nodes)))
+        // Plus one diagonal per node, which the element cliques do not cover for a node no
+        // element touches.
+        (lower, upper.saturating_add(nodes).min(nodes.saturating_mul(nodes)))
     }
 }
 
@@ -185,6 +191,11 @@ fn coupling_bounds(mesh: &Mesh) -> (u64, u64) {
 /// an assembled CSR and one RHS. It excludes the resident mesh/model, local element buffers,
 /// reduction, solver vectors, direct-factor fill/workspace and procedure-specific history.
 /// Therefore fitting this lower bound never establishes feasibility, on any host.
+///
+/// It reads the element pattern and nothing else, so it does **not** see the fill-in a
+/// multipoint constraint adds: a `contact.add` couples nodes of two Bodies that share no
+/// element, and `mpc::transform` builds those entries outside `pattern`. A tied model's `nnz`
+/// and `bytes` are therefore under-reported by the size of the interface coupling.
 pub fn cost_estimate(mesh: &Mesh, dofs_per_node: usize, solver: Solver) -> CostEstimate {
     let dofs = (mesh.n_nodes() as u64).saturating_mul(dofs_per_node as u64);
     let block_size = (dofs_per_node as u64).saturating_mul(dofs_per_node as u64);
