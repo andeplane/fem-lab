@@ -346,7 +346,8 @@ for a plane-stress Sheet, the volume includes its specified thickness.
 ### load.pressure
 
 Uniform pressure on a face Set, positive into the surface (a negative value pulls).
-The total force is the pressure times the face area and is reported by query.model.
+Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
+force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -2881,8 +2882,10 @@ Returns: `ScriptText`.
 
 ### query.set
 
-What a Set resolved to on the current Mesh: kind, count, bounding box, area or volume
-and centroid. Use it to verify a predicate selected what you meant.
+What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
+and centroid. Face Sets also report pressureArea from the load boundary quadrature,
+including thickness or radial weighting (plane strain: one metre of depth). Pressure
+times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
 
 Returns: `SetInfo`.
 
@@ -3583,7 +3586,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nThe total force is the pressure times the face area and is reported by query.model.",
+      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.",
       "type": "object",
       "properties": {
         "name": {
