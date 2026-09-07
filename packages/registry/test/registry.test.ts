@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import schema from '../src/generated/engine.schema.json';
+import schema from '../src/generated/runtime-schema';
 import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';

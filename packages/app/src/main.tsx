@@ -11,7 +11,7 @@ import '@fontsource/ibm-plex-sans/latin-400.css';
 import '@fontsource/ibm-plex-sans/latin-500.css';
 import '@fontsource/ibm-plex-sans/latin-600.css';
 import { render } from 'preact';
-import schema from '../../registry/src/generated/engine.schema.json';
+import schema from '../../registry/src/generated/runtime-schema';
 import { capabilityNotes, readHostCaps } from './capabilities';
 import { clearsBenchmark } from './benchmark';
 import { devApiKeys } from './dev-keys';
