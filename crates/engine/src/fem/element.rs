@@ -95,12 +95,33 @@ pub trait Element: Send + Sync {
     fn face_load(&self, c: &ElementCtx<'_>, local_face: u8, load: FaceLoad, out: &mut [f64]) -> Result<(), Error>;
     /// Total strain and stress at the Gauss points, `VOIGT` each: `stress.len() == n_gp * 6`.
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error>;
+<<<<<<< HEAD
     /// `K_σ = ∫ (∂N_a/∂x_i) σ_ij (∂N_b/∂x_j) δ_kl dV`, row-major `n_dof × n_dof`: the stress
     /// stiffening of the state `u` puts this element in, which a linear buckling Step scales by
     /// the load factor. The stress is this element's own Gauss-point stress, recomputed from `u`
     /// exactly as [`Element::recover`] does — the integral wants the unaveraged values, and a
     /// nodal average is a different (smoothed) field.
     fn geometric(&self, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error>;
+=======
+    /// The finite-deformation counterpart of [`Element::stiffness`] and [`Element::recover`]
+    /// in one pass: the consistent tangent `K_T`, the internal force `f_int`, the Cauchy
+    /// stress and Green–Lagrange strain at the Gauss points, and the advanced per-point state,
+    /// for the **total** nodal displacement `u`. Returns the smallest Gauss-point `det J` of
+    /// the *reference* configuration, as `stiffness` does.
+    ///
+    /// Total Lagrangian: everything is integrated over the reference configuration, `S` is the
+    /// second Piola–Kirchhoff stress the material law returns for the Green–Lagrange strain,
+    /// and the linear elastic law therefore *is* St Venant–Kirchhoff. Three-dimensional solids
+    /// and plane strain only; `mesh.inverted` when `det F ≤ 0`, which the Newton loop reads as
+    /// the signal to halve its increment.
+    fn tangent_and_force(
+        &self,
+        c: &ElementCtx<'_>,
+        u: &[f64],
+        state_in: &[f64],
+        out: TangentOut<'_>,
+    ) -> Result<f64, Error>;
+>>>>>>> origin/main
     /// Parametric coordinates of Gauss point `i`, for extrapolation and probes.
     fn gp_xi(&self, i: usize) -> [f64; 3];
     fn shape_at(&self, xi: [f64; 3], n: &mut [f64]);
@@ -245,8 +266,13 @@ struct Kin {
     b: Vec<f64>,
     /// `n_gp * n_nodes` shape values.
     n: Vec<f64>,
+<<<<<<< HEAD
     /// `n_gp * n_nodes` physical shape-function gradients `∂N_a/∂x`, the same ones `B` is
     /// filled from. The geometric stiffness needs them raw rather than in Voigt rows.
+=======
+    /// `n_gp * n_nodes` reference gradients `∂N_a/∂X`, which the finite-strain kernels need
+    /// as vectors rather than as the `B` columns they are packed into.
+>>>>>>> origin/main
     grad: Vec<[f64; 3]>,
     /// `w · det J · scale` per Gauss point.
     w: Vec<f64>,
@@ -364,15 +390,24 @@ fn kinematics_with_rule(kind: ElementKind, c: &ElementCtx<'_>, rule: Rule) -> Re
 /// Stress and the 6×6 tangent at every Gauss point, through the idealisation's path: plane
 /// stress condenses ε₃₃ away and pads the 3×3 answer back into Voigt rows 11, 22, 12; every
 /// other idealisation calls the 3D law once with the whole batch.
+///
+/// `state_in` and `state_out` are `n * law.n_state()` and carry a history-dependent law's
+/// per-point state across one evaluation; a stateless law reads and writes nothing. The plane
+/// stress branch condenses through [`plane_stress_condense`], which drives the law with zero
+/// state and drops what comes out, so it carries `state_in` forward unchanged — which is why
+/// `static-nonlinear` refuses plane stress rather than pretending to integrate a history there.
 fn constitutive(
     c: &ElementCtx<'_>,
     n: usize,
     strain: &[f64],
+    state_in: &[f64],
+    state_out: &mut [f64],
     stress: &mut [f64],
     tangent: &mut [f64],
 ) -> Result<(), Error> {
     let law = c.material.law;
     if let Idealisation::PlaneStress { .. } = c.idealisation {
+        state_out.copy_from_slice(state_in);
         let mut e2 = vec![0.0; n * 3];
         for p in 0..n {
             for (a, &i) in PLANE.iter().enumerate() {
@@ -394,8 +429,6 @@ fn constitutive(
         return Ok(());
     }
     let zeros = vec![0.0; n * VOIGT];
-    let state_in = vec![0.0; n * law.n_state()];
-    let mut state_out = vec![0.0; n * law.n_state()];
     let batch = MaterialBatch {
         n,
         strain,
@@ -403,9 +436,24 @@ fn constitutive(
         temperature: &zeros[..n],
         dt: 0.0,
         props: &c.material.props,
-        state_in: &state_in,
+        state_in,
     };
-    law.evaluate(batch, MaterialOut { stress, tangent, state_out: &mut state_out })
+    law.evaluate(batch, MaterialOut { stress, tangent, state_out })
+}
+
+/// [`constitutive`] for a law whose state does not advance: zeros in, the advanced state
+/// dropped. Every linear procedure integrates this way — `stiffness`, `thermal_load` and
+/// `recover` evaluate *at* a strain rather than along a path.
+fn constitutive_stateless(
+    c: &ElementCtx<'_>,
+    n: usize,
+    strain: &[f64],
+    stress: &mut [f64],
+    tangent: &mut [f64],
+) -> Result<(), Error> {
+    let s = n * c.material.law.n_state();
+    let (zeros, mut out) = (vec![0.0; s], vec![0.0; s]);
+    constitutive(c, n, strain, &zeros, &mut out, stress, tangent)
 }
 
 /// The tangent at zero strain: what the stiffness, the thermal load and the mode condensation
@@ -413,17 +461,17 @@ fn constitutive(
 pub(crate) fn tangent_at_zero(c: &ElementCtx<'_>, n: usize) -> Result<Vec<f64>, Error> {
     let zeros = vec![0.0; n * VOIGT];
     let (mut s, mut d) = (vec![0.0; n * VOIGT], vec![0.0; n * VOIGT * VOIGT]);
-    constitutive(c, n, &zeros, &mut s, &mut d)?;
+    constitutive_stateless(c, n, &zeros, &mut s, &mut d)?;
     Ok(d)
 }
 
-/// `K̂ = Σ w B̂ᵀ D B̂` over the augmented columns, `nt × nt` row-major.
-fn augmented_k(kin: &Kin, d: &[f64]) -> Vec<f64> {
-    let nt = kin.nt();
-    let mut k = vec![0.0; nt * nt];
+/// `K += Σ_g w_g B_gᵀ D_g B_g`. `b` is `n_gp` blocks of `VOIGT × nt` row-major and `k` is
+/// `nt × nt`; the linear and the finite-strain path differ only in what they put in `b`, so
+/// the summation order — and with it the last bit of every entry — is written once.
+fn bt_d_b(b: &[f64], w: &[f64], nt: usize, d: &[f64], k: &mut [f64]) {
     let mut db = vec![0.0; VOIGT * nt];
-    for g in 0..kin.n_gp {
-        let b = kin.b_at(g);
+    for (g, &wg) in w.iter().enumerate() {
+        let b = &b[g * VOIGT * nt..(g + 1) * VOIGT * nt];
         let dg = &d[g * VOIGT * VOIGT..(g + 1) * VOIGT * VOIGT];
         for i in 0..VOIGT {
             for col in 0..nt {
@@ -432,10 +480,27 @@ fn augmented_k(kin: &Kin, d: &[f64]) -> Vec<f64> {
         }
         for r in 0..nt {
             for col in 0..nt {
-                k[r * nt + col] += kin.w[g] * (0..VOIGT).map(|i| b[i * nt + r] * db[i * nt + col]).sum::<f64>();
+                k[r * nt + col] += wg * (0..VOIGT).map(|i| b[i * nt + r] * db[i * nt + col]).sum::<f64>();
             }
         }
     }
+}
+
+/// `f += Σ_g w_g B_gᵀ σ_g`, the same layout as [`bt_d_b`].
+fn bt_sigma(b: &[f64], w: &[f64], nt: usize, stress: &[f64], f: &mut [f64]) {
+    for (g, &wg) in w.iter().enumerate() {
+        let bg = &b[g * VOIGT * nt..(g + 1) * VOIGT * nt];
+        for (col, fc) in f.iter_mut().enumerate() {
+            *fc += wg * (0..VOIGT).map(|i| bg[i * nt + col] * stress[g * VOIGT + i]).sum::<f64>();
+        }
+    }
+}
+
+/// `K̂ = Σ w B̂ᵀ D B̂` over the augmented columns, `nt × nt` row-major.
+fn augmented_k(kin: &Kin, d: &[f64]) -> Vec<f64> {
+    let nt = kin.nt();
+    let mut k = vec![0.0; nt * nt];
+    bt_d_b(&kin.b, &kin.w, nt, d, &mut k);
     k
 }
 
@@ -524,12 +589,7 @@ fn thermal_strain(kin: &Kin, c: &ElementCtx<'_>) -> Option<Vec<f64>> {
 fn internal_force(kin: &Kin, stress: &[f64]) -> Vec<f64> {
     let nt = kin.nt();
     let mut f = vec![0.0; nt];
-    for g in 0..kin.n_gp {
-        let b = kin.b_at(g);
-        for (col, fc) in f.iter_mut().enumerate() {
-            *fc += kin.w[g] * (0..VOIGT).map(|i| b[i * nt + col] * stress[g * VOIGT + i]).sum::<f64>();
-        }
-    }
+    bt_sigma(&kin.b, &kin.w, nt, stress, &mut f);
     f
 }
 
@@ -727,6 +787,7 @@ fn recovered(kind: ElementKind, c: &ElementCtx<'_>, u: &[f64]) -> Result<(Kin, V
     }
     let mut stress = vec![0.0; kin.n_gp * VOIGT];
     let mut tangent = vec![0.0; kin.n_gp * VOIGT * VOIGT];
+<<<<<<< HEAD
     constitutive(c, kin.n_gp, &mech, &mut stress, &mut tangent)?;
     Ok((kin, stress, strain))
 }
@@ -789,11 +850,164 @@ fn geometric_of(kind: ElementKind, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]
                 let v = kin.w[g] * (0..dim).map(|j| sga[j] * grad[b][j]).sum::<f64>();
                 for k in 0..dim {
                     kg[(dim * a + k) * nd + dim * b + k] += v;
+=======
+    constitutive_stateless(c, kin.n_gp, &mech, stress, &mut tangent)
+}
+
+// ------------------------------------------------ finite deformation (total Lagrangian)
+
+/// Where [`Element::tangent_and_force`] writes.
+pub struct TangentOut<'a> {
+    /// Consistent tangent `K_T = K_mat + K_geo`, `n_dof × n_dof` row-major.
+    pub k: &'a mut [f64],
+    /// Internal force `∫ B_Lᵀ S dV`, `n_dof`.
+    pub f: &'a mut [f64],
+    /// **Cauchy** stress at the Gauss points, `n_gp * VOIGT`.
+    pub stress: &'a mut [f64],
+    /// **Green–Lagrange** strain at the Gauss points, `n_gp * VOIGT`, total (thermal included).
+    pub strain: &'a mut [f64],
+    /// The advanced per-point state, `n_gp * law.n_state()`.
+    pub state: &'a mut [f64],
+}
+
+/// The displacement gradient `H_ij = Σ_a u_ai ∂N_a/∂X_j` at one Gauss point. A two-dimensional
+/// idealisation leaves its third row and column zero, so `F₃₃ = 1`: plane strain, which is the
+/// one 2D idealisation this kernel serves.
+fn displacement_gradient(kin: &Kin, u: &[f64], g: usize) -> [[f64; 3]; 3] {
+    let mut h = [[0.0; 3]; 3];
+    for a in 0..kin.n_nodes {
+        let ga = kin.grad[g * kin.n_nodes + a];
+        for i in 0..kin.dim {
+            let ui = u[kin.dim * a + i];
+            for (j, hij) in h[i].iter_mut().enumerate().take(kin.dim) {
+                *hij += ui * ga[j];
+            }
+        }
+    }
+    h
+}
+
+/// `F = I + H`.
+fn deformation_gradient(h: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut f = *h;
+    for (i, row) in f.iter_mut().enumerate() {
+        row[i] += 1.0;
+    }
+    f
+}
+
+/// `E = ½(H + Hᵀ + HᵀH)` in Voigt 11, 22, 33, 12, 13, 23 with engineering shear, so it pairs
+/// with the second Piola–Kirchhoff stress the law returns exactly as `ε` pairs with `σ`.
+///
+/// That is `½(FᵀF − I)` with the subtraction done by hand. Written the other way, a strain of
+/// 1e-6 would be the difference of two numbers either side of 1 and would keep only ten digits
+/// — which puts a floor of about `E · 1e-10` under every stress and stops the Newton residual
+/// of a nearly-linear Step from ever reaching its tolerance.
+fn green_lagrange(h: &[[f64; 3]; 3]) -> [f64; VOIGT] {
+    let e = |i: usize, j: usize| 0.5 * (h[i][j] + h[j][i] + (0..3).map(|k| h[k][i] * h[k][j]).sum::<f64>());
+    [e(0, 0), e(1, 1), e(2, 2), 2.0 * e(0, 1), 2.0 * e(0, 2), 2.0 * e(1, 2)]
+}
+
+/// A symmetric Voigt tensor as the 3×3 it stands for.
+fn voigt_3x3(s: &[f64]) -> [[f64; 3]; 3] {
+    [[s[0], s[3], s[4]], [s[3], s[1], s[5]], [s[4], s[5], s[2]]]
+}
+
+/// The Voigt slot of each `(i, j)` of a symmetric 3×3.
+const VOIGT_IJ: [(usize, usize); VOIGT] = [(0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
+
+/// One element's consistent tangent, internal force and Gauss-point fields at a total nodal
+/// displacement, integrated over the **reference** configuration.
+///
+/// `B_L[row][dim·a + k] = Σ_{(row,i,j) ∈ B_MAP} F_ki ∂N_a/∂X_j` is the small-strain `B` with
+/// every gradient pushed through `F`, so `δE = B_L δu`; `K_mat = Σ w B_Lᵀ (dS/dE) B_L` and
+/// `K_geo[dim·a+k][dim·b+k] = Σ w (g_a · S · g_b)` is the initial-stress term, which is what
+/// makes the tangent consistent and Newton quadratic.
+fn tangent_and_force_of(
+    kind: ElementKind,
+    c: &ElementCtx<'_>,
+    u: &[f64],
+    state_in: &[f64],
+    out: TangentOut<'_>,
+) -> Result<f64, Error> {
+    // Incompatible modes are off under finite strain: the enhanced field is derived for
+    // infinitesimal strain and hourglasses in compression, so this integrates fully whatever
+    // the Model's Formulation says. `procedure::nonlinear` warns when that changes an answer.
+    let full = ElementCtx {
+        coords: c.coords,
+        material: c.material,
+        idealisation: c.idealisation.clone(),
+        formulation: Formulation::Full,
+        temperature: c.temperature,
+        t_ref: c.t_ref,
+        section: c.section,
+    };
+    let kin = kinematics(kind, &full)?;
+    let (n_gp, nn, dim, nd) = (kin.n_gp, kin.n_nodes, kin.dim, kin.n_dof);
+    let mut bl = vec![0.0; n_gp * VOIGT * nd];
+    let mut grads = vec![[[0.0; 3]; 3]; n_gp];
+    for g in 0..n_gp {
+        let h = displacement_gradient(&kin, u, g);
+        let fm = deformation_gradient(&h);
+        let det = det3(&fm);
+        // A folded *deformed* element is the same failure as a folded reference one, and the
+        // Newton loop reads it as the signal to cut the increment back.
+        if !(det > 0.0 && det.is_finite()) {
+            return Err(inverted());
+        }
+        grads[g] = fm;
+        out.strain[g * VOIGT..(g + 1) * VOIGT].copy_from_slice(&green_lagrange(&h));
+        let b = &mut bl[g * VOIGT * nd..(g + 1) * VOIGT * nd];
+        for a in 0..nn {
+            let ga = kin.grad[g * nn + a];
+            for (row, i, j) in B_MAP {
+                if i < dim && j < dim {
+                    for k in 0..dim {
+                        b[row * nd + dim * a + k] += fm[k][i] * ga[j];
+                    }
+>>>>>>> origin/main
                 }
             }
         }
     }
+<<<<<<< HEAD
     Ok(())
+=======
+    let mut mech = out.strain[..n_gp * VOIGT].to_vec();
+    if let Some(eps) = thermal_strain(&kin, &full) {
+        for (a, b) in mech.iter_mut().zip(eps.iter()) {
+            *a -= b;
+        }
+    }
+    let (mut s, mut d) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT * VOIGT]);
+    constitutive(&full, n_gp, &mech, state_in, out.state, &mut s, &mut d)?;
+    out.k.fill(0.0);
+    out.f.fill(0.0);
+    bt_d_b(&bl, &kin.w, nd, &d, out.k);
+    bt_sigma(&bl, &kin.w, nd, &s, out.f);
+    for g in 0..n_gp {
+        let sg = voigt_3x3(&s[g * VOIGT..(g + 1) * VOIGT]);
+        for a in 0..nn {
+            let ga = kin.grad[g * nn + a];
+            for b in 0..nn {
+                let gb = kin.grad[g * nn + b];
+                let v = kin.w[g] * (0..3).map(|i| ga[i] * (0..3).map(|j| sg[i][j] * gb[j]).sum::<f64>()).sum::<f64>();
+                for k in 0..dim {
+                    out.k[(dim * a + k) * nd + dim * b + k] += v;
+                }
+            }
+        }
+        // σ = F S Fᵀ / det F: the second Piola–Kirchhoff stress pushed forward to the
+        // deformed configuration, which is the stress a gauge on the part would read.
+        let fm = grads[g];
+        let det = det3(&fm);
+        let sig = &mut out.stress[g * VOIGT..(g + 1) * VOIGT];
+        for (slot, (i, j)) in VOIGT_IJ.into_iter().enumerate() {
+            sig[slot] = (0..3).map(|k| (0..3).map(|l| fm[i][k] * sg[k][l] * fm[j][l]).sum::<f64>()).sum::<f64>() / det;
+        }
+    }
+    Ok(kin.min_det)
+>>>>>>> origin/main
 }
 
 /// The smallest Gauss-point `det J` of one element's coordinates, or `None` when the element
@@ -942,8 +1156,19 @@ impl<R: RefElement> Element for Iso<R> {
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
         recover_of(R::KIND, c, u, stress, strain)
     }
+<<<<<<< HEAD
     fn geometric(&self, c: &ElementCtx<'_>, u: &[f64], kg: &mut [f64]) -> Result<(), Error> {
         geometric_of(R::KIND, c, u, kg)
+=======
+    fn tangent_and_force(
+        &self,
+        c: &ElementCtx<'_>,
+        u: &[f64],
+        state_in: &[f64],
+        out: TangentOut<'_>,
+    ) -> Result<f64, Error> {
+        tangent_and_force_of(R::KIND, c, u, state_in, out)
+>>>>>>> origin/main
     }
     fn gp_xi(&self, i: usize) -> [f64; 3] {
         rule_of(R::KIND).points[i]

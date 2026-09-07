@@ -4337,6 +4337,7 @@ fn every_procedure_runs_the_well_posedness_checks_first() {
         (r#""heat-steady""#, "heat"),
         (r#""heat-transient","dt":"1 s","tEnd":"2 s""#, "transient"),
         (r#""explicit","tEnd":"1 ms""#, "explicit"),
+        (r#""static-nonlinear","increments":2"#, "nlgeom"),
     ];
     for (procedure, name) in cases {
         let mut e = engine();
@@ -8370,4 +8371,162 @@ fn an_import_that_is_not_a_solid_is_refused_without_touching_the_model() {
     assert_eq!(e.model(), &before);
     // a name a Body cannot have
     assert_eq!(err(&mut e, &import_cmd("a.b", open, "")).code, ErrorCode::Schema);
+}
+
+/// A slender steel cantilever, quadratic elements, loaded far enough to bend visibly.
+///
+/// `PL²/EI = 1.3791547` is the elastica whose tip slope is 0.6 rad, which puts the tip at
+/// `0.9048889 L` along the beam and `0.3872578 L` across it (see
+/// `the_large_deflection_cantilever_follows_the_elastica`, which derives both by quadrature).
+fn elastica_beam(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"nlgeom"}"#);
+    ok(e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","force":"N"}}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","5 mm","5 mm"]}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":20,"ny":1,"nz":1}},"order":2}"#);
+    ok(e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin"}"#);
+    ok(e, r#"{"cmd":"load.traction","name":"tip","on":"beam.xmax","total":["0 N","0 N","-15.084505 N"]}"#);
+}
+
+fn tip_component(e: &mut Engine, component: u32) -> f64 {
+    let query: Query = serde_json::from_str(&format!(
+        r#"{{"query":"query.probe","field":"displacement","component":{component},"at":["1 m","2.5 mm","2.5 mm"]}}"#
+    ))
+    .expect("a probe Query");
+    let QueryResult::Probe(p) = e.query(query).expect("the probe lands in the beam") else { panic!("probe") };
+    p.value.value
+}
+
+/// A nonlinear Step through the registry, end to end: the load arrives in increments, the
+/// Result keeps the load–deflection curve, and a beam that bends this far comes out
+/// substantially stiffer than the linear Step says — by the amount the elastica predicts.
+#[test]
+fn a_static_nonlinear_step_reaches_the_elastica_and_keeps_its_load_deflection_curve() {
+    let mut e = engine();
+    elastica_beam(&mut e);
+    ok(&mut e, r#"{"cmd":"step.add","name":"linear","procedure":"static","constraints":["root"],"loads":["tip"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"large","procedure":"static-nonlinear","constraints":["root"],"loads":["tip"],
+            "increments":5,"maxCutbacks":3,"nonlinearTolerance":1e-8,"nonlinearMaxIterations":12}"#,
+    );
+    // A 1:200 cantilever meshed with 10:1 elements is conditioned well past the direct solve's
+    // default acceptance, so the *linear* comparison Step asks for the accuracy it can have.
+    // The nonlinear Step needs no such thing: its corrections are inexact on purpose and its
+    // own residual criterion, not the linear solver's, decides when it has converged.
+    ok(&mut e, r#"{"cmd":"solve.run","step":"linear","tolerance":1e-6}"#);
+    let linear = tip_component(&mut e, 2);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"large"}"#);
+    let (across, along) = (tip_component(&mut e, 2), tip_component(&mut e, 0));
+
+    // The elastica, in millimetres, and 2 % — refining to 40 elements moves the deflection
+    // from -381.7 to -385.3 mm, so what is left of the gap is the mesh, not the formulation.
+    assert!((across + 387.2578).abs() <= 0.02 * 387.2578, "tip deflection {across} mm");
+    assert!((along + 95.11107).abs() <= 0.05 * 95.11107, "tip shortening {along} mm");
+    // linear theory says PL³/3EI = 459.7 mm: the geometric stiffening is 16 %, not a rounding
+    assert!((linear + 459.7182).abs() <= 0.01 * 459.7182, "linear tip deflection {linear} mm");
+    assert!(across / linear < 0.87, "the nonlinear answer must be much stiffer: {across} vs {linear}");
+
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: Some("large".into()) }).unwrap() else {
+        panic!()
+    };
+    assert!(!r.stale && r.solver == "cpu-direct");
+    assert!(r.balance < 1e-9, "the reactions balance the applied load: {}", r.balance);
+    // one history row per converged increment, plus the origin, with the load factor as "time"
+    assert_eq!(r.history.len(), 6, "{:?}", r.history);
+    assert_eq!(r.history[0].time.value, 0.0);
+    assert_eq!(r.history[5].time.value, 1.0);
+    assert_eq!(r.history[0].min.value, 0.0);
+    assert!(r.history[5].min.value < r.history[4].min.value, "the curve is monotone in the load factor");
+    assert!(r.iterations > 5, "a nonlinear Step reports the Newton iterations it took: {}", r.iterations);
+    assert!(e.model().steps.iter().any(|s| s.increments == Some(5) && s.max_cutbacks == Some(3)));
+}
+
+/// Linear elements have no incompatible modes under finite deformation, so the Result warns
+/// that they will lock — and names the way out.
+#[test]
+fn a_nonlinear_step_warns_that_linear_elements_lock() {
+    let mut e = engine();
+    elastica_beam(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":20,"ny":1,"nz":1}},"order":1}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"large","procedure":"static-nonlinear","constraints":["root"],"loads":["tip"],
+            "increments":2}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"large"}"#);
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: Some("large".into()) }).unwrap() else {
+        panic!()
+    };
+    let w = r.warnings.first().expect("a linear element under finite deformation warns");
+    assert_eq!(w.code, "nlgeom.incompatibleModes");
+    assert!(w.text.contains("hex8") && w.text.contains("order 2"), "{}", w.text);
+    assert_eq!(w.where_.as_deref(), Some("formulation"));
+}
+
+/// A Step that cannot converge says which increment, at what load factor, with what residual,
+/// and what to change — rather than returning an answer nobody should trust.
+#[test]
+fn a_nonlinear_step_that_diverges_names_the_increment_and_the_way_out() {
+    let mut e = engine();
+    elastica_beam(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"hopeless","procedure":"static-nonlinear","constraints":["root"],"loads":["tip"],
+            "increments":1,"maxCutbacks":0,"nonlinearMaxIterations":1}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"hopeless"}"#);
+    assert_eq!(bad.code, ErrorCode::NewtonDiverged);
+    assert!(bad.cause.contains("increment 1") && bad.cause.contains("load factor"), "{}", bad.cause);
+    assert_eq!(bad.where_.as_deref(), Some("step"));
+    assert!(bad.suggestion.expect("a way out").contains("increments"));
+
+    // The controls shared with an iterating heat Step are refused where they are written, by
+    // `step.add`; the ones only this procedure has are refused when it runs, because nothing
+    // above `procedure_step` knows which fields the procedure will read.
+    for (fields, field, at_add) in [
+        (r#""nonlinearMaxIterations":0"#, "nonlinearMaxIterations", true),
+        (r#""nonlinearTolerance":0"#, "nonlinearTolerance", true),
+        (r#""increments":0"#, "increments", false),
+        (r#""maxCutbacks":21"#, "maxCutbacks", false),
+        (r#""tEnd":"0 s""#, "tEnd", false),
+    ] {
+        let add = format!(
+            r#"{{"cmd":"step.add","name":"bad","procedure":"static-nonlinear","constraints":["root"],
+                "loads":["tip"],{fields}}}"#
+        );
+        let bad = if at_add {
+            err(&mut e, &add)
+        } else {
+            ok(&mut e, &add);
+            err(&mut e, r#"{"cmd":"solve.run","step":"bad"}"#)
+        };
+        assert_eq!(bad.code, ErrorCode::Schema, "{field}");
+        assert_eq!(bad.where_.as_deref(), Some(field));
+    }
+}
+
+/// `query.cost` counts a nonlinear Step's retained load–deflection curve before it is run, the
+/// same way it counts a transient's frames: one displacement field per increment, plus the
+/// origin. Reducing `increments` is the lever, so the note is reported and not enforced.
+#[test]
+fn the_cost_of_a_nonlinear_step_counts_the_curve_it_will_retain() {
+    let mut e = engine();
+    elastica_beam(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"large","procedure":"static-nonlinear","constraints":["root"],"loads":["tip"],
+            "increments":5}"#,
+    );
+    ok(&mut e, r#"{"cmd":"step.add","name":"linear","procedure":"static","constraints":["root"],"loads":["tip"]}"#);
+    let QueryResult::Cost(nl) = e.query(Query::Cost { step: "large".into() }).unwrap() else { panic!() };
+    let QueryResult::Cost(lin) = e.query(Query::Cost { step: "linear".into() }).unwrap() else { panic!() };
+    assert_eq!(nl.dofs, lin.dofs);
+    assert_eq!(nl.retained_frames, 6, "the origin and five increments");
+    assert_eq!(lin.retained_frames, 0);
+    let nodes = nl.dofs / 3;
+    assert_eq!(nl.retained_bytes, 6 * (nodes * 3 + 1) * 8);
+    assert!(nl.bytes > lin.bytes);
+    assert_eq!(nl.feasible, None);
 }

@@ -58,6 +58,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | euler-column-fixed-free-hex20 | green | 4/4 | 17.399614 | 17.2718 | 0.74 % |
 | euler-column-pinned-quad8 | green | 3/3 | 68.798751 | 69.0872 | 0.42 % |
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
+| explicit-sdof-step | green | 4/4 | 0.001002 | 0.001 | 0.20 % |
+| explicit-wave-bar | green | 4/4 | 1.001437 | 1 | 0.14 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
 | imported-mesh-prism | green | 6/6 | 6.24289 | 6.24289 | 0.00 % |
 | kirsch-quarter-quad8 | green | 4/4 | 302.187087 | 300 | 0.73 % |
@@ -81,6 +83,9 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | near-incompressible-049 | green | 4/4 | 5.9894e-5 | 5.9898e-5 | 0.01 % |
 | near-incompressible-0499 | green | 4/4 | 5.9951e-5 | 5.9990e-5 | 0.07 % |
 | near-incompressible-04999 | green | 4/4 | 5.9609e-5 | 5.9999e-5 | 0.65 % |
+| nlgeom-cantilever-hex20 | green | 6/6 | -382.167439 | -387.25775 | 1.31 % |
+| nlgeom-small-strain-hex20 | green | 4/4 | -0.190407 | -0.190407 | 0.00 % |
+| nlgeom-uniaxial-svk | green | 6/6 | 24255 | 24255 | 0.00 % |
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
@@ -241,7 +246,8 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (modes 2 and 3, Timoshenko drift) | mass matrix, eigen solver | engine test + green |
 | B5 | Euler column buckling: pinned–pinned (quad8 plane stress), fixed–free and fixed–fixed (hex20) | P_cr = π²EI/(κL)², κ = 1, 2 and ½ | 1 % | linear buckling: K_σ from the static stress state | engine test + green |
 | B5b | Simply supported square plate, uniaxial compression, hex20 | σ_cr = kπ²D/(b²t) with k = 4 → 75.920 MPa | 3 % | plate buckling; the 2D form of the same K_σ | green |
-| B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
+| B5c | Two-bar (von Mises) truss, apex load | λ = 2EAh³/(P L³), derived in the test | exact to 1e-6 | the truss form of the same K_σ | engine test |
+| B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | green as **K2** (end force). The end-moment half needs a moment load, which no Command applies; filed separately |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
 | B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
 | B9 | Truss axial patch: three collinear bars at 1, 2 and 5 elements | u(x) = F x / (E A) at every node; 1 mm at the tip with E = 200 GPa, A = 1000 mm², L = 2 m, F = 100 kN | 1e-12 rel, identical at all three meshes | the bar element reproduces its own exact field, whatever the subdivision | green |
@@ -625,11 +631,18 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F1 | Linear momentum conservation, free body, 2000 explicit steps | Δp = 0, energy drift = 0 | 1e-6 | explicit integrator symmetry (Blast Wall's test) | engine test |
 | F2 | Critical time step | 0.9 Δt_crit stable for 5000 steps, 1.25 Δt_crit is `explicit.unstable` | as stated | Δt estimator really is critical | engine test |
 | F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
-| F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) | |
+| F3 | SDOF under step load, `u = (F/k)(1 − cos ωt)`; one hex8 with one free DOF, `k = 2Ea/9`, `m = ρa³/8` at ν = 0 | F/k at T/4, 2F/k at T/2, 0 at T | 1 % | the explicit path from a Journal against a phase-sensitive closed form; the cantilever and Newmark/HHT forms wait on #72 | green |
 | F4 | Two-block tie / bonded contact patch test, matched meshes | uniform tension: σ constant across the tie, u exactly the linear field, Σ reactions = applied | 1e-8 | bonded contact between Bodies (#61) | green |
 | F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
 | F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+| F5 | The integrator's own period error, predicted exactly: SDOF free vibration over 100 cycles at ωΔt = 0.25, 0.5, 1 | period = `2π / ((2/Δt) asin(ωΔt/2))` at each step; the coefficient of `(ωΔt)²` in ΔT/T fitted from the three is **−1/24** (central differences *shorten* the period; the trapezoidal rule lengthens it by 1/12) | 1e-4 on each period, 1 % on the coefficient | a start-up kick of the wrong half-step, a lagging velocity update or a wrongly scaled mass all keep a clean sinusoid and fail this | engine test |
+| F6 | Discrete energy `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`, SDOF at ωΔt = 1 for 100 cycles and the F2 cantilever with a random initial velocity for 500 steps | exactly constant: `½ m v₀²` for the SDOF, its own initial value for the beam | 1e-12 (SDOF), 1e-10 (beam) relative wander | central differences conserve a modified energy exactly for linear systems; the `½vᵀMv + ½uᵀKu` monitor only bounds it | engine test |
+| F7 | The stability boundary is sharp: SDOF at ωΔt = 1.96 and 2.04 for 1000 steps | below: bounded, sampled amplitude = `v₀ / (ω √(1 − (ωΔt/2)²))`; above: `explicit.unstable` | 1 % on the amplitude, the error code above | the boundary is at 2, not merely somewhere near it | engine test |
+| F8 | Second-order convergence in Δt: SDOF against `(v₀/ω) sin ωt` at t = 5⅛ T for ωΔt = 0.2, 0.1, 0.05 | observed rate 2 | rate ≥ 1.9 | a first-order start-up shows as a rate near one | engine test |
+| F9 | Wave arrival: step traction σ₀ on the free end of a fixed-free rod (hex8, ν = 0, lateral DOFs held), 100 and 200 elements | front at mid-length at `t = L/2c`, `c = √(E/ρ)`; particle velocity `σ₀/(ρc)` from the ramp's slope; nothing moves before the front; free end at `σ₀ c t/E` | 0.5 % on arrival and speed (engine test), 1 % on the probes (case) | the wave speed and the arrival time, not only a tip history | green + engine test |
+| F10 | Impulse: a free hex8 pushed at one corner by `F` for `τ` | `p = F(τ + Δt/2)` (half-step velocity), mass centre at `Fτ²/2M`, transverse momentum zero | 1e-10 relative | `Δp = ∫F dt` while the block deforms; `Ku` sums to zero over a rigid mode | engine test |
+| F11 | Cross-solver: modal frequencies against the spectrum of an explicit free vibration, fixed-free rod of 20 hex8, modes 1–3 | consistent chain `ω² = (6c²/h²)(1 − cos kh)/(2 + cos kh)` for modal, lumped chain `ω = (2c/h) sin(kh/2)` with the F5 dispersion for explicit, `k = (2j−1)π/2L`; the two solvers differ by exactly the gap between those closed forms (0.08 % at mode 1) | 1e-6 (modal), 1e-4 (explicit), 1e-4 on the gap | two integrators, two mass matrices, one spectrum | engine test |
 
 The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
 the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
@@ -660,6 +673,40 @@ per-constraint reactions of a tied assembly against the single Body it stands fo
 contact, gapping and sliding; nobody on this change has read the publication, and a benchmark
 whose reference value has not been read from its source is not a benchmark. It belongs to
 frictionless contact (#62) if it turns out to be the frictionless patch test.
+
+**F5–F10 (#396) exist to tell a right integrator from a nearly-right one.** A sign error, an
+off-by-one in the start-up or a wrong damping coefficient still produces smooth, plausible
+curves, so every gate compares against a closed form derived in the test and the strongest
+compare the integrator's *own* error with what theory predicts. The single-degree-of-freedom
+model is one hex8 with every DOF held except `ux` of one corner: at ν = 0 the corner's
+diagonal stiffness is `∫ E(∂N/∂x)² + G(∂N/∂y)² + G(∂N/∂z)² dV = 2Ea/9`, exact under 2×2×2
+Gauss, and its HRZ mass is `ρa³/8`; the test asserts both against the assembly before using
+them. Central differences on `ü = −ω²u` have the exact discrete frequency
+`sin(ω̃Δt/2) = ωΔt/2`, so the period is *shorter* than `2π/ω` by `(ωΔt)²/24 + 0.00295 (ωΔt)⁴`
+— the issue's magnitude 1/24 with the sign the dispersion relation gives (the trapezoidal rule
+*lengthens* it by `(ωΔt)²/12`, which is the gate #72 adds). F5 measures the period by linear
+interpolation of the upward zero crossings over 100 cycles, which is third-order accurate
+because a sinusoid has no curvature at its zeros, checks each against the dispersion relation
+and fits `ΔT/T ÷ (ωΔt)² = c + d(ωΔt)²` through three steps for the coefficient. F6's invariant
+is the one central differences conserve exactly, `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`
+(with `− ½ fᵀ(u_n + u_{n+1})` under a constant load), computed from the retained frames alone;
+the integrator's monitor `½vᵀMv + ½uᵀKu` uses the staggered velocity and oscillates by O(Δt²),
+which is why it is bounded rather than constant. F7's closed-form amplitude
+`v₀/(ω√(1 − (ωΔt/2)²))` diverges at the boundary, so a 2 % margin on either side is a sharp
+test. F9 and F11 use a hex8 bar with ν = 0 and every lateral DOF held, which is *exactly* the
+1-D rod: uniform-over-the-section motion strains only `ε_xx`, and each section's four nodes
+carry a quarter of the rod's force and mass, so the consistent and lumped chains' eigenvalues
+are closed forms and `sin kx` is an exact eigenvector of both. The modal Step (consistent mass)
+and the explicit Step (lumped mass, then the F5 shortening) therefore disagree by an amount
+the test derives, and F11 gates their difference against that number rather than against a
+tolerance loose enough to hide a bug.
+
+**Waiting on #72 (implicit dynamics):** the Newmark period elongation against 1/12, HHT
+amplitude decay against its spectral radius, harmonic forcing against the closed-form
+magnification, explicit-versus-implicit agreement at small Δt, a damped implicit run converging
+to the static solution, free fall with initial velocity through both procedures, and the
+direct/iterative/GPU linear solvers agreeing under the implicit integrator. Explicit dynamics
+has no linear solve, so the last row has nothing to compare today.
 
 F2b's endpoint regression adds `u(t) = v₀t + gt²/2` on two mesh sizes at end times of 0.25,
 1.6 and 2.25 nominal stable steps. The final history time is exactly the requested endpoint,
@@ -781,6 +828,47 @@ rows, because their oracles are the geometry itself:
 | # | Case | Method |
 |---|---|---|
 | I1 | Export B1, C5, D1 as Abaqus `.inp`, run in CalculiX, compare nodal displacements | within 1e-6 relative for identical mesh and element type; documented run, not CI |
+
+## K. Geometric nonlinearity (phase 6)
+
+Total Lagrangian, Newton–Raphson, load stepping (`procedure: static-nonlinear`, issue #59).
+Green–Lagrange strain and second Piola–Kirchhoff stress go through the *existing* linear
+elastic law, which on that pair is the St Venant–Kirchhoff material, so every row below tests
+kinematics and the Newton loop rather than a new constitutive model. Solid and plane-strain
+idealisations only.
+
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| K1 | Uniaxial St Venant–Kirchhoff bar, ν = 0, stretched 10 % | exact: E₁₁ = (λ²−1)/2 = 0.105, Cauchy σ₁₁ = λE·E₁₁ = 24255 MPa, root reaction λS₁₁A₀ = 242.55 MN | 1e-9 rel | the strain measure, the stress measure and the push-forward, against closed form; a small-strain formulation misses σ by 13 % | green |
+| K2 | Large-deflection cantilever, fixed-direction tip force, hex20, α = PL²/EI = 1.3791547 | exact elastica by quadrature of its own first integral: x_tip = 0.90488893 L, y_tip = 0.38725775 L | 2 % across, 5 % along | the whole loop under a 39 % tip deflection; linear theory is 19 % out | green |
+| K3 | The same cantilever at 1/1000 of B1's load, `static-nonlinear` against `static` | B1's own hex20 answer, 0.1904070 mm | 1e-5 rel | the finite-strain kernel degenerates to the linear one exactly | green |
+| K4 | Finite-deformation patch test: triaxial stretch, simple shear, a 0.4 rad rotation and a general `F`, on a distorted mesh, every element kind | exact constant `E` and Cauchy `σ` from the same `F` | 1e-9 rel on displacement, 1e-8·E on stress | `B_L`, the geometric stiffness and the assembly, on all eight kinds | engine test |
+| K5 | Rigid-body motion of one element: rotations of 0.37, π/2, π rad and a general 3D rotation, plus a translation | zero strain, zero stress, zero internal force | 1e-12 strain, 1e-9·E stress | total Lagrangian outright — a small-strain formulation fails this at any angle | engine test |
+| K6 | Consistent tangent against the central difference of the internal force, every kind | `K_T v = d f_int/du · v` | 1e-6 rel | the tangent is the derivative, which is what makes Newton quadratic (ADR 0007: calculus, not a second implementation) | engine test |
+| K7 | Beam-column: cantilever under a tip load *and* an axial compression at `u = L√(P/EI)` = 0.5, 1.0, 1.4 | `δ(P)/δ(0) = 3(tan u/u − 1)/u²`, exact, running away at `u = π/2` — the cantilever Euler load | 2 % | the geometric stiffness alone (the ratio cancels the discretisation), up to 79 % of the critical load | engine test |
+| K8 | Determinism: K2's beam at 1 and 4 threads | bit-identical displacement, stress, reaction and every scalar | exact | the scatter, the norms and therefore every convergence decision are fixed-order (ADR 0013) | engine test |
+| K9 | A beam cut in two and bonded back together, at K2's deflection | the single-Body beam's own answer | 1e-6 rel | the multipoint elimination happens *inside* the Newton loop: `TᵀK_T T` and `Tᵀr` per iteration, the correction recovered onto the slaves, and the tie force kept out of the support reactions | engine test |
+
+K2's reference is derived, not transcribed. `EI θ'' = −P cos θ` with `θ(0) = 0` and `θ'(L) = 0`
+integrates once to `θ' = √(2P/EI)·√(sin θ_L − sin θ)`, so a chosen tip slope `θ_L` fixes the load
+parameter and the tip position as three integrals of one integrand;
+`the_large_deflection_cantilever_follows_the_elastica` evaluates them and checks that the same
+quadrature reduces to `θ_L = α/2` and `y = αL/3` as `α → 0`, which is Euler–Bernoulli. Bisshopp
+& Drucker (1945) tabulate the same curve and their published values stay **resolve** until the
+paper is on hand; no row here depends on them.
+
+K2 is gated at 2 % on 20 elements because that is where the mesh is, not the formulation:
+refining to 40 elements moves the tip deflection from −382.2 mm to −385.3 mm against the
+elastica's −387.3 mm, so the error falls from 1.31 % to 0.49 %. The cheap mesh keeps the case
+fast; the engine test in `crates/engine/tests/fem.rs` runs the same beam at both slopes.
+
+**What is deliberately not here.** Follower loads: the external force is deformation-independent,
+so a pressure keeps the direction and the area it had on the reference mesh. Line search: the
+only robustness measure is halving cutback, which every row above converges with; snap-through
+needs arc-length control (#75). Plane stress and axisymmetry: the finite-strain kernel has
+`F₃₃ = 1`, and both are refused by name rather than approximated. B5's pinned Euler column stays
+#58's linear-buckling job; K7 measures the same critical load through the beam-column solution,
+whose end conditions a three-dimensional solid can reproduce without ambiguity.
 
 ## Substituted cases
 

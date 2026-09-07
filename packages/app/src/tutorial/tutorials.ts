@@ -7,6 +7,7 @@ import journalAsProgram from '../../tutorials/journal-as-program.json';
 import meshConvergence from '../../tutorials/mesh-convergence.json';
 import modalAnalysis from '../../tutorials/modal-analysis.json';
 import plateWithHole from '../../tutorials/plate-with-hole.json';
+import pressureVessel from '../../tutorials/pressure-vessel.json';
 import readAResult from '../../tutorials/read-a-result.json';
 import symmetryAnd2d from '../../tutorials/symmetry-and-2d.json';
 import thermalBar from '../../tutorials/thermal-bar.json';
@@ -26,6 +27,7 @@ export const TUTORIALS: Tutorial[] = [
   meshConvergence,
   symmetryAnd2d,
   journalAsProgram,
+  pressureVessel,
 ] as Tutorial[];
 
 export function tutorialById(id: string): Tutorial | undefined {
