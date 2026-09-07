@@ -1,0 +1,115 @@
+{
+  "name": "implicit-bar-wave",
+  "reference": "Benchmark F3c: a fixed-free bar of steel, 1 m by 50 x 50 mm with nu = 0 so the solid is the one-dimensional bar exactly, loaded suddenly by 2.5 kN at its free end. The tip follows u(t) = (PL/EA)[1 - (8/pi^2) sum over odd n of n^-2 cos(n pi c t/2L)], c = sqrt(E/rho) = 5188.7 m/s, an independent Fourier series whose sum is a triangle wave of period T1 = 4L/c = 770.9 us: at t = 0.35 T1 the tip is at 1.4 PL/EA = 6.6667e-3 mm. Forty hex8 along the bar at T1/400 by Newmark average acceleration; the engine test refines mesh and step together three times and shows second-order convergence in the step.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "bar-wave"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "bar",
+      "size": [
+        "1 m",
+        "50 mm",
+        "50 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "rod",
+      "E": "210 GPa",
+      "nu": 0,
+      "rho": "7800 kg/m^3"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "rod",
+      "bodies": [
+        "bar"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 40,
+          "ny": 1,
+          "nz": 1
+        }
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "bar.xmin"
+    },
+    {
+      "cmd": "load.traction",
+      "name": "pull",
+      "on": "bar.xmax",
+      "total": [
+        "2.5 kN",
+        "0 N",
+        "0 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "wave",
+      "procedure": "implicit",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "pull"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "dt": "1.927248e-6 s",
+      "tEnd": "2.698148e-4 s",
+      "alpha": 0,
+      "outputEvery": 1000
+    },
+    {
+      "cmd": "solve.run",
+      "step": "wave"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "1000 mm",
+          "25 mm",
+          "25 mm"
+        ],
+        "component": 0
+      },
+      "path": "/value/value",
+      "expect": 0.006666667,
+      "tol": 0.02,
+      "rel": true,
+      "note": "the tip at 0.35 T1 against the Fourier series"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/solver",
+      "expect": "cpu-direct",
+      "note": "one factorisation, back-substituted every step"
+    }
+  ]
+}
