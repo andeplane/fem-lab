@@ -223,6 +223,7 @@ pub(crate) async fn post(
         buckling_factors: Vec::new(),
         modes: Vec::new(),
         history,
+        sweep: None,
         solver,
         warnings: mpc.warnings,
         assumptions: Vec::new(),

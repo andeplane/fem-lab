@@ -126,7 +126,10 @@ impl ResultRecord {
             + r.modes.iter().map(|f| f.data.len()).sum::<usize>()
             + r.frequencies.len()
             + r.buckling_factors.len()
-            + r.history.as_ref().map_or(0, |h| h.times.len() + h.values.iter().map(Vec::len).sum::<usize>());
+            + r.history.as_ref().map_or(0, |h| h.times.len() + h.values.iter().map(Vec::len).sum::<usize>())
+            + r.sweep.as_ref().map_or(0, |s| {
+                s.frequencies.len() + s.amplitude.iter().chain(&s.phase).map(|f| f.data.len()).sum::<usize>()
+            });
         (values * 8) as u64
     }
 

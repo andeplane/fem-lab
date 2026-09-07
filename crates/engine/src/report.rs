@@ -661,6 +661,7 @@ mod tests {
             frequencies: vec![],
             buckling_factors: vec![],
             history: vec![],
+            sweep: vec![],
             balance: 0.0,
             warnings: vec![],
         };

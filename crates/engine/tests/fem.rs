@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use femlab_engine::command::Formulation;
-use femlab_engine::command::{CoupleKind, Field, SectionSpec, Solver};
+use femlab_engine::command::{CoupleKind, Field, SectionSpec, Solver, SweepSpacing};
 use femlab_engine::fem::assembly::{
     assemble_stiffness, expand, pattern, pattern_coupled, reactions, reduce, resolve, Assembled, Csr, Pattern,
     ResolvedConstraints,
@@ -3346,13 +3346,24 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
         Step::Explicit { t_end: 1.0, dt_factor: 0.9, initial_velocity: None, output_every: 1 },
         Step::Buckling { n_modes: 1, solver: opts },
         implicit_step(1.0, 2.0, 0.0, (0.0, 0.0), None, 1),
+        harmonic_step(1.0, 2.0, 3, 0.02, 1),
     ]
     .iter()
     .map(Step::name)
     .collect();
     assert_eq!(
         names,
-        ["static", "static-nonlinear", "modal", "heat-steady", "heat-transient", "explicit", "buckling", "implicit"]
+        [
+            "static",
+            "static-nonlinear",
+            "modal",
+            "heat-steady",
+            "heat-transient",
+            "explicit",
+            "buckling",
+            "implicit",
+            "harmonic"
+        ]
     );
 }
 
@@ -4201,6 +4212,42 @@ fn a_step_result_is_bit_identical_at_one_and_many_threads() {
     }
 }
 
+/// The post-modal arithmetic is a fixed-order reduction too, so a sweep and the modal Step it
+/// continues are bit-identical at one and many threads, retained frames included.
+#[test]
+fn a_harmonic_sweep_is_bit_identical_at_one_and_many_threads() {
+    let many = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(2);
+    let mesh = Structured { kind: ElementKind::Hex8, n: [8, 2, 2] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".to_string(), t: [0.0, 0.0, -1e5] }];
+    let modal = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() };
+    let sweep = harmonic_step(10.0, 400.0, 5, 0.02, 1);
+    let swept = |threads: usize| {
+        let pool = Pool::new(threads);
+        let modes = pollster::block_on(procedure::run(&p, &modal, &pool, None, None, &mut nop)).expect("modes");
+        pollster::block_on(procedure::run(&p, &sweep, &pool, None, Some(&modes), &mut nop)).expect("a sweep")
+    };
+    let (one, par) = (swept(1), swept(many));
+    let (a, b) = (one.sweep.expect("a sweep"), par.sweep.expect("a sweep"));
+    assert_eq!(a.frequencies, b.frequencies);
+    for (x, y) in a.amplitude.iter().chain(&a.phase).zip(b.amplitude.iter().chain(&b.phase)) {
+        let differing = x.data.iter().zip(&y.data).filter(|(u, v)| u.to_bits() != v.to_bits()).count();
+        assert_eq!(differing, 0, "{differing} sweep values differ at {many} threads");
+    }
+    for (k, v) in &one.scalars {
+        assert_eq!(v.to_bits(), par.scalars[k].to_bits(), "scalar {k}");
+    }
+}
+
 // -------------------------------------------------- amplituded static Steps (Benchmark B8)
 
 /// A static Step whose Loads and prescribed displacements ride an amplitude `g(t)`.
@@ -4484,6 +4531,24 @@ fn hold(name: &str, on: &str, value: f64) -> Constraint {
 
 fn run_step(p: &Problem<'_>, step: &Step) -> Result<StepResult, Error> {
     pollster::block_on(procedure::run(p, step, &Pool::new(2), None, None, &mut nop))
+}
+
+/// A Step run against the Result of the Step it continues, which is what `after` gives it.
+fn run_after(p: &Problem<'_>, step: &Step, previous: Option<&StepResult>) -> Result<StepResult, Error> {
+    pollster::block_on(procedure::run(p, step, &Pool::new(2), None, previous, &mut nop))
+}
+
+/// A linearly spaced harmonic sweep at one constant modal damping ratio.
+fn harmonic_step(f_start: f64, f_stop: f64, points: usize, zeta: f64, output_every: usize) -> Step {
+    Step::Harmonic {
+        f_start,
+        f_stop,
+        points,
+        spacing: SweepSpacing::Linear,
+        damping_ratio: Some(zeta),
+        rayleigh: (0.0, 0.0),
+        output_every,
+    }
 }
 
 fn steady() -> Step {
@@ -6229,6 +6294,21 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
             }
         }
     }
+    // A harmonic Step reports at three phases too, and only runs against a modal Result: the
+    // assembly (call 0), one solve call per retained frequency (1..=4 here) and the post (5).
+    let modal = run_step(&solid, &Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() })
+        .expect("a bar with mass has modes");
+    for at in [0, 1, 4, 5] {
+        let mut go = cancel_on(at);
+        let step = harmonic_step(10.0, 100.0, 4, 0.02, 1);
+        let e = pollster::block_on(procedure::run(&solid, &step, &Pool::new(2), None, Some(&modal), &mut go))
+            .expect_err("cancelled");
+        assert_eq!(e.code, ErrorCode::Cancelled, "call {at}: {}", e.cause);
+    }
+    let mut go = cancel_on(6);
+    let step = harmonic_step(10.0, 100.0, 4, 0.02, 1);
+    pollster::block_on(procedure::run(&solid, &step, &Pool::new(2), None, Some(&modal), &mut go))
+        .expect("a host that never says stop gets its sweep");
 }
 
 /// A factorization is only a candidate: verify the full original operator independently.
@@ -7968,6 +8048,250 @@ fn a_tie_conducts_as_one_bar_steady_and_transient() {
     for v in &history.values[0] {
         assert!((v - t0).abs() <= 1e-9 || (v - t1).abs() <= 1e-9, "the initial field is uniform apart from the end");
     }
+}
+
+// --------------------------------------------------------------- harmonic response
+
+/// One hex8 clamped at `xmin` and guided at `xmax` so the only free displacements are the four
+/// axial ones on the loaded face. That face's symmetry group makes the uniform combination its
+/// own mode, and a uniform axial traction excites nothing else: the model **is** a single
+/// degree of freedom, which is what makes the closed form exact rather than approximate.
+fn sdof_bar<'a>(mesh: &'a Mesh, sets: &'a BTreeMap<String, ResolvedSet>, bodies: &'a [String]) -> Problem<'a> {
+    let mut p = problem(
+        mesh,
+        sets,
+        bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0), fix("guide", "xmax", [false, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Traction { faces: "xmax".to_string(), t: [1.0e6, 0.0, 0.0] }];
+    p
+}
+
+/// `phi_k^T f` per mode, so the test can name the one mode this load drives without asking the
+/// procedure under test which one it was.
+fn participations(p: &Problem<'_>, modes: &[FieldData]) -> Vec<f64> {
+    let dpn = p.dofs_per_node();
+    let mut f = vec![0.0; p.n_dofs()];
+    assemble_loads(p, &mut f).expect("a traction on a steel face assembles");
+    for &(dof, _) in &resolve(p).expect("the constraints resolve").fixed {
+        f[dof as usize] = 0.0;
+    }
+    modes
+        .iter()
+        .map(|m| {
+            (0..m.data.len() / 3)
+                .flat_map(|node| (0..dpn).map(move |c| (node * dpn + c, node * 3 + c)))
+                .map(|(dof, comp)| m.data[comp] * f[dof])
+                .sum()
+        })
+        .collect()
+}
+
+/// Benchmark F14. A single-degree-of-freedom magnification curve is exact for mode
+/// superposition, so it is gated at roundoff rather than at an engineering tolerance: any
+/// looser and a real error in the complex denominator, the phase convention or the modal
+/// participation would pass unnoticed.
+///
+/// `|u| / u_static = 1 / sqrt((1 - r^2)^2 + (2 zeta r)^2)` and `phase = atan2(2 zeta r, 1 - r^2)`,
+/// with `u_static` taken from the independent static procedure and `r = f / f_n` from the
+/// independent modal one.
+#[test]
+fn a_single_degree_of_freedom_sweep_reproduces_the_magnification_closed_form() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = sdof_bar(&mesh, &sets, &bodies);
+    let opts = SolveOptions::default();
+
+    let stat = run_step(&p, &static_step(opts)).expect("a guided bar under traction is well posed");
+    let tip: Vec<u32> = sets["xmax"].nodes.clone();
+    let u_static = stat.fields[&Field::Displacement].data[tip[0] as usize * 3];
+    assert!(u_static > 0.0, "the traction pulls the free face outwards: {u_static}");
+
+    // Four free DOFs, four modes: the subspace is the whole space, so the shapes are exact.
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: opts }).expect("a bar with mass has modes");
+    let part = participations(&p, &modal.modes);
+    let driven = (0..part.len()).fold(0, |best, k| if libm::fabs(part[k]) > libm::fabs(part[best]) { k } else { best });
+    let f_n = modal.frequencies[driven];
+
+    for zeta in [0.02, 0.05, 0.2] {
+        // 30 points from 0.1 f_n to 3 f_n is r = 0.1, 0.2, ... 3.0.
+        let step = harmonic_step(0.1 * f_n, 3.0 * f_n, 30, zeta, 1);
+        let res = run_after(&p, &step, Some(&modal)).expect("a harmonic Step after a solved modal one");
+        let sweep = res.sweep.as_ref().expect("a harmonic Step keeps its sweep");
+        assert_eq!(sweep.frequencies.len(), 30, "outputEvery 1 keeps every point");
+        for (i, &hz) in sweep.frequencies.iter().enumerate() {
+            let r = hz / f_n;
+            let (real, imag) = (1.0 - r * r, 2.0 * zeta * r);
+            let want = u_static / libm::sqrt(real * real + imag * imag);
+            let want_phase = libm::atan2(imag, real);
+            for &node in &tip {
+                let got = sweep.amplitude[i].data[node as usize * 3];
+                let got_phase = sweep.phase[i].data[node as usize * 3];
+                assert!(libm::fabs(got - want) <= 1e-8 * want, "zeta {zeta}, r {r}: {got} against {want}");
+                assert!(
+                    libm::fabs(got_phase - want_phase) <= 1e-8,
+                    "zeta {zeta}, r {r}: phase {got_phase} against {want_phase}"
+                );
+                // The transverse components are held, so they never respond.
+                assert_eq!(sweep.amplitude[i].data[node as usize * 3 + 1], 0.0);
+            }
+        }
+        // The displacement field is the amplitude where the response peaked, and for a lightly
+        // damped SDOF that is the grid point nearest resonance.
+        let peak = res.scalars["peak_frequency"];
+        assert!(libm::fabs(peak - f_n) <= 0.06 * f_n, "the peak sits on resonance: {peak} against {f_n}");
+        let at_peak = sweep.frequencies.iter().position(|f| *f == peak).expect("the peak is a retained frequency");
+        assert_eq!(res.fields[&Field::Displacement], sweep.amplitude[at_peak]);
+        assert_eq!(res.frequencies, modal.frequencies, "the modal basis is reported with the response");
+        assert_eq!(res.scalars["zeta_1"], zeta);
+        assert_eq!(res.solver.solver, "cpu-modal-superposition");
+    }
+}
+
+/// Rayleigh damping reaches the same response through the other door: at one frequency,
+/// `zeta = alpha/(2w) + beta w / 2` picked to equal a constant ratio gives an identical
+/// amplitude and phase there.
+#[test]
+fn rayleigh_damping_matches_the_constant_ratio_it_reproduces() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = sdof_bar(&mesh, &sets, &bodies);
+    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
+        .expect("a bar with mass has modes");
+    let w = 2.0 * PI * modal.frequencies[0];
+    // beta w / 2 = 0.05 at the natural frequency, with no mass-proportional term.
+    let beta = 0.1 / w;
+    let constant =
+        run_after(&p, &harmonic_step(0.5 * modal.frequencies[0], 2.0 * modal.frequencies[0], 3, 0.05, 1), Some(&modal))
+            .expect("a constant ratio sweep");
+    let rayleigh = Step::Harmonic {
+        f_start: 0.5 * modal.frequencies[0],
+        f_stop: 2.0 * modal.frequencies[0],
+        points: 3,
+        spacing: SweepSpacing::Linear,
+        damping_ratio: None,
+        rayleigh: (0.0, beta),
+        output_every: 1,
+    };
+    let res = run_after(&p, &rayleigh, Some(&modal)).expect("a Rayleigh damped sweep");
+    assert!(libm::fabs(res.scalars["zeta_1"] - 0.05) < 1e-15, "{}", res.scalars["zeta_1"]);
+    let (a, b) = (&constant.sweep.expect("a sweep"), &res.sweep.expect("a sweep"));
+    let node = sets["xmax"].nodes[0] as usize * 3;
+    for i in 0..3 {
+        assert!(libm::fabs(a.amplitude[i].data[node] - b.amplitude[i].data[node]) <= 1e-12 * a.amplitude[i].data[node]);
+        assert!(libm::fabs(a.phase[i].data[node] - b.phase[i].data[node]) <= 1e-12);
+    }
+    // Mass-proportional damping at the same frequency is the same ratio the other way round.
+    let mass_damped = Step::Harmonic {
+        f_start: 0.5 * modal.frequencies[0],
+        f_stop: 2.0 * modal.frequencies[0],
+        points: 3,
+        spacing: SweepSpacing::Linear,
+        damping_ratio: None,
+        rayleigh: (0.1 * w, 0.0),
+        output_every: 1,
+    };
+    let res = run_after(&p, &mass_damped, Some(&modal)).expect("a mass-proportional sweep");
+    assert!(libm::fabs(res.scalars["zeta_1"] - 0.05) < 1e-15, "{}", res.scalars["zeta_1"]);
+}
+
+/// A harmonic Step without a solved modal Step behind it says so, whether `after` named
+/// nothing at all or named a Step that produced no frequencies.
+#[test]
+fn a_harmonic_step_needs_the_modes_it_superposes() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = sdof_bar(&mesh, &sets, &bodies);
+    let step = harmonic_step(10.0, 100.0, 5, 0.02, 1);
+    let stat = run_step(&p, &static_step(SolveOptions::default())).expect("a static Result has no frequencies");
+    for (previous, where_) in [(None, "step.procedure"), (Some(&stat), "after")] {
+        let error = run_after(&p, &step, previous).expect_err("no modes, no response");
+        assert_eq!(error.code, ErrorCode::NotFound);
+        assert_eq!(error.where_.as_deref(), Some(where_));
+        assert!(error.suggestion.expect("a way out").contains("modal"));
+    }
+}
+
+/// A moving support is base excitation, which mode superposition against a fixed-base modal
+/// basis cannot represent. It is refused rather than silently answered with a zero.
+#[test]
+fn a_harmonic_step_refuses_a_prescribed_displacement() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = sdof_bar(&mesh, &sets, &bodies);
+    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
+        .expect("a bar with mass has modes");
+    p.constraints = vec![fix("root", "xmin", [true, true, true], 1e-3)];
+    let error = run_after(&p, &harmonic_step(10.0, 100.0, 5, 0.02, 1), Some(&modal))
+        .expect_err("base excitation is not this procedure");
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.where_.as_deref(), Some("step.constraints"));
+    assert!(error.suggestion.expect("a way out").contains("load.force"));
+}
+
+/// `outputEvery` strides a sweep exactly as it strides a transient: the first frequency, every
+/// n-th one after it, and the last whatever the arithmetic says.
+#[test]
+fn a_sweep_retains_the_first_the_stride_and_the_last_frequency() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = sdof_bar(&mesh, &sets, &bodies);
+    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
+        .expect("a bar with mass has modes");
+    let res = run_after(&p, &harmonic_step(10.0, 70.0, 7, 0.02, 3), Some(&modal)).expect("a strided sweep");
+    let sweep = res.sweep.expect("a harmonic Step keeps its sweep");
+    assert_eq!(sweep.clone(), sweep, "a Sweep is comparable and cloneable like every Result member");
+    assert!(format!("{sweep:?}").contains("frequencies"));
+    assert_eq!(sweep.frequencies, vec![10.0, 40.0, 70.0]);
+    assert_eq!(sweep.amplitude.len(), 3);
+    assert_eq!(sweep.phase.len(), 3);
+    assert_eq!(res.scalars["retained_frequencies"], 3.0);
+    assert_eq!(res.scalars["sweep_points"], 7.0);
+}
+
+/// A sweep the schema cannot build is refused before any mode is touched.
+#[test]
+fn an_unusable_sweep_stops_the_harmonic_step() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = sdof_bar(&mesh, &sets, &bodies);
+    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
+        .expect("a bar with mass has modes");
+    let error = run_after(&p, &harmonic_step(10.0, 70.0, 1, 0.02, 1), Some(&modal)).expect_err("one point is no sweep");
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert_eq!(error.where_.as_deref(), Some("points"));
+}
+
+/// The Loads and the Constraints of a harmonic Step are its own, and both report what they
+/// cannot resolve rather than answering with a silent zero.
+#[test]
+fn a_harmonic_step_reports_a_load_or_a_constraint_it_cannot_resolve() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let modal = run_step(
+        &sdof_bar(&mesh, &sets, &bodies),
+        &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() },
+    )
+    .expect("a bar with mass has modes");
+    let step = harmonic_step(10.0, 100.0, 5, 0.02, 1);
+
+    let mut bad_load = sdof_bar(&mesh, &sets, &bodies);
+    bad_load.loads = vec![Load::Traction { faces: "nowhere".to_string(), t: [1.0, 0.0, 0.0] }];
+    assert_eq!(run_after(&bad_load, &step, Some(&modal)).expect_err("no such Set").code, ErrorCode::SetEmpty);
+
+    let mut bad_hold = sdof_bar(&mesh, &sets, &bodies);
+    bad_hold.constraints = vec![fix("root", "nowhere", [true, true, true], 0.0)];
+    assert_eq!(run_after(&bad_hold, &step, Some(&modal)).expect_err("no such Set").code, ErrorCode::SetEmpty);
 }
 
 /// A tied assembly has the frequencies of the single Body it models, and its recovered mode
