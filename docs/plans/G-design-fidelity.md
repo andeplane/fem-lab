@@ -96,6 +96,13 @@ and keyboard reachability still require acceptance. This viewport does not
 replace the required 1180 px boundary and 1600 × 1000 reference comparisons.
 No paid Assistant request was submitted.
 
+Source inspection of the integrated `738ec52` code explains this overlap: the
+workspace reserves Assistant width only at ≥ 1494 px (`style.css`); below that,
+the fixed drawer overlays the workspace. The handoff explicitly permits a right
+drawer or split. Overlap alone therefore does not establish a placement defect;
+verify that closing the drawer restores the covered controls and that the
+intended keyboard paths remain usable before filing a new layout defect.
+
 ### Current source and scenario references
 
 These references were inspected at `3a3e1e4`; scenario existence is not a substitute for
