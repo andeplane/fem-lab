@@ -3793,6 +3793,32 @@
         "x-returns": "RetainedResults"
       },
       {
+        "description": "The triangulated boundary of a retained Result's solved Mesh, with f64 SI positions,\noriginal node indices, Body identities and face-Set memberships. Explicit resultId\nreads that immutable solve even after Model edits; an omitted id selects the latest\ncompatible Result for step (or the last solved Step), rejecting stale or missing Results.\nThis never substitutes the current Mesh or a geometry preview. Use query.results for ids.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resultId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "type": "string",
+            "const": "query.surface"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "x-returns": "ResultSurface"
+      },
+      {
         "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
         "type": "object",
         "properties": {
@@ -8114,6 +8140,9 @@
       },
       {
         "$ref": "#/$defs/RetainedResults"
+      },
+      {
+        "$ref": "#/$defs/ResultSurface"
       },
       {
         "$ref": "#/$defs/ResultField"
@@ -13328,6 +13357,140 @@
           "fieldBytes",
           "meshBytes",
           "modelJsonBytes"
+        ]
+      },
+      "ResultSurface": {
+        "description": "A solved Mesh surface. Flat arrays preserve original node identities for field lookup.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "description": "Position unit, always metres.",
+            "type": "string"
+          },
+          "positions": {
+            "description": "Every solved Mesh node, xyz component-fastest, in f64 SI.",
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "indices": {
+            "description": "Triangle node indices, three per triangle, oriented outward.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "triBody": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "triFace": {
+            "description": "First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "faceNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "setNames": {
+            "description": "Every named Set, including overlapping face aliases; memberships are CSR by triangle.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "triSetOffsets": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "triSets": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "bodyNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "edges": {
+            "description": "Sheet boundary edges and line members, two node indices per segment.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "edgeFace": {
+            "description": "u32::MAX means no face Set, including line members.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "edgeBody": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "resultId",
+          "step",
+          "nodeCount",
+          "unit",
+          "positions",
+          "indices",
+          "triBody",
+          "triFace",
+          "faceNames",
+          "setNames",
+          "triSetOffsets",
+          "triSets",
+          "bodyNames",
+          "edges",
+          "edgeFace",
+          "edgeBody"
         ]
       },
       "ResultField": {

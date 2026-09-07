@@ -2019,6 +2019,11 @@ export type Query =
   | {
       step?: string | null;
       resultId?: string | null;
+      query: "query.surface";
+    }
+  | {
+      step?: string | null;
+      resultId?: string | null;
       field: string;
       query: "query.field";
     }
@@ -3381,6 +3386,7 @@ export type QueryResult =
   | SetInfo
   | ResultSummary
   | RetainedResults
+  | ResultSurface
   | ResultField
   | DifferenceField
   | FramesResult
@@ -5136,6 +5142,48 @@ export interface RetainedResult {
    * Serialized solved Model metadata size, not its in-memory allocation size.
    */
   modelJsonBytes: number;
+}
+/**
+ * A solved Mesh surface. Flat arrays preserve original node identities for field lookup.
+ */
+export interface ResultSurface {
+  resultId: string;
+  step: string;
+  nodeCount: number;
+  /**
+   * Position unit, always metres.
+   */
+  unit: string;
+  /**
+   * Every solved Mesh node, xyz component-fastest, in f64 SI.
+   */
+  positions: number[];
+  /**
+   * Triangle node indices, three per triangle, oriented outward.
+   */
+  indices: number[];
+  triBody: number[];
+  /**
+   * First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
+   */
+  triFace: number[];
+  faceNames: string[];
+  /**
+   * Every named Set, including overlapping face aliases; memberships are CSR by triangle.
+   */
+  setNames: string[];
+  triSetOffsets: number[];
+  triSets: number[];
+  bodyNames: string[];
+  /**
+   * Sheet boundary edges and line members, two node indices per segment.
+   */
+  edges: number[];
+  /**
+   * u32::MAX means no face Set, including line members.
+   */
+  edgeFace: number[];
+  edgeBody: number[];
 }
 /**
  * Final scientific values are f64 SI in component-fastest entity order.

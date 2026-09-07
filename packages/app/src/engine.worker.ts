@@ -4,8 +4,9 @@
 // `slice()`d the instant they are made and never escape unsliced (plan B risk R1).
 import init, { Engine, version } from './generated/wasm/femlab_engine_wasm.js';
 import wasmUrl from './generated/wasm/femlab_engine_wasm_bg.wasm?url';
-import { siUnitOf } from './fields';
-import type { BufferSpec, FrameResult, ResultSummary } from '@femlab/registry';
+import type { Query, ResultSelector } from '@femlab/registry';
+import { isBulkQuery, queryBulk, retainedFieldBulk, retainedSurfaceBulk } from './result-transfer';
+import type { Bulk, FieldRequest } from './result-transfer';
 import type { AppReq, AppRes } from './protocol';
 import { toStructured } from './protocol';
 import { restoreHistory } from './recovery';
@@ -13,12 +14,6 @@ import { restoreHistory } from './recovery';
 let engine: Engine | undefined;
 /** Serialises the whole message loop: the engine is `&mut self` on every interesting call. */
 let tail: Promise<unknown> = Promise.resolve();
-
-interface Bulk {
-  value: unknown;
-  buffers: BufferSpec[];
-  raw: ArrayBuffer[];
-}
 
 function need(): Engine {
   if (!engine) throw { code: 'internal', cause: 'the engine Worker was used before create', where: 'create' };
@@ -79,39 +74,13 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
       return JSON.parse(json);
     }
     case 'query': {
-      if ((req.payload as { query: string }).query !== 'query.frame') return JSON.parse(need().query(JSON.stringify(req.payload)));
-      // Rust uses the same Query resolver and copies f64 values into an owned JS buffer.
-      // Transfer that staging allocation; never transfer a view of the retained History.
-      const { values, ...metadata } = need().query_transfer(JSON.stringify(req.payload)) as Omit<FrameResult, 'values'> & { values: Float64Array };
-      return {
-        value: metadata,
-        buffers: [{ name: 'values', dtype: 'f64' as const, length: values.length }],
-        raw: [values.buffer as ArrayBuffer],
-      };
+      const q = req.payload as Query;
+      return isBulkQuery(q) ? queryBulk(need(), q) : JSON.parse(need().query(JSON.stringify(q)));
     }
     case 'surface':
-      return surface();
-    case 'field': {
-      const { step, field, component } = req.payload as { step?: string; field: string; component?: number };
-      // `field()` already returns a fresh Float32Array (Rust built the f32 staging vector), so
-      // there is no view over wasm memory to outlive here.
-      const values = need().field(step, field, component);
-      let min = 0;
-      let max = 0;
-      for (let i = 0; i < values.length; i++) {
-        const v = values[i]!;
-        if (i === 0 || v < min) min = v;
-        if (i === 0 || v > max) max = v;
-      }
-      const reactionQuantity = field === 'reaction'
-        ? (JSON.parse(need().query(JSON.stringify({ query: 'query.result', step }))) as ResultSummary).reactionQuantity
-        : 'force';
-      return {
-        value: { min, max, unit: siUnitOf(field, reactionQuantity) },
-        buffers: [{ name: 'values', dtype: 'f32' as const, length: values.length }],
-        raw: [values.buffer as ArrayBuffer],
-      };
-    }
+      return req.payload === undefined ? surface() : retainedSurfaceBulk(need(), req.payload as ResultSelector);
+    case 'field':
+      return retainedFieldBulk(need(), req.payload as FieldRequest);
     case 'exportFile':
       return JSON.parse(need().export_file());
     case 'importFile': {

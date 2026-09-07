@@ -135,23 +135,57 @@ impl Engine {
         serde_json::to_string(&r).map_err(schema_err)
     }
 
-    /// The same schema-owned Query as `query`, with a frame's values copied into a fresh
-    /// Float64Array for Worker transfer. The retained History and wasm memory never escape.
-    /// Other Query responses retain their JSON shape. This is transport staging, not a
-    /// separate frame resolver or an f32 rendering conversion.
+    /// The same schema-owned Query as `query`, with scientific arrays copied into fresh JS
+    /// staging buffers. Frames, fields and positions remain f64. Difference values have an
+    /// additional u8 `valid` mask (0 means the JSON value is null); topology remains u32.
+    /// Transferring or mutating these buffers never detaches retained engine storage.
+    /// Other Query responses retain their JSON shape. Rendering conversions happen in hosts.
     pub fn query_transfer(&mut self, query_json: String) -> Result<JsValue, JsValue> {
+        use femlab_engine::query::QueryResult;
         let q: Query = serde_json::from_str(&query_json).map_err(schema_err)?;
         let result = self.inner.query(q).map_err(|e| throw(&e))?;
-        let (json, values) = match result {
-            femlab_engine::query::QueryResult::Frame(mut frame) => {
+        let mut arrays: Vec<(&str, JsValue)> = Vec::new();
+        let json = match result {
+            QueryResult::Frame(mut frame) => {
                 let values = std::mem::take(&mut frame.values);
-                (serde_json::to_string(&frame), Some(values))
+                arrays.push(("values", js_sys::Float64Array::from(&values[..]).into()));
+                serde_json::to_string(&frame)
             }
-            other => (serde_json::to_string(&other), None),
+            QueryResult::Field(mut field) => {
+                let values = std::mem::take(&mut field.values);
+                arrays.push(("values", js_sys::Float64Array::from(&values[..]).into()));
+                serde_json::to_string(&field)
+            }
+            QueryResult::Difference(mut difference) => {
+                let optional = std::mem::take(&mut difference.values);
+                let values: Vec<f64> = optional.iter().map(|v| v.unwrap_or(0.0)).collect();
+                let valid: Vec<u8> = optional.iter().map(|v| u8::from(v.is_some())).collect();
+                arrays.push(("values", js_sys::Float64Array::from(&values[..]).into()));
+                arrays.push(("valid", js_sys::Uint8Array::from(&valid[..]).into()));
+                serde_json::to_string(&difference)
+            }
+            QueryResult::Surface(mut surface) => {
+                let positions = std::mem::take(&mut surface.positions);
+                arrays.push(("positions", js_sys::Float64Array::from(&positions[..]).into()));
+                for (name, values) in [
+                    ("indices", &mut surface.indices),
+                    ("triBody", &mut surface.tri_body),
+                    ("triFace", &mut surface.tri_face),
+                    ("triSetOffsets", &mut surface.tri_set_offsets),
+                    ("triSets", &mut surface.tri_sets),
+                    ("edges", &mut surface.edges),
+                    ("edgeFace", &mut surface.edge_face),
+                    ("edgeBody", &mut surface.edge_body),
+                ] {
+                    arrays.push((name, js_sys::Uint32Array::from(&std::mem::take(values)[..]).into()));
+                }
+                serde_json::to_string(&surface)
+            }
+            other => serde_json::to_string(&other),
         };
         let out = js_sys::JSON::parse(&json.map_err(schema_err)?)?;
-        if let Some(values) = values {
-            js_sys::Reflect::set(&out, &"values".into(), &js_sys::Float64Array::from(&values[..]))?;
+        for (name, values) in arrays {
+            js_sys::Reflect::set(&out, &name.into(), &values)?;
         }
         Ok(out)
     }

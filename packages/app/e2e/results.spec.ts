@@ -141,13 +141,12 @@ test.describe('@cpu solving the cantilever and reading its Result', () => {
  * not the pixels. The block reduction is what absorbs the antialiased fringe; if it still flakes,
  * compare the count of set blocks within a tolerance rather than the hash.
  *
- * The size is pinned by `page.setViewportSize`, not by a `width` on the Query: `ScreenshotOptions`
- * declares one but `HostContext.view.screenshot` ignores it, so passing it would only make the
- * test look more deterministic than it is.
+ * Explicit image dimensions also fix the camera aspect when Model edits add status rows and
+ * resize the interactive canvas. Field-only tests use the pinned page viewport.
  */
-async function silhouette(page: Page): Promise<number> {
-  return page.evaluate(async () => {
-    const { png } = (await window.fem.registry.query({ query: 'query.screenshot', legend: false })) as unknown as { png: string };
+async function silhouette(page: Page, size?: { width: number; height: number }): Promise<number> {
+  return page.evaluate(async (size) => {
+    const { png } = (await window.fem.registry.query({ query: 'query.screenshot', legend: false, ...size })) as unknown as { png: string };
     const img = new Image();
     await new Promise((done) => {
       img.onload = done;
@@ -173,7 +172,7 @@ async function silhouette(page: Page): Promise<number> {
       }
     }
     return hash;
-  });
+  }, size);
 }
 
 test.describe('@cpu the deformed shape, across fields', () => {
@@ -218,4 +217,49 @@ test.describe('@cpu the deformed shape, across fields', () => {
     await expect(page.locator('.deform-bar button[aria-pressed="true"]')).toHaveText('true scale');
     await shot(page, '14-true-scale');
   });
+});
+
+test('@cpu stale results keep their solved mesh through geometry edits and view-mode roundtrips', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1280, height: 860 });
+  await page.addInitScript(() => localStorage.setItem('femlab.tour.dismissed', '1'));
+  await page.goto('./');
+  await ready(page);
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'file.openExample', name: 'cantilever' }));
+  await expect(page.locator('.legend')).toBeVisible();
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setDeformScale', scale: 'true' }));
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.preset', view: 'iso' }));
+  await page.evaluate(async () => {
+    await window.fem.dispatch({ cmd: 'view.toggle', layer: 'grid', on: false });
+    await window.fem.dispatch({ cmd: 'view.toggle', layer: 'axes', on: false });
+  });
+  const retained = await page.evaluate(async () => {
+    const result = await window.fem.query.result();
+    return window.fem.query.surface({ resultId: result.resultId });
+  });
+  await page.evaluate(() => window.fem.load.traction({ name: 'tip', on: 'beam.xmax', total: ['0 N', '0 N', '-2 kN'] }));
+  await expect(page.locator('.stale-banner')).toBeVisible();
+  const staleShape = await silhouette(page, { width: 640, height: 480 });
+  expect(await silhouette(page, { width: 640, height: 480 })).toBe(staleShape);
+  await page.evaluate(async () => {
+    await window.fem.geometry.addBox({ name: 'beam', size: ['2 m', '100 mm', '100 mm'] });
+    await window.fem.geometry.addBox({ name: 'new-body', size: ['200 mm', '200 mm', '200 mm'], at: ['0 m', '300 mm', '0 m'] });
+    await window.fem.mesh.set({ mesher: { kind: 'lattice', size: { nx: 2, ny: 1, nz: 1 } }, order: 1 });
+  });
+  expect((await page.evaluate(() => window.fem.query.mesh())).nodes).not.toBe(retained.nodeCount);
+  expect(await page.evaluate(resultId => window.fem.query.surface({ resultId }), retained.resultId)).toEqual(retained);
+  expect(await silhouette(page, { width: 640, height: 480 })).toBe(staleShape);
+  for (const mode of ['geometry', 'mesh'] as const) {
+    await page.evaluate(mode => window.fem.dispatch({ cmd: 'view.setMode', mode }), mode);
+    expect(await silhouette(page, { width: 640, height: 480 })).not.toBe(staleShape);
+    await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setMode', mode: 'results' }));
+    await expect(page.locator('.legend')).toBeVisible();
+    await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+    expect(await silhouette(page, { width: 640, height: 480 })).toBe(staleShape);
+    await expect(page.locator('.stale-banner')).toBeVisible();
+  }
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.showField', field: null }));
+  expect(await silhouette(page, { width: 640, height: 480 })).not.toBe(staleShape);
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.animate', step: 'static', playing: false, frame: 25 }));
+  expect(await silhouette(page, { width: 640, height: 480 })).toBe(staleShape);
 });

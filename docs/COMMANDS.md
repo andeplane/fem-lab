@@ -3441,6 +3441,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
 - [query.results](#queries-query-results)
 - [query.script](#queries-query-script)
 - [query.set](#queries-query-set)
+- [query.surface](#queries-query-surface)
 
 <a id="queries-query-capabilities"></a>
 
@@ -3790,6 +3791,24 @@ Returns: `SetInfo`.
 | --- | --- | --- | --- |
 | name | yes | <code>{"type":"string"}</code> |  |
 | query | yes | <code>{"type":"string","const":"query.set"}</code> |  |
+
+<a id="queries-query-surface"></a>
+
+### query.surface
+
+The triangulated boundary of a retained Result's solved Mesh, with f64 SI positions,
+original node indices, Body identities and face-Set memberships. Explicit resultId
+reads that immutable solve even after Model edits; an omitted id selects the latest
+compatible Result for step (or the last solved Step), rejecting stale or missing Results.
+This never substitutes the current Mesh or a geometry preview. Use query.results for ids.
+
+Returns: `ResultSurface`.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| step | no | <code>{"type":["string","null"]}</code> |  |
+| resultId | no | <code>{"type":["string","null"]}</code> |  |
+| query | yes | <code>{"type":"string","const":"query.surface"}</code> |  |
 
 ### Queries definitions
 
