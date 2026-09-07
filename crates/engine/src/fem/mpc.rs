@@ -302,10 +302,10 @@ fn cyclic_rows(
             ));
         }
         let t = best.1;
-        for c in 0..dpn {
+        for (c, row) in r.iter().enumerate().take(dpn) {
             let masters: Vec<(u32, f64)> = (0..dpn)
-                .filter(|&d| r[c][d].abs() > WEIGHT_EPS)
-                .map(|d| (node * dpn as u32 + d as u32, r[c][d]))
+                .filter(|&d| row[d].abs() > WEIGHT_EPS)
+                .map(|d| (node * dpn as u32 + d as u32, row[d]))
                 .collect();
             out.push(Row { slave: t * dpn as u32 + c as u32, masters, owner });
         }
