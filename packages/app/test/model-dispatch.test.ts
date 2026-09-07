@@ -44,3 +44,20 @@ describe('complete model operation ordering', () => {
     await expect(dispatch({ cmd: 'project.new' })).resolves.toBe('done');
   });
 });
+
+it.each(['file.save', 'project.save', 'file.shareLink'])('%s can finish its captured snapshot after later model edits', async (cmd) => {
+  const saving = gate();
+  let revision = 0;
+  const dispatch = serializeModelDispatch(registry, async (command) => {
+    if (command.cmd === cmd) {
+      const captured = revision;
+      await saving.promise;
+      return captured;
+    }
+    return ++revision;
+  });
+  const saved = dispatch({ cmd });
+  await expect(dispatch({ cmd: 'geometry.addBox' })).resolves.toBe(1);
+  saving.release();
+  await expect(saved).resolves.toBe(0);
+});

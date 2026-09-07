@@ -1,11 +1,12 @@
 import type { Registry } from '@femlab/registry';
 
+// Saves capture immutable snapshots and may finish after later edits; they do not hold this lane.
 // These host operations span several engine calls and/or change the current saved project.
 // The Worker's per-message queue cannot keep a Journal replay together with its UI refresh.
 const MODEL_HOST_COMMANDS = new Set([
-  'project.new', 'project.open', 'project.delete', 'project.rename', 'project.save',
+  'project.new', 'project.open', 'project.delete', 'project.rename',
   'file.open', 'file.restore', 'file.openExample', 'example.open', 'geometry.importFile',
-  'file.export', 'file.save', 'file.shareLink',
+  'file.export',
 ]);
 
 /**
