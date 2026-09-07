@@ -4926,7 +4926,7 @@ fn the_tet_mesher_refuses_bad_settings_and_geometry_it_cannot_resolve() {
     // Every other way the map can go wrong is refused where serde would refuse a derived one.
     for (spec, cause) in [
         (r#"{"kind":"tet","size":5}"#, "untagged enum Quantity"),
-        (r#"{"kind":"tet","size":"0.3 m","maxElements":"lots"}"#, "maxElements"),
+        (r#"{"kind":"tet","size":"0.3 m","maxElements":"lots"}"#, "expected u32"),
         (r#"{"kind":"tet","size":"0.3 m","bogus":1}"#, "unknown field `bogus`"),
     ] {
         let malformed = err(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{spec}}}"#));
