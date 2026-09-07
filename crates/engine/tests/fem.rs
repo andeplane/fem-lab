@@ -8061,7 +8061,7 @@ fn condensed_plane_stress(d: &[[f64; VOIGT]; VOIGT]) -> [[f64; 3]; 3] {
 }
 
 /// `A⁻¹` of a symmetric positive-definite 3×3 by Gauss–Jordan, for the lamina oracle.
-fn invert3(a: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+fn invert3_spd(a: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
     let mut m = [[0.0f64; 6]; 3];
     for i in 0..3 {
         m[i][..3].copy_from_slice(&a[i]);
@@ -8583,7 +8583,7 @@ fn an_off_axis_lamina_has_the_rotated_compliance_including_shear_extension_coupl
         let (mut stress, mut tangent) = ([0.0; 3], [0.0; 9]);
         plane_stress_condense(&law, &LAMINA, &[0.0; 3], &mut stress, &mut tangent).expect("plane stress");
         let c_ps: [[f64; 3]; 3] = std::array::from_fn(|i| std::array::from_fn(|j| tangent[i * 3 + j]));
-        let got = invert3(&c_ps);
+        let got = invert3_spd(&c_ps);
         // The plane-stress compliance is the 11/22/12 sub-block of the full 3D compliance: with
         // σ33 = σ13 = σ23 = 0 the other rows never enter.
         let plane = [0usize, 1, 3];
