@@ -21,7 +21,7 @@ use crate::post::{Extremum, FieldData};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{
     AssumedMaterialProperty, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary, StudyReport,
-    StudyRow, Valued,
+    StudyRow, SweepRow, Valued,
 };
 use crate::solve::SolveOptions;
 use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Q};
@@ -396,6 +396,15 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
             amplitude: step.amplitude.as_ref().map(amplitude),
             solver: opts,
         },
+        Procedure::Harmonic => procedure::Step::Harmonic {
+            f_start: want(step.f_start, "fStart")?,
+            f_stop: want(step.f_stop, "fStop")?,
+            points: step.points.unwrap_or(0) as usize,
+            spacing: step.sweep.unwrap_or_default(),
+            damping_ratio: step.damping_ratio,
+            rayleigh: (step.rayleigh_alpha.unwrap_or(0.0), step.rayleigh_beta.unwrap_or(0.0)),
+            output_every: step.output_every.unwrap_or(1) as usize,
+        },
         // The initial velocity needs the Mesh; `initial_velocity` fills it in once the Problem
         // exists, so this stays a pure SI mapping.
         Procedure::Explicit => procedure::Step::Explicit {
@@ -513,6 +522,15 @@ pub(crate) fn planned_cost(
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), 1, steps, *output_every, work)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "heat-transient")) });
         }
+        // A harmonic Step solves nothing, but it retains two nodal fields per frequency, so it
+        // is budgeted like a transient with six stored components instead of three.
+        procedure::Step::Harmonic { f_start, f_stop, points, spacing, output_every, .. } => {
+            procedure::harmonic::sweep_grid(*f_start, *f_stop, *points, *spacing)?;
+            let steps = points - 1;
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, Solver::Auto);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), 6, steps, *output_every, 4)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "harmonic")) });
+        }
         procedure::Step::Explicit { t_end, dt_factor, output_every, .. } => {
             let p = explicit_problem.expect("an explicit cost plan needs its resolved Problem");
             let (steps, _) = procedure::explicit::retention_grid(p, *t_end, *dt_factor)?;
@@ -623,6 +641,7 @@ impl Engine {
                 procedure::Step::HeatTransient { .. }
                     | procedure::Step::Explicit { .. }
                     | procedure::Step::Implicit { .. }
+                    | procedure::Step::Harmonic { .. }
                     | procedure::Step::Static { amplitude: Some(_), .. }
             ) {
                 planned_cost(p.mesh, Some(&p), &proc_step)?
@@ -937,10 +956,35 @@ impl Engine {
                     HistoryRow { time: display(m, t, Time::DIM), min: display(m, lo, dim), max: display(m, hi, dim) }
                 })
                 .collect(),
+            sweep: res.sweep.iter().flat_map(|s| sweep_rows(m, s)).collect(),
             balance: residual / biggest,
             warnings: res.warnings.clone(),
         })
     }
+}
+
+/// A harmonic sweep as summary rows: per retained frequency, the largest nodal displacement
+/// amplitude and the phase of the very component that reached it. The first maximum wins, so
+/// two DOFs at the same amplitude give the same row at any thread count.
+fn sweep_rows(model: &Model, sweep: &crate::procedure::Sweep) -> Vec<SweepRow> {
+    let mut rows = Vec::with_capacity(sweep.frequencies.len());
+    for (i, hz) in sweep.frequencies.iter().enumerate() {
+        let (amplitude, phase) = &(&sweep.amplitude[i], &sweep.phase[i]);
+        let at = amplitude.data.iter().enumerate().fold((0usize, f64::NEG_INFINITY), |best, (j, v)| {
+            if *v > best.1 {
+                (j, *v)
+            } else {
+                best
+            }
+        });
+        rows.push(SweepRow {
+            frequency: display(model, *hz, Frequency::DIM),
+            amplitude: display(model, at.1, Length::DIM),
+            // Radians are the SI angle and the Model has no display unit for one.
+            phase: Valued { value: phase.data[at.0], unit: "rad".to_string() },
+        });
+    }
+    rows
 }
 
 fn vec3(model: &Model, v: [f64; 3], dim: Dimension) -> [Valued; 3] {

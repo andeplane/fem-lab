@@ -2,6 +2,11 @@
 
 /**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
+ *
+ * `step.add` is much the largest variant, and by design: it is the union of every procedure's
+ * arguments, so it grows with each new procedure while the rest stay put. Boxing it would put
+ * a heap indirection on the Journal's replay path — the one place a Command is actually read
+ * in bulk — to save a few hundred kilobytes across a Journal of a few hundred entries.
  */
 export type Command =
   | {
@@ -738,8 +743,9 @@ export type Command =
        */
       alpha?: number | null;
       /**
-       * Mass-proportional Rayleigh damping coefficient of an implicit Step, `C = a·M + b·K`.
-       * Default "0 Hz"; must be non-negative.
+       * Mass-proportional Rayleigh damping α of `C = αM + βK`, read by an implicit Step
+       * (directly) and a harmonic one (as `ζ = α / (2ω)`, most of it at low frequency).
+       * Default "0 Hz"; must be non-negative, e.g. "0.5 1/s".
        */
       rayleighAlpha?:
         | (
@@ -751,8 +757,9 @@ export type Command =
           )
         | null;
       /**
-       * Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default
-       * "0 s"; must be non-negative.
+       * Stiffness-proportional Rayleigh damping β of `C = αM + βK`, read by an implicit Step
+       * (directly) and a harmonic one (as `ζ = βω / 2`, most of it at high frequency).
+       * Default "0 s"; must be non-negative, e.g. "1e-5 s".
        */
       rayleighBeta?:
         | (
@@ -796,6 +803,43 @@ export type Command =
        * five iterations from a good starting point).
        */
       nonlinearMaxIterations?: number | null;
+      /**
+       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       */
+      fStart?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Last frequency of a harmonic sweep; must be above fStart.
+       */
+      fStop?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * How many frequencies the sweep evaluates, including both endpoints. At least 2.
+       */
+      points?: number | null;
+      /**
+       * Frequency spacing of a harmonic sweep; default linear.
+       */
+      sweep?: SweepSpacing | null;
+      /**
+       * Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
+       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+       */
+      dampingRatio?: number | null;
       cmd: "step.add";
     }
   | {
@@ -1795,7 +1839,7 @@ export type CoupleKind = "distributed" | "rigid";
  * Analysis procedures.
  */
 export type Procedure =
-  "static" | "static-nonlinear" | "modal" | "heat-steady" | "heat-transient" | "explicit" | "implicit";
+  "static" | "static-nonlinear" | "modal" | "heat-steady" | "heat-transient" | "explicit" | "implicit" | "harmonic";
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
@@ -1840,6 +1884,10 @@ export type AmplitudeSpec =
       value: number[];
       kind: "table";
     };
+/**
+ * How a harmonic Step spaces the frequencies between `fStart` and `fStop`.
+ */
+export type SweepSpacing = "linear" | "log";
 /**
  * Linear solver choice. `auto` picks the sparse direct factorisation up to 200 000 equations
  * (100 000 in the browser, where the heap is smaller) and above that a conjugate gradient
@@ -2156,6 +2204,11 @@ export type FrameSample =
 export type TimeSampling = "exact" | "nearest";
 /**
  * Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
+ *
+ * `step.add` is much the largest variant, and by design: it is the union of every procedure's
+ * arguments, so it grows with each new procedure while the rest stay put. Boxing it would put
+ * a heap indirection on the Journal's replay path — the one place a Command is actually read
+ * in bulk — to save a few hundred kilobytes across a Journal of a few hundred entries.
  */
 export type ModelFile_Command =
   | {
@@ -2892,8 +2945,9 @@ export type ModelFile_Command =
        */
       alpha?: number | null;
       /**
-       * Mass-proportional Rayleigh damping coefficient of an implicit Step, `C = a·M + b·K`.
-       * Default "0 Hz"; must be non-negative.
+       * Mass-proportional Rayleigh damping α of `C = αM + βK`, read by an implicit Step
+       * (directly) and a harmonic one (as `ζ = α / (2ω)`, most of it at low frequency).
+       * Default "0 Hz"; must be non-negative, e.g. "0.5 1/s".
        */
       rayleighAlpha?:
         | (
@@ -2905,8 +2959,9 @@ export type ModelFile_Command =
           )
         | null;
       /**
-       * Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default
-       * "0 s"; must be non-negative.
+       * Stiffness-proportional Rayleigh damping β of `C = αM + βK`, read by an implicit Step
+       * (directly) and a harmonic one (as `ζ = βω / 2`, most of it at high frequency).
+       * Default "0 s"; must be non-negative, e.g. "1e-5 s".
        */
       rayleighBeta?:
         | (
@@ -2950,6 +3005,43 @@ export type ModelFile_Command =
        * five iterations from a good starting point).
        */
       nonlinearMaxIterations?: number | null;
+      /**
+       * First frequency of a harmonic sweep, e.g. "1 Hz".
+       */
+      fStart?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Last frequency of a harmonic sweep; must be above fStart.
+       */
+      fStop?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * How many frequencies the sweep evaluates, including both endpoints. At least 2.
+       */
+      points?: number | null;
+      /**
+       * Frequency spacing of a harmonic sweep; default linear.
+       */
+      sweep?: SweepSpacing | null;
+      /**
+       * Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
+       * for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+       */
+      dampingRatio?: number | null;
       cmd: "step.add";
     }
   | {
@@ -4380,6 +4472,10 @@ export interface BodyRow {
    * Auto-named faces of this body (`beam.xmin` …), plus its cuts' faces.
    */
   faces: string[];
+  /**
+   * Measured source patches and durable naming suggestions, for an imported mesh Body.
+   */
+  patches?: ImportedPatchRow[];
 }
 /**
  * A value with its display unit.
@@ -4394,6 +4490,188 @@ export interface Valued {
 export interface Valued1 {
   value: number;
   unit: string;
+}
+/**
+ * One face patch of an imported mesh Body.
+ */
+export interface ImportedPatchRow {
+  /**
+   * The import's ordinal face name. Use `suggestedPredicate` to create a durable name.
+   */
+  tag: string;
+  triangleCount: number;
+  area: Valued;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  centroid: [Valued, Valued, Valued];
+  /**
+   * Area-weighted mean of the triangles' outward unit normals. It is zero for a complete curved side.
+   *
+   * @minItems 3
+   * @maxItems 3
+   */
+  meanNormal: [number, number, number];
+  /**
+   * Paste this value into `geometry.nameFace.where`.
+   */
+  suggestedPredicate:
+    | {
+        /**
+         * @minItems 3
+         * @maxItems 3
+         */
+        normal: [number, number, number];
+        /**
+         * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        offset:
+          | string
+          | {
+              value: number;
+              unit: string;
+            };
+        tol?:
+          | (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          | null;
+        kind: "plane";
+      }
+    | {
+        /**
+         * @minItems 3
+         * @maxItems 3
+         */
+        normal: [number, number, number];
+        max_angle_deg?: number | null;
+        kind: "normal";
+      }
+    | {
+        /**
+         * @minItems 3
+         * @maxItems 3
+         *
+         * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        min: [
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        ];
+        /**
+         * @minItems 3
+         * @maxItems 3
+         *
+         * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        max: [
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        ];
+        kind: "bbox";
+      }
+    | {
+        /**
+         * @minItems 3
+         * @maxItems 3
+         *
+         * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        point: [
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          ),
+          (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        ];
+        /**
+         * @minItems 3
+         * @maxItems 3
+         */
+        axis: [number, number, number];
+        /**
+         * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+         */
+        radius:
+          | string
+          | {
+              value: number;
+              unit: string;
+            };
+        tol?:
+          | (
+              | string
+              | {
+                  value: number;
+                  unit: string;
+                }
+            )
+          | null;
+        kind: "cylinder";
+      }
+    | {
+        of: FacePredicate[];
+        kind: "any";
+      };
 }
 export interface MaterialRow {
   name: string;
@@ -4692,6 +4970,10 @@ export interface ResultSummary {
    */
   history?: HistoryRow[];
   /**
+   * One row per retained frequency of a harmonic sweep; empty for every other procedure.
+   */
+  sweep?: SweepRow[];
+  /**
    * Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
    * conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
    * Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
@@ -4753,6 +5035,18 @@ export interface HistoryRow {
   time: Valued;
   min: Valued;
   max: Valued;
+}
+/**
+ * One retained frequency of a harmonic sweep.
+ *
+ * `amplitude` is the largest displacement amplitude any DOF reached at this frequency, and
+ * `phase` is that same DOF's lag behind the driving load, so the pair describes one real
+ * motion: `u(t) = amplitude · cos(2π f t − phase)`.
+ */
+export interface SweepRow {
+  frequency: Valued;
+  amplitude: Valued;
+  phase: Valued;
 }
 export interface RetainedResults {
   limit: number;
@@ -5572,6 +5866,11 @@ export interface Step {
   maxCutbacks?: number | null;
   nonlinearTolerance?: number | null;
   nonlinearMaxIterations?: number | null;
+  fStart?: number | null;
+  fStop?: number | null;
+  points?: number | null;
+  sweep?: SweepSpacing | null;
+  dampingRatio?: number | null;
   alpha?: number | null;
   rayleighAlpha?: number | null;
   rayleighBeta?: number | null;

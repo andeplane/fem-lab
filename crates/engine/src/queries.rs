@@ -136,6 +136,7 @@ impl Engine {
             measure: display(m, measure, Dimension([dim, 0, 0, 0])),
             mass: None,
             faces,
+            patches: Vec::new(),
         })
     }
 
@@ -169,6 +170,7 @@ impl Engine {
             measure: display(m, length, Length::DIM),
             mass: None,
             faces: Vec::new(),
+            patches: Vec::new(),
         })
     }
 
@@ -200,6 +202,23 @@ impl Engine {
                 .and_then(|mat| mat.rho)
                 .filter(|_| solid.dim() == 3)
                 .map(|rho| display(m, rho * solid.volume(), Mass::DIM));
+            let patches = if b.shape.is_imported() {
+                solid
+                    .triangles()
+                    .face_patches()
+                    .into_iter()
+                    .map(|p| ImportedPatchRow {
+                        tag: p.tag,
+                        triangle_count: p.triangle_count,
+                        area: display(m, p.area, Dimension([2, 0, 0, 0])),
+                        centroid: p.centroid.map(|x| display(m, x, Length::DIM)),
+                        mean_normal: p.mean_normal,
+                        suggested_predicate: crate::definition::face(&p.suggested_predicate),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             bodies.push(BodyRow {
                 name: b.name.clone(),
                 material: b.material.clone(),
@@ -207,6 +226,7 @@ impl Engine {
                 measure: display(m, measure, mdim),
                 mass,
                 faces: solid.tags(),
+                patches,
             });
         }
         bodies.extend(implicit);
