@@ -99,8 +99,11 @@ impl Candidate {
     }
 
     pub fn finish(mut self) -> Result<PreparedCandidate, Error> {
-        let snapshot = document_snapshot(&mut self.engine, self.ticket.target.clone())?;
-        Ok(PreparedCandidate { engine: self.engine, ticket: self.ticket, snapshot })
+        document_snapshot(&mut self.engine, self.ticket.target.clone()).map(|snapshot| PreparedCandidate {
+            engine: self.engine,
+            ticket: self.ticket,
+            snapshot,
+        })
     }
 }
 

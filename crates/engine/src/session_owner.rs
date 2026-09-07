@@ -353,9 +353,9 @@ fn transitioning() -> Error {
 }
 
 pub(crate) fn document_snapshot(inner: &mut Engine, stamp: Stamp) -> Result<DocumentSnapshot, Error> {
-    Ok(DocumentSnapshot {
+    inner.query_model().map(|model| DocumentSnapshot {
         stamp,
-        model: inner.query_model()?,
+        model,
         file: inner.export_file(),
         journal: crate::query::JournalDump {
             hash: inner.journal().hash(),
