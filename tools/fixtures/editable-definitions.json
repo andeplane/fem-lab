@@ -393,6 +393,64 @@
     }
   },
   {
+    "kind": "material",
+    "command": {
+      "cmd": "material.add",
+      "name": "editable",
+      "orthotropic": {
+        "E1": "155.123456789 GPa",
+        "E2": "12.1 GPa",
+        "E3": "12.1 GPa",
+        "G12": "4.4 GPa",
+        "G13": "4.4 GPa",
+        "G23": "3.2 GPa",
+        "nu12": 0.248,
+        "nu13": 0.248,
+        "nu23": 0.458
+      },
+      "rho": "1600 kg/m^3",
+      "source": "independent table"
+    }
+  },
+  {
+    "kind": "material",
+    "command": {
+      "cmd": "material.add",
+      "name": "editable",
+      "orthotropic": {
+        "E1": "11 GPa",
+        "E2": "0.9 GPa",
+        "E3": "0.5 GPa",
+        "G12": "0.7 GPa",
+        "G13": "0.65 GPa",
+        "G23": "0.04 GPa",
+        "nu12": 0.4,
+        "nu13": 0.45,
+        "nu23": 0.6,
+        "alpha": [
+          "3.5e-6 1/K",
+          "2.5e-5 1/K",
+          "3.4e-5 1/K"
+        ],
+        "k": [
+          "0.35 W/(m K)",
+          "0.2 W/(m K)",
+          "0.2 W/(m K)"
+        ]
+      },
+      "orientation": {
+        "axis": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "angle": "30 deg"
+      },
+      "rho": "500 kg/m^3",
+      "cp": "1600 J/(kg K)"
+    }
+  },
+  {
     "kind": "set",
     "command": {
       "cmd": "geometry.nameFace",

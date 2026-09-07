@@ -18,8 +18,9 @@ use femlab_engine::fem::element::{element_for, min_det_j, Element, ElementCtx, F
 use femlab_engine::fem::heat::HeatLoad;
 use femlab_engine::fem::loads::{assemble_loads, face_set_area, Load, LoadTotals};
 use femlab_engine::fem::material::{
-    builtin_law, check_batch, isotropic_d, plane_stress_condense, LinearElastic, MaterialBatch, MaterialLaw,
-    MaterialOut, VOIGT,
+    axes_are_planar, axis_angle_rotation, builtin_law, check_batch, isotropic_d, orthotropic_d, plane_stress_condense,
+    rotate_diagonal, transpose3, voigt_rotation, LinearElastic, MaterialBatch, MaterialLaw, MaterialOut, Rotated,
+    ORTHOTROPIC_PROPS, VOIGT,
 };
 use femlab_engine::fem::mpc::{self, Mpc, Row};
 use femlab_engine::fem::problem::{Constraint, Coupling, Problem};
@@ -43,6 +44,7 @@ use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
 use femlab_engine::{OnProgress, Progress};
 use femlab_geometry::mesh::{ElementKind, FaceKind};
 use femlab_geometry::{annulus, mapped, perturb_interior, Curve, Mesh, QuadBlock, Structured};
+use proptest::prelude::*;
 
 #[path = "support/cost_allocator.rs"]
 mod cost_allocator;
@@ -6414,4 +6416,565 @@ fn a_radiation_step_that_runs_out_of_passes_is_solve_diverged() {
     let transient_error = run_step(&p, &transient).expect_err("one pass cannot converge an increment either");
     assert_eq!(transient_error.code, ErrorCode::SolveDiverged);
     assert_eq!(transient_error.where_.as_deref(), Some("heat-transient increment 1"));
+}
+
+// ------------------------------------------------- orthotropic materials (#68)
+
+/// A unidirectional carbon/epoxy lamina: `[E1, E2, E3, G12, G13, G23, nu12, nu13, nu23]`, the
+/// shape of every composite tutorial's fibre-dominated ply. Only the ratios matter to the tests.
+const LAMINA: [f64; 9] = [155e9, 12.1e9, 12.1e9, 4.4e9, 4.4e9, 3.2e9, 0.248, 0.248, 0.458];
+
+/// The orthotropic compliance written straight from its definition, Voigt 11, 22, 33, 12, 13, 23
+/// with engineering shear. Independent of `orthotropic_d`, which inverts it by Cholesky.
+fn lamina_compliance(p: &[f64; 9]) -> [[f64; VOIGT]; VOIGT] {
+    let (e, g, nu) = (&p[..3], &p[3..6], &p[6..]);
+    let mut s = [[0.0; VOIGT]; VOIGT];
+    s[0] = [1.0 / e[0], -nu[0] / e[0], -nu[1] / e[0], 0.0, 0.0, 0.0];
+    s[1] = [-nu[0] / e[0], 1.0 / e[1], -nu[2] / e[1], 0.0, 0.0, 0.0];
+    s[2] = [-nu[1] / e[0], -nu[2] / e[1], 1.0 / e[2], 0.0, 0.0, 0.0];
+    for (i, &gi) in g.iter().enumerate() {
+        s[i + 3][i + 3] = 1.0 / gi;
+    }
+    s
+}
+
+fn mat6(a: &[[f64; VOIGT]; VOIGT], b: &[[f64; VOIGT]; VOIGT]) -> [[f64; VOIGT]; VOIGT] {
+    std::array::from_fn(|i| std::array::from_fn(|j| (0..VOIGT).map(|k| a[i][k] * b[k][j]).sum()))
+}
+
+fn transposed6(a: &[[f64; VOIGT]; VOIGT]) -> [[f64; VOIGT]; VOIGT] {
+    std::array::from_fn(|i| std::array::from_fn(|j| a[j][i]))
+}
+
+/// `Tᵀ D T`: the stiffness of a material whose axes are `r`'s rows, written out here rather than
+/// taken from `Rotated`, so the element tests have an oracle the element path does not share.
+fn rotated_d(props: &[f64; 9], r: &[[f64; 3]; 3]) -> [[f64; VOIGT]; VOIGT] {
+    let t = voigt_rotation(r);
+    let d = orthotropic_d(props).expect("an admissible lamina");
+    mat6(&transposed6(&t), &mat6(&d, &t))
+}
+
+/// The 3×3 plane-stress stiffness condensed from a 6×6, by the closed form for a linear law:
+/// `C_ps = C_pp − C_pz C_zz⁻¹ C_zp` on Voigt rows 11, 22, 12.
+fn condensed_plane_stress(d: &[[f64; VOIGT]; VOIGT]) -> [[f64; 3]; 3] {
+    let p = [0usize, 1, 3];
+    std::array::from_fn(|a| std::array::from_fn(|b| d[p[a]][p[b]] - d[p[a]][2] * d[2][p[b]] / d[2][2]))
+}
+
+/// `A⁻¹` of a symmetric positive-definite 3×3 by Gauss–Jordan, for the lamina oracle.
+fn invert3(a: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut m = [[0.0f64; 6]; 3];
+    for i in 0..3 {
+        m[i][..3].copy_from_slice(&a[i]);
+        m[i][3 + i] = 1.0;
+    }
+    for col in 0..3 {
+        let pivot = m[col][col];
+        assert!(pivot.abs() > 0.0, "singular at {col}");
+        for v in m[col].iter_mut() {
+            *v /= pivot;
+        }
+        for row in 0..3 {
+            if row != col {
+                let f = m[row][col];
+                for j in 0..6 {
+                    m[row][j] -= f * m[col][j];
+                }
+            }
+        }
+    }
+    std::array::from_fn(|i| std::array::from_fn(|j| m[i][3 + j]))
+}
+
+/// The rotations the orthotropic tests sweep: axis (not yet normalised), angle in radians.
+fn rotations() -> Vec<([f64; 3], f64)> {
+    let s = 1.0 / (14.0f64).sqrt();
+    vec![
+        ([0.0, 0.0, 1.0], 0.0),
+        ([0.0, 0.0, 1.0], PI / 6.0),
+        ([0.0, 0.0, 1.0], PI / 2.0),
+        ([0.0, 0.0, 1.0], -0.4),
+        ([1.0, 0.0, 0.0], 0.7),
+        ([0.0, 1.0, 0.0], 1.1),
+        ([s, 2.0 * s, 3.0 * s], 2.3),
+        ([-2.0 * s, s, 3.0 * s], -1.7),
+    ]
+}
+
+/// The tangent one law reports at zero strain, as a 6×6.
+fn tangent_of(law: &dyn MaterialLaw, props: &[f64]) -> [[f64; VOIGT]; VOIGT] {
+    let zeros = [0.0; VOIGT];
+    let (mut stress, mut tangent, mut state) = ([0.0; VOIGT], [0.0; VOIGT * VOIGT], []);
+    law.evaluate(
+        MaterialBatch { n: 1, strain: &zeros, dstrain: &zeros, temperature: &[0.0], dt: 0.0, props, state_in: &[] },
+        MaterialOut { stress: &mut stress, tangent: &mut tangent, state_out: &mut state },
+    )
+    .expect("an admissible law");
+    std::array::from_fn(|i| std::array::from_fn(|j| tangent[i * VOIGT + j]))
+}
+
+/// `voigt_rotation` is the *strain* transform, and its inverse is the transform of the
+/// transposed rotation, never its own transpose: with engineering shear the two differ by
+/// factors of two, which is the classical trap this pins down.
+///
+/// Three independent checks per rotation: the rotated tensor's invariants (trace and double
+/// contraction) survive, the transform agrees with the double contraction `R ε Rᵀ` written out
+/// in tensor form, and `T(R) T(Rᵀ) = I`.
+#[test]
+fn the_voigt_rotation_transforms_strain_and_inverts_through_the_transposed_rotation() {
+    let identity = voigt_rotation(&axis_angle_rotation([0.0, 0.0, 1.0], 0.0));
+    for (i, row) in identity.iter().enumerate() {
+        for (j, &v) in row.iter().enumerate() {
+            assert!((v - f64::from(i == j)).abs() <= 1e-15, "identity[{i}][{j}] = {v}");
+        }
+    }
+    // A quarter turn about z puts material axis 1 along global y, so a global ε₁₁ is the
+    // material's ε₂₂ and the engineering shear γ₁₂ changes sign — both by hand.
+    let quarter = voigt_rotation(&axis_angle_rotation([0.0, 0.0, 1.0], PI / 2.0));
+    let global = [1.0, 2.0, 3.0, 0.5, 0.0, 0.0];
+    let got: Vec<f64> = (0..VOIGT).map(|i| (0..VOIGT).map(|j| quarter[i][j] * global[j]).sum()).collect();
+    close(&got, &[2.0, 1.0, 3.0, -0.5, 0.0, 0.0], 1e-14);
+    let pairs = [(0usize, 0usize), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)];
+    for (axis, angle) in rotations() {
+        let norm = axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let r = axis_angle_rotation(axis.map(|v| v / norm), angle);
+        let t = voigt_rotation(&r);
+        let inverse = voigt_rotation(&transpose3(&r));
+        let product = mat6(&t, &inverse);
+        for (i, row) in product.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                assert!((v - f64::from(i == j)).abs() <= 1e-13, "{axis:?} {angle}: T T⁻¹[{i}][{j}] = {v}");
+            }
+        }
+        // The same rotation done as `R ε Rᵀ` on the tensor, which shares no code with the
+        // column-by-column construction under test.
+        let voigt = [0.3, -0.2, 0.7, 0.4, -0.9, 0.15];
+        let mut tensor = [[0.0; 3]; 3];
+        for (v, &(a, b)) in voigt.iter().zip(&pairs) {
+            tensor[a][b] = if a == b { *v } else { 0.5 * v };
+            tensor[b][a] = tensor[a][b];
+        }
+        let rotated: [[f64; 3]; 3] = std::array::from_fn(|i| {
+            std::array::from_fn(|j| (0..3).map(|p| (0..3).map(|q| r[i][p] * tensor[p][q] * r[j][q]).sum::<f64>()).sum())
+        });
+        let want: Vec<f64> =
+            pairs.iter().map(|&(a, b)| if a == b { rotated[a][b] } else { 2.0 * rotated[a][b] }).collect();
+        let got: Vec<f64> = (0..VOIGT).map(|i| (0..VOIGT).map(|j| t[i][j] * voigt[j]).sum()).collect();
+        close(&got, &want, 1e-13);
+        // A rotation preserves the trace and the double contraction of the tensor it acts on.
+        let trace = |v: &[f64]| v[0] + v[1] + v[2];
+        let contraction =
+            |v: &[f64]| v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + 0.5 * (v[3] * v[3] + v[4] * v[4] + v[5] * v[5]);
+        assert!((trace(&got) - trace(&voigt)).abs() <= 1e-14 * inf_norm(&voigt), "{axis:?} {angle}: trace");
+        let ratio = contraction(&got) / contraction(&voigt);
+        assert!((ratio - 1.0).abs() <= 1e-13, "{axis:?} {angle}: contraction {ratio}");
+    }
+}
+
+/// `axis_angle_rotation` is a rotation whose *rows* are the material axes, so material axis 1 of
+/// a lamina at +θ about z is at +θ from global x — the ply-angle convention the tutorials use.
+#[test]
+fn the_orientation_rotation_puts_material_axis_one_at_the_ply_angle() {
+    let theta = 0.6;
+    let r = axis_angle_rotation([0.0, 0.0, 1.0], theta);
+    close(&r[0], &[libm::cos(theta), libm::sin(theta), 0.0], 1e-15);
+    close(&r[1], &[-libm::sin(theta), libm::cos(theta), 0.0], 1e-15);
+    close(&r[2], &[0.0, 0.0, 1.0], 1e-15);
+    // Orthonormal for a general axis, which is what makes `Rᵀ` the inverse everywhere else.
+    for (axis, angle) in rotations() {
+        let norm = axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let r = axis_angle_rotation(axis.map(|v| v / norm), angle);
+        let rrt: [[f64; 3]; 3] =
+            std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| r[i][k] * r[j][k]).sum()));
+        for (i, row) in rrt.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                assert!((v - f64::from(i == j)).abs() <= 1e-14, "{axis:?} {angle}: RRᵀ[{i}][{j}] = {v}");
+            }
+        }
+    }
+    // A rotation about the out-of-plane axis is the only kind a 2D idealisation can carry.
+    assert!(axes_are_planar(&axis_angle_rotation([0.0, 0.0, 1.0], 1.2)));
+    assert!(!axes_are_planar(&axis_angle_rotation([1.0, 0.0, 0.0], 1.2)));
+    assert!(!axes_are_planar(&axis_angle_rotation([0.0, 1.0, 0.0], 1.2)));
+    // A rotation about z by any angle leaves axis 3 alone, so it stays planar; a zero angle
+    // about any axis is the identity and is planar too.
+    assert!(axes_are_planar(&axis_angle_rotation([1.0, 0.0, 0.0], 0.0)));
+    // `rotate_diagonal` is `Rᵀ diag(d) R`, which for the identity is the diagonal itself.
+    let diag = rotate_diagonal(&axis_angle_rotation([0.0, 0.0, 1.0], 0.0), [2.0, 3.0, 5.0]);
+    close(&diag[0], &[2.0, 0.0, 0.0], 1e-15);
+    close(&diag[1], &[0.0, 3.0, 0.0], 1e-15);
+    close(&diag[2], &[0.0, 0.0, 5.0], 1e-15);
+    // and `transpose3` is its own inverse
+    let r = axis_angle_rotation([0.0, 1.0, 0.0], 0.9);
+    for (a, b) in transpose3(&transpose3(&r)).iter().zip(&r) {
+        close(a, b, 1e-16);
+    }
+}
+
+/// `orthotropic_d` inverts the compliance: `D S = I`, checked against the compliance written
+/// straight from its definition rather than against another inversion.
+#[test]
+fn the_orthotropic_stiffness_is_the_inverse_of_the_written_compliance() {
+    let d = orthotropic_d(&LAMINA).expect("an admissible lamina");
+    let s = lamina_compliance(&LAMINA);
+    let product = mat6(&d, &s);
+    for (i, row) in product.iter().enumerate() {
+        for (j, &v) in row.iter().enumerate() {
+            assert!((v - f64::from(i == j)).abs() <= 1e-12, "D S [{i}][{j}] = {v}");
+        }
+    }
+    // Symmetric, which is what the major-Poisson convention buys.
+    for i in 0..VOIGT {
+        for j in 0..VOIGT {
+            assert!((d[i][j] - d[j][i]).abs() <= 1e-6 * d[0][0], "D[{i}][{j}] asymmetric");
+        }
+    }
+    // The law is the registry's, with the props it advertises, and its stress is `D ε`.
+    let law = builtin_law("orthotropic-elastic").expect("a built-in law");
+    assert_eq!(law.id(), "orthotropic-elastic");
+    assert_eq!(law.n_props(), 9);
+    assert_eq!(law.n_state(), 0);
+    assert_eq!(law.prop_names(), ORTHOTROPIC_PROPS);
+    let strain = [1e-4, -2e-4, 3e-4, 5e-5, -6e-5, 7e-5];
+    let (mut stress, mut tangent) = ([0.0; VOIGT], [0.0; VOIGT * VOIGT]);
+    law.evaluate(
+        MaterialBatch {
+            n: 1,
+            strain: &strain,
+            dstrain: &[0.0; VOIGT],
+            temperature: &[0.0],
+            dt: 0.0,
+            props: &LAMINA,
+            state_in: &[],
+        },
+        MaterialOut { stress: &mut stress, tangent: &mut tangent, state_out: &mut [] },
+    )
+    .expect("an admissible lamina");
+    let want: Vec<f64> = (0..VOIGT).map(|i| (0..VOIGT).map(|j| d[i][j] * strain[j]).sum()).collect();
+    close(&stress, &want, 1e-12);
+}
+
+/// The admissibility test is the Cholesky of the normal compliance, so every way of making that
+/// block non-positive-definite — and every unusable modulus — is refused with a located error.
+#[test]
+fn an_inadmissible_orthotropic_material_is_refused_by_the_cholesky() {
+    let bad = |props: &[f64], code: ErrorCode, where_: &str| {
+        let e = orthotropic_d(props).expect_err("refused");
+        assert_eq!(e.code, code, "{props:?}: {e:?}");
+        assert_eq!(e.where_.as_deref(), Some(where_), "{props:?}: {e:?}");
+        assert!(e.suggestion.is_some(), "{props:?} has no suggestion");
+    };
+    // A wrong prop count is the shared slice check, which names the field and not a fix.
+    let short = orthotropic_d(&LAMINA[..8]).expect_err("refused");
+    assert_eq!(short.code, ErrorCode::MaterialProps);
+    assert_eq!(short.where_.as_deref(), Some("material.props"));
+    let mut p = LAMINA;
+    p[0] = 0.0;
+    bad(&p, ErrorCode::MaterialProps, "orthotropic.E1");
+    p = LAMINA;
+    p[1] = -1.0;
+    bad(&p, ErrorCode::MaterialProps, "orthotropic.E2");
+    p = LAMINA;
+    p[2] = f64::NAN;
+    bad(&p, ErrorCode::MaterialProps, "orthotropic.E3");
+    p = LAMINA;
+    p[3] = 0.0;
+    bad(&p, ErrorCode::MaterialProps, "orthotropic.G12");
+    p = LAMINA;
+    p[5] = f64::INFINITY;
+    bad(&p, ErrorCode::MaterialProps, "orthotropic.G23");
+    p = LAMINA;
+    p[6] = f64::NAN;
+    bad(&p, ErrorCode::MaterialProps, "orthotropic.nu12");
+    // ν12 past √(E1/E2) breaks the 1–2 minor: the second pivot is the one that goes negative.
+    p = LAMINA;
+    p[6] = 1.2 * (LAMINA[0] / LAMINA[1]).sqrt();
+    bad(&p, ErrorCode::MaterialProps, "orthotropic");
+    assert!(orthotropic_d(&p).expect_err("refused").cause.contains("pivot 1"), "{:?}", orthotropic_d(&p));
+    // ν23 large with the 1–2 minor still healthy: only the third pivot fails, which is the case
+    // a hand-copied `|nu12| < sqrt(E1/E2)` list misses.
+    p = LAMINA;
+    p[8] = 0.999;
+    assert!(orthotropic_d(&p).expect_err("refused").cause.contains("pivot 2"), "{:?}", orthotropic_d(&p));
+    // and values just inside each boundary are accepted, so the test is not passing by refusing
+    // everything
+    p = LAMINA;
+    p[6] = 0.5 * (LAMINA[0] / LAMINA[1]).sqrt();
+    orthotropic_d(&p).expect("just admissible");
+    p = LAMINA;
+    p[8] = 0.9;
+    orthotropic_d(&p).expect("just admissible");
+}
+
+/// An isotropic material written orthotropically **is** the isotropic one, at every orientation:
+/// `isotropic_d` is an oracle that owes nothing to `orthotropic_d` or `Rotated`, and a wrong
+/// factor of two anywhere in the Voigt transform would break the invariance.
+#[test]
+fn an_isotropic_material_written_orthotropically_is_rotation_invariant() {
+    for (e, nu) in [(210e9, 0.3), (70e9, 0.0), (3.0e6, 0.45)] {
+        let g = e / (2.0 * (1.0 + nu));
+        let props = [e, e, e, g, g, g, nu, nu, nu];
+        let want = isotropic_d(e, nu);
+        let d = orthotropic_d(&props).expect("admissible");
+        for (a, b) in d.iter().zip(&want) {
+            close(a, b, 1e-12);
+        }
+        for (axis, angle) in rotations() {
+            let norm = axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let r = axis_angle_rotation(axis.map(|v| v / norm), angle);
+            let law = Rotated::new(builtin_law("orthotropic-elastic").expect("built in"), &r);
+            let got = tangent_of(&law, &props);
+            for (a, b) in got.iter().zip(&want) {
+                close(a, b, 1e-11);
+            }
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(96))]
+    /// The same invariance over random axes and angles: rotating an isotropic material can never
+    /// change it, whichever way it is turned.
+    #[test]
+    fn a_rotated_isotropic_material_is_still_isotropic(
+        ax in -1.0f64..1.0, ay in -1.0f64..1.0, az in -1.0f64..1.0, angle in -3.2f64..3.2,
+    ) {
+        let norm = (ax * ax + ay * ay + az * az).sqrt();
+        prop_assume!(norm > 1e-3);
+        let (e, nu) = (210e9, 0.3);
+        let g = e / (2.0 * (1.0 + nu));
+        let r = axis_angle_rotation([ax / norm, ay / norm, az / norm], angle);
+        let law = Rotated::new(builtin_law("orthotropic-elastic").expect("built in"), &r);
+        let got = tangent_of(&law, &[e, e, e, g, g, g, nu, nu, nu]);
+        let want = isotropic_d(e, nu);
+        for (i, (a, b)) in got.iter().zip(&want).enumerate() {
+            for (j, (x, y)) in a.iter().zip(b).enumerate() {
+                prop_assert!((x - y).abs() <= 1e-10 * e, "[{}][{}]: {} vs {}", i, j, x, y);
+            }
+        }
+    }
+}
+
+/// `Rotated` forwards its inner law's identity and checks its slices before touching them, so a
+/// wrapped plugin reports the same errors a bare one does.
+#[test]
+fn the_rotated_wrapper_forwards_the_inner_law_and_checks_its_slices() {
+    let r = axis_angle_rotation([0.0, 0.0, 1.0], 0.3);
+    let law = Rotated::new(&LinearElastic, &r);
+    assert_eq!(law.id(), "linear-elastic");
+    assert_eq!(law.n_props(), 2);
+    assert_eq!(law.n_state(), 0);
+    assert_eq!(law.prop_names(), ["E", "nu"]);
+    let zeros = [0.0; VOIGT];
+    let (mut stress, mut tangent) = ([0.0; VOIGT], [0.0; VOIGT * VOIGT]);
+    let batch = |strain: &'static [f64]| MaterialBatch {
+        n: 1,
+        strain,
+        dstrain: &zeros,
+        temperature: &[0.0],
+        dt: 0.0,
+        props: &[210e9, 0.3],
+        state_in: &[],
+    };
+    static SHORT: [f64; 3] = [0.0; 3];
+    let e = law
+        .evaluate(batch(&SHORT), MaterialOut { stress: &mut stress, tangent: &mut tangent, state_out: &mut [] })
+        .expect_err("a short strain slice is refused");
+    assert_eq!(e.code, ErrorCode::MaterialProps);
+    assert_eq!(e.where_.as_deref(), Some("material.strain"));
+    // The same check every law shares, reached through the wrapper.
+    let out = MaterialOut { stress: &mut stress, tangent: &mut tangent, state_out: &mut [] };
+    assert!(check_batch(&law, &batch(&SHORT), &out).is_err());
+}
+
+/// A1-ortho: the constant-strain patch test with an orthotropic material at an orientation, on
+/// every element kind and every idealisation. The oracle is `Tᵀ D T` assembled in the test —
+/// which shares no code with `Rotated` — plus the energy identity `uᵀKu = V ε:σ`.
+#[test]
+fn one_element_reproduces_constant_strain_for_an_oriented_orthotropic_material() {
+    for kind in ALL_KINDS {
+        let el = element_for(kind);
+        let (coords, base, rbar) = simple(kind);
+        let (nd, n_gp) = (el.n_dof(), el.n_gp());
+        let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
+        for id in idealisations(kind) {
+            // A 2D idealisation only carries a rotation about the out-of-plane axis.
+            let (axis, angle) =
+                if id.dim() == 3 { ([1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0], 0.9) } else { ([0.0, 0.0, 1.0], PI / 6.0) };
+            let r = axis_angle_rotation(axis, angle);
+            let mat = orthotropic_material(&LAMINA, Some(r));
+            let d = rotated_d(&LAMINA, &r);
+            let volume = weighted(&id, base, rbar);
+            for form in [Formulation::Full, Formulation::IncompatibleModes] {
+                let c = ctx(&coords, &mat, id.clone(), form);
+                let mut k = vec![0.0; nd * nd];
+                el.stiffness(&c, &mut k).expect("a valid stiffness");
+                for strain in patch_modes(&id) {
+                    let mut want = [0.0; VOIGT];
+                    if let Idealisation::PlaneStress { .. } = id {
+                        let cps = condensed_plane_stress(&d);
+                        let plane = [strain[0], strain[1], strain[3]];
+                        for (a, &i) in [0usize, 1, 3].iter().enumerate() {
+                            want[i] = (0..3).map(|b| cps[a][b] * plane[b]).sum();
+                        }
+                    } else {
+                        for (i, w) in want.iter_mut().enumerate() {
+                            *w = (0..VOIGT).map(|j| d[i][j] * strain[j]).sum();
+                        }
+                    }
+                    let u = patch_displacement(kind, &id, &coords, &strain);
+                    el.recover(&c, &u, &mut sig, &mut eps).expect("a valid recovery");
+                    for g in 0..n_gp {
+                        close(&eps[g * VOIGT..(g + 1) * VOIGT], &strain, 1e-12);
+                        close(&sig[g * VOIGT..(g + 1) * VOIGT], &want, 1e-10);
+                    }
+                    let ku = mat_vec(&k, nd, &u);
+                    let energy: f64 = u.iter().zip(ku).map(|(u, f)| u * f).sum();
+                    let expect = volume * strain.iter().zip(want).map(|(e, s)| e * s).sum::<f64>();
+                    assert!((energy / expect - 1.0).abs() < 1e-10, "{kind:?} {id:?} {form:?}: energy");
+                }
+            }
+        }
+    }
+}
+
+/// A6-ortho: an unconstrained body at a uniform temperature expands to `u = Rᵀ diag(α) R ΔT
+/// (x − x₀)` with no stress at all. The oracle is 3×3 matrix algebra with no Voigt in it, which
+/// is what catches the transform the plan got wrong: using `Tᵀ` instead of `T⁻¹` for the thermal
+/// strain scales the shear rows by two, and only an anisotropic α at an orientation shows it.
+#[test]
+fn free_expansion_of_an_oriented_orthotropic_material_leaves_no_stress() {
+    let alpha = [1.2e-5, 3.5e-5, 8.0e-6];
+    let dt = 60.0;
+    for kind in ALL_KINDS.iter().filter(|k| k.dim() == 3) {
+        let el = element_for(*kind);
+        let coords = distorted(*kind);
+        let (nd, n_gp) = (el.n_dof(), el.n_gp());
+        let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
+        for (axis, angle) in rotations() {
+            let norm = axis.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let r = axis_angle_rotation(axis.map(|v| v / norm), angle);
+            let mut mat = orthotropic_material(&LAMINA, Some(r));
+            mat.alpha = alpha;
+            // The expansion tensor in global coordinates, straight from its definition.
+            let a: [[f64; 3]; 3] =
+                std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| r[k][i] * alpha[k] * r[k][j]).sum()));
+            let temps = vec![300.0 + dt; kind.n_nodes()];
+            for form in [Formulation::Full, Formulation::IncompatibleModes] {
+                let mut c = ctx(&coords, &mat, Idealisation::Solid3d, form);
+                c.temperature = Some(&temps);
+                c.t_ref = 300.0;
+                let u = nodal_field(*kind, &coords, &|x: [f64; 3]| {
+                    std::array::from_fn(|i| dt * (0..3).map(|j| a[i][j] * x[j]).sum::<f64>())
+                });
+                el.recover(&c, &u, &mut sig, &mut eps).expect("a valid recovery");
+                let bound = 1e-8 * LAMINA[0] * alpha[1] * dt;
+                for (g, s) in sig.iter().enumerate() {
+                    assert!(s.abs() <= bound, "{kind:?} {axis:?} {angle} {form:?} [{g}]: sigma {s}");
+                }
+                // and the thermal load is exactly the force that free expansion would need
+                let mut f = vec![0.0; nd];
+                el.thermal_load(&c, &mut f).expect("a thermal load");
+                let mut k = vec![0.0; nd * nd];
+                el.stiffness(&c, &mut k).expect("a stiffness");
+                let ku = mat_vec(&k, nd, &u);
+                let scale = inf_norm(&f);
+                assert!(scale > 0.0);
+                for (i, (a, b)) in ku.iter().zip(&f).enumerate() {
+                    assert!((a - b).abs() <= 1e-9 * scale, "{kind:?} {axis:?} {angle} [{i}]: {a} vs {b}");
+                }
+            }
+        }
+    }
+}
+
+/// A1-cond: a linear temperature field over one element with an orthotropic conductivity at an
+/// orientation stores `(∇T · K ∇T) V`, with `K = Rᵀ diag(k) R` formed in the test.
+#[test]
+fn orthotropic_conduction_integrates_the_rotated_tensor() {
+    let k = [12.0, 45.0, 3.0];
+    for kind in ALL_KINDS {
+        let (coords, base, rbar) = simple(kind);
+        let nn = kind.n_nodes();
+        for id in idealisations(kind) {
+            let (axis, angle) =
+                if id.dim() == 3 { ([2.0 / 3.0, -1.0 / 3.0, 2.0 / 3.0], 1.4) } else { ([0.0, 0.0, 1.0], 0.8) };
+            let r = axis_angle_rotation(axis, angle);
+            let mut mat = orthotropic_material(&LAMINA, Some(r));
+            mat.k = k;
+            let tensor = rotate_diagonal(&r, k);
+            // The element's own answer for the same tensor, so `conductivity_tensor` is checked
+            // against `rotate_diagonal` used directly.
+            for (a, b) in mat.conductivity_tensor().iter().zip(&tensor) {
+                close(a, b, 1e-15);
+            }
+            let grad = if id.dim() == 3 { [0.7, -1.3, 0.4] } else { [0.7, -1.3, 0.0] };
+            let c = ctx(&coords, &mat, id.clone(), Formulation::Full);
+            let mut heat_k = vec![0.0; nn * nn];
+            femlab_engine::fem::heat::conductivity(kind, &c, &mut heat_k).expect("a valid heat element");
+            let temperature: Vec<f64> =
+                (0..nn).map(|a| (0..3).map(|i| grad[i] * coords[3 * a + i]).sum::<f64>()).collect();
+            let kt = mat_vec(&heat_k, nn, &temperature);
+            let energy: f64 = temperature.iter().zip(kt).map(|(t, q)| t * q).sum();
+            let quadratic: f64 = (0..3).map(|i| grad[i] * (0..3).map(|j| tensor[i][j] * grad[j]).sum::<f64>()).sum();
+            let want = quadratic * weighted(&id, base, rbar);
+            assert!((energy / want - 1.0).abs() < 1e-11, "{kind:?} {id:?}: {energy} vs {want}");
+        }
+    }
+}
+
+/// C-lamina: an off-axis unidirectional lamina in plane stress. The oracle is the *compliance*
+/// rotated, `S̄ = T⁻¹ S T⁻ᵀ` — a different path from the stiffness rotation the element uses, and
+/// the only one that produces the shear–extension coupling `S̄₁₆` a correct rotation must have.
+#[test]
+fn an_off_axis_lamina_has_the_rotated_compliance_including_shear_extension_coupling() {
+    let s_mat = lamina_compliance(&LAMINA);
+    let mut biggest_coupling = 0.0f64;
+    for degrees in (0..=90).step_by(5) {
+        let theta = f64::from(degrees) * PI / 180.0;
+        let r = axis_angle_rotation([0.0, 0.0, 1.0], theta);
+        // ε_glob = T⁻¹ ε_mat and σ_mat = T⁻ᵀ σ_glob, so S_glob = T⁻¹ S T⁻ᵀ with T⁻¹ = T(Rᵀ).
+        let u = voigt_rotation(&transpose3(&r));
+        let s_glob = mat6(&u, &mat6(&s_mat, &transposed6(&u)));
+        let law = Rotated::new(builtin_law("orthotropic-elastic").expect("built in"), &r);
+        let (mut stress, mut tangent) = ([0.0; 3], [0.0; 9]);
+        plane_stress_condense(&law, &LAMINA, &[0.0; 3], &mut stress, &mut tangent).expect("plane stress");
+        let c_ps: [[f64; 3]; 3] = std::array::from_fn(|i| std::array::from_fn(|j| tangent[i * 3 + j]));
+        let got = invert3(&c_ps);
+        // The plane-stress compliance is the 11/22/12 sub-block of the full 3D compliance: with
+        // σ33 = σ13 = σ23 = 0 the other rows never enter.
+        let plane = [0usize, 1, 3];
+        for (a, &i) in plane.iter().enumerate() {
+            for (b, &j) in plane.iter().enumerate() {
+                let want = s_glob[i][j];
+                assert!(
+                    (got[a][b] - want).abs() <= 1e-9 * s_glob[1][1],
+                    "{degrees}°: S[{i}][{j}] = {} vs {want}",
+                    got[a][b]
+                );
+            }
+        }
+        // Uniaxial σx: the three strains are the first column of the compliance.
+        let sigma_x = 100e6;
+        let strains: Vec<f64> = (0..3).map(|a| got[a][0] * sigma_x).collect();
+        close(&strains, &[s_glob[0][0] * sigma_x, s_glob[1][0] * sigma_x, s_glob[3][0] * sigma_x], 1e-9);
+        biggest_coupling = biggest_coupling.max((s_glob[3][0] / s_glob[0][0]).abs());
+        // On axis and across it there is no shear–extension coupling at all; in between there is.
+        let coupled = degrees != 0 && degrees != 90;
+        assert_eq!(coupled, s_glob[3][0].abs() > 1e-3 * s_glob[0][0].abs(), "{degrees}°: coupling");
+    }
+    assert!(biggest_coupling > 0.5, "the off-axis coupling is the point: {biggest_coupling}");
+}
+
+/// A material resolved to numbers the way `solve_run` resolves an orthotropic Model material.
+fn orthotropic_material(props: &[f64; 9], axes: Option<[[f64; 3]; 3]>) -> Material {
+    Material {
+        law: builtin_law("orthotropic-elastic").expect("built in"),
+        props: props.to_vec(),
+        rho: DENSITY,
+        alpha: [0.0; 3],
+        k: [0.0; 3],
+        cp: 0.0,
+        axes,
+    }
 }

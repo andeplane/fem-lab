@@ -216,10 +216,11 @@ fn materials(m: &ModelSummary, model: &crate::model::Model) -> String {
                         format!("{} / {} / {}", q(&o.e1), q(&o.e2), q(&o.e3)),
                         format!("{} / {} / {}", fmt_sig(o.nu12, 4), fmt_sig(o.nu13, 4), fmt_sig(o.nu23, 4)),
                     ),
-                    None => (
-                        mat.e.as_ref().map(q).unwrap_or_else(|| "—".into()),
-                        mat.nu.map(|v| fmt_sig(v, 4)).unwrap_or_else(|| "—".into()),
-                    ),
+                    // `material.add` guarantees one form or the other, so the isotropic pair is
+                    // present here; an empty cell is what a hand-edited Model with neither gets.
+                    None => {
+                        (mat.e.as_ref().map(q).unwrap_or_default(), mat.nu.map(|v| fmt_sig(v, 4)).unwrap_or_default())
+                    }
                 };
                 let mut row = vec![
                     format!("`{}`", mat.name),
