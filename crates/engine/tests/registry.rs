@@ -7356,7 +7356,10 @@ fn radiating_heat_with_unrepresentable_temperature(procedure: &str) {
     assert_eq!(error.where_.as_deref(), Some("solve"));
     assert!(error.cause.contains("relative residual"));
     assert_eq!(serde_json::to_value(e.export_file()).unwrap(), before);
-    assert_eq!(e.query(Query::Result { step: Some("heat".into()) }).unwrap_err().code, ErrorCode::NotFound);
+    assert_eq!(
+        e.query(Query::Result { result_id: None, step: Some("heat".into()) }).unwrap_err().code,
+        ErrorCode::NotFound
+    );
 }
 
 #[test]
