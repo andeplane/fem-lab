@@ -114,9 +114,11 @@ async function handle(req: AppReq, onProgress: (p: { phase: string; fraction: nu
     }
     case 'exportFile':
       return JSON.parse(need().export_file());
-    case 'importFile':
+    case 'importFile': {
       need().import_file(JSON.stringify(req.payload));
-      return { seq: -1, revision: need().revision(), hash: need().model_hash(), warnings: [], output: { kind: 'none' } };
+      const { journal } = JSON.parse(need().export_file());
+      return { seq: -1, revision: need().revision(), hash: need().model_hash(), warnings: [], output: { type: 'none' }, journal };
+    }
     case 'replay': {
       // Rebuild the full acknowledged history, then restore the active revision while keeping
       // the redo tail. Numerical solves are skipped by the engine's replay implementation.

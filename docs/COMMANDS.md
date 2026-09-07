@@ -22,6 +22,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [constraint.remove](#commands-constraint-remove)
 - [constraint.symmetry](#commands-constraint-symmetry)
 - [constraint.temperature](#commands-constraint-temperature)
+- [contact.add](#commands-contact-add)
 - [geometry.add](#commands-geometry-add)
 - [geometry.addBox](#commands-geometry-addBox)
 - [geometry.nameFace](#commands-geometry-nameFace)
@@ -50,6 +51,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [model.new](#commands-model-new)
 - [model.rename](#commands-model-rename)
 - [model.setIdealisation](#commands-model-setIdealisation)
+- [model.setName](#commands-model-setName)
 - [model.setUnits](#commands-model-setUnits)
 - [plugin.load](#commands-plugin-load)
 - [solve.run](#commands-solve-run)
@@ -130,6 +132,30 @@ multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driv
 | on | yes | <code>{"type":"string"}</code> |  |
 | value | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"constraint.temperature"}</code> |  |
+
+<a id="commands-contact-add"></a>
+
+### contact.add
+
+Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
+point it projects onto in `master`, in every displacement component. It is a linear
+constraint inside the same operator — no iteration, no gap opening, no sliding — so a
+bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
+slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
+gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
+master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
+so the two parts are in perfect thermal contact. A tie is listed in a Step's
+`constraints` like any other, and is removed with constraint.remove. Ties add stiffness
+between Bodies that share no element, which query.cost does not count.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| master | yes | <code>{"type":"string"}</code> |  |
+| slave | yes | <code>{"type":"string"}</code> |  |
+| kind | yes | <code>{"$ref":"#/$defs/ContactKind"}</code> |  |
+| tol | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"contact.add"}</code> |  |
 
 <a id="commands-geometry-add"></a>
 
@@ -502,12 +528,18 @@ default incompatible modes or use order 2 when bending matters. Mapped geometry 
 a Body name distinct from explicit geometry. Keeping that name preserves its material;
 changing/removing it requires no remaining Body references and clears its material.
 Use model.rename to change an implicit Body name while preserving its references.
+`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+geometry: the selected mesher still determines the boundary approximation. `formulation`
+has no effect when `simplices` is true, because simplex elements have no incompatible
+modes.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
 | mesher | yes | <code>{"$ref":"#/$defs/MesherSpec"}</code> |  |
 | order | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
 | formulation | no | <code>{"anyOf":[{"$ref":"#/$defs/Formulation"},{"type":"null"}]}</code> |  |
+| simplices | no | <code>{"type":["boolean","null"]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"mesh.set"}</code> |  |
 
 <a id="commands-model-duplicate"></a>
@@ -569,6 +601,19 @@ solid bodies; mixing them makes the Model ill-posed.
 | --- | --- | --- | --- |
 | idealisation | yes | <code>{"$ref":"#/$defs/IdealisationSpec"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"model.setIdealisation"}</code> |  |
+
+<a id="commands-model-setName"></a>
+
+### model.setName
+
+Change the Model's display name without resetting geometry, history or solved Results.
+A name-only edit is undoable and changes the full Model/Journal identity, but does not
+change the Result-validity fingerprint. Whitespace-only names are rejected.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"model.setName"}</code> |  |
 
 <a id="commands-model-setUnits"></a>
 
@@ -796,6 +841,24 @@ Expand a definition to inspect its complete schema. Definition names are local t
     "x",
     "y",
     "z"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ContactKind</summary>
+
+```json
+{
+  "description": "How two faces interact where they meet.",
+  "oneOf": [
+    {
+      "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+      "type": "string",
+      "const": "bonded"
+    }
   ]
 }
 ```
@@ -3026,6 +3089,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
+      "description": "Change the Model's display name without resetting geometry, history or solved Results.\nA name-only edit is undoable and changes the full Model/Journal identity, but does not\nchange the Result-validity fingerprint. Whitespace-only names are rejected.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "model.setName"
+        }
+      },
+      "required": [
+        "cmd",
+        "name"
+      ]
+    },
+    {
       "description": "Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,\nor axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs\nsolid bodies; mixing them makes the Model ill-posed.",
       "type": "object",
       "properties": {
@@ -3401,7 +3481,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation. `formulation`\nhas no effect when `simplices` is true, because simplex elements have no incompatible\nmodes.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -3424,6 +3504,12 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ]
+        },
+        "simplices": {
+          "type": [
+            "boolean",
+            "null"
           ]
         },
         "cmd": {
@@ -3566,6 +3652,45 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "on",
         "value"
+      ]
+    },
+    {
+      "description": "Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the\npoint it projects onto in `master`, in every displacement component. It is a linear\nconstraint inside the same operator — no iteration, no gap opening, no sliding — so a\nbonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the\nslave side: a node-to-face tie passes the patch test that way round. `tol` is the largest\ngap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the\nmaster than that is `contact.unpaired`. In a heat Step the same tie carries temperature,\nso the two parts are in perfect thermal contact. A tie is listed in a Step's\n`constraints` like any other, and is removed with constraint.remove. Ties add stiffness\nbetween Bodies that share no element, which query.cost does not count.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "master": {
+          "type": "string"
+        },
+        "slave": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ContactKind"
+        },
+        "tol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_length"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cmd": {
+          "type": "string",
+          "const": "contact.add"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "master",
+        "slave",
+        "kind"
       ]
     },
     {
@@ -4200,6 +4325,24 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "source"
       ],
       "x-status": "stub"
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ContactKind</summary>
+
+```json
+{
+  "description": "How two faces interact where they meet.",
+  "oneOf": [
+    {
+      "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+      "type": "string",
+      "const": "bonded"
     }
   ]
 }

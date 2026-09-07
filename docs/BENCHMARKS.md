@@ -79,6 +79,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
+| tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
+| tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
 
 <!-- bench:end -->
 
@@ -110,8 +112,30 @@ is within 1e-12 m and stress component within 1e-3 Pa of the closed form on all 
 Reversing disjoint Load order is bit-identical; equal overlapping increments are idempotent,
 while unequal increments are rejected with both Load names and the Body. A8's numerics half is
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
-`StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
-`LLᵀ` included.
+`StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, including
+faer factorization/triangular solution under the platform policy documented below.
+
+The same-machine Windows follow-up (`tools/replay-le10-266`) runs the immutable
+unguarded CLI with default/1/4 threads and replays the verified 15,432-equation
+LE10 Hex20 operator in faer Seq/Rayon1/Rayon4. Its 3.54 MB lossless fixture retains
+the complete CSR matrix, RHS and ARM solution, with checked SHA256 provenance.
+The capture reproduces the independent LE10 stress and force balance and has
+original-operator residual 1.19e-12; replay requires residual below 1e-10. All
+variants run on one machine with CPU/SIMD capabilities logged, and any failed
+variant fails the diagnostic job. This distinguishes platform factorization
+from assembly without weakening the physical Benchmark. The first same-machine
+Windows run reproduced residual 0.489816 in standalone Rayon4 while Seq/Rayon1
+passed near 1e-12. Mixed Seq-factor/Rayon4-solve and Rayon4-factor/Seq-solve
+controls now distinguish the two phases without changing the captured operator,
+acceptance thresholds or original CLI baseline. Stage-isolation run 34034891628
+identified parallel numeric factorization: Rayon4-factor/Seq-solve failed at
+1.250237705 residual, while Seq-factor/Rayon4-solve passed at 1.1248e-12. Windows
+therefore uses per-call sequential numeric factorization, retaining parallel
+assembly/triangular solve ([ADR0019](adr/0019-windows-direct-factorization-parallelism.md)).
+The exact discrete harmonic Dirichlet solution `x_i=(i+1)/(n+1)` independently
+checks reusable factors at 65/129/257 unknowns, two right-hand sides, one/four-thread
+construction and concurrent callers; no solve may mutate faer's global setting.
+The unchanged Windows Hex20/Tet10 stress and force-balance checks still gate the fix.
 
 Direct-solver acceptance (#266) is also checked independently of factorization success.
 `a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer` supplies a full operator whose
@@ -338,6 +362,13 @@ its existing `nafems-le10-plate` identifier for compatibility, but its visible t
 reference explicitly identify the full-face variant. Correction: #183; command-reachable
 Tet10 validation follows under #4.
 
+The command-reachable Tet10 row (#4) uses the same full-face variant and the unchanged
+2% tolerance. Splitting 6 × 6 × 4, 12 × 12 × 8 and 18 × 18 × 8 parent cells gives
+−5.014643, −5.101429 and −5.163953 MPa respectively; reference error decreases to 1.64%.
+The fixture also gates reaction balance and Result freshness. Separate simplex tests verify
+the exact linear heat profile at both orders over three refinements, body-scoped face areas,
+and named edge preservation and deterministic replay for Tri3/Tri6.
+
 ## E. Heat transfer (phase 2)
 
 | # | Case | Reference | Tolerance | Proves | Status |
@@ -404,6 +435,10 @@ The retained-frame registry checks (#243) read every uniform-heating value throu
 strides, integral and nonintegral endpoint ratios, and initial/final-only output. The values
 must equal `T=t` K within `1e-10 K`; SI arrays remain labelled K when Model display units
 are Celsius. The final frame is exactly the final primary FieldData, including zero padding.
+The document-name regression (#123) repeats both orders and 2/4 axial cells: rename,
+undo/redo and full replay preserve the original solved Model hash, frame catalogue and
+`T(0.4 s)=0.4 K` values, while sampled probes/paths stay unchanged. A subsequent heat-source
+edit remains stale even after another rename, and sampled access rejects it.
 
 An independent cooled-slab Fourier series checks every retained node at 0.05, 0.10 and 0.15 s:
 `T(x,t) = Σ_(odd n) 400/(nπ) sin(nπx) exp(−n²π²t)` K for a 1 m slab initially at 100 K,
@@ -445,7 +480,40 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F2 | Critical time step | 0.9 Δt_crit stable for 5000 steps, 1.25 Δt_crit is `explicit.unstable` | as stated | Δt estimator really is critical | engine test |
 | F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
 | F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) | |
-| F4 | Two-block tie / bonded contact patch test | continuous stress across the tie | 1e-8 | constraints between bodies (phase 6) | |
+| F4 | Two-block tie / bonded contact patch test, matched meshes | uniform tension: σ constant across the tie, u exactly the linear field, Σ reactions = applied | 1e-8 | bonded contact between Bodies (#61) | green |
+| F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
+| F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
+| F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+
+The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
+the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
+and F4c gate at roundoff rather than at an engineering tolerance. F4c's reference is the value
+`cantilever-hex8-im` measures on the single Body beside it, not a published number: it is an
+equivalence, and the published Timoshenko value is the one that case is gated against.
+
+**F4b is an engine test, not an installed case, because the Command API cannot yet build it.**
+`mesh.set` takes one element size for the whole Model, and the lattice mesher divides each Body's
+bounding box by it, so two prismatic Bodies that share a face are always meshed compatibly
+across it: a non-conforming interface cannot be expressed from a Journal today. The engine test
+(`crates/engine/tests/fem.rs`) builds one directly, with the slave block meshed at half the
+master's size, and runs the same three assertions. It is deliberately a *nested* refinement:
+node-to-face ties reproduce a constant stress state exactly when the fine grid's cell edges
+include the coarse grid's, and only approximately when they do not — which is what mortar
+methods exist for and what no tutorial in TUTORIAL-COVERAGE needs. Per-Body mesh sizes would
+make F4b an installed case: #359.
+
+F4d covers a trap the elimination hides. The solved system enforces equilibrium of the retained
+combination, `Tᵀ(Ku − f) = 0`, so at a DOF that is both held by a Constraint and a master of a
+tie, `Ku − f` is the support force *plus* the force the tie pushes into it. `assembly::reactions`
+adds the tie term back (`mpc::master_forces`), which is what makes both the per-constraint
+reaction and the global `balance` right when a tie reaches a support. Without it the global sum
+is wrong too, so F4's `balance` check alone would not have caught it — F4d compares the
+per-constraint reactions of a tied assembly against the single Body it stands for.
+
+**NAFEMS R0081 CGS-1** is not claimed here. TUTORIAL-COVERAGE row 55 lists CGS-1…CGS-10 under
+contact, gapping and sliding; nobody on this change has read the publication, and a benchmark
+whose reference value has not been read from its source is not a benchmark. It belongs to
+frictionless contact (#62) if it turns out to be the frictionless patch test.
 
 F2b's endpoint regression adds `u(t) = v₀t + gt²/2` on two mesh sizes at end times of 0.25,
 1.6 and 2.25 nominal stable steps. The final history time is exactly the requested endpoint,

@@ -46,7 +46,7 @@ fn time_index(times: &[f64], time: f64, sampling: TimeSampling) -> Result<usize,
 
 impl Engine {
     /// Metadata uses the stored primary field's shape, never a possibly edited current Mesh.
-    fn history(&self, step: Option<&str>) -> Result<(&str, &String, &History, usize), Error> {
+    fn history(&self, step: Option<&str>) -> Result<(&str, &crate::engine::ResultHashes, &History, usize), Error> {
         let (name, hash, _, result) = self.stored(step)?;
         let history = result.history.as_ref().ok_or_else(|| {
             Error::new(ErrorCode::Unsupported, format!("step '{name}' has no retained transient frames"))
@@ -65,8 +65,8 @@ impl Engine {
         let (name, hash, history, nodes) = self.history(step)?;
         Ok(FramesResult {
             step: name.into(),
-            model_hash: hash.clone(),
-            stale: *hash != self.model_hash(),
+            model_hash: hash.model.clone(),
+            stale: hash.validity != crate::hash::result_hash(&self.model),
             node_count: nodes,
             field: history.field,
             components: 3,
@@ -106,7 +106,7 @@ impl Engine {
         })?;
         let resolved = ResolvedFrame {
             step: name.into(),
-            model_hash: hash.clone(),
+            model_hash: hash.model.clone(),
             frame: self.frame_stamp(index, history.times[index]),
         };
         Ok((vector_field(values, values.len() / nodes), resolved, selected))

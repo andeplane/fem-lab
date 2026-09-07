@@ -17,6 +17,12 @@ export interface Fem {
      */
     setUnits(args: Omit<Extract<Command, { cmd: 'model.setUnits' }>, 'cmd'>): Promise<Ack>;
     /**
+     * Change the Model's display name without resetting geometry, history or solved Results.
+     * A name-only edit is undoable and changes the full Model/Journal identity, but does not
+     * change the Result-validity fingerprint. Whitespace-only names are rejected.
+     */
+    setName(args: Omit<Extract<Command, { cmd: 'model.setName' }>, 'cmd'>): Promise<Ack>;
+    /**
      * Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,
      * or axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs
      * solid bodies; mixing them makes the Model ill-posed.
@@ -117,6 +123,11 @@ export interface Fem {
      * a Body name distinct from explicit geometry. Keeping that name preserves its material;
      * changing/removing it requires no remaining Body references and clears its material.
      * Use model.rename to change an implicit Body name while preserving its references.
+     * `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+     * (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+     * geometry: the selected mesher still determines the boundary approximation. `formulation`
+     * has no effect when `simplices` is true, because simplex elements have no incompatible
+     * modes.
      */
     set(args: Omit<Extract<Command, { cmd: 'mesh.set' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -160,6 +171,21 @@ export interface Fem {
      * it first. Removing a constraint makes existing Results of that Step stale.
      */
     remove(args: Omit<Extract<Command, { cmd: 'constraint.remove' }>, 'cmd'>): Promise<Ack>;
+  };
+  contact: {
+    /**
+     * Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
+     * point it projects onto in `master`, in every displacement component. It is a linear
+     * constraint inside the same operator — no iteration, no gap opening, no sliding — so a
+     * bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
+     * slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
+     * gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
+     * master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
+     * so the two parts are in perfect thermal contact. A tie is listed in a Step's
+     * `constraints` like any other, and is removed with constraint.remove. Ties add stiffness
+     * between Bodies that share no element, which query.cost does not count.
+     */
+    add(args: Omit<Extract<Command, { cmd: 'contact.add' }>, 'cmd'>): Promise<Ack>;
   };
   load: {
     /**

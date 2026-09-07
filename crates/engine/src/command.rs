@@ -17,6 +17,15 @@ use crate::units::{
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
 pub type SetRef = String;
 
+/// How two faces interact where they meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ContactKind {
+    /// Glued: the two faces never separate and never slide, so the assembly behaves as one
+    /// part. Linear, and the only kind there is today.
+    Bonded,
+}
+
 /// A displacement component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -694,6 +703,12 @@ pub enum Command {
     #[serde(rename = "model.setUnits", rename_all = "camelCase")]
     ModelSetUnits { units: UnitSet },
 
+    /// Change the Model's display name without resetting geometry, history or solved Results.
+    /// A name-only edit is undoable and changes the full Model/Journal identity, but does not
+    /// change the Result-validity fingerprint. Whitespace-only names are rejected.
+    #[serde(rename = "model.setName", rename_all = "camelCase")]
+    ModelSetName { name: String },
+
     /// Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,
     /// or axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs
     /// solid bodies; mixing them makes the Model ill-posed.
@@ -824,6 +839,11 @@ pub enum Command {
     /// a Body name distinct from explicit geometry. Keeping that name preserves its material;
     /// changing/removing it requires no remaining Body references and clears its material.
     /// Use model.rename to change an implicit Body name while preserving its references.
+    /// `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+    /// (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+    /// geometry: the selected mesher still determines the boundary approximation. `formulation`
+    /// has no effect when `simplices` is true, because simplex elements have no incompatible
+    /// modes.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     MeshSet {
         mesher: MesherSpec,
@@ -831,6 +851,8 @@ pub enum Command {
         order: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         formulation: Option<Formulation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplices: Option<bool>,
     },
 
     /// Write the current Mesh out as text the host saves; the Mesh is built first if it is
@@ -875,6 +897,26 @@ pub enum Command {
     /// multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driven end.
     #[serde(rename = "constraint.temperature", rename_all = "camelCase")]
     ConstraintTemperature { name: String, on: SetRef, value: Q<Temperature> },
+
+    /// Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
+    /// point it projects onto in `master`, in every displacement component. It is a linear
+    /// constraint inside the same operator — no iteration, no gap opening, no sliding — so a
+    /// bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
+    /// slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
+    /// gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
+    /// master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
+    /// so the two parts are in perfect thermal contact. A tie is listed in a Step's
+    /// `constraints` like any other, and is removed with constraint.remove. Ties add stiffness
+    /// between Bodies that share no element, which query.cost does not count.
+    #[serde(rename = "contact.add", rename_all = "camelCase")]
+    ContactAdd {
+        name: String,
+        master: SetRef,
+        slave: SetRef,
+        kind: ContactKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tol: Option<Q<Length>>,
+    },
 
     /// Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without
     /// it first. Removing a constraint makes existing Results of that Step stale.
