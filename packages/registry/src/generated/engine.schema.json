@@ -996,6 +996,31 @@
         ]
       },
       {
+        "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "of": {
+            "type": "string"
+          },
+          "conductance": {
+            "$ref": "#/$defs/Q_heat_transfer_coefficient"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "contact.thermal"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "of",
+          "conductance"
+        ]
+      },
+      {
         "description": "Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it\nfirst. Removing a load makes existing Results of that Step stale.",
         "type": "object",
         "properties": {
@@ -4658,6 +4683,31 @@
               "name",
               "bodies",
               "q"
+            ]
+          },
+          {
+            "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "of": {
+                "type": "string"
+              },
+              "conductance": {
+                "$ref": "#/$defs/Q_heat_transfer_coefficient"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "contact.thermal"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "of",
+              "conductance"
             ]
           },
           {
@@ -8440,6 +8490,31 @@
               "name",
               "bodies",
               "q"
+            ]
+          },
+          {
+            "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "of": {
+                "type": "string"
+              },
+              "conductance": {
+                "$ref": "#/$defs/Q_heat_transfer_coefficient"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "contact.thermal"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "of",
+              "conductance"
             ]
           },
           {
@@ -13977,6 +14052,28 @@
               "bodies",
               "q"
             ]
+          },
+          {
+            "description": "A finite conductance across the bonded contact `of`, replacing its perfect thermal tie.",
+            "type": "object",
+            "properties": {
+              "of": {
+                "type": "string"
+              },
+              "h": {
+                "type": "number",
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "thermalContact"
+              }
+            },
+            "required": [
+              "kind",
+              "of",
+              "h"
+            ]
           }
         ]
       },
@@ -15629,6 +15726,31 @@
               "name",
               "bodies",
               "q"
+            ]
+          },
+          {
+            "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "of": {
+                "type": "string"
+              },
+              "conductance": {
+                "$ref": "#/$defs/Q_heat_transfer_coefficient"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "contact.thermal"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "of",
+              "conductance"
             ]
           },
           {

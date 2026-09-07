@@ -77,6 +77,16 @@ impl Csr {
             .collect()
     }
 
+    /// Add `v` at `(row, col)`, an entry [`pattern_coupled`] promised is there. A thermal
+    /// contact adds directly into `K` rather than eliminating a row, so it needs a named entry
+    /// rather than the element scatter's slot map, which only ever names entries an element
+    /// contributed.
+    pub fn add_at(&mut self, row: u32, col: u32, v: f64) {
+        let (lo, hi) = (self.row_ptr[row as usize] as usize, self.row_ptr[row as usize + 1] as usize);
+        let at = self.col_idx[lo..hi].binary_search(&col).expect("pattern_coupled seeded this entry");
+        self.vals[lo + at] += v;
+    }
+
     /// The same arrays as a faer sparse matrix. A symmetric matrix stored row-major in CSR is
     /// the identical byte layout as its own column-major CSC, so faer reads our arrays in
     /// place; only the lower triangle is looked at (`Side::Lower`) by the Cholesky.

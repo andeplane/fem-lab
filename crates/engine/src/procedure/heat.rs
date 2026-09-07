@@ -19,11 +19,11 @@ use crate::command::Field;
 use crate::engine::OnProgress;
 use crate::error::Error;
 use crate::error::ErrorCode;
-use crate::fem::assembly::{expand, pattern, reduce, resolve, Csr, Pattern, ResolvedConstraints};
+use crate::fem::assembly::{expand, pattern_coupled, reduce, resolve, Csr, Pattern, ResolvedConstraints};
 use crate::fem::checks;
 use crate::fem::heat::{capacity, conductivity, face_film, face_integrals, radiative_film, source, HeatLoad};
 use crate::fem::mpc::{self, Mpc};
-use crate::fem::problem::Problem;
+use crate::fem::problem::{Coupling, Problem};
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, Per};
 use crate::procedure::{
@@ -97,7 +97,7 @@ pub struct HeatSystem {
 /// Elements are walked in order and scattered through the same slot map the stiffness uses, so
 /// the result is bit-identical whatever the thread count; the assembly is sequential because a
 /// heat matrix is `dim²` times smaller than the elastic one it sits beside.
-pub fn assemble(p: &Problem<'_>, pat: &Pattern) -> Result<HeatSystem, Error> {
+pub fn assemble(p: &Problem<'_>, pat: &Pattern, mpc: &Mpc) -> Result<HeatSystem, Error> {
     let mut k = pat.csr.clone();
     let mut f = vec![0.0; p.mesh.n_nodes()];
     let mut film = vec![0.0; p.mesh.n_nodes()];
@@ -112,7 +112,8 @@ pub fn assemble(p: &Problem<'_>, pat: &Pattern) -> Result<HeatSystem, Error> {
             HeatLoad::Convection { faces, h, t_inf } => (faces, *h, *h * *t_inf),
             HeatLoad::Flux { faces, q } => (faces, 0.0, *q),
             // Radiation is state-dependent: `add_radiation` puts it in at each iterate.
-            HeatLoad::Source { .. } | HeatLoad::Radiation { .. } => continue,
+            // A thermal contact is handled below, on the slave faces its own Coupling names.
+            HeatLoad::Source { .. } | HeatLoad::Radiation { .. } | HeatLoad::Contact { .. } => continue,
         };
         for &face in &p.set(faces)?.faces {
             let kind = p.mesh.kind_of(face.elem);
@@ -134,6 +135,56 @@ pub fn assemble(p: &Problem<'_>, pat: &Pattern) -> Result<HeatSystem, Error> {
                 *v *= rhs;
             }
             scatter(pat, p, face.elem, &ke, &fe, &mut k, &mut f);
+        }
+    }
+
+    // Thermal contact resistance (#85): `mpc.contact` holds the rows of a bonded tie that a
+    // `contact.thermal` overrides — `mpc::build` skipped eliminating them, so both sides stay
+    // free unknowns and the interface is instead a conductance directly in `K`. `checks::all`
+    // (`unknown_thermal_contacts`) has already matched every `of` to a Coupling in this Step.
+    // The lumped nodal area `Aₙ` reuses this same loop's `face_integrals` on the slave faces:
+    // `film` fixed at 1 makes its `vec` output exactly `∫Nₙ dS`, unscaled.
+    for load in &p.heat_loads {
+        let HeatLoad::Contact { of, h } = load else { continue };
+        let owner = p
+            .couplings
+            .iter()
+            .position(|c| c.name() == of)
+            .expect("checks::all matched every contact.thermal to a Coupling in this Step");
+        let Coupling::Bonded { slave, .. } = &p.couplings[owner];
+        let mut area = vec![0.0; p.mesh.n_nodes()];
+        for &face in &p.set(slave)?.faces {
+            let kind = p.mesh.kind_of(face.elem);
+            let nn = kind.n_nodes();
+            coords.resize(nn * 3, 0.0);
+            p.mesh.elem_coords(face.elem, &mut coords);
+            ke.clear();
+            ke.resize(nn * nn, 0.0);
+            fe.clear();
+            fe.resize(nn, 0.0);
+            p.ctx(face.elem, &coords, &t)
+                .and_then(|c| face_integrals(kind, &c, face.local, &mut ke, &mut fe))
+                .map_err(|e| e.at(format!("element {}", face.elem)))?;
+            for (&node, &a) in p.mesh.elem_nodes(face.elem).iter().zip(&fe) {
+                area[node as usize] += a;
+            }
+        }
+        // `w(eₙ − Σaₖeₖ)(eₙ − Σaₖeₖ)ᵀ`: symmetric, positive semi-definite, exact where the
+        // pairing is node-to-node and consistent otherwise because the weights `aₖ` are a
+        // partition of unity. `pattern_coupled(mesh, 1, mpc.contact_pairs())` made room for
+        // every entry this touches.
+        for row in mpc.contact.iter().filter(|r| r.owner == owner) {
+            let w = *h * area[row.slave as usize];
+            k.add_at(row.slave, row.slave, w);
+            for &(mk, ak) in &row.masters {
+                k.add_at(row.slave, mk, -w * ak);
+                k.add_at(mk, row.slave, -w * ak);
+            }
+            for &(mk, ak) in &row.masters {
+                for &(ml, al) in &row.masters {
+                    k.add_at(mk, ml, w * ak * al);
+                }
+            }
         }
     }
 
@@ -178,7 +229,9 @@ pub fn assemble(p: &Problem<'_>, pat: &Pattern) -> Result<HeatSystem, Error> {
 pub fn radiates(p: &Problem<'_>) -> bool {
     p.heat_loads.iter().any(|l| match l {
         HeatLoad::Radiation { .. } => true,
-        HeatLoad::Convection { .. } | HeatLoad::Flux { .. } | HeatLoad::Source { .. } => false,
+        HeatLoad::Convection { .. } | HeatLoad::Flux { .. } | HeatLoad::Source { .. } | HeatLoad::Contact { .. } => {
+            false
+        }
     })
 }
 
@@ -198,7 +251,10 @@ pub fn add_radiation(p: &Problem<'_>, pat: &Pattern, t: &[f64], k: &mut Csr, f: 
     for load in &p.heat_loads {
         let (faces, eps, t_inf) = match load {
             HeatLoad::Radiation { faces, emissivity, t_inf } => (faces, *emissivity, *t_inf),
-            HeatLoad::Convection { .. } | HeatLoad::Flux { .. } | HeatLoad::Source { .. } => continue,
+            HeatLoad::Convection { .. }
+            | HeatLoad::Flux { .. }
+            | HeatLoad::Source { .. }
+            | HeatLoad::Contact { .. } => continue,
         };
         for &face in &p.set(faces)?.faces {
             let kind = p.mesh.kind_of(face.elem);
@@ -248,7 +304,7 @@ fn radiation_start(p: &Problem<'_>) -> f64 {
         .map(|c| c.value)
         .chain(p.heat_loads.iter().filter_map(|l| match l {
             HeatLoad::Convection { t_inf, .. } | HeatLoad::Radiation { t_inf, .. } => Some(*t_inf),
-            HeatLoad::Flux { .. } | HeatLoad::Source { .. } => None,
+            HeatLoad::Flux { .. } | HeatLoad::Source { .. } | HeatLoad::Contact { .. } => None,
         }))
         .fold(1.0, f64::max)
 }
@@ -338,13 +394,15 @@ pub async fn steady(
     }
     validate_materials(p, false)?;
     report(&mut progress, "assemble", 0.1, "building the conductivity matrix")?;
-    let pat = pattern(p.mesh, 1);
+    // `mpc` is built before the Pattern because a thermal contact's excluded rows need room in
+    // it that no element creates (`pattern_coupled`, plan B §5).
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    let pat = pattern_coupled(p.mesh, 1, &mpc.contact_pairs());
     // The checks have already looked at every material, every Set and every Jacobian the
     // assembly touches, so what is left cannot fail — unlike the stiffness, the conductivity
     // never calls a material law.
-    let sys = pool.install(|| assemble(p, &pat)).expect("the checks accepted this mesh");
+    let sys = pool.install(|| assemble(p, &pat, &mpc)).expect("the checks accepted this mesh");
     let rc = resolve(p).expect("the checks resolved the constraints");
-    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
     let (sys, t, solver, passes) = match radiates(p) {
         true => {
             let (sys, t, mut solver, passes) = pool.install(|| steady_radiating(p, &pat, &sys, &rc, &mpc, control))?;
@@ -527,9 +585,12 @@ pub fn transient(
             .suggest("step.add with theta between 0 (explicit Euler) and 1 (backward Euler)"));
     }
     report(&mut progress, "assemble", 0.1, "building the conductivity and capacity matrices")?;
-    let pat = pattern(p.mesh, 1);
+    // `mpc` is built before the Pattern for the same reason as in `steady`: a thermal contact's
+    // excluded rows need room in it that no element creates.
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    let pat = pattern_coupled(p.mesh, 1, &mpc.contact_pairs());
     let (sys, cap) = pool
-        .install(|| assemble(p, &pat).and_then(|s| assemble_capacity(p, &pat).map(|c| (s, c))))
+        .install(|| assemble(p, &pat, &mpc).and_then(|s| assemble_capacity(p, &pat).map(|c| (s, c))))
         .expect("the checks accepted this mesh");
     let rc = resolve(p).expect("the checks resolved the constraints");
     // `a = C/Δt + θK` is the matrix that is factorised once; `b = C/Δt − (1−θ)K` builds the
@@ -544,7 +605,6 @@ pub fn transient(
     // Reducing `a` against a zero right-hand side leaves exactly `−A_fc u_c` at the base
     // prescribed values, which the amplitude scales linearly.
     let zeros = vec![0.0; a.n];
-    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
     // Only `a` is transformed. The recurrence needs `TᵀB T v`, and `T v` is the temperature
     // field itself, so `b` stays on the original numbering and `Tᵀ` is applied to `B T` once
     // per increment — one transform instead of two, and no reduced state to carry.

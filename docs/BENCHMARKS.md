@@ -498,6 +498,7 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
 | F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+| F4e | `contact.thermal` on a bonded pair: two conductors in series with a finite interface resistance | `q = ΔT / (L1/k1 + 1/hc + L2/k2)`, interface jump `q/hc` | 1e-9 rel | thermal contact resistance (#85) | green |
 
 The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
 the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
@@ -523,6 +524,17 @@ adds the tie term back (`mpc::master_forces`), which is what makes both the per-
 reaction and the global `balance` right when a tie reaches a support. Without it the global sum
 is wrong too, so F4's `balance` check alone would not have caught it — F4d compares the
 per-constraint reactions of a tied assembly against the single Body it stands for.
+
+F4e (#85) is a different Coupling role from F4-F4d: `contact.thermal` names the same bonded
+contact and replaces its perfect thermal tie with a finite conductance `h_c`, assembled into the
+heat operator exactly as `load.convection` is rather than eliminated by `mpc::transform`.
+`mpc::build` skips the tie rows of a contact a `contact.thermal` names — the tie and the
+resistance are never both applied — and the mechanical tie of the same Coupling is untouched, so
+a Model can bond two parts structurally while giving them a Biot-number interface thermally. Two
+Bodies of different conductivity, joined by `contact.add` and overridden by `contact.thermal`,
+reproduce `q = ΔT / (L1/k1 + 1/hc + L2/k2)` to roundoff at every node on both sides, with the
+temperature dropping by exactly `q/hc` at the interface — an oracle from series thermal
+resistance, not a comparison against the engine's own perfect-tie or convection paths.
 
 **NAFEMS R0081 CGS-1** is not claimed here. TUTORIAL-COVERAGE row 55 lists CGS-1…CGS-10 under
 contact, gapping and sliding; nobody on this change has read the publication, and a benchmark

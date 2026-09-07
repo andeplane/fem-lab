@@ -28,6 +28,7 @@ pub fn all(p: &Problem<'_>) -> Vec<Error> {
     out.extend(empty_sets(p));
     out.extend(inverted(p.mesh));
     out.extend(resolve(p).err());
+    out.extend(unknown_thermal_contacts(p));
     // The couplings are checked whatever the physics: a tie a heat Step cannot pair is as
     // broken as one a static Step cannot. Without a valid `Mpc` the rigid-body test would be
     // answering a different question, so it waits for the next run.
@@ -89,8 +90,36 @@ fn unheld_temperature(p: &Problem<'_>) -> Option<Error> {
 fn holds_temperature(load: &HeatLoad) -> bool {
     match load {
         HeatLoad::Convection { .. } | HeatLoad::Radiation { .. } => true,
-        HeatLoad::Flux { .. } | HeatLoad::Source { .. } => false,
+        // A contact resistance ties two temperatures to each other, not either one to a fixed
+        // level: two Bodies joined only by one still float together, exactly as an ordinary
+        // bonded tie (which is not a heat load at all) already does.
+        HeatLoad::Flux { .. } | HeatLoad::Source { .. } | HeatLoad::Contact { .. } => false,
     }
+}
+
+/// A `contact.thermal` names a contact this Step's Constraints do not include. Without this,
+/// `heat::assemble` would have no Coupling to look the pairing up in and no lumped area to
+/// weight it by; catching it here keeps that lookup total.
+fn unknown_thermal_contacts(p: &Problem<'_>) -> Vec<Error> {
+    p.heat_loads
+        .iter()
+        .filter_map(|l| match l {
+            HeatLoad::Contact { of, .. } => Some(of.as_str()),
+            HeatLoad::Convection { .. }
+            | HeatLoad::Flux { .. }
+            | HeatLoad::Source { .. }
+            | HeatLoad::Radiation { .. } => None,
+        })
+        .filter(|of| !p.couplings.iter().any(|c| c.name() == *of))
+        .map(|of| {
+            Error::new(
+                ErrorCode::ModelIllPosed,
+                format!("contact.thermal names '{of}', which this Step's constraints do not list as a bonded contact"),
+            )
+            .at(format!("contact '{of}'"))
+            .suggest("step.add listing the contact.add Constraint that contact.thermal names")
+        })
+        .collect()
 }
 
 /// A Body whose blocks have no material: nothing can be integrated over it.
