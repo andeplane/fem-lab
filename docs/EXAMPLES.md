@@ -84,7 +84,7 @@ path, not a stress: the lattice puts two or three elements across a bolt hole),
 | `cantilever-modal` | 2 | A clamped-free steel beam with a rectangular section — four bending frequencies from one modal Step, two in each plane. | fₙ = (βₙ²/2π)·√(EI/ρAL⁴) | [modal-analysis](../packages/app/tutorials/modal-analysis.json) |
 | `mesh-convergence-cantilever` | 2 | The cantilever solved at three mesh sizes by `study.converge`, with the observed rate and a Richardson estimate of the converged value. | δ = PL³/3EI = 0.1905 mm | [mesh-convergence](../packages/app/tutorials/mesh-convergence.json) |
 | `heated-fin-convection` | 2 | An aluminium fin held at its root temperature and cooled by air on all four long faces — steady conduction against the 1D fin formula. | θ/θ_b = cosh m(L−x) / cosh mL | [heat-conduction](../packages/app/tutorials/heat-conduction.json) |
-| `thermal-stress-plate` | 3 | A heat Step conducts a linear temperature field through a plate, and a static Step named after it picks that field up as thermal stress. | σₓₓ = −EαΔT/(1−ν) = −150 MPa | — |
+| `thermal-stress-plate` | 3 | A heat Step conducts a linear temperature field through a plate, and a static Step named after it picks that field up as thermal stress. | σₓₓ = −EαΔT/(1−ν) = −150 MPa | [thermal-stress-chaining](../packages/app/tutorials/thermal-stress-chaining.json) |
 | `explicit-free-fall` | 3 | An unconstrained block under gravity, integrated by central differences — explicit dynamics checked against a schoolbook drop. | u = gt²/2 = 4.905 µm at 1 ms | — |
 
 ## NAFEMS and named benchmarks
