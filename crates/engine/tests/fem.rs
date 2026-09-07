@@ -8913,8 +8913,9 @@ fn a_harmonic_dampingratios_list_matches_the_half_power_bandwidth() {
     let sets = sets_of(&mesh);
     let bodies = one_body();
     let p = sdof_bar(&mesh, &sets, &bodies);
-    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
-        .expect("a bar with mass has modes");
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+            .expect("a bar with mass has modes");
     let f_n = modal.frequencies[0];
     let zeta = 0.02;
     let tip = sets["xmax"].nodes[0] as usize * 3;
@@ -14522,8 +14523,9 @@ fn cantilever_beam_modes_converge_to_euler_bernoulli_at_fourth_order_and_shear_s
         let sets = root_set();
         let bodies = vec!["beam".to_string()];
         let p = beam_cantilever_problem(&mesh, &sets, &bodies, generic_section(1e-8, 1e-6, 1e-6));
-        let res = run_step(&p, &Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() })
-            .expect("beam bending modes");
+        let res =
+            run_step(&p, &Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default(), prestress: None })
+                .expect("beam bending modes");
         for (f, e) in res.frequencies.iter().zip(&exact) {
             assert!(f / e - 1.0 > -1e-9, "a conforming element is stiffer than the continuum: {f} vs {e}");
         }
@@ -14546,8 +14548,8 @@ fn cantilever_beam_modes_converge_to_euler_bernoulli_at_fourth_order_and_shear_s
     let sets = root_set();
     let bodies = vec!["beam".to_string()];
     let p = beam_cantilever_problem(&mesh, &sets, &bodies, generic_section(1e-2, 1e-1, 1e-1));
-    let res =
-        run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() }).expect("a stubby beam");
+    let res = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+        .expect("a stubby beam");
     let eb = beta[0] * beta[0] / (2.0 * PI) * 1e-2f64.sqrt();
     let ratio = res.frequencies[0] / eb;
     assert!(ratio < 0.99 && ratio > 0.9, "shear softens a stubby beam: {ratio}");
