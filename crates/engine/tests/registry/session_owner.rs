@@ -238,14 +238,19 @@ fn acquisition_query_errors_and_oversized_operations_do_not_bypass_admission() {
 const BAD_REMOVE: &str = r#"{"cmd":"geometry.remove","name":"missing"}"#;
 
 #[test]
-fn a_failed_model_snapshot_is_reported_with_no_fabricated_snapshot() {
+fn an_invalid_shape_edit_is_rejected_before_it_can_poison_a_snapshot() {
     let mut owner = owner("runtime");
     let mut client = Client::acquire(&mut owner);
     client.write(&mut owner, r#"{"cmd":"geometry.addBox","name":"body","size":["2 m","2 m","2 m"]}"#).unwrap();
     client.write(&mut owner, r#"{"cmd":"geometry.subtractBox","name":"cut","from":"body","size":["1.5 m","1.5 m","1.5 m"],"at":["0 m","0 m","0 m"]}"#).unwrap();
-    client.write(&mut owner, r#"{"cmd":"geometry.addBox","name":"body","size":["1 m","1 m","1 m"]}"#).unwrap();
-    let error = owner.snapshot(&client.context()).unwrap_err();
+    let before = owner.snapshot(&client.context()).unwrap();
+    let error =
+        client.write(&mut owner, r#"{"cmd":"geometry.addBox","name":"body","size":["1 m","1 m","1 m"]}"#).unwrap_err();
     assert!(error.cause.contains("empty solid"));
+    assert_eq!(
+        serde_json::to_value(owner.snapshot(&client.context()).unwrap()).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
 }
 
 #[test]

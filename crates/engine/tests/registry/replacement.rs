@@ -220,14 +220,14 @@ fn failed_cancelled_and_abandoned_candidates_release_their_resources() {
     entries[0].hash_after = "wrong".into();
     assert!(pollster::block_on(candidate.journal(entries, true)).is_err());
     assert_eq!(drops.get(), 3);
-    // A candidate whose initial snapshot fails can never acquire the prepared type (#389).
+    // Geometry validation rejects a poisoned candidate before it can acquire the prepared type (#389).
     let candidate = Candidate::new(ticket.clone(), None, Box::new(TrackedHost(drops.clone())), 1);
-    let candidate = pollster::block_on(candidate.commands(vec![
+    let error = pollster::block_on(candidate.commands(vec![
         command(r#"{"cmd":"geometry.addBox","name":"body","size":["2 m","2 m","2 m"]}"#),
         command(r#"{"cmd":"geometry.subtractBox","name":"cut","from":"body","size":["1.5 m","1.5 m","1.5 m"],"at":["0 m","0 m","0 m"]}"#),
         command(r#"{"cmd":"geometry.addBox","name":"body","size":["1 m","1 m","1 m"]}"#),
-    ], &mut proceed)).unwrap();
-    assert!(candidate.finish().err().unwrap().cause.contains("empty solid"));
+    ], &mut proceed)).err().unwrap();
+    assert!(error.cause.contains("empty solid"));
     assert_eq!(drops.get(), 4);
     let prepared = Candidate::new(ticket.clone(), None, Box::new(TrackedHost(drops.clone())), 1).finish().unwrap();
     owner.abandon_replacement(&ticket).unwrap();
