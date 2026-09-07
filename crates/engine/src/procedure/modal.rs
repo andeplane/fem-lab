@@ -39,10 +39,11 @@ const SHIFT: f64 = 1e-6;
 /// The `q × q` dense reduction is sequential at any host thread count, per call, never globally.
 const DENSE_PAR: Par = Par::Seq;
 
-/// `M = ∫ ρ NᵀN dV` for the whole mesh, into a fresh copy of `pat.csr`.
+/// `M = ∫ ρ NᵀN dV` for the whole mesh plus every point mass, into a fresh copy of `pat.csr`.
 ///
 /// `lumped` gives the HRZ-scaled diagonal instead, which is what the explicit integrator
-/// needs; the modal path always wants the consistent matrix.
+/// needs; the modal path always wants the consistent matrix. A point mass is lumped either
+/// way — it has no shape function to spread it — so it lands on its own node's diagonal.
 pub fn assemble_mass(p: &Problem<'_>, pat: &Pattern, lumped: bool) -> Result<Csr, Error> {
     let dpn = p.dofs_per_node();
     let mut m = pat.csr.clone();
@@ -66,6 +67,14 @@ pub fn assemble_mass(p: &Problem<'_>, pat: &Pattern, lumped: bool) -> Result<Csr
             for (s, v) in slot.iter().zip(me.iter()) {
                 m.vals[*s as usize] += v;
             }
+        }
+    }
+    for pm in &p.points {
+        for c in 0..dpn {
+            let r = pm.node as usize * dpn + c;
+            let (lo, hi) = (m.row_ptr[r] as usize, m.row_ptr[r + 1] as usize);
+            let at = m.col_idx[lo..hi].binary_search(&(r as u32)).expect("the pattern seeds every node's diagonal");
+            m.vals[lo + at] += pm.mass;
         }
     }
     Ok(m)
@@ -209,6 +218,7 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>) -> Result<Spectrum, 
             // A factorization may still produce an unacceptable residual.
             factored.solve(&y, &mut bar[c])?;
         }
+        orthonormalise(&mut bar);
         // K̂ = X̄ᵀ K X̄ and M̂ = X̄ᵀ M X̄, both q × q and symmetric by construction.
         let (k_hat, m_hat) = (project(k, &bar, q, n), project(m, &bar, q, n));
         let (lam, z) = dense_eigen(&k_hat, &m_hat, q);
@@ -230,6 +240,37 @@ fn subspace(k: &Csr, m: &Csr, p: usize, shift: Option<f64>) -> Result<Spectrum, 
         }
     }
     Ok((lambda[..p].to_vec(), x[..p].to_vec(), sweeps))
+}
+
+/// Modified Gram-Schmidt on the iterated block, in place.
+///
+/// Subspace iteration drives every column towards the same lowest mode, and one dominant lumped
+/// mass makes `M` nearly rank-one on the DOFs it is coupled to, so `A⁻¹ M X` comes back with
+/// columns that are numerically parallel; `X̄ᵀ M X̄` is then singular and the Cholesky below has
+/// nothing to factorise. Orthonormalising changes the basis of the subspace and never the
+/// subspace, so the Ritz values are the same numbers — and with orthonormal columns and a
+/// positive definite `M`, `X̄ᵀ M X̄` is positive definite by construction.
+///
+/// The columns are taken in order and each is swept against the ones before it, so the result
+/// is the same at any thread count.
+fn orthonormalise(bar: &mut [Vec<f64>]) {
+    for c in 0..bar.len() {
+        for j in 0..c {
+            let (before, rest) = bar.split_at_mut(c);
+            let (col, basis) = (&mut rest[0], &before[j]);
+            let d: f64 = col.iter().zip(basis.iter()).map(|(a, b)| a * b).sum();
+            for (v, b) in col.iter_mut().zip(basis.iter()) {
+                *v -= d * b;
+            }
+        }
+        // `A⁻¹M` is invertible, so a column can only shrink towards its predecessors, never
+        // vanish exactly; the floor makes a shrunken one scaled rather than divided by zero.
+        let norm = bar[c].iter().map(|v| v * v).sum::<f64>().sqrt();
+        let scale = 1.0 / norm.max(f64::MIN_POSITIVE);
+        for v in bar[c].iter_mut() {
+            *v *= scale;
+        }
+    }
 }
 
 /// `Xᵀ A X` for `q` columns of length `n`, row-major `q × q`.
