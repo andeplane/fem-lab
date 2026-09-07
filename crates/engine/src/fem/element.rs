@@ -25,6 +25,7 @@ use crate::command::Formulation;
 use crate::error::{Error, ErrorCode};
 use crate::fem::material::{plane_stress_condense, MaterialBatch, MaterialLaw, MaterialOut, VOIGT};
 use crate::fem::quadrature::Rule;
+use crate::fem::section::Section;
 use crate::fem::shape::{
     centre_xi, dshape_of, face_dshape_of, face_rule_of, face_shape_of, in_reference, product_rule_of, rule_of,
     shape_of, Hex20, Hex8, Quad4, Quad8, RefElement, Tet10, Tet4, Tri3, Tri6,
@@ -50,6 +51,8 @@ pub struct ElementCtx<'a> {
     pub material: &'a Material,
     pub idealisation: Idealisation,
     pub formulation: Formulation,
+    /// The cross-section of a line member; `None` for a solid, which has its own geometry.
+    pub section: Option<&'a Section>,
     /// Nodal temperature; `None` → no thermal strain.
     pub temperature: Option<&'a [f64]>,
     pub t_ref: f64,
@@ -134,6 +137,24 @@ const B_MAP: [(usize, usize, usize); 9] =
 const PLANE: [usize; 3] = [0, 1, 3];
 /// Dimensionless determinant tolerance after scaling the active Jacobian by its largest entry.
 const DET_TOL: f64 = 1e-14;
+
+/// The material's density, or the `model.ill-posed` error every mass integral reports.
+pub(crate) fn density(c: &ElementCtx<'_>) -> Result<f64, Error> {
+    if c.material.rho.is_finite() && c.material.rho >= 0.0 {
+        Ok(c.material.rho)
+    } else {
+        Err(Error::new(ErrorCode::ModelIllPosed, "material density must be finite and non-negative")
+            .at("material.rho")
+            .suggest("material.add with rho >= \"0 kg/m^3\""))
+    }
+}
+
+/// The `model.ill-posed` error a frequency bound reports for a weightless element.
+pub(crate) fn no_density() -> Error {
+    Error::new(ErrorCode::ModelIllPosed, "an element with zero density has no natural frequency")
+        .at("material.rho")
+        .suggest("material.add with rho, e.g. \"7850 kg/m^3\"")
+}
 
 pub(crate) fn inverted() -> Error {
     Error::new(ErrorCode::MeshInverted, "the element Jacobian is inverted, numerically singular or nonfinite")
@@ -423,7 +444,7 @@ fn constitutive_stateless(
 
 /// The tangent at zero strain: what the stiffness, the thermal load and the mode condensation
 /// all integrate against for a linear law.
-fn tangent_at_zero(c: &ElementCtx<'_>, n: usize) -> Result<Vec<f64>, Error> {
+pub(crate) fn tangent_at_zero(c: &ElementCtx<'_>, n: usize) -> Result<Vec<f64>, Error> {
     let zeros = vec![0.0; n * VOIGT];
     let (mut s, mut d) = (vec![0.0; n * VOIGT], vec![0.0; n * VOIGT * VOIGT]);
     constitutive_stateless(c, n, &zeros, &mut s, &mut d)?;
@@ -569,14 +590,9 @@ fn mass_of(kind: ElementKind, c: &ElementCtx<'_>, m: &mut [f64], lumped: bool) -
     let kin = kinematics_with_rule(kind, c, product_rule_of(kind))?;
     let (nn, dim, nd) = (kin.n_nodes, kin.dim, kin.n_dof);
     m.fill(0.0);
-    if !c.material.rho.is_finite() || c.material.rho < 0.0 {
-        return Err(Error::new(ErrorCode::ModelIllPosed, "material density must be finite and non-negative")
-            .at("material.rho")
-            .suggest("material.add with rho >= \"0 kg/m^3\""));
-    }
     // A material without `rho` resolves to zero density. Its consistent and lumped element
     // masses are both the exact zero matrix; in particular HRZ must not evaluate 0 / 0.
-    if c.material.rho == 0.0 {
+    if density(c)? == 0.0 {
         return Ok(());
     }
     for g in 0..kin.n_gp {
@@ -843,6 +859,7 @@ fn tangent_and_force_of(
         formulation: Formulation::Full,
         temperature: c.temperature,
         t_ref: c.t_ref,
+        section: c.section,
     };
     let kin = kinematics(kind, &full)?;
     let (n_gp, nn, dim, nd) = (kin.n_gp, kin.n_nodes, kin.dim, kin.n_dof);
@@ -911,6 +928,11 @@ fn tangent_and_force_of(
 /// is folded at one of them. The well-posedness check screens a whole Mesh with this before
 /// any material is looked at, and it is the same Jacobian the integrals use.
 pub fn min_det_j(kind: ElementKind, coords: &[f64]) -> Option<f64> {
+    // A line member is embedded in the mesh's space, so its Jacobian is the length of
+    // `dx/dξ` rather than a determinant of the coordinate directions.
+    if kind == ElementKind::Truss2 {
+        return crate::fem::truss::axis(coords).map(|(_, half)| half);
+    }
     let (nn, dim) = (kind.n_nodes(), kind.dim());
     let rule = rule_of(kind);
     let mut dn = vec![[0.0; 3]; nn];
@@ -991,11 +1013,16 @@ fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
     // One `?`: the two integrals fail on exactly the same elements and materials.
     stiffness_of(kind, c, &mut k).and_then(|_| mass_of(kind, c, &mut mm, true))?;
     if c.material.rho == 0.0 {
-        return Err(Error::new(ErrorCode::ModelIllPosed, "an element with zero density has no natural frequency")
-            .at("material.rho")
-            .suggest("material.add with rho, e.g. \"7850 kg/m^3\""));
+        return Err(no_density());
     }
-    let minv: Vec<f64> = (0..n).map(|i| 1.0 / mm[i * n + i]).collect();
+    Ok(omega_max_power(&k, &mm, n))
+}
+
+/// `√λ_max` of `M_lumped⁻¹ K` by fifty power iterations from a fixed deterministic start, then
+/// the Rayleigh quotient. `k` is `n × n` row-major and `m` holds the lumped mass on its
+/// diagonal; every element kind's `omega_max` ends here.
+pub(crate) fn omega_max_power(k: &[f64], m: &[f64], n: usize) -> f64 {
+    let minv: Vec<f64> = (0..n).map(|i| 1.0 / m[i * n + i]).collect();
     let mut v: Vec<f64> = (0..n).map(|i| libm::sin(i as f64 + 1.0)).collect();
     for _ in 0..50 {
         let w: Vec<f64> = (0..n).map(|i| minv[i] * (0..n).map(|j| k[i * n + j] * v[j]).sum::<f64>()).collect();
@@ -1004,7 +1031,7 @@ fn omega_max_of(kind: ElementKind, c: &ElementCtx<'_>) -> Result<f64, Error> {
     }
     let num: f64 = (0..n).map(|i| v[i] * (0..n).map(|j| k[i * n + j] * v[j]).sum::<f64>()).sum();
     let den: f64 = (0..n).map(|i| v[i] * v[i] / minv[i]).sum();
-    Ok((num / den).sqrt())
+    (num / den).sqrt()
 }
 
 // ------------------------------------------------------------------ the built-in
@@ -1072,6 +1099,7 @@ impl<R: RefElement> Element for Iso<R> {
     }
 }
 
+static TRUSS2: crate::fem::truss::Truss2 = crate::fem::truss::Truss2;
 static ISO_HEX8: Iso<Hex8> = Iso(PhantomData);
 static ISO_HEX20: Iso<Hex20> = Iso(PhantomData);
 static ISO_TET4: Iso<Tet4> = Iso(PhantomData);
@@ -1092,5 +1120,6 @@ pub fn element_for(kind: ElementKind) -> &'static dyn Element {
         ElementKind::Quad8 => &ISO_QUAD8,
         ElementKind::Tri3 => &ISO_TRI3,
         ElementKind::Tri6 => &ISO_TRI6,
+        ElementKind::Truss2 => &TRUSS2,
     }
 }

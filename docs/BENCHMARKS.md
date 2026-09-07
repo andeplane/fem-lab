@@ -85,6 +85,10 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 | tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
 | tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
+| truss-axial-patch | green | 8/8 | 1 | 1 | 0.00 % |
+| truss-space-determinate | green | 5/5 | -0.390625 | -0.390625 | 0.00 % |
+| truss-thermal-restrained | green | 5/5 | -240 | -240 | 0.00 % |
+| truss-two-bar-planar | green | 5/5 | -0.1 | -0.1 | 0.00 % |
 
 <!-- bench:end -->
 
@@ -238,6 +242,12 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | green as **K2** (end force). The end-moment half needs a moment load, which no Command applies; filed separately |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
 | B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
+| B9 | Truss axial patch: three collinear bars at 1, 2 and 5 elements | u(x) = F x / (E A) at every node; 1 mm at the tip with E = 200 GPa, A = 1000 mm², L = 2 m, F = 100 kN | 1e-12 rel, identical at all three meshes | the bar element reproduces its own exact field, whatever the subdivision | green |
+| B10 | Symmetric two-bar planar truss, 30° apex, load P | N = P/(2 sin 30) = P; δ = 2 P L / (E A) by unit-load virtual work | 1e-10 rel | joint equilibrium and axial recovery in a plane | green |
+| B11 | Determinate three-legged space truss (tripod), skew members | N = −P L / (3 H) from statics; δ = P L³ / (3 H² E A) by virtual work | 1e-10 rel | 3D direction cosines | green |
+| B12 | Bar held at both ends, ΔT = 100 K | σ = −E α ΔT = −240 MPa; reaction σA = 240 kN | 1e-12 rel | the thermal load and the restrained-stress path on a line element | green |
+| B13 | Fixed–free bar's axial modes, 4/8/16 truss elements, consistent mass | f_n = (2n−1)/(4L)·√(E/ρ) | 1 % at 16 elements, observed rate > 1.9, every discrete frequency above the exact one | consistent mass and modal convergence of the line element | engine test |
+| B20 | Section library: A, I_y, I_z, J of every `section.add` shape | closed forms (Roark for the rectangle's J), and the I-section against the IPE 200 datasheet A = 2850 mm², I_y = 19.43e6 mm⁴, I_z = 1.424e6 mm⁴ | exact against the closed forms (1e-12 rel); within 6 % *below* the datasheet | the section library a line member integrates with | engine test |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
 motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
@@ -258,6 +268,49 @@ a temperature Load present, the frame at g = 0 must equal a pure thermal solve �
 and reactions — and the frame at g = 1 the un-amplituded answer. The exactness of the scaling
 itself is what a linear procedure guarantees; when a nonlinear material, contact or large
 deflection lands, the increments become real solves and this benchmark becomes their gate.
+
+B9 to B12 are Journals through the registry, so they check `geometry.addLine`, the line
+mesher, the Section library and the truss element together. Each one is gated against a closed
+form nobody had to look up: the bar equation, joint equilibrium with unit-load virtual work,
+and `σ = −E α ΔT`. Two things about them are worth knowing.
+
+**A truss needs bracing the checks do not ask for.** `checks::rigid_modes` looks for *global*
+rigid motion. A pin-jointed member carries no transverse stiffness, so a node that only two
+collinear members reach — every interior node of a subdivided bar — is a local mechanism that
+the checks cannot see and the factorisation reports as `solve.not-positive-definite`. B9
+therefore holds every node across the bar axis with one `geometry.nameRegion` box, and B10's
+and B11's joints are braced by members that are not collinear. A named `constraint.mechanism`
+check is a separate issue.
+
+**Stress is averaged at a joint.** `average_at_nodes` smooths across elements of the same
+material, and at a truss joint that means averaging the axial stresses of members pointing in
+different directions. B10 and B11 are symmetric, so every member meeting at the probed joint
+carries the same force and the average is exact; `stressUnaveraged` is what a mixed joint
+wants until per-member section forces land with the beam (#65).
+
+B13 (`truss_axial_modes_converge_to_the_closed_form_bar_frequency`) is an engine test, like
+B7, because the rate needs three meshes of one bar rather than one Model. With E = ρ = L = 1
+the exact frequencies are (2n−1)/4 Hz; the consistent mass gives 0.644 %, 0.161 % and 0.0402 %
+error in the first mode at 4, 8 and 16 elements, an observed rate of 2.00, and every discrete
+frequency above the continuum's, which is what a conforming displacement element must do.
+
+B20 (`section_properties_match_their_closed_forms_and_a_datasheet`) checks every
+`SectionSpec` arm against an oracle written from the geometry rather than from the
+library: the rectangle and the circle against their textbook formulas, the square's
+torsion constant against Roark's 0.1406 s⁴ (the library's fit gives 0.14083, and the
+exact Saint-Venant series 0.140577, so the gate is 3e-4 on that ratio), the tube as the
+solid circle minus its bore, the I-section as two flange rectangles plus a web by the
+parallel-axis theorem, and the channel through the vanishing first moment about its own
+centroid. The I-section is then cross-checked against the **IPE 200** datasheet
+(A = 2850 mm², I_y = 19.43e6 mm⁴, I_z = 1.424e6 mm⁴). The library models square corners
+and a rolled profile has root fillets, which only ever add material, so the gate is
+*signed*: the computed value must be below the datasheet and by less than 6 %. It comes
+out 4.4 % low on A, 5.0 % on I_y and 0.3 % on I_z. The shear factors are the classical
+Timoshenko–Reissner values (5/6 rectangle, 0.9 circle, 0.5 thin tube, area ratios for the
+I and the channel), **not** Cowper's ν-dependent ones, which at ν = 0.3 are 0.850 and
+0.886; `section.add`'s doc string says which convention it is. The shear centre and
+warping torsion are not modelled, so an open section gets the thin-strip St Venant
+torsion constant only.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
