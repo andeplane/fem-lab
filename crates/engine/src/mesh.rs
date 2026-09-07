@@ -420,7 +420,7 @@ pub fn mesher_settings(spec: &MesherSpec) -> Result<MesherSettings, Error> {
         MesherSpec::Sweep { base, sweep } => {
             Ok(MesherSettings::Sweep { base: Box::new(mesher_settings(base)?), sweep: sweep_settings(sweep)? })
         }
-        MesherSpec::Tet { size, max_elements } => {
+        MesherSpec::Tet(crate::command::TetSpec { size, max_elements }) => {
             let s = size.si().map_err(|e| e.at("mesher.size"))?;
             if s <= 0.0 {
                 return Err(Error::schema("element size must be positive").at("mesher.size"));
@@ -578,3 +578,4 @@ fn set_empty(model: &Model, mesh: &Mesh, name: &str, probe: Option<[f64; 3]>) ->
         .at(format!("set '{name}'"))
         .suggest("geometry.nameFace with a plane through that point, or a larger tol")
 }
+

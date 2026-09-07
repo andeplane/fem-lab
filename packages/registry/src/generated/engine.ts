@@ -38,61 +38,13 @@ export type Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      size: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      size: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
        */
-      at?:
-        | [
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            )
-          ]
-        | null;
+      at?: [QLength, QLength, QLength] | null;
       cmd: "geometry.addBox";
     }
   | {
@@ -101,61 +53,13 @@ export type Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      size: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      size: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      at: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      at: [QLength, QLength, QLength];
       cmd: "geometry.subtractBox";
     }
   | {
@@ -165,29 +69,7 @@ export type Command =
     }
   | {
       name: string;
-      points: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ][];
+      points: [QLength, QLength, QLength][];
       members?: [number, number][] | null;
       divisions?: number | null;
       cmd: "geometry.addLine";
@@ -211,15 +93,7 @@ export type Command =
        * Hex sha256 of the decoded file, checked before it is read.
        */
       sha256?: string | null;
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      unitLength:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      unitLength: Quantity;
       /**
        * Dihedral angle in degrees above which an edge splits two face patches.
        */
@@ -227,15 +101,7 @@ export type Command =
       /**
        * Collapse mesh features smaller than this before use.
        */
-      simplifyBelow?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      simplifyBelow?: QLength | null;
       cmd: "geometry.import";
     }
   | {
@@ -255,61 +121,13 @@ export type Command =
     }
   | {
       name: string;
-      /**
-       * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-       */
-      E:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      E: QStress;
       nu: number;
-      rho?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      alpha?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      k?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      cp?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      yield?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      rho?: QDensity | null;
+      alpha?: QThermalExpansion | null;
+      k?: QConductivity | null;
+      cp?: QSpecificHeat | null;
+      yield?: QStress | null;
       source?: string | null;
       cmd: "material.add";
     }
@@ -358,15 +176,7 @@ export type Command =
       name: string;
       on: string;
       dof: Dof;
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      value:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      value: QLength;
       cmd: "constraint.prescribe";
     }
   | {
@@ -378,15 +188,7 @@ export type Command =
   | {
       name: string;
       on: string;
-      /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
-       */
-      value:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      value: QTemperature;
       cmd: "constraint.temperature";
     }
   | {
@@ -394,15 +196,7 @@ export type Command =
       master: string;
       slave: string;
       kind: ContactKind;
-      tol?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      tol?: QLength | null;
       cmd: "contact.add";
     }
   | {
@@ -412,15 +206,7 @@ export type Command =
   | {
       name: string;
       on: string;
-      /**
-       * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-       */
-      value:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      value: QStress;
       cmd: "load.pressure";
     }
   | {
@@ -429,32 +215,8 @@ export type Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A force with unit, e.g. "10 kN". Any unit of the right dimension is accepted.
        */
-      total: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      total: [QForce, QForce, QForce];
       cmd: "load.traction";
     }
   | {
@@ -463,32 +225,8 @@ export type Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A force with unit, e.g. "10 kN". Any unit of the right dimension is accepted.
        */
-      total: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      total: [QForce, QForce, QForce];
       cmd: "load.force";
     }
   | {
@@ -496,121 +234,41 @@ export type Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A acceleration with unit, e.g. "9.81 m/s^2". Any unit of the right dimension is accepted.
        */
-      g: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      g: [QAcceleration, QAcceleration, QAcceleration];
       cmd: "load.gravity";
     }
   | {
       name: string;
       bodies: string[];
-      /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
-       */
-      value:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      reference?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      value: QTemperature;
+      reference?: QTemperature | null;
       cmd: "load.temperature";
     }
   | {
       name: string;
       on: string;
-      /**
-       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
-       */
-      h:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
-       */
-      tInf:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      h: QHeatTransferCoefficient;
+      tInf: QTemperature;
       cmd: "load.convection";
     }
   | {
       name: string;
       on: string;
-      /**
-       * A heat flux with unit, e.g. "1 kW/m^2". Any unit of the right dimension is accepted.
-       */
-      q:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      q: QHeatFlux;
       cmd: "load.heatFlux";
     }
   | {
       name: string;
       on: string;
       emissivity: number;
-      /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
-       */
-      tInf:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      tInf: QTemperature;
       cmd: "load.radiation";
     }
   | {
       name: string;
       bodies: string[];
-      /**
-       * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
-       */
-      q:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      q: QHeatSource;
       cmd: "load.heatSource";
     }
   | {
@@ -631,24 +289,8 @@ export type Command =
        * amplitude. A uniform increment no larger than dt is chosen to finish exactly at
        * tEnd; the Result reports the increment actually used.
        */
-      dt?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      tEnd?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      dt?: QTime | null;
+      tEnd?: QTime | null;
       theta?: number | null;
       outputEvery?: number | null;
       /**
@@ -657,15 +299,7 @@ export type Command =
        */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
-      initial?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      initial?: QTemperature | null;
       /**
        * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
        * the solution between two passes. Default 1e-6.
@@ -695,16 +329,7 @@ export type Command =
     }
   | {
       step: string;
-      /**
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      sizes: (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )[];
+      sizes: QLength[];
       quantity: QuantityOfInterest;
       restore?: boolean | null;
       cmd: "study.converge";
@@ -734,15 +359,7 @@ export type IdealisationSpec =
       kind: "solid3d";
     }
   | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      thickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      thickness: QLength;
       kind: "planeStress";
     }
   | {
@@ -750,6 +367,16 @@ export type IdealisationSpec =
     }
   | {
       kind: "axisymmetric";
+    };
+/**
+ * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+ */
+export type QLength = QLength1 & {};
+export type QLength1 =
+  | string
+  | {
+      value: number;
+      unit: string;
     };
 /**
  * Kinds of nameable objects in a Model.
@@ -763,153 +390,33 @@ export type ShapeSpec =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      size: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      size: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
        */
-      at?:
-        | [
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            )
-          ]
-        | null;
+      at?: [QLength, QLength, QLength] | null;
       kind: "box";
     }
   | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      height:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      radius: QLength;
+      height: QLength;
       /**
        * @minItems 3
        * @maxItems 3
        */
-      at?:
-        | [
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            )
-          ]
-        | null;
+      at?: [QLength, QLength, QLength] | null;
       segments?: number | null;
       kind: "cylinder";
     }
   | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      radius: QLength;
       /**
        * @minItems 3
        * @maxItems 3
        */
-      at?:
-        | [
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            )
-          ]
-        | null;
+      at?: [QLength, QLength, QLength] | null;
       segments?: number | null;
       kind: "sphere";
     }
@@ -919,15 +426,7 @@ export type ShapeSpec =
     }
   | {
       sketch: SketchSpec;
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      height:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      height: QLength;
       kind: "extrude";
     }
   | {
@@ -963,25 +462,8 @@ export type SegmentSpec =
       /**
        * @minItems 2
        * @maxItems 2
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      to: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      to: [QLength, QLength];
       tag?: string | null;
       kind: "line";
     }
@@ -989,47 +471,13 @@ export type SegmentSpec =
       /**
        * @minItems 2
        * @maxItems 2
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      center: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      center: [QLength, QLength];
       /**
        * @minItems 2
        * @maxItems 2
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      to: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      to: [QLength, QLength];
       ccw: boolean;
       tag?: string | null;
       kind: "arc";
@@ -1043,6 +491,16 @@ export type MeshFormat = "stl";
  */
 export type DataEncoding = "utf8" | "base64";
 /**
+ * What one unit in the file means, since the format records no units.
+ */
+export type Quantity = (
+  | string
+  | {
+      value: number;
+      unit: string;
+    }
+) & {};
+/**
  * A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.
  */
 export type FacePredicate =
@@ -1052,24 +510,8 @@ export type FacePredicate =
        * @maxItems 3
        */
       normal: [number, number, number];
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      offset:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      tol?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      offset: QLength;
+      tol?: QLength | null;
       kind: "plane";
     }
   | {
@@ -1085,116 +527,28 @@ export type FacePredicate =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      min: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      min: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      max: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      max: [QLength, QLength, QLength];
       kind: "bbox";
     }
   | {
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      point: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      point: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
        */
       axis: [number, number, number];
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      tol?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      radius: QLength;
+      tol?: QLength | null;
       kind: "cylinder";
     }
   | {
@@ -1209,66 +563,68 @@ export type RegionPredicate =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      min: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      min: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      max: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      max: [QLength, QLength, QLength];
       kind: "bbox";
     }
   | {
       name: string;
       kind: "body";
+    };
+/**
+ * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+ */
+export type QStress = QStress1 & {};
+export type QStress1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * A density with unit, e.g. "7850 kg/m^3". Any unit of the right dimension is accepted.
+ */
+export type QDensity = QDensity1 & {};
+export type QDensity1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * A thermal expansion with unit, e.g. "1.2e-5 1/K". Any unit of the right dimension is accepted.
+ */
+export type QThermalExpansion = QThermalExpansion1 & {};
+export type QThermalExpansion1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * A conductivity with unit, e.g. "50 W/(m K)". Any unit of the right dimension is accepted.
+ */
+export type QConductivity = QConductivity1 & {};
+export type QConductivity1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * A specific heat with unit, e.g. "460 J/(kg K)". Any unit of the right dimension is accepted.
+ */
+export type QSpecificHeat = QSpecificHeat1 & {};
+export type QSpecificHeat1 =
+  | string
+  | {
+      value: number;
+      unit: string;
     };
 /**
  * A cross-section for line members (trusses and frames). The library turns the shape into the
@@ -1286,195 +642,63 @@ export type RegionPredicate =
  */
 export type SectionSpec =
   | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      width:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      height:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      width: QLength;
+      height: QLength;
       kind: "rectangle";
     }
   | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      radius: QLength;
       kind: "circle";
     }
   | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      thickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      radius: QLength;
+      thickness: QLength;
       kind: "tube";
     }
   | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      height:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      width:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      webThickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      flangeThickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      height: QLength;
+      width: QLength;
+      webThickness: QLength;
+      flangeThickness: QLength;
       kind: "i";
     }
   | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      height:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      width:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      webThickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      flangeThickness:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      height: QLength;
+      width: QLength;
+      webThickness: QLength;
+      flangeThickness: QLength;
       kind: "channel";
     }
   | {
-      /**
-       * A area with unit, e.g. "2000 mm^2". Any unit of the right dimension is accepted.
-       */
-      a:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
-       */
-      iY:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
-       */
-      iZ:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
-       */
-      j:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      a: QArea;
+      iY: QSecondMoment;
+      iZ: QSecondMoment;
+      j: QSecondMoment;
       kY?: number | null;
       kZ?: number | null;
-      cY?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      cZ?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      cY?: QLength | null;
+      cZ?: QLength | null;
       kind: "generic";
+    };
+/**
+ * A area with unit, e.g. "2000 mm^2". Any unit of the right dimension is accepted.
+ */
+export type QArea = QArea1 & {};
+export type QArea1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * A second moment with unit, e.g. "1.7e6 mm^4". Any unit of the right dimension is accepted.
+ */
+export type QSecondMoment = QSecondMoment1 & {};
+export type QSecondMoment1 =
+  | string
+  | {
+      value: number;
+      unit: string;
     };
 /**
  * The mesher and its settings.
@@ -1491,15 +715,7 @@ export type MesherSpec =
     }
   | {
       of: string;
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      size:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      size: QLength;
       refine?: RefineBoxSpec[] | null;
       kind: "free";
     }
@@ -1509,29 +725,15 @@ export type MesherSpec =
       kind: "sweep";
     }
   | {
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      size:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      max_elements?: number | null;
+      size: QLength;
+      maxElements?: number | null;
       kind: "tet";
     };
 /**
  * Where a lattice mesh gets its element size: one size, or counts per direction.
  */
 export type LatticeSize =
-  | (
-      | string
-      | {
-          value: number;
-          unit: string;
-        }
-    )
+  | QLength
   | {
       nx: number;
       ny: number;
@@ -1548,25 +750,8 @@ export type CurveSpec =
       /**
        * @minItems 2
        * @maxItems 2
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      center: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      center: [QLength, QLength];
       ccw: boolean;
       kind: "arc";
     }
@@ -1574,47 +759,13 @@ export type CurveSpec =
       /**
        * @minItems 2
        * @maxItems 2
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      center: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      center: [QLength, QLength];
       /**
        * @minItems 2
        * @maxItems 2
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      semiAxes: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      semiAxes: [QLength, QLength];
       kind: "ellipse";
     };
 /**
@@ -1623,15 +774,7 @@ export type CurveSpec =
 export type SweepSpec =
   | {
       layers: number;
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      height:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      height: QLength;
       kind: "extrude";
     }
   | {
@@ -1656,9 +799,71 @@ export type Dof = "ux" | "uy" | "uz";
  */
 export type Axis = "x" | "y" | "z";
 /**
+ * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
+ */
+export type QTemperature = QTemperature1 & {};
+export type QTemperature1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
  * How two faces interact where they meet.
  */
 export type ContactKind = "bonded";
+/**
+ * A force with unit, e.g. "10 kN". Any unit of the right dimension is accepted.
+ */
+export type QForce =
+  QForce1 & {} & QForce1 & {} & QForce1 & {} & QForce1 & {} & QForce1 & {} & QForce1 & {} & QForce1 & {} & QForce1 & {} & QForce1 & {} & QForce1 & {} & QForce1 & {} & QForce1 & {};
+export type QForce1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * A acceleration with unit, e.g. "9.81 m/s^2". Any unit of the right dimension is accepted.
+ */
+export type QAcceleration =
+  QAcceleration1 & {} & QAcceleration1 & {} & QAcceleration1 & {} & QAcceleration1 & {} & QAcceleration1 & {} & QAcceleration1 & {};
+export type QAcceleration1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+ */
+export type QHeatTransferCoefficient = QHeatTransferCoefficient1 & {};
+export type QHeatTransferCoefficient1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * A heat flux with unit, e.g. "1 kW/m^2". Any unit of the right dimension is accepted.
+ */
+export type QHeatFlux = QHeatFlux1 & {};
+export type QHeatFlux1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
+ * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
+ */
+export type QHeatSource = QHeatSource1 & {};
+export type QHeatSource1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
 /**
  * Analysis procedures.
  */
@@ -1672,6 +877,16 @@ export type Procedure = "static" | "modal" | "heat-steady" | "heat-transient" | 
 export type Field =
   "displacement" | "stress" | "stressUnaveraged" | "vonMises" | "principal" | "strain" | "reaction" | "temperature";
 /**
+ * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
+ */
+export type QTime = QTime1 & {};
+export type QTime1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
+/**
  * A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
  * temperature of a heat-transient Step, and every Load and prescribed displacement of a
  * static one.
@@ -1682,28 +897,11 @@ export type Field =
 export type AmplitudeSpec =
   | {
       amplitude: number;
-      /**
-       * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
-       */
-      period:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      period: QTime;
       kind: "sine";
     }
   | {
-      /**
-       * Items: A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
-       */
-      t: (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )[];
+      t: QTime[];
       value: number[];
       kind: "table";
     };
@@ -1735,32 +933,8 @@ export type QuantityOfInterest =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      at: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      at: [QLength, QLength, QLength];
       kind: "probe";
     };
 /**
@@ -1855,32 +1029,8 @@ export type Query =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      at: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      at: [QLength, QLength, QLength];
       query: "query.probe";
     }
   | {
@@ -1895,61 +1045,13 @@ export type Query =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      from: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      from: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      to: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      to: [QLength, QLength, QLength];
       n: number;
       query: "query.path";
     }
@@ -1969,7 +1071,7 @@ export type Query =
       query: "query.script";
     }
   | {
-      quantity: Quantity;
+      quantity: Quantity2;
       to: string;
       query: "query.convert";
     }
@@ -2002,15 +1104,7 @@ export type FrameSample =
       kind: "frame";
     }
   | {
-      /**
-       * A time with unit, e.g. "0.5 s". Any unit of the right dimension is accepted.
-       */
-      time:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      time: QTime;
       sampling: TimeSampling;
       kind: "time";
     };
@@ -2059,61 +1153,13 @@ export type ModelFile_Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      size: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      size: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
        */
-      at?:
-        | [
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            ),
-            (
-              | string
-              | {
-                  value: number;
-                  unit: string;
-                }
-            )
-          ]
-        | null;
+      at?: [QLength, QLength, QLength] | null;
       cmd: "geometry.addBox";
     }
   | {
@@ -2122,61 +1168,13 @@ export type ModelFile_Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      size: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      size: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      at: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      at: [QLength, QLength, QLength];
       cmd: "geometry.subtractBox";
     }
   | {
@@ -2186,29 +1184,7 @@ export type ModelFile_Command =
     }
   | {
       name: string;
-      points: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ][];
+      points: [QLength, QLength, QLength][];
       members?: [number, number][] | null;
       divisions?: number | null;
       cmd: "geometry.addLine";
@@ -2232,15 +1208,7 @@ export type ModelFile_Command =
        * Hex sha256 of the decoded file, checked before it is read.
        */
       sha256?: string | null;
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      unitLength:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      unitLength: Quantity1;
       /**
        * Dihedral angle in degrees above which an edge splits two face patches.
        */
@@ -2248,15 +1216,7 @@ export type ModelFile_Command =
       /**
        * Collapse mesh features smaller than this before use.
        */
-      simplifyBelow?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      simplifyBelow?: QLength | null;
       cmd: "geometry.import";
     }
   | {
@@ -2276,61 +1236,13 @@ export type ModelFile_Command =
     }
   | {
       name: string;
-      /**
-       * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-       */
-      E:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      E: QStress;
       nu: number;
-      rho?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      alpha?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      k?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      cp?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      yield?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      rho?: QDensity | null;
+      alpha?: QThermalExpansion | null;
+      k?: QConductivity | null;
+      cp?: QSpecificHeat | null;
+      yield?: QStress | null;
       source?: string | null;
       cmd: "material.add";
     }
@@ -2379,15 +1291,7 @@ export type ModelFile_Command =
       name: string;
       on: string;
       dof: Dof;
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      value:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      value: QLength;
       cmd: "constraint.prescribe";
     }
   | {
@@ -2399,15 +1303,7 @@ export type ModelFile_Command =
   | {
       name: string;
       on: string;
-      /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
-       */
-      value:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      value: QTemperature;
       cmd: "constraint.temperature";
     }
   | {
@@ -2415,15 +1311,7 @@ export type ModelFile_Command =
       master: string;
       slave: string;
       kind: ContactKind;
-      tol?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      tol?: QLength | null;
       cmd: "contact.add";
     }
   | {
@@ -2433,15 +1321,7 @@ export type ModelFile_Command =
   | {
       name: string;
       on: string;
-      /**
-       * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-       */
-      value:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      value: QStress;
       cmd: "load.pressure";
     }
   | {
@@ -2450,32 +1330,8 @@ export type ModelFile_Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A force with unit, e.g. "10 kN". Any unit of the right dimension is accepted.
        */
-      total: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      total: [QForce, QForce, QForce];
       cmd: "load.traction";
     }
   | {
@@ -2484,32 +1340,8 @@ export type ModelFile_Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A force with unit, e.g. "10 kN". Any unit of the right dimension is accepted.
        */
-      total: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      total: [QForce, QForce, QForce];
       cmd: "load.force";
     }
   | {
@@ -2517,121 +1349,41 @@ export type ModelFile_Command =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A acceleration with unit, e.g. "9.81 m/s^2". Any unit of the right dimension is accepted.
        */
-      g: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      g: [QAcceleration, QAcceleration, QAcceleration];
       cmd: "load.gravity";
     }
   | {
       name: string;
       bodies: string[];
-      /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
-       */
-      value:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      reference?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      value: QTemperature;
+      reference?: QTemperature | null;
       cmd: "load.temperature";
     }
   | {
       name: string;
       on: string;
-      /**
-       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
-       */
-      h:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
-       */
-      tInf:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      h: QHeatTransferCoefficient;
+      tInf: QTemperature;
       cmd: "load.convection";
     }
   | {
       name: string;
       on: string;
-      /**
-       * A heat flux with unit, e.g. "1 kW/m^2". Any unit of the right dimension is accepted.
-       */
-      q:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      q: QHeatFlux;
       cmd: "load.heatFlux";
     }
   | {
       name: string;
       on: string;
       emissivity: number;
-      /**
-       * A temperature with unit, e.g. "20 degC". Any unit of the right dimension is accepted.
-       */
-      tInf:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      tInf: QTemperature;
       cmd: "load.radiation";
     }
   | {
       name: string;
       bodies: string[];
-      /**
-       * A heat source with unit, e.g. "1 kW/m^3". Any unit of the right dimension is accepted.
-       */
-      q:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
+      q: QHeatSource;
       cmd: "load.heatSource";
     }
   | {
@@ -2652,24 +1404,8 @@ export type ModelFile_Command =
        * amplitude. A uniform increment no larger than dt is chosen to finish exactly at
        * tEnd; the Result reports the increment actually used.
        */
-      dt?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
-      tEnd?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      dt?: QTime | null;
+      tEnd?: QTime | null;
       theta?: number | null;
       outputEvery?: number | null;
       /**
@@ -2678,15 +1414,7 @@ export type ModelFile_Command =
        */
       dtFactor?: number | null;
       amplitude?: AmplitudeSpec | null;
-      initial?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      initial?: QTemperature | null;
       /**
        * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
        * the solution between two passes. Default 1e-6.
@@ -2716,16 +1444,7 @@ export type ModelFile_Command =
     }
   | {
       step: string;
-      /**
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      sizes: (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )[];
+      sizes: QLength[];
       quantity: QuantityOfInterest;
       restore?: boolean | null;
       cmd: "study.converge";
@@ -2748,6 +1467,16 @@ export type ModelFile_Command =
       cmd: "plugin.load";
     };
 /**
+ * What one unit in the file means, since the format records no units.
+ */
+export type Quantity1 = (
+  | string
+  | {
+      value: number;
+      unit: string;
+    }
+) & {};
+/**
  * A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.
  */
 export type FacePredicate2 =
@@ -2757,24 +1486,8 @@ export type FacePredicate2 =
        * @maxItems 3
        */
       normal: [number, number, number];
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      offset:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      tol?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      offset: QLength;
+      tol?: QLength | null;
       kind: "plane";
     }
   | {
@@ -2790,116 +1503,28 @@ export type FacePredicate2 =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      min: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      min: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      max: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      max: [QLength, QLength, QLength];
       kind: "bbox";
     }
   | {
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      point: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      point: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
        */
       axis: [number, number, number];
-      /**
-       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-       */
-      radius:
-        | string
-        | {
-            value: number;
-            unit: string;
-          };
-      tol?:
-        | (
-            | string
-            | {
-                value: number;
-                unit: string;
-              }
-          )
-        | null;
+      radius: QLength;
+      tol?: QLength | null;
       kind: "cylinder";
     }
   | {
@@ -2914,61 +1539,13 @@ export type RegionPredicate2 =
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      min: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      min: [QLength, QLength, QLength];
       /**
        * @minItems 3
        * @maxItems 3
-       *
-       * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
        */
-      max: [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ];
+      max: [QLength, QLength, QLength];
       kind: "bbox";
     }
   | {
@@ -2978,7 +1555,7 @@ export type RegionPredicate2 =
 /**
  * A number with a unit, as text or as parts.
  */
-export type Quantity =
+export type Quantity2 =
   | string
   | {
       value: number;
@@ -3097,6 +1674,16 @@ export type Sweep =
  * rewrite the assumption under an already-computed answer.
  */
 export type AssumedMaterialProperty = "rho" | "alpha";
+/**
+ * A dimensionless with unit, e.g. "0.3". Any unit of the right dimension is accepted.
+ */
+export type QDimensionless = QDimensionless1 & {};
+export type QDimensionless1 =
+  | string
+  | {
+      value: number;
+      unit: string;
+    };
 /**
  * What a Command produced beyond changing the Model.
  */
@@ -3508,31 +2095,7 @@ export interface Placement {
    * @minItems 3
    * @maxItems 3
    */
-  translate?:
-    | [
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        ),
-        (
-          | string
-          | {
-              value: number;
-              unit: string;
-            }
-        )
-      ]
-    | null;
+  translate?: [QLength, QLength, QLength] | null;
   /**
    * @minItems 3
    * @maxItems 3
@@ -3560,72 +2123,7 @@ export interface QuadBlockSpec {
    * @minItems 4
    * @maxItems 4
    */
-  corners: [
-    [
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )
-    ],
-    [
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )
-    ],
-    [
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )
-    ],
-    [
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      ),
-      (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )
-    ]
-  ];
+  corners: [[QLength, QLength], [QLength, QLength], [QLength, QLength], [QLength, QLength]];
   /**
    * @minItems 4
    * @maxItems 4
@@ -3656,56 +2154,14 @@ export interface RefineBoxSpec {
   /**
    * @minItems 2
    * @maxItems 2
-   *
-   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
    */
-  min: [
-    (
-      | string
-      | {
-          value: number;
-          unit: string;
-        }
-    ),
-    (
-      | string
-      | {
-          value: number;
-          unit: string;
-        }
-    )
-  ];
+  min: [QLength, QLength];
   /**
    * @minItems 2
    * @maxItems 2
-   *
-   * Items: A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
    */
-  max: [
-    (
-      | string
-      | {
-          value: number;
-          unit: string;
-        }
-    ),
-    (
-      | string
-      | {
-          value: number;
-          unit: string;
-        }
-    )
-  ];
-  /**
-   * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
-   */
-  size:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
+  max: [QLength, QLength];
+  size: QLength;
 }
 /**
  * One explicit retained field used by `query.difference`.
@@ -3756,7 +2212,13 @@ export interface BodyRow {
    * @maxItems 6
    */
   bbox: [Valued, Valued, Valued, Valued, Valued, Valued];
-  measure: Valued1;
+  /**
+   * Volume for solids, area for 2D sheets.
+   */
+  measure: {
+    value: number;
+    unit: string;
+  };
   mass?: Valued | null;
   /**
    * Auto-named faces of this body (`beam.xmin` …), plus its cuts' faces.
@@ -3767,13 +2229,6 @@ export interface BodyRow {
  * A value with its display unit.
  */
 export interface Valued {
-  value: number;
-  unit: string;
-}
-/**
- * A value with its display unit.
- */
-export interface Valued1 {
   value: number;
   unit: string;
 }
@@ -4382,15 +2837,7 @@ export interface MaterialLibraryEntry {
   specification: string;
   productForm: string;
   condition: string;
-  temperature?:
-    | (
-        | string
-        | {
-            value: number;
-            unit: string;
-          }
-      )
-    | null;
+  temperature?: QTemperature | null;
   temperatureBasis: string;
   E?: SourcedStress | null;
   nu?: SourcedRatio | null;
@@ -4409,15 +2856,7 @@ export interface MaterialLibraryEntry {
   materialAddSource: string;
 }
 export interface SourcedStress {
-  /**
-   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
-   */
-  value:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
+  value: QStress;
   /**
    * The exact grade, direction, statistic or test condition to which the value applies.
    */
@@ -4428,15 +2867,7 @@ export interface SourcedStress {
   source: string;
 }
 export interface SourcedRatio {
-  /**
-   * A dimensionless with unit, e.g. "0.3". Any unit of the right dimension is accepted.
-   */
-  value:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
+  value: QDimensionless;
   /**
    * The exact grade, direction, statistic or test condition to which the value applies.
    */
@@ -4447,15 +2878,7 @@ export interface SourcedRatio {
   source: string;
 }
 export interface SourcedDensity {
-  /**
-   * A density with unit, e.g. "7850 kg/m^3". Any unit of the right dimension is accepted.
-   */
-  value:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
+  value: QDensity;
   /**
    * The exact grade, direction, statistic or test condition to which the value applies.
    */
@@ -4466,15 +2889,7 @@ export interface SourcedDensity {
   source: string;
 }
 export interface SourcedThermalExpansion {
-  /**
-   * A thermal expansion with unit, e.g. "1.2e-5 1/K". Any unit of the right dimension is accepted.
-   */
-  value:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
+  value: QThermalExpansion;
   /**
    * The exact grade, direction, statistic or test condition to which the value applies.
    */
@@ -4485,15 +2900,7 @@ export interface SourcedThermalExpansion {
   source: string;
 }
 export interface SourcedConductivity {
-  /**
-   * A conductivity with unit, e.g. "50 W/(m K)". Any unit of the right dimension is accepted.
-   */
-  value:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
+  value: QConductivity;
   /**
    * The exact grade, direction, statistic or test condition to which the value applies.
    */
@@ -4504,15 +2911,7 @@ export interface SourcedConductivity {
   source: string;
 }
 export interface SourcedSpecificHeat {
-  /**
-   * A specific heat with unit, e.g. "460 J/(kg K)". Any unit of the right dimension is accepted.
-   */
-  value:
-    | string
-    | {
-        value: number;
-        unit: string;
-      };
+  value: QSpecificHeat;
   /**
    * The exact grade, direction, statistic or test condition to which the value applies.
    */
@@ -4672,7 +3071,23 @@ export interface ModelFile {
 export interface Model {
   name: string;
   description?: string | null;
-  units?: UnitSet1;
+  /**
+   * Display units, all optional; SI defaults.
+   */
+  units?: {
+    length?: string | null;
+    force?: string | null;
+    /**
+     * Thermal reaction and applied power display unit; defaults to W, independently of force.
+     */
+    power?: string | null;
+    stress?: string | null;
+    mass?: string | null;
+    density?: string | null;
+    time?: string | null;
+    temperature?: string | null;
+    acceleration?: string | null;
+  };
   idealisation: Idealisation;
   bodies?: Body[];
   cuts?: Cut[];
@@ -4694,23 +3109,6 @@ export interface Model {
    */
   mesherMaterial?: string | null;
   plugins?: PluginRecord[];
-}
-/**
- * Display units, all optional; SI defaults.
- */
-export interface UnitSet1 {
-  length?: string | null;
-  force?: string | null;
-  /**
-   * Thermal reaction and applied power display unit; defaults to W, independently of force.
-   */
-  power?: string | null;
-  stress?: string | null;
-  mass?: string | null;
-  density?: string | null;
-  time?: string | null;
-  temperature?: string | null;
-  acceleration?: string | null;
 }
 /**
  * A Body: one named shape with a material, and a Section when it is made of line members.

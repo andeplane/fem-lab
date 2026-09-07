@@ -358,11 +358,64 @@ pub enum MesherSpec {
     /// lattice crossings is chamfered by up to `size`, so prefer the mapped or sweep mesher when
     /// the geometry is prismatic, because those are exact. `maxElements` caps the background
     /// lattice (500 000 by default) and is checked before anything is allocated.
-    Tet {
-        size: Q<Length>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_elements: Option<u32>,
-    },
+    Tet(TetSpec),
+}
+
+/// `MesherSpec::Tet`'s settings, deserialized by hand rather than derived.
+///
+/// A two-field struct variant of an internally tagged enum — one `Q<Length>` field (itself
+/// `#[serde(transparent)]` over an `#[serde(untagged)]` `Quantity`) followed by a trailing
+/// `#[serde(default)]` `Option` — hits a `serde_derive` limitation where the Content-buffered
+/// deserializer used for internally tagged struct variants silently treats the last field as
+/// absent, whatever the JSON says: `maxElements` came back `None` even when the JSON gave 5,
+/// verified with a minimal reproduction outside this crate and independent of `MesherSpec`'s
+/// other variants (which stay struct variants because none of them hits this shape: `Lattice`
+/// and `Sweep` have no trailing scalar Option, and `Free`'s `refine: Option<Vec<_>>` is not the
+/// pattern that triggers it). Wrapping the payload as a newtype variant over a type with its own
+/// `Deserialize` — a plain `MapAccess` loop, none of `serde_derive`'s struct-variant codegen —
+/// sidesteps it, confirmed against the same minimal reproduction.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TetSpec {
+    pub size: Q<Length>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_elements: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for TetSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "camelCase")]
+        enum Field {
+            Size,
+            MaxElements,
+        }
+        struct TetSpecVisitor;
+        impl<'de> serde::de::Visitor<'de> for TetSpecVisitor {
+            type Value = TetSpec;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a tet mesher spec with `size` and an optional `maxElements`")
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<TetSpec, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut size = None;
+                let mut max_elements = None;
+                while let Some(key) = map.next_key::<Field>()? {
+                    match key {
+                        Field::Size => size = Some(map.next_value()?),
+                        Field::MaxElements => max_elements = map.next_value()?,
+                    }
+                }
+                Ok(TetSpec { size: size.ok_or_else(|| serde::de::Error::missing_field("size"))?, max_elements })
+            }
+        }
+        deserializer.deserialize_map(TetSpecVisitor)
+    }
 }
 
 /// A file format `mesh.export` writes.

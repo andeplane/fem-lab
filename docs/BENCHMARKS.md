@@ -401,6 +401,10 @@ checked beyond aggregate counts.
 | D3 | NAFEMS FV52 simply-supported solid plate, modal | 45.897, 109.44, 109.44, 167.89, 193.59, 206.19 Hz (Ansys) vs Abaqus row 44.092, 106.66, … — **resolve** | 3 % | 3D eigen | |
 | D4 | Manufactured solution, elasticity and Poisson, hex/tet p=1,2 | prescribed u(x); L2 rate p+1, H1 rate p | rate ± 0.1 | convergence machinery, body loads | |
 | D5 | 1M-DOF cantilever, hex8, static (`#[ignore]`, run by hand) and its CI sibling at 66k DOF (`[50,20,20]`) | same as B1 at that size | CI sibling **green**: `‖u_gpu − u_direct‖ ≤ 1e-8 ‖u‖` after 8 refinement steps at a 4.8e-10 relative residual, 4.3 s on an M4 Max against 1.5 s for `cpu-direct`. The 780 300-DOF run is **unresolved**: Jacobi-scaled f32 CG does not converge at κ ≈ 1e8 (residual grows to 1.5e4, `solve.stalled` → `cpu-direct`), so it prints its outcome and is not gated until a stronger preconditioner lands (PLAN 2.2). Times are never asserted on software adapters | GPU PCG + iterative refinement at scale | green |
+| D6 | Lamé thick cylinder as a 90° CSG revolve (#22), free **tet10** | reaction balance and Result freshness gate; σθθ, σrr and u_r at r = 0.15 m (mid-wall) recorded against the closed form 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m | balance 1e-8; stress/displacement recorded, not gated | the free tet mesher's isosurface-stuffed mesh on a curved boundary; Set survival across a mesher swap | green |
+| D7 | the same CSG revolve, free **tet4** | same | recorded, not gated — the element-order lesson | the free tet mesher with constant-strain elements | green |
+| D8 | patch test on the free tet mesher's own unstructured mesh of a CSG box with a cylindrical bore, tet4 and tet10, all six constant-strain modes | exact constant stress and strain | 1e-9 rel | the mesher's irregular connectivity and curved boundary, not just the synthetic structured lattice A1 already covers | engine test |
+| D9 | quality, volume and Set survival on a box, cylinder, sphere and box-minus-cylinder at two sizes | dihedral ∈ [10.7°, 164.8°]; volume within the stated tolerance of the closed form; every Solid tag resolves to a non-empty face Set at both sizes | as stated | the mesher's SIGGRAPH 2007 dihedral-angle guarantee, measured rather than claimed | geometry test |
 
 **D1 uses ESRD's full-face support variant of LE10.** The original NAFEMS problem holds
 vertical displacement only along the outer face's mid-plane line and reports −5.38 MPa.
@@ -426,6 +430,49 @@ The command-reachable Tet10 row (#4) uses the same full-face variant and the unc
 The fixture also gates reaction balance and Result freshness. Separate simplex tests verify
 the exact linear heat profile at both orders over three refinements, body-scoped face areas,
 and named edge preservation and deterministic replay for Tri3/Tri6.
+
+**D6/D7 are built as CSG (#22).** `geometry.add` of a 90° `Revolve` of the rectangle
+r ∈ [0.1, 0.2] m, z ∈ [0, 0.1] m with segment tags `zmin`/`outer`/`zmax`/`inner`, named `tube`,
+tags the body identically to the `lame-3d-revolve-hex20.json` mapped block — `tube.inner`,
+`tube.outer`, `tube.zmin`, `tube.zmax`, `tube.theta0`, `tube.theta1` — so `lame-3d-revolve-tet10.json`
+and `lame-3d-revolve-tet4.json` are that Journal with only `mesh.set` (and the probe point, below)
+changed: the sweep mesher's `{ kind: "sweep", base: mapped, sweep: revolve }` becomes
+`{ kind: "tet", size }`. That every constraint and load still resolves is itself the evidence
+that a Set survives a mesher swap; no new Set-naming code was needed, and it is what D6's JSON
+case actually gates, via reaction balance and Result freshness.
+
+**D6/D7 record point accuracy rather than gating it, and that is itself a finding.** Probes sit
+at r = 0.15 m (mid-wall), not the inner surface r = a: the free tet mesher warps a node onto the
+analytic surface only where a background-lattice edge actually crosses it, so a point exactly at
+r = a can fall just outside a coarser mesh (`Error::NotFound`, "the point is outside the mesh") —
+a direct consequence of the chamfering ADR 0020 documents, not a solver bug. At mid-wall,
+tet10 gives σθθ = 40.08 MPa, σrr = −19.98 MPa, u_r = 3.881e-5 m at h = 0.02 m (28 %, 28 %, 9 %
+against the closed form's 55.5556 MPa, −15.5556 MPa, 4.246667e-5 m) and 48.24 MPa, −13.18 MPa,
+3.703e-5 m at h = 0.012 m (13 %, 15 %, 13 %, five minutes to solve) — real convergence, but an
+order of magnitude looser than the sweep mesher's digit-for-digit hex20 answer at a comparable
+cost, and not the promised 2 %/1 %. Point-probed stress on an unstructured unstructured tet mesh
+converges far more slowly than an integrated quantity (D9's volume, or C1's Richardson-extrapolated
+stress concentration) or a structured mesh's nodal answer; reaching 2 %/1 % here would need a
+background lattice this suite cannot afford to solve routinely. `free_tet4_is_recorded_on_the_lame_cylinder_not_gated`
+runs the identical model at order 1, h = 0.02 m: σθθ = 35.03 MPa, σrr = −21.99 MPa,
+u_r = 3.658e-5 m — the constant-strain element's own answer, recorded rather than gated, the
+same treatment C3 gives quad4's hoop stress under incompressibility.
+
+**D8 is the mesher's own connectivity, not a synthetic lattice.** Every other kind in
+`the_patch_test_passes_for_every_kind_and_every_constant_strain_mode` (A1) runs on a `Structured`
+lattice perturbed off-grid; `the_free_tet_mesher_passes_the_patch_test_on_a_csg_box_with_a_bore`
+instead calls the free tet mesher itself on a box with a cylindrical bore, straightens its tet10
+mid-edge nodes (the patch identity needs straight sides, exactly as A1's mid-edge nodes are put
+back on the midpoint of their corners), and reproduces all six Voigt constant-strain modes to
+1e-9 relative — the mesher's irregular node valences and curved boundary do not cost the element
+its patch-test exactness.
+
+**D9's Set-survival half is `tet_meshes_hold_their_dihedral_angles_volume_and_sets_at_two_sizes`**
+in `crates/geometry/tests/mesh.rs`: a box, a cylinder, a sphere, and a box minus a cylinder, at
+two sizes, each checked for the [10.7°, 164.8°] dihedral bound, volume against the shape's closed
+form (0.07 then 0.02 relative, tightening with refinement), and a non-empty face Set for every
+Solid tag at both sizes. This is the mesher's SIGGRAPH 2007 guarantee measured directly, not
+inferred from D6's solved answer.
 
 ## E. Heat transfer (phase 2)
 

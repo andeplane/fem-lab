@@ -586,9 +586,10 @@ changing/removing it requires no remaining Body references and clears its materi
 Use model.rename to change an implicit Body name while preserving its references.
 `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
 (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
-geometry: the selected mesher still determines the boundary approximation. `formulation`
-has no effect when `simplices` is true, because simplex elements have no incompatible
-modes.
+geometry: the selected mesher still determines the boundary approximation, and the `tet`
+mesher is the one that meshes a curved solid freely. `formulation` has no effect when
+`simplices` is true, or under the `tet` mesher, because simplex elements have no
+incompatible modes.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -1560,6 +1561,20 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "kind",
         "base",
         "sweep"
+      ]
+    },
+    {
+      "description": "Unstructured tetrahedra filling every 3D Body, at about `size`. The only mesher that\nmeshes curved CSG solids without stair-stepping: it cuts a body-centred lattice against\nthe exact solid, so boundary nodes lie on the true surface, a cylinder comes out round,\nand every named CSG face becomes the face Set `<body>.<tag>` as it does for the lattice.\n`order: 2` gives tet10 with the mid-edge nodes projected onto curved faces; order 1 gives\nconstant-strain tet4, which is stiff in bending. A sharp CSG edge that falls between two\nlattice crossings is chamfered by up to `size`, so prefer the mapped or sweep mesher when\nthe geometry is prismatic, because those are exact. `maxElements` caps the background\nlattice (500 000 by default) and is checked before anything is allocated.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "tet"
+        }
+      },
+      "$ref": "#/$defs/TetSpec",
+      "required": [
+        "kind"
       ]
     }
   ]
@@ -2937,6 +2952,34 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>TetSpec</summary>
+
+```json
+{
+  "description": "`MesherSpec::Tet`'s settings, deserialized by hand rather than derived.\n\nA two-field struct variant of an internally tagged enum — one `Q<Length>` field (itself\n`#[serde(transparent)]` over an `#[serde(untagged)]` `Quantity`) followed by a trailing\n`#[serde(default)]` `Option` — hits a `serde_derive` limitation where the Content-buffered\ndeserializer used for internally tagged struct variants silently treats the last field as\nabsent, whatever the JSON says: `maxElements` came back `None` even when the JSON gave 5,\nverified with a minimal reproduction outside this crate and independent of `MesherSpec`'s\nother variants (which stay struct variants because none of them hits this shape: `Lattice`\nand `Sweep` have no trailing scalar Option, and `Free`'s `refine: Option<Vec<_>>` is not the\npattern that triggers it). Wrapping the payload as a newtype variant over a type with its own\n`Deserialize` — a plain `MapAccess` loop, none of `serde_derive`'s struct-variant codegen —\nsidesteps it, confirmed against the same minimal reproduction.",
+  "type": "object",
+  "properties": {
+    "size": {
+      "$ref": "#/$defs/Q_length"
+    },
+    "maxElements": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "size"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>UnitSet</summary>
 
 ```json
@@ -4083,7 +4126,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation. `formulation`\nhas no effect when `simplices` is true, because simplex elements have no incompatible\nmodes.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation, and the `tet`\nmesher is the one that meshes a curved solid freely. `formulation` has no effect when\n`simplices` is true, or under the `tet` mesher, because simplex elements have no\nincompatible modes.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -5698,6 +5741,20 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "base",
         "sweep"
       ]
+    },
+    {
+      "description": "Unstructured tetrahedra filling every 3D Body, at about `size`. The only mesher that\nmeshes curved CSG solids without stair-stepping: it cuts a body-centred lattice against\nthe exact solid, so boundary nodes lie on the true surface, a cylinder comes out round,\nand every named CSG face becomes the face Set `<body>.<tag>` as it does for the lattice.\n`order: 2` gives tet10 with the mid-edge nodes projected onto curved faces; order 1 gives\nconstant-strain tet4, which is stiff in bending. A sharp CSG edge that falls between two\nlattice crossings is chamfered by up to `size`, so prefer the mapped or sweep mesher when\nthe geometry is prismatic, because those are exact. `maxElements` caps the background\nlattice (500 000 by default) and is checked before anything is allocated.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "tet"
+        }
+      },
+      "$ref": "#/$defs/TetSpec",
+      "required": [
+        "kind"
+      ]
     }
   ]
 }
@@ -7125,6 +7182,34 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "angleDeg"
       ]
     }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>TetSpec</summary>
+
+```json
+{
+  "description": "`MesherSpec::Tet`'s settings, deserialized by hand rather than derived.\n\nA two-field struct variant of an internally tagged enum — one `Q<Length>` field (itself\n`#[serde(transparent)]` over an `#[serde(untagged)]` `Quantity`) followed by a trailing\n`#[serde(default)]` `Option` — hits a `serde_derive` limitation where the Content-buffered\ndeserializer used for internally tagged struct variants silently treats the last field as\nabsent, whatever the JSON says: `maxElements` came back `None` even when the JSON gave 5,\nverified with a minimal reproduction outside this crate and independent of `MesherSpec`'s\nother variants (which stay struct variants because none of them hits this shape: `Lattice`\nand `Sweep` have no trailing scalar Option, and `Free`'s `refine: Option<Vec<_>>` is not the\npattern that triggers it). Wrapping the payload as a newtype variant over a type with its own\n`Deserialize` — a plain `MapAccess` loop, none of `serde_derive`'s struct-variant codegen —\nsidesteps it, confirmed against the same minimal reproduction.",
+  "type": "object",
+  "properties": {
+    "size": {
+      "$ref": "#/$defs/Q_length"
+    },
+    "maxElements": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "size"
   ]
 }
 ```
