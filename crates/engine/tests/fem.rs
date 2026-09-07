@@ -1644,6 +1644,9 @@ fn a_folded_element_is_a_mesh_inverted_error() {
             el.body_load(&c, &|_x| [0.0; 3], &mut v).err(),
             el.thermal_load(&c, &mut v).err(),
             el.recover(&c, &u, &mut sig, &mut eps).err(),
+            // the finite-strain kernel refuses a folded *reference* element as flatly as the
+            // linear ones do, before any deformation gradient is formed
+            element_tangent(kind, &c, &u).err(),
             el.omega_max(&c).err(),
         ];
         for e in fails {
