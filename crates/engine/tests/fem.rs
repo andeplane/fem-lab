@@ -3546,7 +3546,7 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
     let names: Vec<&str> = [
         static_step(opts),
         Step::StaticNonlinear(nl_options(1)),
-        Step::Modal { n_modes: 3, shift: None, solver: opts },
+        Step::Modal { n_modes: 3, shift: None, solver: opts, prestress: None },
         Step::HeatSteady { solver: opts, control: NonlinearControl::default() },
         Step::HeatTransient {
             dt: 1.0,
@@ -4456,7 +4456,7 @@ fn a_harmonic_sweep_is_bit_identical_at_one_and_many_threads() {
         vec![fix("root", "xmin", [true, true, true], 0.0)],
     );
     p.loads = vec![Load::Traction { faces: "xmax".to_string(), t: [0.0, 0.0, -1e5] }];
-    let modal = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() };
+    let modal = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default(), prestress: None };
     let sweep = harmonic_step(10.0, 400.0, 5, 0.02, 1);
     let swept = |threads: usize| {
         let pool = Pool::new(threads);
@@ -5651,7 +5651,7 @@ fn a_slender_cantilever_has_the_euler_bernoulli_bending_frequencies() {
         Formulation::Full,
         vec![fix("root", "xmin", [true, true, true], 0.0)],
     );
-    let step = Step::Modal { n_modes: 8, shift: None, solver: SolveOptions::default() };
+    let step = Step::Modal { n_modes: 8, shift: None, solver: SolveOptions::default(), prestress: None };
     let res = run_step(&p, &step).expect("a clamped cantilever has modes");
     // A square section makes every bending mode a degenerate pair, and any rotation of a
     // degenerate pair is as good an eigenvector, so the shapes cannot be split by direction.
@@ -6004,7 +6004,7 @@ fn nafems_fv32_tapered_membrane_has_the_published_frequencies() {
             vec![fix("root", "root", [true, true, false], 0.0)],
         );
         p.materials = vec![material_of(&material)];
-        let step = Step::Modal { n_modes: 6, shift: None, solver: SolveOptions::default() };
+        let step = Step::Modal { n_modes: 6, shift: None, solver: SolveOptions::default(), prestress: None };
         let res = run_step(&p, &step).expect("a clamped membrane has modes");
         let errs: Vec<f64> = res.frequencies.iter().zip(want).map(|(got, w)| (got - w).abs() / w).collect();
         worst.push(errs.iter().fold(0.0f64, |m, e| m.max(*e)));
@@ -6025,7 +6025,7 @@ fn a_free_block_has_six_zero_frequencies() {
     let sets = sets_of(&mesh);
     let bodies = one_body();
     let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
-    let step = Step::Modal { n_modes: 8, shift: None, solver: SolveOptions::default() };
+    let step = Step::Modal { n_modes: 8, shift: None, solver: SolveOptions::default(), prestress: None };
     let res = run_step(&p, &step).expect("a free body still has modes");
     let seventh = res.frequencies[6];
     for (i, f) in res.frequencies.iter().take(6).enumerate() {
@@ -6062,7 +6062,7 @@ fn a_modal_step_without_a_density_names_the_missing_property() {
         vec![fix("root", "xmin", [true, true, true], 0.0)],
     );
     p.materials[0].rho = 0.0;
-    let step = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() };
+    let step = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default(), prestress: None };
     let e = run_step(&p, &step).expect_err("no density, no mass");
     assert_eq!(e.code, ErrorCode::ModelIllPosed);
     assert!(e.cause.contains("density"), "{}", e.cause);
@@ -6284,6 +6284,153 @@ fn the_critical_time_step_separates_a_ringing_beam_from_a_diverging_one() {
     let e = run_step(&p, &unstable).expect_err("1.25 Δt_crit diverges");
     assert_eq!(e.code, ErrorCode::ExplicitUnstable);
     assert!(e.cause.contains("diverged at step"), "{}", e.cause);
+}
+
+// ------------------------------- prestressed modal analysis (#344, Benchmarks B16 and B17)
+
+/// A solved Step's displacement as one value per DOF, which is what `prestress` takes.
+///
+/// The inverse of `procedure::vector_field`, written out here rather than borrowed from the
+/// crate so this test's preload is assembled from the public Result a host would read.
+fn preload_dofs(res: &StepResult, dofs_per_node: usize) -> Vec<f64> {
+    let d = &res.fields[&Field::Displacement];
+    let nodes = d.data.len() / 3;
+    let mut u = vec![0.0; nodes * dofs_per_node];
+    for node in 0..nodes {
+        for c in 0..dofs_per_node {
+            u[node * dofs_per_node + c] = d.data[node * 3 + c];
+        }
+    }
+    u
+}
+
+/// The single-solve linear static Step every preload below is solved with.
+fn preload_step() -> Step {
+    Step::Static { solver: slender_solver(), dt: 1.0, t_end: 1.0, amplitude: None, output_every: 1 }
+}
+
+/// The prestressed frequencies of `p` under `pressure` on `xmax`: solve statically, then hand
+/// that displacement to a modal Step as its preload.
+fn prestressed(p: &mut Problem<'_>, pressure: f64, n_modes: usize) -> Vec<f64> {
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: pressure }];
+    let statics = run_step(p, &preload_step()).expect("a linear column carries an end pressure");
+    let u = preload_dofs(&statics, p.dofs_per_node());
+    let modal = Step::Modal { n_modes, shift: None, solver: SolveOptions::default(), prestress: Some(u) };
+    run_step(p, &modal).expect("a preloaded column still vibrates").frequencies
+}
+
+/// #344: the preload moves the frequencies the way stress stiffening says it must, and the
+/// preload that takes the first one to zero is the very load factor linear buckling reports.
+///
+/// The two procedures share `assemble_geometric`, so this is the check that keeps them one
+/// theory rather than two: `K φ = λ(−K_σ)φ` and `(K + K_σ)φ = ω²Mφ` are the same pencil, and
+/// at `α = λ` the first squared frequency must vanish. `ω₁²` is very nearly linear in the
+/// preload, so a residual `ω₁²(λ)/ω₁²(0) = ε` places the zero crossing at `λ(1 + ε)`: gating
+/// that ratio at 0.005 *is* agreement with the buckling factor to 0.5 %.
+#[test]
+fn a_prestressed_column_follows_its_axial_load_and_meets_its_own_buckling_factor() {
+    let (length, side) = (1.0, 0.02);
+    let mesh = Structured { kind: ElementKind::Hex20, n: [16, 1, 1] }.box_([length, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    let unloaded =
+        run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+            .expect("a steel column has a first bending mode")
+            .frequencies[0];
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: BUCKLING_PRESSURE }];
+    let lambda = run_step(&p, &Step::Buckling { n_modes: 1, solver: slender_solver() })
+        .expect("a compressed column has a buckling factor")
+        .buckling_factors[0];
+
+    // A preload that produced no displacement adds an identically zero K_σ, so the answer is
+    // the unprestressed one to the last bit — not merely to a tolerance.
+    let zero = prestressed(&mut p, 0.0, 1)[0];
+    assert_eq!(zero, unloaded, "a zero preload must not perturb the spectrum at all");
+
+    // Tension stiffens, compression softens, and both by the amount the closed form predicts
+    // for a fixed–free column: f(P) = f(0)·√(1 − P/P_cr) with P_cr = λ·P_ref.
+    for factor in [-0.5, 0.5] {
+        let got = prestressed(&mut p, factor * lambda * BUCKLING_PRESSURE, 1)[0];
+        let want = unloaded * libm::sqrt(1.0 - factor);
+        assert!(libm::fabs(got / want - 1.0) < 0.02, "at {factor} of the buckling load: {got} Hz against {want} Hz");
+        assert_eq!(got > unloaded, factor < 0.0, "tension raises and compression lowers: {got} vs {unloaded}");
+    }
+
+    // At the buckling factor itself the first frequency is gone.
+    let critical = prestressed(&mut p, lambda * BUCKLING_PRESSURE, 1)[0];
+    let residual = (critical * critical) / (unloaded * unloaded);
+    assert!(residual < 0.005, "the zero crossing missed the buckling factor by {residual}: {critical} Hz");
+}
+
+/// A preload well past the buckling load leaves `K + K_σ` indefinite, and the failure is named
+/// as the modelling mistake it is rather than as the Cholesky it came out of.
+///
+/// The rewrite is sound but not complete: the modal iteration factorises `K + K_σ − σM` for a
+/// small negative `σ`, so a *slightly* over-critical preload is still factorisable and reports
+/// a first frequency of zero instead. Only a failure of that factorisation is claimed here.
+#[test]
+fn a_preload_far_past_the_buckling_load_is_named_rather_than_blamed_on_the_solver() {
+    let (length, side) = (1.0, 0.02);
+    let mesh = Structured { kind: ElementKind::Hex20, n: [8, 1, 1] }.box_([length, side, side]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0)],
+    );
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: BUCKLING_PRESSURE }];
+    let lambda = run_step(&p, &Step::Buckling { n_modes: 1, solver: slender_solver() })
+        .expect("a compressed column has a buckling factor")
+        .buckling_factors[0];
+    p.loads = vec![Load::Pressure { faces: "xmax".into(), p: 50.0 * lambda * BUCKLING_PRESSURE }];
+    let statics = run_step(&p, &preload_step()).expect("a linear column carries any end pressure");
+    let u = preload_dofs(&statics, p.dofs_per_node());
+    let step = Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: Some(u) };
+    let e = run_step(&p, &step).expect_err("a column crushed to fifty times its buckling load has no modes");
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert_eq!(e.where_.as_deref(), Some("after"));
+    assert!(e.cause.contains("passed the buckling load"), "{}", e.cause);
+    assert!(e.suggestion.expect("a way out").contains("buckling"));
+}
+
+/// The axisymmetric idealisation has no geometric stiffness written (the hoop term is missing),
+/// so a prestressed modal Step over one is refused with the element's own `unsupported`, named
+/// with the element it came from — exactly as a buckling Step over the same model is.
+#[test]
+fn a_prestressed_modal_step_refuses_the_axisymmetric_idealisation() {
+    let mesh = Structured { kind: ElementKind::Quad4, n: [2, 3, 1] }.box_([0.05, 0.2, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["shaft".to_string()];
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Axisymmetric { twist: false },
+        Formulation::Full,
+        vec![fix("root", "ymin", [true, true, false], 0.0)],
+    );
+    let step = Step::Modal {
+        n_modes: 1,
+        shift: None,
+        solver: SolveOptions::default(),
+        prestress: Some(vec![1e-6; p.n_dofs()]),
+    };
+    let e = run_step(&p, &step).expect_err("the hoop term of a ring's stress stiffening is not written");
+    assert_eq!(e.code, ErrorCode::Unsupported);
+    assert!(e.where_.as_deref().expect("the element it came from").starts_with("element "), "{e:?}");
+    assert!(e.cause.contains("axisymmetric"), "{}", e.cause);
 }
 
 // ------------------------------------------------------ F5–F10: dynamics verification (#396)
@@ -6586,7 +6733,7 @@ fn modal_frequencies_equal_the_spectrum_of_an_explicit_free_vibration() {
     let bodies = one_body();
     let p = rod_problem(&mesh, &sets, &bodies);
     let (c, h) = ((ROD_E / ROD_RHO).sqrt(), length / n as f64);
-    let modal = Step::Modal { n_modes: 3, shift: None, solver: SolveOptions::default() };
+    let modal = Step::Modal { n_modes: 3, shift: None, solver: SolveOptions::default(), prestress: None };
     let modal = run_step(&p, &modal).expect("three rod modes");
     let tip = node_at(&mesh, [length, 0.0, 0.0]) as usize * 3;
     for j in 0..3 {
@@ -6784,13 +6931,13 @@ fn a_material_the_checks_cannot_see_stops_the_dynamic_procedures() {
     let held = vec![fix("root", "xmin", [true, true, true], 0.0)];
     let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held);
     p.materials[0].props = vec![YOUNG];
-    let modal = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() };
+    let modal = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default(), prestress: None };
     assert_eq!(run_step(&p, &modal).expect_err("one prop instead of two").code, ErrorCode::MaterialProps);
     let boom = Step::Explicit { t_end: 1e-5, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
     assert_eq!(run_step(&p, &boom).expect_err("one prop instead of two").code, ErrorCode::MaterialProps);
 
     p.materials[0].props = vec![YOUNG, POISSON];
-    let shifted = Step::Modal { n_modes: 2, shift: Some(1e18), solver: SolveOptions::default() };
+    let shifted = Step::Modal { n_modes: 2, shift: Some(1e18), solver: SolveOptions::default(), prestress: None };
     let e = run_step(&p, &shifted).expect_err("a shift far above the spectrum");
     assert_eq!(e.code, ErrorCode::SolveNotPositiveDefinite);
 }
@@ -6825,7 +6972,7 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
     let steps: Vec<(&Problem<'_>, Step)> = vec![
         (&hot, steady()),
         (&hot, transient),
-        (&solid, Step::Modal { n_modes: 2, shift: Some(-1.0), solver: SolveOptions::default() }),
+        (&solid, Step::Modal { n_modes: 2, shift: Some(-1.0), solver: SolveOptions::default(), prestress: None }),
         (&solid, Step::Explicit { t_end: 1e-5, dt_factor: 0.9, initial_velocity: None, output_every: 1 }),
         (&solid, implicit_step(1e-5, 1e-5, 0.0, (0.0, 0.0), None, 1)),
     ];
@@ -6840,8 +6987,9 @@ fn a_host_that_says_stop_cancels_every_new_procedure() {
     }
     // A harmonic Step reports at three phases too, and only runs against a modal Result: the
     // assembly (call 0), one solve call per retained frequency (1..=4 here) and the post (5).
-    let modal = run_step(&solid, &Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() })
-        .expect("a bar with mass has modes");
+    let modal =
+        run_step(&solid, &Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default(), prestress: None })
+            .expect("a bar with mass has modes");
     for at in [0, 1, 4, 5] {
         let mut go = cancel_on(at);
         let step = harmonic_step(10.0, 100.0, 4, 0.02, 1);
@@ -7134,8 +7282,11 @@ fn simplex_axial_modes_converge_to_the_closed_form_bar_frequency() {
             );
             p.materials[0].props = vec![1.0, 0.0];
             p.materials[0].rho = 1.0;
-            let res = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
-                .expect("axial bar mode");
+            let res = run_step(
+                &p,
+                &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None },
+            )
+            .expect("axial bar mode");
             // u=sin(pi*x/2), E=rho=L=1 => f=1/4 Hz.
             errors.push((res.frequencies[0] / 0.25 - 1.0).abs());
         }
@@ -8012,8 +8163,9 @@ fn truss_axial_modes_converge_to_the_closed_form_bar_frequency() {
         p.materials[0].rho = 1.0;
         p.sections = vec![unit_section()];
         p.section_of_block = vec![Some(0)];
-        let res = run_step(&p, &Step::Modal { n_modes: 3, shift: None, solver: SolveOptions::default() })
-            .expect("axial bar modes");
+        let res =
+            run_step(&p, &Step::Modal { n_modes: 3, shift: None, solver: SolveOptions::default(), prestress: None })
+                .expect("axial bar modes");
         // E = rho = L = 1, so f_n = (2n - 1) / 4.
         for (i, f) in res.frequencies.iter().enumerate() {
             let exact = (2.0 * (i as f64 + 1.0) - 1.0) / 4.0;
@@ -8658,8 +8810,8 @@ fn a_single_degree_of_freedom_sweep_reproduces_the_magnification_closed_form() {
     assert!(u_static > 0.0, "the traction pulls the free face outwards: {u_static}");
 
     // Four free DOFs, four modes: the subspace is the whole space, so the shapes are exact.
-    let modal =
-        run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: opts }).expect("a bar with mass has modes");
+    let modal = run_step(&p, &Step::Modal { n_modes: 4, shift: None, solver: opts, prestress: None })
+        .expect("a bar with mass has modes");
     let part = participations(&p, &modal.modes);
     let driven = (0..part.len()).fold(0, |best, k| if libm::fabs(part[k]) > libm::fabs(part[best]) { k } else { best });
     let f_n = modal.frequencies[driven];
@@ -8708,8 +8860,9 @@ fn rayleigh_damping_matches_the_constant_ratio_it_reproduces() {
     let sets = sets_of(&mesh);
     let bodies = one_body();
     let p = sdof_bar(&mesh, &sets, &bodies);
-    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
-        .expect("a bar with mass has modes");
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+            .expect("a bar with mass has modes");
     let w = 2.0 * PI * modal.frequencies[0];
     // beta w / 2 = 0.05 at the natural frequency, with no mass-proportional term.
     let beta = 0.1 / w;
@@ -8816,8 +8969,9 @@ fn a_harmonic_step_refuses_a_prescribed_displacement() {
     let sets = sets_of(&mesh);
     let bodies = one_body();
     let mut p = sdof_bar(&mesh, &sets, &bodies);
-    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
-        .expect("a bar with mass has modes");
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+            .expect("a bar with mass has modes");
     p.constraints = vec![fix("root", "xmin", [true, true, true], 1e-3)];
     let error = run_after(&p, &harmonic_step(10.0, 100.0, 5, 0.02, 1), Some(&modal))
         .expect_err("base excitation is not this procedure");
@@ -8834,8 +8988,9 @@ fn a_sweep_retains_the_first_the_stride_and_the_last_frequency() {
     let sets = sets_of(&mesh);
     let bodies = one_body();
     let p = sdof_bar(&mesh, &sets, &bodies);
-    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
-        .expect("a bar with mass has modes");
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+            .expect("a bar with mass has modes");
     let res = run_after(&p, &harmonic_step(10.0, 70.0, 7, 0.02, 3), Some(&modal)).expect("a strided sweep");
     let sweep = res.sweep.expect("a harmonic Step keeps its sweep");
     assert_eq!(sweep.clone(), sweep, "a Sweep is comparable and cloneable like every Result member");
@@ -8854,8 +9009,9 @@ fn an_unusable_sweep_stops_the_harmonic_step() {
     let sets = sets_of(&mesh);
     let bodies = one_body();
     let p = sdof_bar(&mesh, &sets, &bodies);
-    let modal = run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() })
-        .expect("a bar with mass has modes");
+    let modal =
+        run_step(&p, &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None })
+            .expect("a bar with mass has modes");
     let error = run_after(&p, &harmonic_step(10.0, 70.0, 1, 0.02, 1), Some(&modal)).expect_err("one point is no sweep");
     assert_eq!(error.code, ErrorCode::Schema);
     assert_eq!(error.where_.as_deref(), Some("points"));
@@ -8870,7 +9026,7 @@ fn a_harmonic_step_reports_a_load_or_a_constraint_it_cannot_resolve() {
     let bodies = one_body();
     let modal = run_step(
         &sdof_bar(&mesh, &sets, &bodies),
-        &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default() },
+        &Step::Modal { n_modes: 1, shift: None, solver: SolveOptions::default(), prestress: None },
     )
     .expect("a bar with mass has modes");
     let step = harmonic_step(10.0, 100.0, 5, 0.02, 1);
@@ -8888,7 +9044,7 @@ fn a_harmonic_step_reports_a_load_or_a_constraint_it_cannot_resolve() {
 /// shapes are continuous across the tie.
 #[test]
 fn a_tied_beam_has_the_frequencies_of_the_whole_one() {
-    let modal = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() };
+    let modal = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default(), prestress: None };
     let root = |on: &str| vec![fix("root", on, [true, true, true], 0.0)];
     let whole = Structured { kind: ElementKind::Hex8, n: [8, 2, 2] }.box_([1.0, 0.1, 0.1]);
     let whole_sets = sets_of(&whole);
@@ -9723,7 +9879,7 @@ fn a_dominant_tip_mass_does_not_collapse_the_subspace() {
     let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, clamped());
     p.points = lug(node, lump);
     p.couplings = vec![couple("attach", node, "xmax", CoupleKind::Distributed)];
-    let modal = Step::Modal { n_modes: 6, shift: None, solver: SolveOptions::default() };
+    let modal = Step::Modal { n_modes: 6, shift: None, solver: SolveOptions::default(), prestress: None };
     let res = run_step(&p, &modal).expect("six modes of a tip-mass cantilever");
     assert_eq!(res.frequencies.len(), 6);
     assert!(res.frequencies.iter().all(|f| f.is_finite() && *f > 0.0), "{:?}", res.frequencies);
@@ -12948,7 +13104,7 @@ fn a_rotated_model_gives_rotated_displacements_and_stresses() {
         // no eigenvalue moves by more than 1e-10 relative in a sweep and converges linearly,
         // so each frame's eigenvalues are within a small multiple of 1e-10 of the limit and
         // the two frames' frequencies (√λ, which halves the relative error) agree to 1e-9.
-        let modal = Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default() };
+        let modal = Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default(), prestress: None };
         let (fa, fb) = (run_step(&p, &modal).expect("modal"), run_step(&q, &modal).expect("rotated modal"));
         gate(&format!("{label} frequencies"), &fb.frequencies, &fa.frequencies, 1e-9);
     }
@@ -13482,7 +13638,7 @@ fn every_procedure_is_bit_identical_at_one_and_many_threads() {
     let dt_crit = critical_step(&sp);
     let runs: [(&Problem<'_>, Step); 5] = [
         (&sp, static_step(SolveOptions::default())),
-        (&sp, Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default() }),
+        (&sp, Step::Modal { n_modes: 4, shift: None, solver: SolveOptions::default(), prestress: None }),
         (&sp, Step::Explicit { t_end: 18.0 * dt_crit, dt_factor: 0.9, initial_velocity: None, output_every: 5 }),
         (&hp, steady()),
         (&hp, transient_step()),

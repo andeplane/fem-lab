@@ -1,12 +1,23 @@
 //! Modal analysis by subspace iteration on a shifted factorisation (plan A §6).
 //!
-//! `K φ = λ M φ` with a consistent mass. The iteration works with `A = K − σ M` for a small
+//! `(K + K_σ) φ = λ M φ` with a consistent mass, and `K_σ = 0` unless the Step names a static
+//! predecessor with `after` (#344). The iteration works with `A = K − σ M` for a small
 //! negative `σ`, which is positive definite even when `K` is not — that is what lets a
 //! completely free body, whose six rigid modes have `λ = 0`, be factorised at all. Each sweep
 //! is `X̄ = A⁻¹ M X`, a `q × q` projection of `K` and `M` onto `X̄`, a dense generalised
 //! eigenproblem, and an M-orthonormal update; `q = min(2p, p + 8)` subspace vectors converge
 //! the `p` smallest eigenvalues quickly and the start vectors are Bathe's, so the answer never
 //! depends on a random seed.
+//!
+//! **Prestress (stress stiffening).** A Step whose `after` names a solved static or
+//! static-nonlinear Step is a *prestressed* modal analysis: the geometric stiffness of that
+//! Step's stress state is added to `K` before the eigenproblem is formed, so a tie in tension
+//! rings higher and a strut in compression lower, and a member at its buckling load has a first
+//! frequency of zero. `K_σ` is the very matrix linear buckling builds
+//! ([`crate::procedure::buckling::assemble_geometric`]), from the very displacement the
+//! predecessor solved, so the two procedures cannot drift apart: at the preload where buckling
+//! reports `λ = 1`, this reports `f₁ = 0`. Without a preload the addition never happens, and
+//! the unprestressed answer is the same bits it always was.
 //!
 //! The dense `q × q` work runs under `Par::Seq`: it is tiny, and a sequential reduction keeps
 //! the frequencies bit-identical at any thread count. That parallelism is passed per call, so a
@@ -123,11 +134,36 @@ pub(crate) fn no_free_dofs() -> Error {
     .suggest("constraint.remove on an over-constraining displacement constraint")
 }
 
+/// A preload past the buckling load, named as the modelling mistake it is.
+///
+/// Beyond the critical load `K + K_σ` has a negative eigenvalue, the shifted operator the
+/// subspace iteration factorises is indefinite too, and no Cholesky of it exists. That comes
+/// back from the linear algebra as `solve.not-positive-definite` pointing at the solver, which
+/// is exactly the wrong place to look: the solver is fine and the *preload* is past the point
+/// where the structure still stands. Only a prestressed Step rewrites it — an unprestressed
+/// modal Step that fails to factorise has some other reason to, and keeps its own error.
+fn past_buckling(e: Error, prestressed: bool) -> Error {
+    if prestressed && e.code == ErrorCode::SolveNotPositiveDefinite {
+        return Error::new(
+            ErrorCode::ModelIllPosed,
+            "the preload has passed the buckling load: K + K_sigma is indefinite, so the prestressed structure has no vibration about this state",
+        )
+        .at("after")
+        .suggest("solve.run the preload Step at a smaller load, or step.add with procedure 'buckling' for the load factor that ends it");
+    }
+    e
+}
+
 /// Solve one modal Step: `n_modes` frequencies and their M-normalised shapes.
+///
+/// `prestress` is the preload displacement, one value per DOF, of the static Step this one
+/// continues; `None` is the ordinary unprestressed analysis and adds nothing to `K`.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     p: &Problem<'_>,
     n_modes: usize,
     shift: Option<f64>,
+    prestress: Option<&[f64]>,
     _solver: &SolveOptions,
     pool: &Pool,
     mut progress: OnProgress<'_>,
@@ -140,8 +176,18 @@ pub fn run(
     report(&mut progress, "assemble", 0.1, "building the stiffness and mass matrices")?;
     let dpn = p.dofs_per_node();
     let pat = pattern(p.mesh, dpn);
-    let (a, m) =
+    let (mut a, m) =
         pool.install(|| assemble_stiffness(p, &pat).and_then(|a| assemble_mass(p, &pat, false).map(|m| (a, m))))?;
+    // The stress stiffening of the preload, added into `K` before anything is transformed or
+    // reduced, so the multipoint transform, the constraint elimination and the free-DOF
+    // numbering all see one operator. Adding zero is exact, so a preload that produced no
+    // displacement leaves every bit of the unprestressed answer alone.
+    if let Some(u) = prestress {
+        let kg = pool.install(|| crate::procedure::buckling::assemble_geometric(p, &pat, u))?;
+        for (v, g) in a.k.vals.iter_mut().zip(&kg.vals) {
+            *v += g;
+        }
+    }
     let rc = resolve(p).expect("the checks resolved the constraints");
     let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
     let zeros = vec![0.0; a.k.n];
@@ -157,7 +203,9 @@ pub fn run(
     }
     let p_modes = n_modes.clamp(1, n);
     report(&mut progress, "solve", 0.3, "subspace iteration")?;
-    let (lambda, shapes, sweeps) = pool.install(|| subspace(&red_k.k_ff, &red_m.k_ff, p_modes, shift))?;
+    let (lambda, shapes, sweeps) = pool
+        .install(|| subspace(&red_k.k_ff, &red_m.k_ff, p_modes, shift))
+        .map_err(|e| past_buckling(e, prestress.is_some()))?;
 
     let mut res = blank(SolveInfo { solver: "cpu-direct", iterations: sweeps, rel_residual: 0.0, time_ms: 0.0 });
     // Negative eigenvalues are shift noise around the rigid modes; a frequency is √λ of the

@@ -1,0 +1,296 @@
+{
+  "name": "prestressed-beam-modal",
+  "reference": "Benchmark B16: prestressed modal analysis of a pinned-pinned steel beam, E = 210 GPa, nu = 0.3, rho = 7850 kg/m^3, 20 x 1000 mm with a plane-stress thickness of 10 mm, modelled as the lower half (20 x 500 mm, quad8, 2 x 40) exactly as the B5 Euler column is: ux = 0 across the y = 0 edge is the pin, and uy = 0 at mid-span is the symmetry condition of the sin(n pi y / L) modes, so the half model answers the odd modes n = 1 and n = 3 of the full beam. I = t b^3 / 12 = 6.6667e-9 m^4, EI = 1400 N m^2, rho A = 1.57 kg/m; f_n(0) = (n^2 pi / 2) sqrt(EI / (rho A L^4)) = 46.9066 and 422.1595 Hz, and P_cr,n = n^2 pi^2 EI / L^2 = 13817.45 N and 124357.0 N. The axial force is a pressure on the 20 x 10 mm end (200 N per MPa), negative for tension: -17.271808 MPa is P = -0.25 P_cr,1 and 34.543615 MPa is P = +0.5 P_cr,1. The oracle is f_n(P) = f_n(0) sqrt(1 - P / P_cr,n), exact for an Euler-Bernoulli pinned-pinned beam because the vibration and buckling modes are the same sin(n pi y / L) and neither depends on P. Tension raises every frequency and compression lowers it; all six values are gated at 1 %.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "prestressed-beam-modal"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "10 mm"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "column",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0 mm",
+                "0 mm"
+              ],
+              [
+                "20 mm",
+                "0 mm"
+              ],
+              [
+                "20 mm",
+                "500 mm"
+              ],
+              [
+                "0 mm",
+                "500 mm"
+              ]
+            ],
+            "n": [
+              2,
+              40
+            ],
+            "tags": [
+              "bottom",
+              "right",
+              "top",
+              "left"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "column"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "pin",
+      "on": "column.bottom",
+      "dofs": [
+        "ux"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "midspan",
+      "on": "column.top",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "stretch",
+      "on": "column.bottom",
+      "value": "-17.271808 MPa"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "squeeze",
+      "on": "column.bottom",
+      "value": "34.543615 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "free",
+      "procedure": "modal",
+      "constraints": [
+        "pin",
+        "midspan"
+      ],
+      "loads": [],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 2
+    },
+    {
+      "cmd": "step.add",
+      "name": "pull",
+      "procedure": "static",
+      "constraints": [
+        "pin",
+        "midspan"
+      ],
+      "loads": [
+        "stretch"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "modes-pull",
+      "procedure": "modal",
+      "after": "pull",
+      "constraints": [
+        "pin",
+        "midspan"
+      ],
+      "loads": [],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 2
+    },
+    {
+      "cmd": "step.add",
+      "name": "push",
+      "procedure": "static",
+      "constraints": [
+        "pin",
+        "midspan"
+      ],
+      "loads": [
+        "squeeze"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "modes-push",
+      "procedure": "modal",
+      "after": "push",
+      "constraints": [
+        "pin",
+        "midspan"
+      ],
+      "loads": [],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 2
+    },
+    {
+      "cmd": "solve.run",
+      "step": "free"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "pull"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "modes-pull"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "push"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "modes-push"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.result",
+        "step": "free"
+      },
+      "path": "/frequencies/0/value",
+      "expect": 46.90661,
+      "tol": 0.01,
+      "rel": true,
+      "note": "f_1 of the unloaded beam"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "free"
+      },
+      "path": "/frequencies/1/value",
+      "expect": 422.15951,
+      "tol": 0.01,
+      "rel": true,
+      "note": "f_3 of the unloaded beam; the half model skips the even modes"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes-pull"
+      },
+      "path": "/frequencies/0/value",
+      "expect": 52.44319,
+      "tol": 0.01,
+      "rel": true,
+      "note": "tension at 0.25 P_cr,1 raises f_1 by sqrt(1.25)"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes-pull"
+      },
+      "path": "/frequencies/1/value",
+      "expect": 427.98268,
+      "tol": 0.01,
+      "rel": true,
+      "note": "the same tension is only 1/36 of P_cr,3"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes-push"
+      },
+      "path": "/frequencies/0/value",
+      "expect": 33.16798,
+      "tol": 0.01,
+      "rel": true,
+      "note": "compression at 0.5 P_cr,1 lowers f_1 by sqrt(0.5)"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes-push"
+      },
+      "path": "/frequencies/1/value",
+      "expect": 410.2653,
+      "tol": 0.01,
+      "rel": true,
+      "note": "the same compression is 1/18 of P_cr,3"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes-pull"
+      },
+      "path": "/prestressFrom",
+      "expect": "pull",
+      "note": "the Result names the preload Step it was stiffened by"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes-push"
+      },
+      "path": "/prestressFrom",
+      "expect": "push"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "free"
+      },
+      "path": "/prestressFrom",
+      "expect": null,
+      "note": "an unchained modal Result has no preload, and omits the field"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "modes-push"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

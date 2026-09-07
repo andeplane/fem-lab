@@ -161,8 +161,17 @@ pub enum Step {
     /// Static equilibrium with geometric nonlinearity: total Lagrangian, Newton–Raphson,
     /// load stepping ([`nonlinear`]).
     StaticNonlinear(nonlinear::Options),
-    /// Natural frequencies and mode shapes by subspace iteration (plan A §6).
-    Modal { n_modes: usize, shift: Option<f64>, solver: SolveOptions },
+    /// Natural frequencies and mode shapes by subspace iteration (plan A §6), optionally
+    /// stiffened by the stress state of the static Step this one continues (#344).
+    Modal {
+        n_modes: usize,
+        shift: Option<f64>,
+        solver: SolveOptions,
+        /// The preload displacement per DOF whose stress stiffens `K`; `None` is the ordinary
+        /// unprestressed analysis. `solve.run` fills it in from the Result of the static Step
+        /// named by `after`, exactly as it fills in an `initial_velocity`.
+        prestress: Option<Vec<f64>>,
+    },
     /// Linear buckling: the static state, then the load factors of `K φ = λ(−K_σ)φ`.
     Buckling { n_modes: usize, solver: SolveOptions },
     /// Steady conduction with convection, flux and radiation boundaries: `(K + H) T = f`,
@@ -347,6 +356,10 @@ pub struct StepResult {
     pub history: Option<History>,
     /// Frequencies and response fields a harmonic Step kept; `None` for every other procedure.
     pub sweep: Option<Sweep>,
+    /// The Step whose stress state stiffened this one, kept with the Result so a later Model
+    /// edit cannot rewrite what these frequencies were actually solved against. `None` for
+    /// every procedure but a prestressed modal Step (#344).
+    pub prestress_from: Option<String>,
     pub solver: SolveInfo,
     pub warnings: Vec<Warning>,
     /// Solver-used optional material defaults, captured by the Model-to-Problem boundary only
@@ -372,7 +385,9 @@ pub async fn run(
             static_::run(p, solver, *dt, *t_end, amplitude.as_ref(), *output_every, pool, gpu, progress).await
         }
         Step::StaticNonlinear(options) => nonlinear::run(p, options, pool, gpu, progress).await,
-        Step::Modal { n_modes, shift, solver } => modal::run(p, *n_modes, *shift, solver, pool, progress),
+        Step::Modal { n_modes, shift, solver, prestress } => {
+            modal::run(p, *n_modes, *shift, prestress.as_deref(), solver, pool, progress)
+        }
         Step::Buckling { n_modes, solver } => buckling::run(p, *n_modes, solver, pool, gpu, progress).await,
         Step::HeatSteady { solver, control } => heat::steady(p, solver, control, pool, gpu, progress).await,
         Step::HeatTransient { dt, t_end, theta, initial, output_every, amplitude, solver, control } => heat::transient(
@@ -471,6 +486,7 @@ pub(crate) fn blank(solver: SolveInfo) -> StepResult {
         modes: Vec::new(),
         history: None,
         sweep: None,
+        prestress_from: None,
         solver,
         warnings: Vec::new(),
         assumptions: Vec::new(),

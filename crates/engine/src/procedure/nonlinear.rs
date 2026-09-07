@@ -552,6 +552,7 @@ pub async fn run(
         modes: Vec::new(),
         history: Some(history),
         sweep: None,
+        prestress_from: None,
         // The Step's own iteration count, not the last linear solve's: a nonlinear Step is
         // measured in Newton iterations, and `solver` names the linear solver each went through.
         solver: SolveInfo { iterations, ..solved },
