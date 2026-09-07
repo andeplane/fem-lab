@@ -6962,6 +6962,14 @@ fn an_off_axis_lamina_has_the_rotated_compliance_including_shear_extension_coupl
         // On axis and across it there is no shear–extension coupling at all; in between there is.
         let coupled = degrees != 0 && degrees != 90;
         assert_eq!(coupled, s_glob[3][0].abs() > 1e-3 * s_glob[0][0].abs(), "{degrees}°: coupling");
+        // A third, entirely separate derivation of the same number: the classical off-axis
+        // modulus `1/Ex = c⁴/E1 + (1/G12 − 2ν12/E1) s²c² + s⁴/E2`, which is trigonometry on the
+        // engineering constants and touches neither `voigt_rotation` nor the compliance matrix.
+        let (c, s) = (libm::cos(theta), libm::sin(theta));
+        let inv_ex = c * c * c * c / LAMINA[0]
+            + (1.0 / LAMINA[3] - 2.0 * LAMINA[6] / LAMINA[0]) * s * s * c * c
+            + s * s * s * s / LAMINA[1];
+        assert!((s_glob[0][0] / inv_ex - 1.0).abs() <= 1e-12, "{degrees}°: 1/Ex {} vs {inv_ex}", s_glob[0][0]);
     }
     assert!(biggest_coupling > 0.5, "the off-axis coupling is the point: {biggest_coupling}");
 }
