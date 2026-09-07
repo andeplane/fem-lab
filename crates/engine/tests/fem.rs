@@ -4220,6 +4220,144 @@ fn one_body() -> Vec<String> {
     vec!["bar".to_string()]
 }
 
+/// The Fourier sine series for a 1 m slab (diffusivity 1 m²/s) initially at `t0`, both faces
+/// stepped to `t1` at t = 0: the same series `retained_frames_cooling_slab_converges_to_the_
+/// fourier_solution` (registry.rs) uses to cool a slab to zero, generalised to a rise between
+/// two endpoints instead of a decay to one. Using 50 terms (n = 1, 3, …, 99), the tail for
+/// n ≥ 101 is bounded term-by-term by `(4Δ/(101π))·exp(-101²π²t)/(1 - exp(-404π²t))` (Δ =
+/// |t1 - t0|; each further term's exponent falls by at least `404π²t` because `(n+2)² - n² =
+/// 4n + 4 ≥ 404` at n ≥ 101), which at the smallest time checked below (t = 0.2 s) is below
+/// 1e-8700 — nowhere near either gate.
+fn stepped_slab_exact(x: f64, time: f64, t0: f64, t1: f64) -> f64 {
+    let pi = std::f64::consts::PI;
+    t1 - (t1 - t0)
+        * (1..100)
+            .step_by(2)
+            .map(|n| {
+                let k = n as f64 * pi;
+                (4.0 / k) * libm::sin(k * x) * libm::exp(-k * k * time)
+            })
+            .sum::<f64>()
+}
+
+/// Benchmark E8: transient field chaining (#84). A plane-stress strip is restrained on every
+/// edge and stepped from `t0` to `t1` at both ends by a heat-transient predecessor; the static
+/// Step named `after` it is solved once per retained frame, keeping the last as its Result and
+/// carrying a von Mises frame for every output time.
+///
+/// **Correction from the plan**: a plane-*strain* strip fully restrained in both in-plane
+/// directions also has zero strain through the (already zero) thickness direction, so all three
+/// normal strains vanish — the classical *confined* thermal stress
+/// `σxx = σyy = σzz = -Eα ΔT / (1 - 2ν)`, which is hydrostatic and carries **zero** von Mises
+/// everywhere: not a benchmark. `σxx = σyy = -Eα ΔT / (1 - ν)` is the plane-*stress* biaxial
+/// restraint result (`σzz = 0`, free through the thickness), which is what this case uses; its
+/// von Mises is `|σxx|`, non-zero and gateable.
+#[test]
+fn transient_field_chaining_gives_stress_at_every_retained_frame() {
+    let (t0, t1) = (300.0, 400.0);
+    let alpha = 1e-5;
+    let (k, rho, cp) = (6.0, 2.0, 3.0); // diffusivity k/(rho*cp) = 1 m^2/s, on a 1 m strip
+    let idealisation = Idealisation::PlaneStress { thickness: 0.2 };
+    let mesh = Structured { kind: ElementKind::Quad4, n: [24, 1, 1] }.box_([1.0, 0.2, 0.2]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["strip".to_string()];
+
+    let heat_material = Material {
+        law: builtin_law("linear-elastic").expect("built in"),
+        props: vec![YOUNG, POISSON],
+        rho,
+        alpha: 0.0,
+        k,
+        cp,
+    };
+    let p_heat = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        idealisation.clone(),
+        heat_material,
+        vec![hold("xmin", "xmin", t1), hold("xmax", "xmax", t1)],
+        Vec::new(),
+    );
+    let transient = Step::HeatTransient {
+        dt: 0.001,
+        t_end: 2.0,
+        theta: 0.5,
+        initial: t0,
+        output_every: 200,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
+    };
+    let heat_result = run_step(&p_heat, &transient).expect("a well-posed transient heat solve");
+    let history = heat_result.history.expect("a heat-transient Step retains a History");
+    assert_eq!(history.field, Field::Temperature);
+    let frames = history.times.len();
+
+    let elastic_material = Material {
+        law: builtin_law("linear-elastic").expect("built in"),
+        props: vec![YOUNG, POISSON],
+        rho,
+        alpha,
+        k,
+        cp,
+    };
+    let mut p_static = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        idealisation,
+        Formulation::Full,
+        vec![
+            fix("xmin_f", "xmin", [true, true, false], 0.0),
+            fix("xmax_f", "xmax", [true, true, false], 0.0),
+            fix("ymin_f", "ymin", [true, true, false], 0.0),
+            fix("ymax_f", "ymax", [true, true, false], 0.0),
+        ],
+    );
+    p_static.materials = vec![elastic_material];
+
+    let mut compose = |values: &[f64]| Ok(Some((values.to_vec(), t0)));
+    let result = procedure::static_::run_history(&mut p_static, &history, &mut compose, &Pool::new(2), &mut nop)
+        .expect("the chained static solve");
+
+    // Frame count equals the predecessor's retained count, and the final history frame equals
+    // the final von Mises field exactly — the final-field contract every other Step keeps.
+    let stress_history = result.history.as_ref().expect("a chained static Step retains a History");
+    assert_eq!(stress_history.field, Field::VonMises);
+    assert_eq!(stress_history.times.len(), frames);
+    assert_eq!(stress_history.values.last().unwrap(), &result.fields[&Field::VonMises].data);
+
+    let scale = YOUNG * alpha * (t1 - t0) / (1.0 - POISSON);
+    let extremes = heat::history_extremes(stress_history);
+    assert_eq!(extremes.len(), frames);
+    for (i, (time, lo, hi)) in extremes.into_iter().enumerate() {
+        assert_eq!(time, history.times[i]);
+        let center = stepped_slab_exact(0.5, time, t0, t1);
+        let expected_lo = YOUNG * alpha * (center - t0).abs() / (1.0 - POISSON);
+        let expected_hi = scale; // the boundary is held at t1 from t = 0 on: dT there is always t1 - t0
+        assert!((lo - expected_lo).abs() <= 0.01 * scale, "frame {i} (t={time}) min: {lo} vs {expected_lo}");
+        assert!((hi - expected_hi).abs() <= 0.01 * scale, "frame {i} (t={time}) max: {hi} vs {expected_hi}");
+    }
+
+    // The final retained time is deep into the exponential decay (t = 2 s, ~20 diffusion time
+    // constants), so the field is uniform to far below 1e-6 relative and the pointwise closed
+    // form gates the whole Result, not just its extremes.
+    let want = [-scale, -scale, 0.0, 0.0, 0.0, 0.0];
+    let stress = &result.fields[&Field::Stress];
+    for node in 0..mesh.n_nodes() {
+        for (c, &w) in want.iter().enumerate() {
+            let got = stress.data[node * stress.comps + c];
+            let tol = 1e-6 * scale;
+            assert!((got - w).abs() <= tol.max(1e-6 * tol), "node {node} component {c}: {got} vs {w}");
+        }
+    }
+    let vm = &result.fields[&Field::VonMises];
+    for node in 0..mesh.n_nodes() {
+        assert!((vm.data[node] - scale).abs() <= 1e-6 * scale, "node {node}: {} vs {scale}", vm.data[node]);
+    }
+}
+
 /// Benchmark E1: a bar between two fixed temperatures conducts a linear profile, exactly, for
 /// every element family — hexahedra, tetrahedra from the Kuhn split, quadrilaterals, triangles.
 #[test]

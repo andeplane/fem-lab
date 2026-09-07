@@ -16,9 +16,9 @@ use crate::error::Error;
 use crate::fem::problem::Problem;
 use crate::fem::{assembly, checks, loads, mpc};
 use crate::par::Pool;
-use crate::post::{extremes, reactions_per_constraint, stress, Per};
+use crate::post::{extremes, reactions_per_constraint, stress, FieldData, Per};
 use crate::procedure::{report, retained_frame_count, time_grid, vector_field, Amplitude, History, StepResult};
-use crate::solve::{solve, SolveOptions};
+use crate::solve::{direct::Direct, solve, LinearSolve, SolveInfo, SolveOptions};
 
 /// The retained frames of an amplituded Step, from the two solved parts of `u(t) = u_th + g·u_L`.
 ///
@@ -156,6 +156,134 @@ pub async fn run(
         frequencies: Vec::new(),
         modes: Vec::new(),
         history,
+        solver,
+        warnings: mpc.warnings,
+        assumptions: Vec::new(),
+    })
+}
+
+/// Solve this static Step once per retained frame of a heat-transient predecessor's
+/// temperature History (#84), instead of once at its final state.
+///
+/// `K` never depends on temperature — only the thermal load does — so this assembles the
+/// stiffness and factorises it exactly once and reuses that factorisation for every frame; what
+/// changes each pass is [`assembly::thermal_load`] alone. Solving N frames the way [`run`]
+/// solves one (assemble, factorise, solve) would cost N full static solves for an operator that
+/// never moves, which is what the first cut of this plan got wrong.
+///
+/// `compose` is `solve_run`'s per-Body temperature composition (`thermal_field`), called once
+/// per frame with that frame's raw nodal values so a chained Step reads the same reference
+/// handling an unchained one already does; `p.temperature` carries whatever it answers and is
+/// left holding the last frame's on return, so the kept [`StepResult`]'s fields are exactly
+/// what [`run`] would answer for that frame alone — the final-field contract every other Step
+/// keeps. `history` then carries one von Mises frame per output time.
+///
+/// ponytail: von Mises is the one field the two tutorials #84 targets read per frame — about
+/// 8 bytes/node/frame, an order of magnitude under a displacement history. Widen `History` to
+/// more than one field only when a case asks for stress components at every output time too.
+pub fn run_history(
+    p: &mut Problem<'_>,
+    history: &History,
+    compose: &mut dyn FnMut(&[f64]) -> Result<Option<(Vec<f64>, f64)>, Error>,
+    pool: &Pool,
+    mut progress: OnProgress<'_>,
+) -> Result<StepResult, Error> {
+    if let Some(e) = checks::all(p).into_iter().next() {
+        return Err(e);
+    }
+    report(&mut progress, "assemble", 0.1, "building the sparsity pattern")?;
+    let dpn = p.dofs_per_node();
+    let pat = assembly::pattern(p.mesh, dpn);
+    p.temperature = None;
+    let (a, other, applied) = pool.install(|| {
+        assembly::assemble_stiffness(p, &pat).and_then(|a| {
+            let mut other = vec![0.0; a.k.n];
+            loads::assemble_loads(p, &mut other).map(|applied| (a, other, applied))
+        })
+    })?;
+    let rc = assembly::resolve(p).expect("the checks resolved the constraints");
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    let zeros = vec![0.0; a.k.n];
+    let (kt, _) = pool.install(|| mpc::transform(&a.k, &zeros, &mpc));
+    // `red.f_f`, folded against the all-zero load above, is exactly `-K_fc u_c`: the one
+    // constant every frame's reduced right-hand side adds to its own transformed load.
+    let red = assembly::reduce(&kt, &zeros, &rc, &mpc.slaves);
+    drop(kt);
+    drop(zeros);
+    let mut factored = pool.install(|| Direct::factor(&red.k_ff))?;
+
+    let n = history.times.len();
+    let mut times = Vec::with_capacity(n);
+    let mut von_mises_frames = Vec::with_capacity(n);
+    let mut f_f = vec![0.0; red.free.len()];
+    let mut u_f = vec![0.0; red.free.len()];
+    let mut worst_residual = 0.0f64;
+    let mut solver = SolveInfo { solver: "cpu-direct", iterations: 0, rel_residual: 0.0, time_ms: 0.0 };
+    let mut last: Option<(Vec<f64>, Vec<f64>, FieldData, FieldData, FieldData)> = None;
+    for (idx, (&time, values)) in history.times.iter().zip(&history.values).enumerate() {
+        p.temperature = compose(values)?;
+        let mut f = pool.install(|| assembly::thermal_load(p))?;
+        for (v, o) in f.iter_mut().zip(&other) {
+            *v += *o;
+        }
+        let load = mpc::transpose_load(&mpc, &f);
+        for (i, &dof) in red.free.iter().enumerate() {
+            f_f[i] = load[dof as usize] + red.f_f[i];
+        }
+        let info = factored.solve(&f_f, &mut u_f)?;
+        worst_residual = worst_residual.max(info.rel_residual);
+        solver = info;
+        let mut u = assembly::expand(&red, &u_f);
+        mpc::recover(&mpc, &mut u);
+        let (gp_stress, gp_strain) =
+            pool.install(|| stress::stress_gp(p, &u)).expect("the stiffness integral accepted this material");
+        let unaveraged = stress::gp_to_nodes(p.mesh, &gp_stress);
+        let nodal_stress = stress::average_at_nodes(p, &unaveraged);
+        let von_mises = stress::von_mises(&nodal_stress);
+        times.push(time);
+        von_mises_frames.push(von_mises.data);
+        if idx + 1 == n {
+            let nodal_strain = stress::average_at_nodes(p, &stress::gp_to_nodes(p.mesh, &gp_strain));
+            let r = assembly::reactions(&a.k, &u, &f, &red.fixed, &mpc);
+            last = Some((u, r, nodal_stress, nodal_strain, unaveraged));
+        }
+        report(&mut progress, "solve", 0.1 + 0.8 * (idx + 1) as f64 / n as f64, "solving a retained frame")?;
+    }
+    solver.rel_residual = worst_residual;
+    // `history` is never empty: `solve_run` only takes this path for a predecessor History,
+    // and `retained_frame_count` never answers zero.
+    let (u, r, nodal_stress, nodal_strain, unaveraged) = last.expect("a retained History has at least one frame");
+    report(&mut progress, "post", 0.9, "recovering fields")?;
+
+    let mut fields = BTreeMap::new();
+    fields.insert(Field::Displacement, vector_field(&u, dpn));
+    fields.insert(Field::Reaction, vector_field(&r, dpn));
+    fields.insert(Field::VonMises, FieldData::new(Per::Node, 1, von_mises_frames[n - 1].clone()));
+    fields.insert(Field::Principal, stress::principal(&nodal_stress));
+    fields.insert(Field::Stress, nodal_stress);
+    fields.insert(Field::StressUnaveraged, unaveraged);
+    fields.insert(Field::Strain, nodal_strain);
+    let mut scalars = BTreeMap::new();
+    scalars.insert("min_det_j".to_string(), a.min_det_j);
+    for (c, axis) in ["x", "y", "z"].iter().enumerate() {
+        scalars.insert(format!("applied_total_{axis}"), applied.force[c]);
+    }
+    scalars.insert("rel_residual".to_string(), solver.rel_residual);
+    let ex = fields
+        .iter()
+        .filter(|(_, f)| f.per == Per::Node)
+        .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
+        .collect();
+    let reactions = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
+    Ok(StepResult {
+        reaction_quantity: crate::units::ReactionQuantity::Force,
+        fields,
+        scalars,
+        extremes: ex,
+        reactions,
+        frequencies: Vec::new(),
+        modes: Vec::new(),
+        history: Some(History { field: Field::VonMises, times, values: von_mises_frames }),
         solver,
         warnings: mpc.warnings,
         assumptions: Vec::new(),

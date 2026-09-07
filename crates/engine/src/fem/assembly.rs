@@ -254,6 +254,45 @@ pub fn assemble_stiffness(p: &Problem<'_>, pat: &Pattern) -> Result<Assembled, E
     Ok(Assembled { k, f_thermal, min_det_j })
 }
 
+/// `∫ Bᵀ D α ΔT dV` alone, at the Problem's current `temperature` — every DOF's thermal load
+/// with no stiffness recomputed.
+///
+/// `K` never depends on temperature, only the thermal load does, so a chained static Step
+/// (#84: one solve per retained frame of a heat-transient predecessor's History) assembles and
+/// factorises `K` exactly once and calls this per frame instead of re-running
+/// [`assemble_stiffness`], which would repeat the far more expensive element stiffness integral
+/// for an answer that never changes. Sequential, like the heat matrix, because the payload is
+/// one value per DOF rather than the `dpn²` block a stiffness entry needs.
+pub fn thermal_load(p: &Problem<'_>) -> Result<Vec<f64>, Error> {
+    let dpn = p.dofs_per_node();
+    let mut f_thermal = vec![0.0; p.n_dofs()];
+    let mut coords = Vec::new();
+    let mut t = Vec::new();
+    let mut fe = Vec::new();
+    for blk in &p.mesh.blocks {
+        let element = element_for(blk.kind);
+        let nn = blk.kind.n_nodes();
+        coords.resize(nn * 3, 0.0);
+        t.resize(nn, 0.0);
+        fe.resize(nn * dpn, 0.0);
+        for i in 0..blk.n_elems() {
+            let elem = blk.first_elem + i as u32;
+            p.mesh.elem_coords(elem, &mut coords);
+            p.gather_temperature(elem, &mut t);
+            let c = p.ctx(elem, &coords, &t)?;
+            fe.iter_mut().for_each(|v| *v = 0.0);
+            element.thermal_load(&c, &mut fe).map_err(|e| e.at(format!("element {elem}")))?;
+            let conn = p.mesh.elem_nodes(elem);
+            for (a, &node) in conn.iter().enumerate() {
+                for c in 0..dpn {
+                    f_thermal[node as usize * dpn + c] += fe[a * dpn + c];
+                }
+            }
+        }
+    }
+    Ok(f_thermal)
+}
+
 /// Constraints resolved to `(dof, value)` pairs, ascending and unique, with the Constraint
 /// each pair came from so reactions can be reported per Constraint.
 #[derive(Debug, Clone, PartialEq)]
