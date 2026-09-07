@@ -227,6 +227,28 @@ as evidence of successful cancellation or a confirmed app defect. Report
 copy/PDF output, complete error/cancellation coverage and the remaining visual
 comparisons stay open.
 
+### Additional fixed-artifact Script and Export inspection
+
+A fresh local session restored the edited cantilever at revision 12. At
+1600 × 1000, the Script panel's editable view visibly rendered coloured syntax,
+line numbers and the separate Run/Stop rail, with Stop disabled while idle.
+No script was executed. Export opened as a centred modal with supported mesh,
+Result, script, Journal and report formats, per-row registry previews, and
+1×/2× image controls. Animation was disabled with the explanation that it needs
+a selected mode shape; Export selected was disabled with no selected rows.
+
+The Checks-tab click exceeded the browser command-dispatch deadline; a fresh
+snapshot confirmed Script was still selected. Clicking the 2× image control
+later timed out dispatching its mouse event, so the doubled preview was not
+verified. The session therefore adds visual Script/Export evidence only, not
+Checks acceptance or file-output verification. The viewport was reset, the
+owned tab closed and the local artifact server stopped successfully.
+
+The outstanding independent checks remain feasible work for a controllable
+browser session; they are not permanently externally blocked. In this session,
+repeated dispatch deadlines prevented completing them. The separate project-
+folder dependency remains #252/#247.
+
 ## Remaining acceptance work and dependencies
 
 This separates the existing audit's independent checks from blocked external
