@@ -114,9 +114,9 @@ impl Engine {
 impl ResultRecord {
     pub(crate) fn history(&self) -> Result<&crate::procedure::History, Error> {
         self.result.history.as_ref().ok_or_else(|| {
-            Error::new(ErrorCode::Unsupported, format!("Step '{}' has no retained transient frames", self.step))
+            Error::new(ErrorCode::Unsupported, format!("Step '{}' has no retained frames", self.step))
                 .at("step")
-                .suggest("solve.run on a heat-transient or explicit Step")
+                .suggest("solve.run on a heat-transient, explicit or amplitude-driven static Step")
         })
     }
 

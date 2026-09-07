@@ -71,7 +71,7 @@ pub enum Query {
 
     /// A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
     /// Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
-    /// omitted ids refuse stale Results. Transient samples use query.frame's existing protocol.
+    /// omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
     #[serde(rename = "query.field", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "ResultField"))]
     Field {
@@ -90,7 +90,7 @@ pub enum Query {
     #[schemars(extend("x-returns" = "DifferenceField"))]
     Difference { left: DifferenceOperand, right: DifferenceOperand, onto: DifferenceOnto },
 
-    /// Catalogue of retained transient primary-field frames (default: last solved Step).
+    /// Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).
     /// Index 0 is the initial state; indices count retained frames, not integration steps.
     /// Metadata remains available for stale Results. No nodal values are copied by this Query.
     #[serde(rename = "query.frames", rename_all = "camelCase")]
@@ -103,7 +103,7 @@ pub enum Query {
         step: Option<String>,
     },
 
-    /// One retained transient primary field. Supply exactly one of zero-based retained index
+    /// One retained primary field from a heat-transient, explicit or amplitude-driven static Step. Supply exactly one of zero-based retained index
     /// or sample (retained index / physical time with exact or nearest selection). Time
     /// selection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation
     /// policy as sampled probe/path. Values are SI,
@@ -184,6 +184,15 @@ pub enum Query {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from_seq: Option<u32>,
     },
+
+    /// Compare this Model's Journal with a supplied base Journal. Returns the shared causal
+    /// prefix and each ordered divergent tail: removed entries belong to `base`, added entries
+    /// to the current Journal. Entry identity is the typed Command plus `hashAfter`; `seq` is
+    /// only a displayed location and is ignored. Entries after the first divergence are not
+    /// re-aligned. This read never replays either Journal.
+    #[serde(rename = "query.journalDiff", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "JournalDiff"))]
+    JournalDiff { base: crate::journal::Journal },
 
     /// The Journal as a TypeScript script against the `fem` API that reproduces the Model line by
     /// line; what the Script panel shows and what script.run accepts back.
@@ -516,7 +525,7 @@ pub struct ResultSummary {
     /// shape is the Result field named `mode:k`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frequencies: Vec<Valued>,
-    /// One row per output time of a transient Step: when, and the range the field covered.
+    /// One row per retained output time: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
     /// |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
@@ -525,7 +534,7 @@ pub struct ResultSummary {
     pub balance: f64,
 }
 
-/// One time of a transient Step's history: the extremes of the field at that instant.
+/// One retained output time in a Step's history: the extremes of the field at that instant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryRow {
@@ -690,6 +699,22 @@ pub struct JournalDump {
     pub can_redo: bool,
 }
 
+/// `query.journalDiff` response. Journals are causal histories, so this is a shared-prefix
+/// comparison rather than a text diff that aligns similar Commands after histories diverge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalDiff {
+    /// Hash of every supplied base entry, including its `seq` labels. A noncanonical supplied
+    /// `seq` can therefore change this hash without changing `sharedEntries`.
+    pub base_hash: String,
+    pub current_hash: String,
+    pub shared_entries: u32,
+    /// The base Journal's ordered tail after `sharedEntries`.
+    pub removed: Vec<crate::journal::JournalEntry>,
+    /// The current Journal's ordered tail after `sharedEntries`.
+    pub added: Vec<crate::journal::JournalEntry>,
+}
+
 /// `query.script` response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScriptText {
@@ -759,6 +784,7 @@ pub enum QueryResult {
     Path(PathResult),
     Cost(CostEstimate),
     Journal(JournalDump),
+    JournalDiff(JournalDiff),
     Script(ScriptText),
     Converted(Converted),
     MaterialLibrary(MaterialLibrary),
@@ -901,7 +927,7 @@ pub struct RetainedResult {
     pub stale: bool,
     pub nodes: usize,
     pub elements: usize,
-    /// f64 arrays in final fields, modes, frequencies and transient History.
+    /// f64 arrays in final fields, modes, frequencies and retained History.
     pub field_bytes: u64,
     /// Numeric coordinates, connectivity and resolved geometry Sets; excludes container overhead.
     pub mesh_bytes: u64,

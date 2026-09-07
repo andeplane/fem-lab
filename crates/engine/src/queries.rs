@@ -50,6 +50,21 @@ impl Engine {
                     can_redo: self.can_redo(),
                 }))
             }
+            Query::JournalDiff { base } => {
+                let shared = base
+                    .entries
+                    .iter()
+                    .zip(&self.journal.entries)
+                    .take_while(|(a, b)| a.cmd == b.cmd && a.hash_after == b.hash_after)
+                    .count();
+                Ok(QueryResult::JournalDiff(JournalDiff {
+                    base_hash: base.hash(),
+                    current_hash: self.journal.hash(),
+                    shared_entries: shared as u32,
+                    removed: base.entries[shared..].to_vec(),
+                    added: self.journal.entries[shared..].to_vec(),
+                }))
+            }
             Query::Script {} => Ok(QueryResult::Script(ScriptText { text: self.journal.as_script(crate::version()) })),
             Query::Convert { quantity, to } => {
                 let (value, unit) = quantity.split()?;
