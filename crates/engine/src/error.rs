@@ -23,6 +23,17 @@ pub struct Error {
 /// Error codes, serialised as dotted strings so TypeScript sees a closed union.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ErrorCode {
+    #[serde(rename = "session.expired")]
+    SessionExpired,
+    #[serde(rename = "session.conflict")]
+    SessionConflict,
+    #[serde(rename = "session.transitioning")]
+    SessionTransitioning,
+    #[serde(rename = "operation.reused")]
+    OperationReused,
+    #[serde(rename = "operation.unknown")]
+    OperationUnknown,
+
     #[serde(rename = "schema")]
     Schema,
     #[serde(rename = "unit.dimension")]
@@ -149,6 +160,11 @@ mod tests {
     #[test]
     fn codes_serialise_as_dotted_strings_and_round_trip() {
         let codes = [
+            ErrorCode::SessionExpired,
+            ErrorCode::SessionConflict,
+            ErrorCode::SessionTransitioning,
+            ErrorCode::OperationReused,
+            ErrorCode::OperationUnknown,
             ErrorCode::Schema,
             ErrorCode::UnitDimension,
             ErrorCode::UnitUnknown,

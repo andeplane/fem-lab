@@ -80,7 +80,7 @@ export function inlineDefs(schema: JsonSchema, defs: Record<string, unknown>): J
 
 /** Drop the `cmd`/`query` discriminator: the tool name carries it. */
 export function stripDiscriminator(schema: JsonSchema): JsonSchema {
-  const { properties = {}, required = [], ...rest } = schema as { properties?: Record<string, unknown>; required?: string[] };
+  const { properties = {}, required = [], 'x-execution': _execution, ...rest } = schema as { properties?: Record<string, unknown>; required?: string[]; 'x-execution'?: unknown };
   const { cmd: _c, query: _q, ...props } = properties;
   return { ...rest, properties: props, required: required.filter((r) => r !== 'cmd' && r !== 'query') };
 }

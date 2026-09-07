@@ -112,6 +112,7 @@ export async function exportText(engine: EngineHandle, format: ExportFormat, ste
 function exportFileCommand(deps: ServerDeps): HostDef {
   return {
     name: 'export.file',
+    execution: 'modelRead',
     description:
       'Write one export into the project folder: the mesh (vtu, msh, inp, stl), the Markdown calculation note (report), the Journal as a TypeScript script, or the femlab/1 model file. `path` is relative to the folder the server was started with; paths that leave it and final-component symbolic links are refused. Returns the path written and its size.',
     schema: z.object({ format: z.enum(EXPORT_FORMATS), path: z.string(), step: z.string().optional() }),

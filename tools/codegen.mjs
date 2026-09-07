@@ -22,6 +22,10 @@ const TOP = {
   ack: 'Ack',
   error: 'EngineError',
   modelFile: 'ModelFile',
+  writeRequest: 'WriteRequest',
+  readRequest: 'ReadRequest',
+  stamp: 'Stamp',
+  executionPolicy: 'ExecutionPolicy',
 };
 
 /** Rewrite every `#/$defs/<old>` to `#/$defs/<new>` per `rename`. */

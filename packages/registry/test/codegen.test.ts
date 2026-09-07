@@ -32,9 +32,9 @@ describe('codegen', () => {
 
   it('merges the six schemas into one $defs table, renaming only the conflicting defs', () => {
     const merged = mergeSchema(schema) as { $defs: Record<string, unknown>; required: string[] };
-    expect(merged.required).toEqual(['commands', 'queries', 'queryResult', 'ack', 'error', 'modelFile']);
+    expect(merged.required).toEqual(['commands', 'queries', 'queryResult', 'ack', 'error', 'modelFile', 'writeRequest', 'readRequest', 'stamp', 'executionPolicy']);
     for (const t of ['Command', 'Query', 'QueryResult', 'Ack', 'EngineError', 'ModelFile', 'Quantity', 'ModelSummary']) expect(merged.$defs).toHaveProperty(t);
-    expect(Object.keys(merged.$defs).filter((k) => /^[A-Z]\w+_[A-Z]/.test(k)).sort()).toEqual(['ModelFile_Command', 'ModelFile_FacePredicate', 'ModelFile_RegionPredicate']);
+    expect(Object.keys(merged.$defs).filter((k) => /^[A-Z]\w+_[A-Z]/.test(k)).sort()).toEqual(['ModelFile_Command', 'ModelFile_FacePredicate', 'ModelFile_RegionPredicate', 'ReadRequest_JournalEntry']);
     expect(merged.$defs['JournalEntry']).toMatchObject({ properties: { cmd: { $ref: '#/$defs/ModelFile_Command' } } });
     expect(Object.keys(merged.$defs).filter((k) => k === 'Error')).toEqual([]);
     // a table's own $defs entry named like the table's type is a real collision

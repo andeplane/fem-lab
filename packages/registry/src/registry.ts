@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Ack, Command, Query, QueryResult } from './generated/engine';
+import type { Ack, Command, Query, QueryResult, ExecutionPolicy } from './generated/engine';
 import { FemError, nearest } from './error';
 import type { EngineTransport } from './transport';
 import { HOST_COMMANDS, HOST_QUERIES, type HostContext } from './host-commands';
@@ -15,6 +15,8 @@ export interface CommandDef {
   /** Engine: the `oneOf` variant (with `$ref`s into `Registry.defs`); host: `z.toJSONSchema`. */
   schema: JsonSchema;
   provider: Provider;
+  /** Required lifetime/execution classification; never inferred from a command name. */
+  execution: ExecutionPolicy;
   /** Engine Commands except `journal.*`; host Commands never. */
   journaled: boolean;
   /** Exposed to the AI (false for `ai.setKey` and for `x-status: stub` variants). */
@@ -26,6 +28,7 @@ export type QueryDef = Omit<CommandDef, 'journaled'>;
 
 /** A host Command or Query as `host-commands.ts` declares it: zod schema in, `HostContext` call out. */
 export interface HostDef<S extends z.ZodType = z.ZodType> {
+  execution: ExecutionPolicy;
   name: string;
   description: string;
   schema: S;
@@ -38,6 +41,7 @@ interface Variant {
   description: string;
   properties: Record<string, { const?: string }>;
   required?: string[];
+  'x-execution'?: ExecutionPolicy;
   'x-status'?: string;
   'x-returns'?: string;
   [k: string]: unknown;
@@ -117,13 +121,14 @@ export class Registry {
 }
 
 function engineDef(name: string, v: Variant): QueryDef {
-  return { name, description: v.description, schema: v, provider: 'engine', tool: v['x-status'] !== 'stub' };
+  return { name, execution: executionPolicy(v['x-execution'], name), description: v.description, schema: v, provider: 'engine', tool: v['x-status'] !== 'stub' };
 }
 
 function hostDef(d: HostDef, ctx: HostContext): QueryDef {
   const { $schema: _, ...schema } = z.toJSONSchema(d.schema);
   return {
     name: d.name,
+    execution: executionPolicy(d.execution, d.name),
     description: d.description,
     schema,
     provider: 'host',
@@ -141,4 +146,13 @@ function schemaError(name: string, error: z.ZodError): FemError {
   const first = error.issues[0]!;
   const where = first.path.length > 0 ? first.path.join('.') : null;
   return new FemError('schema', `${name}: ${first.message}`, where, `check the parameters of ${name} with describe('${name}') and re-issue it`);
+}
+
+/** JS/plugin schema inputs also fail closed; TypeScript alone cannot enforce wire metadata. */
+function executionPolicy(value: unknown, name: string): ExecutionPolicy {
+  switch (value) {
+    case 'modelRead': case 'modelWrite': case 'sessionView': case 'workspace':
+    case 'replacement': case 'producer': case 'control': return value;
+    default: throw new FemError('schema', `${name}: missing or invalid execution policy`, 'execution');
+  }
 }

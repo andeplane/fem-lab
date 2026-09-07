@@ -527,6 +527,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
   return [
     {
       name: 'palette.resolve',
+      execution: 'sessionView',
       description: 'Prepare natural-language intent as editable engine Command previews using the configured Assistant provider. Never executes the proposed Commands. Ambiguity and missing parameters are shown for clarification before opening Properties.',
       schema: z.object({ text: z.string().min(1) }),
       tool: false,
@@ -550,6 +551,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'view.setMode',
+      execution: 'sessionView',
       description: 'Choose what the viewer draws: the Bodies (`geometry`), the Mesh (`mesh`) or the Result contours (`results`). Display only — the Model and the Journal are untouched and the mode survives every solve.',
       schema: z.object({ mode: z.enum(['geometry', 'mesh', 'results']) }),
       tool: true,
@@ -561,6 +563,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'form.edit',
+      execution: 'sessionView',
       description: 'Open an existing Model object in Properties using its complete current definition from query.definition. Preserves its type, quantities and optional parameters; Apply dispatches the returned upsert Command. Nothing changes until Apply.',
       schema: z.object({ kind: z.enum(['body', 'material', 'set', 'constraint', 'load', 'step']), name: z.string() }),
       tool: true,
@@ -568,6 +571,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'chat.setDraft',
+      execution: 'sessionView',
       description: 'Replace the unsent Assistant draft with explicit text and open the drawer. Use this to insert a skill name for the person to complete with arguments; it does not invoke the skill or send a message.',
       schema: z.object({ text: z.string() }),
       tool: true,
@@ -579,6 +583,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'form.pick',
+      execution: 'sessionView',
       description: 'Arm the next viewer face click to fill the explicit field path of an open Command form. `command` must name the currently open form; `field` names its argument path. This sets both the picking target and the form destination, without editing the Model or Journal.',
       schema: z.object({ command: z.string(), field: z.array(z.string().min(1)).min(1) }),
       tool: true,
@@ -590,6 +595,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'form.open',
+      execution: 'sessionView',
       description: 'Put a Command into the Properties form, pre-filled with `args`, without running it: `command` names the Command, `args` are its parameters so far. The person reads the fields, edits them and presses Apply; nothing reaches the Journal until they do. Use it to propose a Command rather than perform one.',
       schema: z.object({ command: z.string(), args: z.record(z.string(), z.unknown()).optional(), keepInitial: z.boolean().optional() }),
       tool: true,
@@ -600,6 +606,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'example.filter',
+      execution: 'workspace',
       description: 'Filter the Examples gallery by one metadata tag and one difficulty level. Pass `null` for either field to show every value in that dimension; this changes only the gallery view.',
       schema: z.object({ tag: z.string().nullable(), difficulty: z.number().int().min(1).max(3).nullable() }),
       tool: true,
@@ -610,6 +617,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'file.openExample',
+      execution: 'replacement',
       description: "Open a bundled example by name (see the Examples panel). Alias of example.open: replay its Journal, refresh the Model and Results, and establish the saved baseline only after a complete open.",
       schema: z.object({ name: z.string() }),
       tool: true,
@@ -620,6 +628,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
     },
     {
       name: 'file.compare',
+      execution: 'sessionView',
       description: 'Select a saved femlab/1 file as the Journal comparison baseline without opening it or changing the current Model. Returns ordered added and removed Command entries; the imported file is never replayed. The imported baseline remains selected until the next successful explicit save/open or new Model.',
       schema: z.union([z.object({ json: z.string() }), z.object({ picker: z.literal(true) })]),
       tool: true,
@@ -660,6 +669,7 @@ export function appHostCommands(store: Store, transport: EngineTransport, viewer
 export function appHostQueries(store: Store): HostDef[] {
   return [{
     name: 'query.journalComparison',
+      execution: 'modelRead',
     description: 'Compare the current Journal with the selected imported file, or with the last successful explicit save/open when no imported comparison is selected. Returns ordered added and removed entries, or null when no baseline exists or a newer request/state supersedes this query. file.compare selects an imported baseline; a successful explicit save/open resets it to the saved baseline, and a new Model clears it. Autosave does not select a baseline.',
     schema: z.object({}),
     tool: true,

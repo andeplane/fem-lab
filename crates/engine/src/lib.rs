@@ -25,6 +25,7 @@ pub mod queries;
 pub mod query;
 pub mod report;
 mod retained;
+pub mod session;
 pub mod solve;
 pub mod solve_run;
 pub mod units;
