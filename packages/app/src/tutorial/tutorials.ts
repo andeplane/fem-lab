@@ -3,6 +3,7 @@
 // there is no fetch and no build step, unlike the Examples gallery's Journals.
 import cantilever from '../../tutorials/cantilever.json';
 import freeFreeModal from '../../tutorials/free-free-modal.json';
+import compositeBlockShear from '../../tutorials/composite-block-shear.json';
 import heatConduction from '../../tutorials/heat-conduction.json';
 import journalAsProgram from '../../tutorials/journal-as-program.json';
 import meshConvergence from '../../tutorials/mesh-convergence.json';
@@ -30,6 +31,7 @@ export const TUTORIALS: Tutorial[] = [
   symmetryAnd2d,
   journalAsProgram,
   pressureVessel,
+  compositeBlockShear,
 ] as Tutorial[];
 
 export function tutorialById(id: string): Tutorial | undefined {

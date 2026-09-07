@@ -28,6 +28,7 @@ satisfying the steps of a tutorial you are only now beginning.
 | [`symmetry-and-2d`](../packages/app/tutorials/symmetry-and-2d.json) | 9 | The `kirsch-quarter-plate` example: plane stress, two symmetry planes, mapped blocks on the hole. | Kirsch's field, plane stress vs plane strain, what symmetry costs you |
 | [`journal-as-program`](../packages/app/tutorials/journal-as-program.json) | 8 | The `cantilever` example again, then exported, edited and replayed as a script instead of clicked. | L³ scaling of a doubled beam, and the CLI `--verify` check against the committed fixture |
 | [`pressure-vessel`](../packages/app/tutorials/pressure-vessel.json) | 10 | A thick cylinder revolved into an axisymmetric slice instead of meshed as a 3D solid (the `lame-cylinder-axisymmetric` example). | Lamé's σθθ(a) = 100 MPa, σrr(a) = −60 MPa against the pr/t thin-wall shortcut, which breaks at this vessel's t/a = 1 |
+| [`composite-block-shear`](../packages/app/tutorials/composite-block-shear.json) | 12 | A steel-faced, aluminium-cored sandwich panel in pure shear: `geometry.subtract` for the cavity, a second Body for the core, `constraint.prescribe` for the shear, `contact.add` to bond the two. | The Reuss/Voigt series and parallel bounds, and why a finite specimen falls just outside them |
 
 The first four are the phase-1 set. The rest each own one procedure, one idealisation or one
 piece of method that the Commands alone do not explain.
