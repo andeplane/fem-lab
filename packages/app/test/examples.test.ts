@@ -7,7 +7,7 @@ import { readHostCaps } from '../src/capabilities';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { Store } from '../src/store';
 import { expectedValue, filterExamples, type ExampleEntry } from '../src/ui/Overlays';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const items: ExampleEntry[] = [
   {

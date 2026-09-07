@@ -15,10 +15,8 @@ import {
   type BenchmarkProvenance,
   type ExampleEntry,
 } from '../src/benchmark';
-import { appHostCommands, openExample } from '../src/host';
-import { Store, initialState } from '../src/store';
+import { openExample } from '../src/host';
 import { Theory } from '../src/ui/Theory';
-import type { WorkerTransport } from '../src/worker-transport';
 import { waitFor } from './wait-for';
 
 const journals = path.resolve(import.meta.dirname, '../../../crates/engine/benches/journals');
@@ -164,36 +162,18 @@ describe('benchmark comparison registry', () => {
   });
 });
 
-describe('example provenance lifecycle', () => {
-  it('attaches metadata only after the example replay and its Result refresh finish', async () => {
-    const store = new Store({ ...initialState, panels: { ...initialState.panels, examples: true } });
-    const journal = [{ cmd: { cmd: 'model.new', name: 'cantilever' } }, { cmd: { cmd: 'study.converge', step: 'static' } }, { cmd: { cmd: 'solve.run', step: 'static' } }];
-    const fetch = vi.fn(async (url: string) =>
-      url.endsWith('index.json')
-        ? ({ ok: true, json: async () => ({ examples: [example()] }) } as Response)
-        : ({ ok: true, text: async () => JSON.stringify(journal) } as Response),
-    );
-    vi.stubGlobal('fetch', fetch);
-    const transport = { exportFile: vi.fn(async () => ({ journal: { entries: journal } })), dispatch: vi.fn(async (cmd: { cmd: string }) => (cmd.cmd === 'solve.run' ? { output: { type: 'solve' } } : cmd.cmd === 'study.converge' ? { output: { type: 'study', report: { rows: [] } } } : { output: { type: 'none' } })) } as unknown as WorkerTransport;
-    const refresh = vi.fn(async () => {
-      expect(store.state.benchmark).toBeNull();
-      store.set({
-        model: { name: 'cantilever', hash: 'model-a' } as never,
-        journal: { entries: [{ seq: 0, cmd: journal[0]!.cmd, hashAfter: 'model-a' }], revision: 2, canUndo: true, canRedo: false } as never,
-        revision: 2,
-      });
-    });
-    const results = { onAck: vi.fn(async (_ack: unknown) => expect(store.state.benchmark).toBeNull()) };
-    const command = appHostCommands(store, transport, { current: null }, refresh, results as never).find((item) => item.name === 'file.openExample')!;
-
-    await command.run({ name: 'cantilever' }, { examples: { open: (name: string) => openExample(name, store, transport, refresh, results as never) } } as never);
-
-    expect(transport.dispatch).toHaveBeenCalledTimes(3);
-    expect(results.onAck.mock.calls.map(([ack]) => (ack as { output: { type: string } }).output.type)).toEqual(['study', 'solve']);
-    expect(store.state.benchmark?.name).toBe('cantilever');
-    expect(store.state.benchmark).toMatchObject({ modelName: 'cantilever', modelHash: 'model-a', modelRevision: 2 });
-    expect(store.state.benchmark?.journalHash).toBe(completeJournalHash(store.state.journal));
-    expect(store.state.panels['examples']).toBe(false);
+describe('example preparation', () => {
+  it('passes complete metadata and Commands to one captured replacement service', async () => {
+    const journal = [{ cmd: { cmd: 'model.new', name: 'cantilever' } }, { cmd: { cmd: 'solve.run', step: 'static' } }];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('index.json')
+      ? Response.json({ examples: [example()] }) : Response.json(journal)));
+    let finish!: () => void;
+    const replay = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const pending = openExample('cantilever', { replay, active: async () => undefined, projects: {} as never });
+    await vi.waitFor(() => expect(replay).toHaveBeenCalledOnce());
+    expect(replay.mock.calls[0]).toEqual([journal.map(entry => entry.cmd), attachComparison(example())]);
+    finish();
+    await expect(pending).resolves.toEqual({ name: 'cantilever', commands: 2 });
     vi.unstubAllGlobals();
   });
 });

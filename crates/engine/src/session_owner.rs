@@ -39,6 +39,7 @@ pub struct DocumentSnapshot {
     pub stamp: Stamp,
     pub model: crate::query::ModelSummary,
     pub file: ModelFile,
+    pub journal: crate::query::JournalDump,
     pub objects: crate::query::ObjectList,
     pub results: crate::query::RetainedResults,
     pub script: String,
@@ -64,6 +65,9 @@ pub struct SessionOwner {
     runs: BTreeMap<String, StateVersion>,
     outcomes: BTreeMap<OperationKey, Outcome>,
     outcome_order: VecDeque<OperationKey>,
+    pending: Option<crate::replacement::ReplacementTicket>,
+    next_ticket: StateVersion,
+    retired: bool,
 }
 
 impl SessionOwner {
@@ -79,6 +83,9 @@ impl SessionOwner {
             runs: BTreeMap::new(),
             outcomes: BTreeMap::new(),
             outcome_order: VecDeque::new(),
+            pending: None,
+            next_ticket: StateVersion::default(),
+            retired: false,
         })
     }
 
@@ -98,15 +105,24 @@ impl SessionOwner {
         Ok(RunLease { stamp: self.stamp(), run_id })
     }
 
+    /// Child producers inherit a live parent's activation; revocation cannot be bypassed by fork.
+    pub fn fork_run(&mut self, context: &ExecutionContext) -> Result<RunLease, Error> {
+        self.check_context(context)?;
+        self.begin_run(&context.session)
+    }
+
     /// Revoke before returning to the host; a message posted earlier is checked when executed.
     pub fn cancel_run(&mut self, session: &SessionRef, run_id: &str) -> Result<(), Error> {
         self.check_session(session)?;
         self.runs.remove(run_id);
+        if self.pending.as_ref().is_some_and(|ticket| ticket.context.run_id == run_id) {
+            self.pending = None;
+        }
         Ok(())
     }
 
     fn check_session(&self, session: &SessionRef) -> Result<(), Error> {
-        if session != &self.stamp.session {
+        if self.retired || session != &self.stamp.session {
             return Err(Error::new(
                 ErrorCode::SessionExpired,
                 "this operation belongs to a different model activation",
@@ -134,16 +150,114 @@ impl SessionOwner {
 
     pub fn snapshot(&mut self, context: &ExecutionContext) -> Result<DocumentSnapshot, Error> {
         self.check_context(context)?;
-        Ok(DocumentSnapshot {
-            stamp: self.stamp(),
-            model: self.inner.query_model()?,
-            file: self.inner.export_file(),
-            objects: self.inner.query_objects(None),
-            results: self.inner.query_results(),
-            script: self.inner.journal().as_script(crate::version()),
-            can_undo: self.inner.can_undo(),
-            can_redo: self.inner.can_redo(),
-        })
+        document_snapshot(&mut self.inner, self.stamp.clone())
+    }
+
+    /// Explicitly select one retained Result's mesh, under the same session check as its fields.
+    pub fn render_result(
+        &self,
+        context: &ExecutionContext,
+        result_id: &str,
+    ) -> Result<(Stamp, crate::engine::RenderView<'_>), Error> {
+        self.check_context(context)?;
+        let record = self.inner.result_record(None, Some(result_id))?;
+        Ok((self.stamp(), crate::engine::RenderView::Mesh(&record.built)))
+    }
+
+    /// The read borrow keeps the admission check and all rendering inputs in one version.
+    pub fn render_view(&mut self, context: &ExecutionContext) -> Result<(Stamp, crate::engine::RenderView<'_>), Error> {
+        self.check_context(context)?;
+        let stamp = self.stamp();
+        self.inner.render_view().map(|view| (stamp, view))
+    }
+
+    /// Admission stays in the owner; GPU diagnostic implementation lives with the device.
+    pub(crate) fn diagnostic_gpu(&mut self, context: &ExecutionContext) -> Result<&mut Gpu, Error> {
+        self.check_context(context)?;
+        self.inner.gpu_mut().ok_or_else(|| Error::unsupported("gpu (no adapter)"))
+    }
+
+    /// Reserve one replacement against the captured active stamp. Old reads remain available.
+    pub fn begin_replacement(
+        &mut self,
+        context: ExecutionContext,
+        expected_version: StateVersion,
+    ) -> Result<crate::replacement::ReplacementTicket, Error> {
+        self.check_context(&context)?;
+        if self.pending.is_some() {
+            return Err(transitioning());
+        }
+        if expected_version != self.stamp.state_version {
+            return Err(Error::new(ErrorCode::SessionConflict, "model changed before replacement preparation")
+                .at("expectedVersion"));
+        }
+        let sequence = StateVersion::try_from(context.operation_id.clone()).map_err(Error::schema)?;
+        let last = self.runs.get_mut(&context.run_id).expect("validated run");
+        if !sequence.is_after(last) {
+            return Err(Error::new(
+                ErrorCode::OperationUnknown,
+                "replacement operation already admitted; inspect its outcome",
+            )
+            .at("operationId"));
+        }
+        *last = sequence;
+        self.next_ticket.advance();
+        self.next_session.advance();
+        let mut target = self.stamp.clone();
+        target.session.session_id = String::from(self.next_session.clone());
+        target.state_version.advance();
+        let ticket = crate::replacement::ReplacementTicket {
+            context,
+            expected: self.stamp(),
+            target,
+            nonce: self.next_ticket.clone(),
+        };
+        self.pending = Some(ticket.clone());
+        Ok(ticket)
+    }
+
+    pub fn abandon_replacement(&mut self, ticket: &crate::replacement::ReplacementTicket) -> Result<(), Error> {
+        if self.pending.as_ref() != Some(ticket) {
+            return Err(
+                Error::new(ErrorCode::SessionConflict, "replacement no longer owns preparation").at("replacement")
+            );
+        }
+        self.pending = None;
+        Ok(())
+    }
+
+    /// A browser candidate may live in a separate Worker. Retire its reserved predecessor
+    /// before publishing that endpoint, rejecting even messages already posted to the old one.
+    pub fn retire_replacement(&mut self, ticket: &crate::replacement::ReplacementTicket) -> Result<(), Error> {
+        if self.pending.as_ref() != Some(ticket) {
+            return Err(
+                Error::new(ErrorCode::SessionConflict, "replacement no longer owns retirement").at("replacement")
+            );
+        }
+        self.retired = true;
+        self.pending = None;
+        self.runs.clear();
+        Ok(())
+    }
+
+    /// Synchronous activation: there is no await between compare, swap, revocation and snapshot.
+    pub fn commit_replacement(
+        &mut self,
+        prepared: crate::replacement::PreparedCandidate,
+    ) -> Result<DocumentSnapshot, Error> {
+        if self.pending.as_ref() != Some(&prepared.ticket) || prepared.ticket.expected != self.stamp {
+            return Err(Error::new(ErrorCode::SessionConflict, "prepared candidate no longer owns activation")
+                .at("replacement"));
+        }
+        // A matching private ticket proves admission: cancelling its run clears pending.
+        let run_id = prepared.ticket.context.run_id;
+        let sequence = self.runs.remove(&run_id).expect("admitted run");
+        self.inner = prepared.engine;
+        self.stamp = prepared.ticket.target;
+        self.runs.clear();
+        self.runs.insert(run_id, sequence);
+        self.pending = None;
+        Ok(prepared.snapshot)
     }
 
     /// A run uses strictly increasing canonical decimal operation ids, starting at 1.
@@ -193,6 +307,9 @@ impl SessionOwner {
     }
 
     async fn execute(&mut self, request: WriteRequest, progress: OnProgress<'_>) -> Result<WriteReply, Error> {
+        if self.pending.is_some() {
+            return Err(transitioning());
+        }
         if request.expected_version != self.stamp.state_version {
             return Err(Error::new(
                 ErrorCode::SessionConflict,
@@ -229,4 +346,28 @@ impl std::fmt::Write for RetentionBudget {
 }
 fn small_enough(value: &dyn std::fmt::Debug) -> bool {
     std::fmt::write(&mut RetentionBudget(64 * 1024), format_args!("{value:?}")).is_ok()
+}
+
+fn transitioning() -> Error {
+    Error::new(ErrorCode::SessionTransitioning, "a replacement is being prepared; wait or cancel it").at("session")
+}
+
+pub(crate) fn document_snapshot(inner: &mut Engine, stamp: Stamp) -> Result<DocumentSnapshot, Error> {
+    Ok(DocumentSnapshot {
+        stamp,
+        model: inner.query_model()?,
+        file: inner.export_file(),
+        journal: crate::query::JournalDump {
+            hash: inner.journal().hash(),
+            entries: inner.journal().entries.clone(),
+            revision: inner.revision(),
+            can_undo: inner.can_undo(),
+            can_redo: inner.can_redo(),
+        },
+        objects: inner.query_objects(None),
+        results: inner.query_results(),
+        script: inner.journal().as_script(crate::version()),
+        can_undo: inner.can_undo(),
+        can_redo: inner.can_redo(),
+    })
 }

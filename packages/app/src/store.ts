@@ -355,7 +355,7 @@ export class Store {
   private journalDiffQuery: ((base: Journal) => Promise<JournalDiff>) | null = null;
   private listeners = new Set<() => void>();
 
-  constructor(public state: UiState = initialState) {}
+  constructor(public state: UiState = structuredClone(initialState)) {}
 
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
@@ -453,12 +453,6 @@ export class Store {
   markOpened(journal: { entries: JournalDump['entries'] }): void {
     this.documentIdentity = {};
     this.markSaved(journal);
-  }
-
-  /** A successful new Model has no saved baseline and invalidates older save completions. */
-  newDocument(): void {
-    this.documentIdentity = {};
-    this.set({ savedJournal: null, savedBaseline: null, journalComparison: null, comparisonSource: null, comparisonBaseline: null });
   }
 
   markSaved(journal: { entries: JournalDump['entries'] }): void {

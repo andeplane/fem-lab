@@ -6,7 +6,7 @@ import { Store } from '../src/store';
 import { readHostCaps } from '../src/capabilities';
 import { Registry, type EngineSchema } from '@femlab/registry';
 import schema from '../../registry/src/generated/engine.schema.json';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 class FakeWorker extends EventTarget implements Worker {
   onmessageerror: Worker['onmessageerror'] = null;

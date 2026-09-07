@@ -30649,6 +30649,9 @@
       "file": {
         "$ref": "#/$defs/ModelFile"
       },
+      "journal": {
+        "$ref": "#/$defs/JournalDump"
+      },
       "objects": {
         "$ref": "#/$defs/ObjectList"
       },
@@ -30669,6 +30672,7 @@
       "stamp",
       "model",
       "file",
+      "journal",
       "objects",
       "results",
       "script",
@@ -36015,6 +36019,40 @@
           }
         ]
       },
+      "JournalDump": {
+        "description": "`query.journal` response.",
+        "type": "object",
+        "properties": {
+          "hash": {
+            "description": "Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.",
+            "type": "string"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/JournalEntry"
+            }
+          },
+          "revision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "canUndo": {
+            "type": "boolean"
+          },
+          "canRedo": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hash",
+          "entries",
+          "revision",
+          "canUndo",
+          "canRedo"
+        ]
+      },
       "ObjectList": {
         "description": "`query.objects` response.",
         "type": "object",
@@ -36145,6 +36183,101 @@
           "meshBytes",
           "modelJsonBytes"
         ]
+      }
+    }
+  },
+  "replacementTicket": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ReplacementTicket",
+    "type": "object",
+    "properties": {
+      "context": {
+        "$ref": "#/$defs/ExecutionContext"
+      },
+      "expected": {
+        "$ref": "#/$defs/Stamp"
+      },
+      "target": {
+        "$ref": "#/$defs/Stamp"
+      },
+      "nonce": {
+        "$ref": "#/$defs/StateVersion"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "context",
+      "expected",
+      "target",
+      "nonce"
+    ],
+    "$defs": {
+      "ExecutionContext": {
+        "description": "A producer captures this scope before awaiting; children inherit it without rebinding.",
+        "type": "object",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/SessionRef"
+          },
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "session",
+          "runId",
+          "operationId"
+        ]
+      },
+      "SessionRef": {
+        "description": "Runtime identity of one activation, including reopen of identical saved bytes.\nThe host injects a fresh backend epoch on restart; the owner issues session ids within it.",
+        "type": "object",
+        "properties": {
+          "backendEpoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "backendEpoch",
+          "sessionId"
+        ]
+      },
+      "Stamp": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/SessionRef"
+          },
+          "stateVersion": {
+            "$ref": "#/$defs/StateVersion"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "session",
+          "stateVersion"
+        ]
+      },
+      "StateVersion": {
+        "description": "Monotonic committed state counter, encoded as a decimal string for lossless JS transport.\nIt is neither Journal length nor a content hash; undo and repeated solves advance it.",
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)$"
       }
     }
   }

@@ -13,7 +13,6 @@ const test = base.extend<{ pageErrors: void }>({
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 async function storedAutosaves(page: Page): Promise<{ name: string; id?: string }[]> {

@@ -30,6 +30,7 @@ const TOP = {
   readReply: 'ReadReply',
   runLease: 'RunLease',
   documentSnapshot: 'DocumentSnapshot',
+  replacementTicket: 'ReplacementTicket',
 };
 
 /** Rewrite every `#/$defs/<old>` to `#/$defs/<new>` per `rename`. */

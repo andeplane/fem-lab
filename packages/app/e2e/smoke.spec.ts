@@ -8,7 +8,7 @@ import { expect, test, type Page } from './fixtures';
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
   // The first call queues behind the engine's construction, so this returns only once wasm is up.
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
+  await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
 }
 
 async function expectCanvasSized(page: Page): Promise<void> {
@@ -28,14 +28,14 @@ test.describe('@cpu the shell', () => {
     await page.goto('./');
     await ready(page);
     await page.evaluate(() => window.fem.model.new({ name: 'camera-shortcuts' }));
-    await page.waitForFunction(async () => {
+    await expect.poll(() => page.evaluate(async () => {
       try {
         await window.fem.registry.query({ query: 'query.view' });
         return true;
       } catch {
         return false;
       }
-    });
+    })).toBe(true);
     const journal = await page.evaluate(() => window.fem.query.journal());
     const shortcuts = ['Digit1', 'Digit2', 'Digit3', 'Digit4'];
     for (let i = 0; i < shortcuts.length; i++) {

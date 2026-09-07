@@ -3949,6 +3949,7 @@ export interface Engine {
   readReply: ReadReply;
   runLease: RunLease;
   documentSnapshot: DocumentSnapshot;
+  replacementTicket: ReplacementTicket;
 }
 /**
  * Display units, all optional; SI defaults.
@@ -5342,6 +5343,7 @@ export interface DocumentSnapshot {
   stamp: Stamp;
   model: ModelSummary;
   file: DocumentSnapshot_ModelFile;
+  journal: DocumentSnapshot_JournalDump;
   objects: ObjectList;
   results: RetainedResults;
   script: string;
@@ -5421,4 +5423,23 @@ export interface DocumentSnapshot_JournalEntry {
   seq: number;
   cmd: DocumentSnapshot_Command;
   hashAfter: string;
+}
+/**
+ * `query.journal` response.
+ */
+export interface DocumentSnapshot_JournalDump {
+  /**
+   * Complete-history hash, independent of `fromSeq`; pass as journal.undo expectedJournal.
+   */
+  hash: string;
+  entries: DocumentSnapshot_JournalEntry[];
+  revision: number;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+export interface ReplacementTicket {
+  context: ExecutionContext;
+  expected: Stamp;
+  target: Stamp;
+  nonce: StateVersion;
 }

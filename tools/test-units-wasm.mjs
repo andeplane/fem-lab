@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import { batchModule } from './checked-batch.mjs';
 // Exercise the same public boundary cases as the native registry regression in the shipped wasm.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { Engine, schema } = require("./wasm-node/femlab_engine_wasm.js");
+const { Engine, schema } = batchModule(require("./wasm-node/femlab_engine_wasm.js"));
 const fixture = JSON.parse(readFileSync(new URL("../crates/engine/tests/fixtures/invalid-quantities.json", import.meta.url), "utf8"));
 const committedSchema = JSON.parse(readFileSync(new URL("../packages/registry/src/generated/engine.schema.json", import.meta.url), "utf8"));
 assert.deepEqual(JSON.parse(schema()), committedSchema);

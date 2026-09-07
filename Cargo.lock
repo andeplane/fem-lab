@@ -668,6 +668,7 @@ dependencies = [
  "bytemuck",
  "dyn-stack",
  "faer",
+ "femlab-engine",
  "femlab-geometry",
  "futures-channel",
  "hex",

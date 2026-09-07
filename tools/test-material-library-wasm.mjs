@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import { batchModule } from './checked-batch.mjs';
 // The shipped wasm exposes the same sourced, typed catalogue as the native registry test.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { Engine } = require("./wasm-node/femlab_engine_wasm.js");
+const { Engine } = batchModule(require("./wasm-node/femlab_engine_wasm.js"));
 const engine = new Engine(1);
 const before = engine.export_file();
 const query = (name) => JSON.parse(engine.query(JSON.stringify({ query: "query.materialLibrary", ...(name ? { name } : {}) })));

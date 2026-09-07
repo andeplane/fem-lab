@@ -1,3 +1,4 @@
+import { batchModule } from '../../../tools/checked-batch.mjs';
 // The results state machine and everything it computes on the way to the screen: the design's
 // states 4–7 as one word, the Solve button's label, the legend's ticks, the balance line, and
 // the field→unit table both the Worker and the viewer read.
@@ -8,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { readHostCaps } from '../src/capabilities';
 import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, legendTicks, siUnitOf } from '../src/fields';
-import { makeHostContext } from '../src/host';
+import { appHostCommands, makeHostContext } from '../src/host';
 import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
 import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
 import { Store, initialState, solveLabel, stageOf, verificationState, type AssistantVerification } from '../src/store';
@@ -16,7 +17,7 @@ import { exaggerationHelp, probeLine } from '../src/ui/App';
 import { Checks, PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
 
 import { specOf, unavailable } from '../src/ui/Export';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const mm = (value: number): Valued => ({ value, unit: 'mm' });
 const kN = (value: number): Valued => ({ value, unit: 'kN' });
@@ -245,13 +246,14 @@ describe('the Export dialog', () => {
 
 /** A viewer stub: the four calls `ResultsView` makes, recorded. */
 function fakeViewer() {
-  return { hasSurface: true, setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), animate: vi.fn(), autoScale: vi.fn(() => 120) };
+  return { hasSurface: true, setSurface: vi.fn(), setField: vi.fn(), setDeformed: vi.fn(), setDim: vi.fn(), setMode: vi.fn(), setColormap: vi.fn(), animate: vi.fn(), autoScale: vi.fn(() => 120) };
 }
 
 function harness(result: ResultSummary | null = RESULT) {
-  const store = new Store({ ...initialState, model: MODEL });
+  const store = new Store({ ...initialState, model: MODEL, viewMode: 'results' });
   const viewer = { current: fakeViewer() };
   const transport = {
+    surface: vi.fn(async () => ({})),
     query: vi.fn(async (q: { query: string; quantity?: { value: number } }) => {
       if (q.query === 'query.convert') return { value: q.quantity!.value * 1000, unit: 'mm' };
       if (result) return result;
@@ -279,7 +281,7 @@ describe('ResultsView', () => {
     const { store, viewer, results, transport } = harness({ ...RESULT, step: 'modes', frequencies: [{ value: 10, unit: 'Hz' }, { value: 20, unit: 'Hz' }] });
     await results.animate({ step: 'modes', mode: 2, playing: false, speed: 0.5, frame: 75 });
     expect(transport.query).toHaveBeenCalledWith({ query: 'query.result', step: 'modes' });
-    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined);
+    expect(transport.field).toHaveBeenCalledWith('modes', 'mode:2', undefined, RESULT.resultId);
     expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 0.5, 0.75);
     expect(store.state).toMatchObject({ playing: false, phase: 0.75, animationSpeed: 0.5, fieldKey: 'mode:2', viewMode: 'results' });
     await results.animate({ step: 'modes', mode: 2, playing: true, speed: 2 });
@@ -302,7 +304,7 @@ describe('ResultsView', () => {
     });
 
     const play = results.animate({ step: 'modes', mode: 1, playing: true });
-    await vi.waitFor(() => expect(transport.field).toHaveBeenCalledWith('modes', 'mode:1', undefined));
+    await vi.waitFor(() => expect(transport.field).toHaveBeenCalledWith('modes', 'mode:1', undefined, RESULT.resultId));
     await results.animate({ step: 'modes', mode: 1, playing: false });
     finishLoad();
     await play;
@@ -359,7 +361,7 @@ describe('ResultsView', () => {
     const heat = { ...RESULT, extremes: [{ ...RESULT.extremes[0]!, field: 'temperature' }] };
     const { store, viewer, results, transport } = harness(heat);
     store.set({ model: { ...MODEL, units: { temperature: 'degC', length: 'm' } } });
-    const { Engine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as { Engine: new (threads: number) => { query(json: string): string } };
+    const { Engine } = batchModule(createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js')) as { Engine: new (threads: number) => { query(json: string): string } };
     const engine = new Engine(1);
     const conversions = vi.fn(async (q: { query: string; quantity?: { value: number }; to?: string }) => {
       if (q.query !== 'query.convert') return heat;
@@ -496,6 +498,7 @@ describe('ResultsView', () => {
   it('hands the legend to a screenshot only in Results mode', async () => {
     const { store, results } = harness();
     await results.refresh();
+    store.set({ viewMode: 'geometry' });
     expect(results.legendBurn()).toBeNull();
     store.set({ viewMode: 'results' });
     expect(results.legendBurn()).toMatchObject({ title: 'σ_vM', unit: 'Pa' });
@@ -551,17 +554,59 @@ describe('ResultsView', () => {
     expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(expect.any(Float32Array), 120);
   });
 
-  it('waits for the surface before scaling: a placeholder bounding box would exaggerate wildly', async () => {
+  it('installs the selected surface before computing automatic deformation scale', async () => {
     const { store, viewer, results } = harness();
-    // The Viewer is mounted but the host has not pushed a surface yet, so its box is the
-    // constructor's unit cube and `autoScale` would measure the model against that.
-    (viewer.current as { hasSurface: boolean }).hasSurface = false;
+    viewer.current.hasSurface = false;
+    viewer.current.setSurface.mockImplementation(() => { viewer.current.hasSurface = true; });
+    viewer.current.autoScale.mockImplementation(() => {
+      expect(viewer.current.hasSurface).toBe(true);
+      return 120;
+    });
     await results.onAck({ output: { type: 'solve' } });
-    expect(store.state.deformScale).toBe(1);
-    expect(viewer.current.setDeformed).not.toHaveBeenCalled();
-    (viewer.current as { hasSurface: boolean }).hasSurface = true;
-    await results.refresh();
     expect(store.state.deformScale).toBe(120);
+  });
+
+  it('keeps current and retained meshes separate across modes, edits and cached refreshes', async () => {
+    const { store, viewer, results, transport } = harness({ ...RESULT, stale: true });
+    const retained = { positions: new Float32Array([0, 0, 0, 1, 0, 0]), source: 'mesh' };
+    let current = { positions: new Float32Array([0, 0, 0, 2, 0, 0]), source: 'mesh' };
+    transport.surface.mockImplementation(async (...args: unknown[]) => args[0] === RESULT.resultId ? retained : current);
+    const host = makeHostContext(store, transport as unknown as WorkerTransport, viewer as never, readHostCaps({ navigator: { userAgent: 'Chrome/140' } }), undefined, results);
+    const registry = new Registry({ schema: schema as unknown as EngineSchema, host,
+      hostCommands: appHostCommands(store, transport as unknown as WorkerTransport, viewer as never, async () => undefined, results) });
+    for (const mode of ['results', 'geometry', 'mesh', 'results', 'geometry'] as const) {
+      await registry.dispatch({ cmd: 'view.setMode', mode });
+      await results.refresh();
+      expect(viewer.current.setSurface).toHaveBeenLastCalledWith(mode === 'results' ? retained : current);
+      expect(viewer.current.setDim).toHaveBeenLastCalledWith(mode === 'results');
+      if (mode !== 'results') {
+        expect(viewer.current.setField).toHaveBeenLastCalledWith(null, [0, 1]);
+        expect(viewer.current.setDeformed).toHaveBeenLastCalledWith(null, 0);
+      }
+    }
+    current = { ...current, positions: new Float32Array([0, 0, 0, 3, 0, 0]) };
+    await results.refresh();
+    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(current);
+    await results.showField({ field: 'displacement' });
+    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(retained);
+    await results.showField({ field: null });
+    expect(viewer.current.setSurface).toHaveBeenLastCalledWith(current);
+  });
+
+  it('does not publish a pending retained field after switching to the current model', async () => {
+    const { viewer, results, transport } = harness({ ...RESULT, stale: true });
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const original = transport.field.getMockImplementation()!;
+    transport.field.mockImplementation(async (...args) => { await gate; return original(...args); });
+    const loading = results.refresh();
+    await vi.waitFor(() => expect(transport.field).toHaveBeenCalled());
+    await results.setMode('geometry');
+    viewer.current.setSurface.mockClear();
+    finish();
+    await loading;
+    expect(viewer.current.setSurface).not.toHaveBeenCalled();
+    expect(viewer.current.setField).toHaveBeenLastCalledWith(null, [0, 1]);
   });
 
   it('keeps a typed exaggeration across a field switch and a re-solve', async () => {

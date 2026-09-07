@@ -1,7 +1,7 @@
 import * as intentResolver from '../src/ai/palette-intent';
 import { appHostCommands } from '../src/host';
 import { Store } from '../src/store';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import { describe, expect, it, vi } from 'vitest';
 import schema from '../../registry/src/generated/engine.schema.json';
