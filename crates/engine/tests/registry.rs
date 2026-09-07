@@ -8628,4 +8628,31 @@ fn initial_velocity_entries_are_checked_for_units_sets_and_agreement() {
     assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("dt")));
     let bad = e.query(Query::Cost { step: "still".into() }).expect_err("no clock, no plan");
     assert_eq!(bad.where_.as_deref(), Some("dt"));
+    // ... and without an end, or with a zero dt, the same way the heat transient is refused.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"still","procedure":"implicit","constraints":[],"loads":["g"],"dt":"1 ms"}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"still"}"#);
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("tEnd")));
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"still","procedure":"implicit","constraints":[],"loads":["g"],"dt":"0 s","tEnd":"5 ms"}"#,
+    );
+    let bad = e.query(Query::Cost { step: "still".into() }).expect_err("the grid is invalid");
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("dt")));
+    // A convergence study resolves the velocity on every mesh it builds, and refuses the same
+    // disagreement the plain solve does.
+    ok(
+        &mut e,
+        &step(
+            r#"[{"on":"whole","value":["1 m/s","0 m/s","0 m/s"]},{"on":"block.xmax","value":["2 m/s","0 m/s","0 m/s"]}]"#,
+        ),
+    );
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"fall","sizes":["0.1 m","0.05 m"],
+        "quantity":{"kind":"probe","field":"displacement","component":2,"at":["0.05 m","0.05 m","0.05 m"]},"restore":false}"#,
+    );
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("initialVelocity[1]")));
 }
