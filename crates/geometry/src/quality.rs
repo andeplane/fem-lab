@@ -1,5 +1,5 @@
-//! Mesh quality from corner geometry alone (C §2.8): the Jacobian ratio, the aspect ratio and
-//! the smallest corner angle, plus the worst elements by Jacobian ratio.
+//! Mesh quality from corner geometry alone (C §2.8): the Jacobian ratio, the aspect ratio, the
+//! smallest corner angle and the dihedral angles, plus the worst elements by Jacobian ratio.
 //!
 //! Cheap on purpose. The element integration repeats the det J check at every Gauss point and
 //! is the authoritative one; this is the number a Query reports and the UI colours by.
@@ -19,15 +19,24 @@ pub struct Quality {
     pub max_aspect: f64,
     /// Smallest angle at any corner of any element face, in degrees; 90 is a cube.
     pub min_angle_deg: f64,
+    /// Smallest interior angle between two faces meeting at an element edge, in degrees, over
+    /// the 3D elements; `None` for a 2D mesh, which has no dihedral angle. This is the number
+    /// a tetrahedral mesh is judged by: `min_det_j_ratio` is identically 1 for a simplex and
+    /// says nothing at all about one.
+    pub min_dihedral_deg: Option<f64>,
+    /// Largest interior angle between two faces meeting at an element edge, in degrees; `None`
+    /// for a 2D mesh. 180 is a flat sliver.
+    pub max_dihedral_deg: Option<f64>,
     /// The `worst_n` elements with the smallest Jacobian ratio, as `(element, ratio)`.
     pub worst: Vec<(u32, f64)>,
 }
 
-/// Corner Jacobian, edge-length and corner-angle quality of every element.
+/// Corner Jacobian, edge-length, corner-angle and dihedral-angle quality of every element.
 pub fn quality(mesh: &Mesh, worst_n: usize) -> Quality {
     let mut per_elem: Vec<(u32, f64)> = Vec::with_capacity(mesh.n_elems());
     let mut max_aspect = 0.0f64;
     let mut min_angle = 180.0f64;
+    let mut dihedral: Option<(f64, f64)> = None;
     for e in 0..mesh.n_elems() as u32 {
         let kind = mesh.kind_of(e);
         let x: Vec<[f64; 3]> = mesh.elem_nodes(e).iter().take(kind.n_corners()).map(|&n| mesh.node(n)).collect();
@@ -44,12 +53,56 @@ pub fn quality(mesh: &Mesh, worst_n: usize) -> Quality {
         }
         max_aspect = max_aspect.max(if short > 0.0 { long / short } else { f64::MAX });
         min_angle = min_angle.min(min_corner_angle(kind, &x));
+        if kind.dim() == 3 {
+            let (lo, hi) = dihedral.unwrap_or((180.0, 0.0));
+            let (a, b) = dihedral_range(kind, &x);
+            dihedral = Some((lo.min(a), hi.max(b)));
+        }
     }
     let min_det_j_ratio = per_elem.iter().map(|&(_, v)| v).fold(1.0f64, f64::min);
     let mut worst = per_elem;
     worst.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
     worst.truncate(worst_n);
-    Quality { min_det_j_ratio, max_aspect, min_angle_deg: min_angle, worst }
+    Quality {
+        min_det_j_ratio,
+        max_aspect,
+        min_angle_deg: min_angle,
+        min_dihedral_deg: dihedral.map(|(lo, _)| lo),
+        max_dihedral_deg: dihedral.map(|(_, hi)| hi),
+        worst,
+    }
+}
+
+/// Smallest and largest interior dihedral angle of one 3D element, in degrees.
+///
+/// Two faces meeting at an edge share exactly two corners, and each face's corners are listed
+/// counter-clockwise seen from outside, so the outward normals `n1` and `n2` of the pair give
+/// the interior angle as `180° − ∠(n1, n2)`.
+fn dihedral_range(kind: ElementKind, x: &[[f64; 3]]) -> (f64, f64) {
+    let n_faces = kind.n_faces();
+    let corners = |f: usize| &kind.face_nodes(f)[..kind.face_kind().n_corners()];
+    let normal = |f: usize| {
+        let c = corners(f);
+        let p = |i: usize| x[c[i] as usize];
+        cross(sub(p(1), p(0)), sub(p(2), p(0)))
+    };
+    let mut lo = 180.0f64;
+    let mut hi = 0.0f64;
+    for f in 0..n_faces {
+        for g in f + 1..n_faces {
+            if corners(f).iter().filter(|l| corners(g).contains(l)).count() != 2 {
+                continue;
+            }
+            let a = 180.0 - angle_deg(normal(f), normal(g));
+            lo = lo.min(a);
+            hi = hi.max(a);
+        }
+    }
+    (lo, hi)
+}
+
+fn cross(u: [f64; 3], v: [f64; 3]) -> [f64; 3] {
+    [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
 }
 
 /// The two corners of the element edge along each parametric axis at each corner of a hex; the

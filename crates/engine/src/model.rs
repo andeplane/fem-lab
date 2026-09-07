@@ -465,6 +465,8 @@ pub enum MesherSettings {
     Free { of: String, size: f64, refine: Vec<RefineBox> },
     /// A 2D mesher swept into 3D.
     Sweep { base: Box<MesherSettings>, sweep: Sweep },
+    /// Free tetrahedra filling every 3D Body of the Model.
+    Tet { size: f64, max_elements: u32 },
 }
 
 /// How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
@@ -490,6 +492,7 @@ impl MesherSettings {
                     sizes.insert(to.into(), size);
                 }
             }
+            Self::Tet { .. } => {}
         }
     }
 
@@ -507,7 +510,7 @@ impl MesherSettings {
         match self {
             Self::Free { of, .. } => Some(of),
             Self::Sweep { base, .. } => base.source_body(),
-            Self::Mapped { .. } | Self::Lattice { .. } => None,
+            Self::Mapped { .. } | Self::Lattice { .. } | Self::Tet { .. } => None,
         }
     }
 
@@ -516,7 +519,7 @@ impl MesherSettings {
         match self {
             MesherSettings::Lattice { .. } => None,
             MesherSettings::Mapped { body, .. } => Some(body),
-            MesherSettings::Free { .. } => None,
+            MesherSettings::Free { .. } | MesherSettings::Tet { .. } => None,
             MesherSettings::Sweep { base, .. } => base.implicit_body(),
         }
     }

@@ -482,6 +482,80 @@ pub enum MesherSpec {
     /// idealisation must be 3D, and the base must make quadrilaterals, so it is the mapped
     /// mesher: sweeping free triangles would need wedge elements, which the engine has not got.
     Sweep { base: Box<MesherSpec>, sweep: SweepSpec },
+    /// Unstructured tetrahedra filling every 3D Body, at about `size`. The only mesher that
+    /// meshes curved CSG solids without stair-stepping: it cuts a body-centred lattice against
+    /// the exact solid, so boundary nodes lie on the true surface, a cylinder comes out round,
+    /// and every named CSG face becomes the face Set `<body>.<tag>` as it does for the lattice.
+    /// `order: 2` gives tet10 with the mid-edge nodes projected onto curved faces; order 1 gives
+    /// constant-strain tet4, which is stiff in bending. A sharp CSG edge that falls between two
+    /// lattice crossings is chamfered by up to `size`, so prefer the mapped or sweep mesher when
+    /// the geometry is prismatic, because those are exact. `maxElements` caps the background
+    /// lattice (500 000 by default) and is checked before anything is allocated.
+    Tet(TetSpec),
+}
+
+/// `MesherSpec::Tet`'s settings, deserialized by hand rather than derived.
+///
+/// A two-field struct variant of an internally tagged enum — one `Q<Length>` field (itself
+/// `#[serde(transparent)]` over an `#[serde(untagged)]` `Quantity`) followed by a trailing
+/// `#[serde(default)]` `Option` — hits a `serde_derive` limitation where the Content-buffered
+/// deserializer used for internally tagged struct variants silently treats the last field as
+/// absent, whatever the JSON says: `maxElements` came back `None` even when the JSON gave 5,
+/// verified with a minimal reproduction outside this crate and independent of `MesherSpec`'s
+/// other variants (which stay struct variants because none of them hits this shape: `Lattice`
+/// and `Sweep` have no trailing scalar Option, and `Free`'s `refine: Option<Vec<_>>` is not the
+/// pattern that triggers it). Wrapping the payload as a newtype variant over a type with its own
+/// `Deserialize` — a plain `MapAccess` loop, none of `serde_derive`'s struct-variant codegen —
+/// sidesteps it, confirmed against the same minimal reproduction.
+///
+/// `#[schemars(inline)]` keeps the schema shaped like the other variants: a newtype variant of
+/// an internally tagged enum otherwise comes out as a `$ref` to `TetSpec` beside the tag's
+/// `properties`/`required`, and both zod's `fromJSONSchema` and json-schema-to-typescript read
+/// a `$ref` with siblings as the `$ref` alone, so `mesh.set { mesher: tet }` would validate as
+/// a tag-less object and every other mesher would match the variant too.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[schemars(inline)]
+pub struct TetSpec {
+    pub size: Q<Length>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_elements: Option<u32>,
+}
+
+impl<'de> Deserialize<'de> for TetSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "camelCase")]
+        enum Field {
+            Size,
+            MaxElements,
+        }
+        struct TetSpecVisitor;
+        impl<'de> serde::de::Visitor<'de> for TetSpecVisitor {
+            type Value = TetSpec;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a tet mesher spec with `size` and an optional `maxElements`")
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<TetSpec, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut size = None;
+                let mut max_elements = None;
+                while let Some(key) = map.next_key::<Field>()? {
+                    match key {
+                        Field::Size => size = Some(map.next_value()?),
+                        Field::MaxElements => max_elements = map.next_value()?,
+                    }
+                }
+                Ok(TetSpec { size: size.ok_or_else(|| serde::de::Error::missing_field("size"))?, max_elements })
+            }
+        }
+        deserializer.deserialize_map(TetSpecVisitor)
+    }
 }
 
 /// A file format `mesh.export` writes.
@@ -1154,9 +1228,10 @@ pub enum Command {
     /// Use model.rename to change an implicit Body name while preserving its references.
     /// `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
     /// (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
-    /// geometry: the selected mesher still determines the boundary approximation. `formulation`
-    /// has no effect when `simplices` is true, because simplex elements have no incompatible
-    /// modes.
+    /// geometry: the selected mesher still determines the boundary approximation, and the `tet`
+    /// mesher is the one that meshes a curved solid freely. `formulation` has no effect when
+    /// `simplices` is true, or under the `tet` mesher, because simplex elements have no
+    /// incompatible modes.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     MeshSet {
         mesher: MesherSpec,

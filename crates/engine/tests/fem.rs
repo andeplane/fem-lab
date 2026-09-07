@@ -1799,7 +1799,9 @@ use femlab_engine::io::vtu::base64;
 use femlab_engine::io::{
     base64_decode, read_msh, read_stl, write_inp, write_msh, write_stl, write_stl_mesh, write_vtu,
 };
-use femlab_geometry::{elliptic_annulus, split_to_simplices, ElementBlock, Face, Shape, Sketch, Solid, TriMesh};
+use femlab_geometry::{
+    elliptic_annulus, split_to_simplices, tet, Affine3, ElementBlock, Face, Shape, Sketch, Solid, TriMesh,
+};
 
 // ---------------------------------------------------------------- msh: gmsh_permutation
 
@@ -3111,6 +3113,54 @@ fn patch_check(mesh: &Mesh, sets: &BTreeMap<String, ResolvedSet>, id: &Idealisat
                     "{label} element {elem} gp {g} component {i}: {got} vs {}",
                     want[i]
                 );
+            }
+        }
+    }
+}
+
+/// D8: the free tet mesher's own irregular connectivity on a curved boundary — corner valences
+/// and a bore no synthetic `Structured` lattice produces — still reproduces every constant-strain
+/// mode exactly. A box with a cylindrical bore, tet4 and tet10, all six Voigt modes, the same
+/// tolerance A1 holds its structured meshes to.
+#[test]
+fn the_free_tet_mesher_passes_the_patch_test_on_a_csg_box_with_a_bore() {
+    let solid = Solid::evaluate(&Shape::Subtract {
+        from: Box::new(Shape::Box { size: [1.0, 1.0, 1.0] }),
+        cut: vec![Shape::Transform {
+            shape: Box::new(Shape::Cylinder { radius: 0.2, height: 3.0, segments: Some(16) }),
+            at: Affine3 { translate: [0.5, 0.5, -1.0], ..Default::default() },
+        }],
+    })
+    .expect("a box minus a cylinder is a solid");
+    let id = Idealisation::Solid3d;
+    for quadratic in [false, true] {
+        let mut mesh = tet(&solid, 0.3, quadratic, 200_000).expect("the free tet mesher meshes this body");
+        straighten(&mut mesh);
+        let kind = mesh.blocks[0].kind;
+        let sets = sets_of(&mesh);
+        let bodies = vec!["patch".to_string()];
+        for e in patch_modes(&id) {
+            let p = problem(
+                &mesh,
+                &sets,
+                &bodies,
+                id.clone(),
+                Formulation::IncompatibleModes,
+                vec![fix("edge", "all", [true, true, true], 0.0)],
+            );
+            let pat = pattern(&mesh, mesh.dim);
+            let a = assemble_stiffness(&p, &pat).expect("the free tet mesher's own mesh assembles");
+            let exact = patch_mesh_field(&mesh, &id, &e);
+            let rc = boundary_constraints(&mesh, &exact);
+            let red = reduce(&a.k, &vec![0.0; a.k.n], &rc, &[]);
+            let (u_f, info) =
+                pollster::block_on(solve(&red.k_ff, &red.f_f, &SolveOptions::default(), &Pool::new(2), None, &mut nop))
+                    .expect("the patch system is positive definite");
+            assert!(info.rel_residual < 1e-10, "{kind:?}: residual {}", info.rel_residual);
+            let u = expand(&red, &u_f);
+            let scale = exact.iter().fold(1.0f64, |m, x| m.max(x.abs()));
+            for (i, (got, want)) in u.iter().zip(&exact).enumerate() {
+                assert!((got - want).abs() <= 1e-9 * scale, "{kind:?} dof {i}: {got} vs {want}");
             }
         }
     }

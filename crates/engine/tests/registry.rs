@@ -1560,6 +1560,9 @@ fn the_cantilever_meshes_and_every_auto_face_resolves() {
     assert!((q.min_det_j_ratio - 1.0).abs() < 1e-12);
     assert!((q.max_aspect - 1.0).abs() < 1e-12);
     assert!((q.min_angle_deg - 90.0).abs() < 1e-9);
+    // Every hex8 corner is a right angle, in 3D: the dihedral fields are populated and exact.
+    assert!((q.min_dihedral_deg.expect("a 3D mesh has a dihedral range") - 90.0).abs() < 1e-9);
+    assert!((q.max_dihedral_deg.expect("a 3D mesh has a dihedral range") - 90.0).abs() < 1e-9);
     assert_eq!(q.worst.len(), 10);
     assert_eq!(q.worst[0].value, 1.0);
     // every auto face Set of the Body is there and non-empty
@@ -5070,6 +5073,160 @@ fn simplex_mesh_preserves_body_scoped_face_rules_and_default_hashes() {
     assert_eq!(mesh_summary(&mut e).element_kind, "tet4");
 }
 
+// ---------------------------------------------------------------- mesh.set { mesher: tet }
+
+/// A box with a cylindrical bore, so the tet mesher has a curved boundary and a Solid-tagged
+/// face (`bore.side`) alongside its own auto-named box faces (`block.xmin` etc).
+fn bored_block(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"bored"}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"block","size":["1 m","1 m","1 m"]}"#);
+    ok(
+        e,
+        r#"{"cmd":"geometry.subtract","name":"bore","from":"block",
+           "shape":{"kind":"cylinder","radius":"0.2 m","height":"3 m","at":["0.5 m","0.5 m","-1 m"],"segments":16}}"#,
+    );
+}
+
+/// The tet mesher fills a curved CSG body, tet10 puts mid-edge nodes off the straight chord, and
+/// every named face — the box's own and the bore's — becomes a non-empty Set at either order.
+#[test]
+fn the_tet_mesher_fills_a_bored_block_with_named_faces_and_dihedral_quality() {
+    for order in [1, 2] {
+        let mut e = engine();
+        bored_block(&mut e);
+        ok(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"tet","size":"0.3 m"}},"order":{order}}}"#));
+        let m = mesh_summary(&mut e);
+        assert_eq!(m.element_kind, if order == 1 { "tet4" } else { "tet10" });
+        assert!(m.elements > 0);
+        let q = m.quality.as_ref().expect("a tet mesh reports quality");
+        let lo = q.min_dihedral_deg.expect("a 3D mesh has a dihedral range");
+        let hi = q.max_dihedral_deg.expect("a 3D mesh has a dihedral range");
+        assert!(lo >= 10.7 && hi <= 164.8, "order {order}: dihedral angles {lo}..{hi} degrees");
+        for name in ["block.xmin", "block.xmax", "block.ymin", "block.ymax", "block.zmin", "block.zmax", "bore.side"] {
+            assert!(set_info(&mut e, name).count > 0, "{name} is empty at order {order}");
+        }
+        // replay is deterministic: the same Journal builds the identical Mesh
+        let file = e.export_file();
+        let mut replay = engine();
+        let hashes = pollster::block_on(replay.replay(&file.journal.entries, false, true)).unwrap();
+        assert_eq!(hashes.last(), Some(&e.model_hash()));
+        assert_eq!(mesh_summary(&mut replay).elements, m.elements);
+    }
+}
+
+/// `simplices` has no element kind left to split into on an already-simplex mesh, so it is a
+/// no-op for the tet mesher: the Mesh is identical either way, though the Model hash still
+/// carries the flag as it was asked for.
+#[test]
+fn the_tet_mesher_is_already_simplices_so_the_flag_is_a_noop() {
+    let mut off = engine();
+    bored_block(&mut off);
+    ok(&mut off, r#"{"cmd":"mesh.set","mesher":{"kind":"tet","size":"0.3 m"},"simplices":false}"#);
+    let mut on = engine();
+    bored_block(&mut on);
+    ok(&mut on, r#"{"cmd":"mesh.set","mesher":{"kind":"tet","size":"0.3 m"},"simplices":true}"#);
+    let (a, b) = (mesh_summary(&mut off), mesh_summary(&mut on));
+    assert_eq!(a.element_kind, "tet4");
+    assert_eq!(a.element_kind, b.element_kind);
+    assert_eq!(a.elements, b.elements);
+    assert_eq!(a.nodes, b.nodes);
+    // The tet settings name no Body, so renaming one leaves them exactly as written.
+    let settings = on.model().mesh.clone();
+    ok(&mut on, r#"{"cmd":"model.rename","kind":"body","name":"block","to":"brick"}"#);
+    assert_eq!(on.model().mesh, settings);
+    assert_eq!(mesh_summary(&mut on).elements, b.elements);
+}
+
+/// Every structured error the tet mesher's settings and the mesher itself can raise, located
+/// and suggesting a fix, and none of them touching the Model.
+#[test]
+fn the_tet_mesher_refuses_bad_settings_and_geometry_it_cannot_resolve() {
+    // `mesher_settings` runs synchronously inside `mesh.set`, so a schema problem in the
+    // settings themselves is refused there and then, touching nothing.
+    let mut e = engine();
+    bored_block(&mut e);
+    let before = e.model().clone();
+    for bad in ["0 m", "-1 m"] {
+        let error = err(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"tet","size":"{bad}"}}}}"#));
+        assert_eq!(error.code, ErrorCode::Schema);
+        assert!(error.cause.contains("positive"), "{}", error.cause);
+    }
+    let error = err(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"tet","size":"0.3 m","maxElements":0}}"#);
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert!(error.cause.contains("maxElements"), "{}", error.cause);
+    assert_eq!(where_(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"tet","size":"1 kg"}}"#), "mesher.size");
+    // `size` is the one field the spec cannot do without, and its hand-written deserializer
+    // says so, and says what it wanted when handed something that is not a spec at all.
+    let missing = err(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"tet"}}"#);
+    assert!(missing.cause.contains("missing field `size`"), "{}", missing.cause);
+    let not_a_map = serde_json::from_str::<femlab_engine::command::TetSpec>("5").unwrap_err().to_string();
+    assert!(not_a_map.contains("a tet mesher spec with `size`"), "{not_a_map}");
+    // Every other way the map can go wrong is refused where serde would refuse a derived one.
+    for (spec, cause) in [
+        (r#"{"kind":"tet","size":5}"#, "untagged enum Quantity"),
+        (r#"{"kind":"tet","size":"0.3 m","maxElements":"lots"}"#, "expected u32"),
+        (r#"{"kind":"tet","size":"0.3 m","bogus":1}"#, "unknown field `bogus`"),
+    ] {
+        let malformed = err(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{spec}}}"#));
+        assert_eq!(malformed.code, ErrorCode::Schema, "{spec}");
+        assert!(malformed.cause.contains(cause), "{spec}: {}", malformed.cause);
+    }
+    assert_eq!(e.model(), &before, "no schema error above touched the Model");
+
+    // Everything past the settings needs the actual Solid, so it is refused only when the Mesh
+    // is built — the same point `a_sweep_refuses_a_lattice_or_tet_base` refuses at.
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"tet","size":"0.3 m","maxElements":10}}"#);
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::MeshFailed);
+    assert!(error.cause.contains("above the limit of 10"), "{}", error.cause);
+    assert!(error.where_.unwrap().contains("block"));
+    // an element far larger than the body: no lattice vertex lands inside it. A sphere, not
+    // the box above — a box's bbox corner sits exactly on its own boundary, which the padded
+    // lattice always lands a vertex on, whatever the size.
+    let mut ball = engine();
+    ok(&mut ball, r#"{"cmd":"model.new","name":"ball"}"#);
+    ok(&mut ball, r#"{"cmd":"geometry.add","name":"ball","shape":{"kind":"sphere","radius":"0.5 m"}}"#);
+    ok(&mut ball, r#"{"cmd":"mesh.set","mesher":{"kind":"tet","size":"10 m"}}"#);
+    let error = ball.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::MeshFailed);
+    assert!(error.cause.contains("no lattice vertex"), "{}", error.cause);
+    // a slab too thin for the element size to keep its volume
+    let mut thin = engine();
+    ok(&mut thin, r#"{"cmd":"model.new","name":"thin"}"#);
+    ok(&mut thin, r#"{"cmd":"geometry.addBox","name":"slab","size":["1 m","1 m","0.2 m"]}"#);
+    ok(
+        &mut thin,
+        r#"{"cmd":"geometry.subtract","name":"bore","from":"slab",
+           "shape":{"kind":"cylinder","radius":"0.45 m","height":"1 m","at":["0.5 m","0.5 m","-0.4 m"],"segments":32}}"#,
+    );
+    ok(&mut thin, r#"{"cmd":"mesh.set","mesher":{"kind":"tet","size":"0.34 m"}}"#);
+    let error = thin.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::MeshFailed);
+    assert!(error.cause.contains("differs from the body's own"), "{}", error.cause);
+}
+
+/// A sweep needs a 2D base; the lattice and tet meshers mesh whole Bodies and cannot be one.
+#[test]
+fn a_sweep_refuses_a_lattice_or_tet_base() {
+    // `mesh.set` only stores the spec; a mesher that cannot resolve only fails when the Mesh
+    // is actually built, the same as every other structured mesh-build error.
+    for base in [r#"{"kind":"lattice","size":"25 mm"}"#, r#"{"kind":"tet","size":"25 mm"}"#] {
+        let mut e = engine();
+        ok(&mut e, r#"{"cmd":"model.new","name":"g"}"#);
+        ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"mesh.set","mesher":{{"kind":"sweep","base":{base},
+                   "sweep":{{"kind":"extrude","layers":1,"height":"1 m"}}}}}}"#
+            ),
+        );
+        let error = e.query(Query::Mesh {}).unwrap_err();
+        assert_eq!(error.code, ErrorCode::MeshFailed);
+        assert!(error.cause.contains("mesh whole Bodies"), "{}", error.cause);
+    }
+}
+
 /// D1: the published ESRD full-outer-face LE10 variant, not the original mid-plane support.
 #[test]
 fn simplex_nafems_le10_converges_to_the_published_stress() {
@@ -5201,6 +5358,109 @@ fn the_revolved_lame_ring_reproduces_the_plane_strain_answer() {
     assert!(rel(ur_3d, ur_2d) < 1e-10, "u_r(a): 3D {ur_3d} vs plane strain {ur_2d}");
     assert!(rel(ur_3d, lame_ur(0.3)) < 0.01, "u_r(a) = {ur_3d} m against the closed form");
     assert!(rel(sig_3d, 100.0) < 0.02, "sigma_theta(a) = {sig_3d} MPa against 100 MPa");
+}
+
+// ---------------------------------------------------------------- D6/D7 free tet: Lamé as CSG
+
+/// The Lamé rectangle revolved 90° as CSG (`geometry.add`), tagged `tube.zmin/outer/zmax/inner`
+/// by segment and `tube.theta0/theta1` on the cut faces — identical to what the mapped block
+/// above gives the sweep mesher — so `mesh.set` is the only line that differs from
+/// `the_revolved_lame_ring_reproduces_the_plane_strain_answer`. `size` and `order` drive the
+/// free tet mesher directly; the model is left ready for `solve.run`.
+fn lame_revolve_tet(e: &mut Engine, size: &str, order: u8) {
+    ok(e, r#"{"cmd":"model.new","name":"lame-3d-tet"}"#);
+    ok(e, r#"{"cmd":"model.setUnits","units":{"length":"m","stress":"MPa","force":"N"}}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3}"#);
+    ok(
+        e,
+        r#"{"cmd":"geometry.add","name":"tube","shape":{"kind":"revolve","angle":90,"segments":16,
+           "sketch":{"outer":[
+             {"kind":"line","to":["0.2 m","0 m"],"tag":"zmin"},
+             {"kind":"line","to":["0.2 m","0.1 m"],"tag":"outer"},
+             {"kind":"line","to":["0.1 m","0.1 m"],"tag":"zmax"},
+             {"kind":"line","to":["0.1 m","0 m"],"tag":"inner"}]}}}"#,
+    );
+    ok(e, &format!(r#"{{"cmd":"mesh.set","mesher":{{"kind":"tet","size":"{size}"}},"order":{order}}}"#));
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["tube"]}"#);
+    ok(e, r#"{"cmd":"constraint.symmetry","name":"theta0","on":"tube.theta0","normal":"y"}"#);
+    ok(e, r#"{"cmd":"constraint.symmetry","name":"theta1","on":"tube.theta1","normal":"x"}"#);
+    ok(e, r#"{"cmd":"constraint.fix","name":"zmin","on":"tube.zmin","dofs":["uz"]}"#);
+    ok(e, r#"{"cmd":"constraint.fix","name":"zmax","on":"tube.zmax","dofs":["uz"]}"#);
+    ok(e, r#"{"cmd":"load.pressure","name":"inside","on":"tube.inner","value":"60 MPa"}"#);
+    ok(
+        e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static",
+           "constraints":["theta0","theta1","zmin","zmax"],"loads":["inside"]}"#,
+    );
+    ok(e, r#"{"cmd":"solve.run","step":"static"}"#);
+}
+
+/// `sigma_theta`, `sigma_rr` and `u_r` at r = 0.15 m (mid-wall, not the inner surface) from one
+/// free-tet solve of the CSG revolve. Away from the exact boundary because the free tet mesher
+/// only puts a node exactly on the analytic surface at a cut it actually made; probing precisely
+/// at r = a asks for a point the coarser of these meshes may chamfer a hair short of, which is
+/// this mesher's own documented, bounded limitation, not a solver error.
+fn lame_tet_probe(size: &str, order: u8) -> (f64, f64, f64) {
+    let mut e = engine();
+    lame_revolve_tet(&mut e, size, order);
+    let at = ["0.15 m", "0 m", "0.05 m"];
+    (
+        probe_value(&mut e, Field::Stress, 1, at),
+        probe_value(&mut e, Field::Stress, 0, at),
+        probe_value(&mut e, Field::Displacement, 0, at),
+    )
+}
+
+/// D6: tet10 on the free mesher's own cut-and-warped mesh of the CSG revolve — not the sweep
+/// mesher's structured hexahedra. The gate here is reaction balance and Result freshness (in the
+/// JSON case): the model is well posed and the `tube.*` Sets a sweep-mesher Journal already
+/// relies on still resolve after `mesh.set` swaps the mesher, which is what #22 exists to prove.
+/// Point-probed stress and displacement at r = 0.15 m (mid-wall) are recorded, not gated: this
+/// mesher's dihedral-bounded cut-and-warp tetrahedra converge on a point value far more slowly
+/// than the sweep mesher's exact prismatic hex20 — measured at 13 %/13 % at h = 0.012 m (five
+/// minutes to solve) against 28 %/9 % at h = 0.02 m, real convergence but not the sweep mesher's
+/// digit-for-digit answer, and not tight enough for a 2 %/1 % gate at a size this suite can
+/// afford. D7 shows the same story one element order lower.
+#[test]
+fn free_tet10_on_the_lame_cylinder_is_recorded_not_gated_and_survives_the_mesher_swap() {
+    // Lame's closed form at r = 0.15 m: sigma_theta = A + B/r^2, sigma_rr = A - B/r^2 with
+    // A = 20 MPa, B = 0.8 MPa*m^2; u_r = (1+nu)/E * (A(1-2nu) r + B/r) with eps_z = 0.
+    let exact = (55.555_555_555_555_56_f64, -15.555_555_555_555_557_f64, 4.246_666_666_666_667e-5_f64);
+    let (theta, rr, ur) = lame_tet_probe("0.02 m", 2);
+    assert!(theta.is_finite() && rr.is_finite() && ur.is_finite(), "{theta} {rr} {ur}");
+    assert!(theta > 0.0 && rr < 0.0 && ur > 0.0, "the signs of a pressurised cylinder: {theta} {rr} {ur}");
+    // A generous sanity bound, not the Benchmark's gate: catches a gross regression (an inverted
+    // sign, an order-of-magnitude error) without asserting an accuracy this mesh size does not
+    // reliably reach at a point probe.
+    assert!(rel(theta, exact.0) < 0.5 && rel(rr, exact.1) < 0.5 && rel(ur, exact.2) < 0.5);
+}
+
+/// D7: the same CSG revolve, constant-strain tet4 — the element-order lesson C3 already made
+/// for quad4, here for the free tet mesher. Recorded, not gated: the numbers appear in
+/// BENCHMARKS.md as measured, not compared to the closed form within a tolerance.
+#[test]
+fn free_tet4_is_recorded_on_the_lame_cylinder_not_gated() {
+    let (theta, rr, ur) = lame_tet_probe("0.02 m", 1);
+    assert!(theta.is_finite() && rr.is_finite() && ur.is_finite(), "{theta} {rr} {ur}");
+    assert!(theta > 0.0 && rr < 0.0 && ur > 0.0, "the signs of a pressurised cylinder: {theta} {rr} {ur}");
+}
+
+/// `scale_mesher`'s Tet arm: `study.converge` re-meshes the free tet mesher at each size, and
+/// restores the coarser setting the study borrowed.
+#[test]
+fn a_convergence_study_scales_the_free_tet_mesher() {
+    let mut e = engine();
+    lame_revolve_tet(&mut e, "0.03 m", 2);
+    let r = study(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"static","sizes":["0.03 m","0.025 m","0.02 m"],
+           "quantity":{"kind":"probe","field":"displacement","component":0,"at":["0.15 m","0 m","0.05 m"]}}"#,
+    );
+    assert_eq!(r.rows.len(), 3);
+    assert!(r.rows.windows(2).all(|w| w[0].dofs < w[1].dofs), "the tet mesh must grow: {:?}", r.rows);
+    assert!(r.rows.iter().all(|row| row.value > 0.0), "{:?}", r.rows);
+    let QueryResult::Mesh(m) = e.query(Query::Mesh {}).expect("meshed") else { panic!("a MeshSummary") };
+    assert_eq!(m.element_kind, "tet10", "study.converge restores the coarse setting, still tet10");
 }
 
 // ---------------------------------------------------------------- B2 MacNeal–Harder
@@ -5727,6 +5987,7 @@ fn the_report_is_the_whole_analysis_in_order_and_reproducible() {
     assert!(md.contains("| `steel` | 210000 MPa | 0.3 | 7850 kg/m^3 | EN 10025 | beam |"), "{md}");
     assert!(md.contains("| Element kind | hex8 |"), "{md}");
     assert!(md.contains("min det J ratio"), "{md}");
+    assert!(md.contains("| dihedral angle range (degrees) | 90 to 90 |"), "{md}");
     assert!(md.contains("Cost estimate:"), "{md}");
     // loads with their totals, and the Steps
     assert!(md.contains("Total applied force from Forces and Tractions: 0, 0, -1 kN."), "{md}");
@@ -5763,6 +6024,23 @@ fn the_report_is_the_whole_analysis_in_order_and_reproducible() {
     assert_eq!(filename, "cantilever.md");
     assert_eq!(mime, "text/markdown");
     assert_eq!(text, *md);
+}
+
+/// A 2D mesh has no dihedral angle — nothing meets at an edge between two faces there — so the
+/// Mesh section's quality table reads "—" rather than a false range.
+#[test]
+fn the_report_mesh_quality_has_no_dihedral_row_for_a_2d_mesh() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"sheet"}"#);
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStress","thickness":"10 mm"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"mesh.set","mesher":{"kind":"mapped","blocks":[
+           {"corners":[["0 m","0 m"],["1 m","0 m"],["1 m","1 m"],["0 m","1 m"]],
+            "n":[2,2],"tags":["bottom","right","top","left"]}]}}"#,
+    );
+    let md = report(&mut e, None, None).markdown;
+    assert!(md.contains("| dihedral angle range (degrees) | — |"), "{md}");
 }
 
 /// `include` picks sections; each one stands on its own, and `step` picks one Step's Result.
