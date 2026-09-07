@@ -7874,13 +7874,16 @@ fn material_add_takes_one_stiffness_form_and_an_orientation() {
     assert_eq!(bad.code, ErrorCode::MaterialProps);
     assert_eq!(bad.where_.as_deref(), Some("orthotropic"));
     assert!(bad.cause.contains("positive definite"), "{bad:?}");
-    // A dimension mistake inside the block is a located unit error.
-    let mut wrong_unit = lamina_block();
-    wrong_unit["E1"] = serde_json::json!("155 m");
-    let unit =
-        err(&mut e, &serde_json::json!({"cmd":"material.add","name":"ply","orthotropic":wrong_unit}).to_string());
-    assert_eq!(unit.code, ErrorCode::UnitDimension);
-    assert_eq!(unit.where_.as_deref(), Some("orthotropic.E1"));
+    // A dimension mistake inside the block is a located unit error, and every one of the six
+    // stiffnesses is located by its own name rather than by the first one that happens to fail.
+    for field in ["E1", "E2", "E3", "G12", "G13", "G23"] {
+        let mut wrong_unit = lamina_block();
+        wrong_unit[field] = serde_json::json!("155 m");
+        let unit =
+            err(&mut e, &serde_json::json!({"cmd":"material.add","name":"ply","orthotropic":wrong_unit}).to_string());
+        assert_eq!(unit.code, ErrorCode::UnitDimension, "{field}");
+        assert_eq!(unit.where_.as_deref(), Some(format!("orthotropic.{field}").as_str()), "{field}");
+    }
     // The happy path, with an orientation given in degrees about an unnormalised axis.
     ok(&mut e, &lamina_command(serde_json::json!({ "orientation": { "axis": [0, 0, 2], "angle": "30 deg" } })));
     let mat = e.model().materials[0].clone();
@@ -8123,6 +8126,14 @@ fn an_orthotropic_material_is_reported_everywhere_a_material_is_named() {
     assert!(ply.summary.starts_with("orthotropic, E1 = 1.55e11 Pa"), "{}", ply.summary);
     let steel = o.objects.iter().find(|x| x.name == "steel").expect("the steel object");
     assert!(steel.summary.starts_with("E = 2.1e11 Pa"), "{}", steel.summary);
+    // Dropping the orientation does not bring the hand check back: with the material axes along
+    // the global ones there is still no single `E` for `δ = F L³ / 3 E I` to quote.
+    ok(&mut e, &lamina_command(serde_json::json!({ "rho": "1600 kg/m^3" })));
+    let cleared = e.model().materials.iter().find(|m| m.name == "ply").expect("the ply").clone();
+    assert!(cleared.orientation.is_none() && cleared.e.is_none(), "no orientation and no single E");
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let unoriented = report(&mut e, None, Some(vec![ReportSection::Verification]));
+    assert!(!unoriented.markdown.contains("Hand calculation"), "{}", unoriented.markdown);
 }
 
 /// An orthotropic Model replays to the same hashes it was built with, so a Journal that names

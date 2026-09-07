@@ -7106,6 +7106,49 @@ fn an_inadmissible_orthotropic_material_is_refused_by_the_cholesky() {
     orthotropic_d(&p).expect("just admissible");
 }
 
+/// The law refuses the same two things `orthotropic_d` does, and a `Rotated` wrapper hands the
+/// inner law's refusal back unchanged instead of rotating a stress that was never computed.
+#[test]
+fn the_orthotropic_law_refuses_a_short_batch_and_forwards_it_through_the_rotation() {
+    let zeros = [0.0; VOIGT];
+    let batch = |strain: &'static [f64], props: &'static [f64]| MaterialBatch {
+        n: 1,
+        strain,
+        dstrain: &zeros,
+        temperature: &[0.0],
+        dt: 0.0,
+        props,
+        state_in: &[],
+    };
+    static SHORT: [f64; 3] = [0.0; 3];
+    static FULL: [f64; VOIGT] = [1e-4, 0.0, 0.0, 0.0, 0.0, 0.0];
+    // ν23 = 0.999 leaves the 1-2 minor healthy and kills the third pivot: admissible props are
+    // a different failure from a mis-sized slice, and both must reach the caller.
+    static INADMISSIBLE: [f64; 9] = [155e9, 12.1e9, 12.1e9, 4.4e9, 4.4e9, 3.2e9, 0.248, 0.248, 0.999];
+    let law = builtin_law("orthotropic-elastic").expect("a built-in law");
+    let run = |law: &dyn MaterialLaw, strain, props| {
+        let (mut stress, mut tangent) = ([0.0; VOIGT], [0.0; VOIGT * VOIGT]);
+        law.evaluate(
+            batch(strain, props),
+            MaterialOut { stress: &mut stress, tangent: &mut tangent, state_out: &mut [] },
+        )
+        .expect_err("refused")
+    };
+    let short = run(law, &SHORT, &LAMINA);
+    assert_eq!(short.code, ErrorCode::MaterialProps);
+    assert_eq!(short.where_.as_deref(), Some("material.strain"));
+    let bad = run(law, &FULL, &INADMISSIBLE);
+    assert_eq!(bad.code, ErrorCode::MaterialProps);
+    assert!(bad.cause.contains("pivot 2"), "{bad:?}");
+    // Through the wrapper: the wrapper's own slice check passes, so this is the inner law's
+    // error travelling back out of `Rotated::evaluate`.
+    let r = axis_angle_rotation([0.0, 0.0, 1.0], 0.4);
+    let rotated = Rotated::new(law, &r);
+    let through = run(&rotated, &FULL, &INADMISSIBLE);
+    assert_eq!(through.code, bad.code);
+    assert_eq!(through.cause, bad.cause);
+}
+
 /// An isotropic material written orthotropically **is** the isotropic one, at every orientation:
 /// `isotropic_d` is an oracle that owes nothing to `orthotropic_d` or `Rotated`, and a wrong
 /// factor of two anywhere in the Voigt transform would break the invariance.
