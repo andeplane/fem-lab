@@ -317,3 +317,26 @@ fn transpose(a: &[f64], q: usize) -> Vec<f64> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn dense_modes_preserve_global_parallelism_and_the_generalized_eigenproblem() {
+        let before = faer::get_global_parallelism();
+        // M=diag(4,9), M^-1/2 K M^-1/2=[[6.5,2.5],[2.5,6.5]]:
+        // its eigenvalues are exactly 4 and 9. Both eigenvectors must have unit M-norm.
+        let k = [26.0, 15.0, 15.0, 58.5];
+        let m = [4.0, 0.0, 0.0, 9.0];
+        let (values, vectors) = super::dense_eigen(&k, &m, 2);
+        assert_eq!(faer::get_global_parallelism(), before);
+        for (column, expected) in [4.0, 9.0].into_iter().enumerate() {
+            assert!((values[column] - expected).abs() < 1e-12);
+            let x = vectors[column];
+            let y = vectors[2 + column];
+            assert!((4.0 * x * x + 9.0 * y * y - 1.0).abs() < 1e-12);
+            assert!((26.0 * x + 15.0 * y - expected * 4.0 * x).abs() < 1e-12);
+            assert!((15.0 * x + 58.5 * y - expected * 9.0 * y).abs() < 1e-12);
+        }
+        assert!((4.0 * vectors[0] * vectors[1] + 9.0 * vectors[2] * vectors[3]).abs() < 1e-12);
+    }
+}
