@@ -5,10 +5,13 @@ import type { JournalEntry, ModelSummary, ObjectRef, ResultSummary } from '@feml
 import { useEffect, useLayoutEffect } from 'preact/hooks';
 import type { Store, Tab, UiState } from '../store';
 import { TABS } from '../store';
+import { lazy } from '../lazy';
 import { Checks, Results } from './Results';
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
 import { commandLine } from './schema';
+
+const ScriptEditor = lazy(() => import('./ScriptEditor').then((module) => module.default));
 
 const argText = (cmd: Record<string, unknown>): string => {
   const { cmd: _name, ...rest } = cmd;
@@ -147,12 +150,12 @@ function Journal({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
 }
 
 function Script({ s, store, dispatch }: { s: UiState; store: Store; dispatch: Dispatch }) {
-  const text = s.scriptDraft ?? s.script;
-  const editing = s.scriptDraft !== null;
+  const editing = s.scriptEditing;
+  const text = editing ? (s.scriptDraft ?? s.script) : s.script;
   return (
     <div class="script">
       {editing ? (
-        <textarea class="mono script-edit" value={text} data-cmd="script.setSource" onInput={(e) => store.set({ scriptDraft: (e.target as HTMLTextAreaElement).value })} />
+        <ScriptEditor value={text} onChange={(scriptDraft) => store.set({ scriptDraft })} />
       ) : (
         <div class="script-view">
           {text.split('\n').map((line, i) => (
@@ -171,8 +174,16 @@ function Script({ s, store, dispatch }: { s: UiState; store: Store; dispatch: Di
         <Cmd dispatch={dispatch} cmd="script.stop" class="tbutton outline" disabled={!s.scriptRunning}>
           ■ Stop
         </Cmd>
-        <Cmd dispatch={dispatch} cmd="script.setSource" class="tbutton outline" args={{ code: text }} onRun={() => store.set({ scriptDraft: editing ? null : text })}>
-          {editing ? 'view the Journal' : 'edit this script'}
+        <Cmd
+          dispatch={dispatch}
+          cmd="script.setEditing"
+          class="tbutton outline"
+          args={{ editing: !editing }}
+        >
+          {editing ? 'view the Journal' : s.scriptDraft === null ? 'edit this script' : 'resume draft'}
+        </Cmd>
+        <Cmd dispatch={dispatch} cmd="script.setSource" class="tbutton outline" args={{ code: editing ? `\n${s.script}` : s.script, ...(editing ? { append: true } : {}) }}>
+          insert current Journal
         </Cmd>
         <div class="script-out mono">
           {s.scriptOut.map((line, i) => (

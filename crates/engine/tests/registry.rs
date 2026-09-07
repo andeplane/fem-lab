@@ -1372,6 +1372,54 @@ fn set_info(e: &mut Engine, name: &str) -> femlab_engine::query::SetInfo {
 }
 
 #[test]
+fn pressure_area_uses_the_loaded_boundary_measure_without_changing_the_journal() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"pressure-area"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"box","size":["1 m","350 mm","300 mm"]}"#);
+    for order in [1, 2] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{{"nx":2,"ny":3,"nz":2}}}},"order":{order}}}"#
+            ),
+        );
+        let before = e.query(Query::Journal { from_seq: None }).unwrap();
+        let area = set_info(&mut e, "box.xmax").pressure_area.unwrap();
+        assert!((area.value - 0.105).abs() < 1e-12);
+        assert_eq!(area.unit, "m^2");
+        assert_eq!(e.query(Query::Journal { from_seq: None }).unwrap(), before);
+    }
+    // A 2 m long edge at r = 3 m: thickness-weighted strip, unit-depth strip, or cylinder.
+    // These exact areas are independent of the element load implementation.
+    for (id, expected) in [
+        (r#"{"kind":"planeStress","thickness":"30 mm"}"#, 0.06),
+        (r#"{"kind":"planeStrain"}"#, 2.0),
+        (r#"{"kind":"axisymmetric"}"#, 12.0 * std::f64::consts::PI),
+    ] {
+        ok(&mut e, r#"{"cmd":"model.new","name":"strip"}"#);
+        ok(&mut e, &format!(r#"{{"cmd":"model.setIdealisation","idealisation":{id}}}"#));
+        for order in [1, 2] {
+            ok(
+                &mut e,
+                &format!(
+                    r#"{{"cmd":"mesh.set","mesher":{{"kind":"mapped","blocks":[{{
+                "corners":[["1 m","0 m"],["3 m","0 m"],["3 m","2 m"],["1 m","2 m"]],
+                "n":[2,3],"tags":["bottom","right","top","left"]}}]}},"order":{order}}}"#
+                ),
+            );
+            let before = e.query(Query::Journal { from_seq: None }).unwrap();
+            let edge = set_info(&mut e, "sheet.right");
+            assert!((edge.measure.value - 2.0).abs() < 1e-12);
+            assert_eq!(edge.measure.unit, "m");
+            let area = edge.pressure_area.unwrap();
+            assert!((area.value - expected).abs() < 1e-10, "{id}: {area:?}");
+            assert_eq!(area.unit, "m^2");
+            assert_eq!(e.query(Query::Journal { from_seq: None }).unwrap(), before);
+        }
+    }
+}
+
+#[test]
 fn the_cantilever_meshes_and_every_auto_face_resolves() {
     let mut e = engine();
     cantilever(&mut e);
@@ -1435,6 +1483,7 @@ fn named_sets_resolve_and_an_empty_one_points_at_the_nearest_face() {
     assert!((top.measure.value - 1e5).abs() < 1e-6, "{:?}", top.measure);
     let tip = set_info(&mut e, "tip");
     assert_eq!(tip.kind, "element");
+    assert_eq!(tip.pressure_area, None);
     assert_eq!(tip.count, 1);
     assert!((tip.measure.value - 250.0 * 100.0 * 100.0).abs() < 1e-3, "{:?}", tip.measure);
     assert_eq!(tip.measure.unit, "mm^3");
@@ -1448,6 +1497,7 @@ fn named_sets_resolve_and_an_empty_one_points_at_the_nearest_face() {
     );
     let end = set_info(&mut e, "end");
     assert_eq!(end.kind, "node");
+    assert_eq!(end.pressure_area, None);
     assert_eq!(end.count, 4);
     assert_eq!(end.measure.value, 0.0);
     assert!((end.centroid[0].value - 1000.0).abs() < 1e-9);
@@ -5862,139 +5912,6 @@ fn unknown_selector_bodies_list_the_mapped_body_and_preserve_the_journal() {
     }
 }
 
-fn journal_diff(e: &mut Engine, base: femlab_engine::Journal) -> femlab_engine::query::JournalDiff {
-    let QueryResult::JournalDiff(diff) = e.query(Query::JournalDiff { base }).unwrap() else {
-        panic!("query.journalDiff returns JournalDiff")
-    };
-    diff
-}
-
-#[test]
-fn journal_diff_reports_the_shared_causal_prefix_and_ordered_tails_without_mutation() {
-    let mut empty = engine();
-    let both_empty = journal_diff(&mut empty, femlab_engine::Journal::default());
-    assert_eq!(both_empty.base_hash, both_empty.current_hash);
-    assert_eq!(both_empty.shared_entries, 0);
-    assert!(both_empty.removed.is_empty() && both_empty.added.is_empty());
-
-    let mut e = engine();
-    ok(&mut e, r#"{"cmd":"model.new","name":"current"}"#);
-    let prefix = e.journal().clone();
-    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
-    let complete = e.journal().clone();
-
-    let from_empty = journal_diff(&mut e, femlab_engine::Journal::default());
-    assert_eq!(from_empty.shared_entries, 0);
-    assert!(from_empty.removed.is_empty());
-    assert_eq!(from_empty.added, complete.entries);
-
-    let to_empty = journal_diff(&mut empty, complete.clone());
-    assert_eq!(to_empty.shared_entries, 0);
-    assert_eq!(to_empty.removed, complete.entries);
-    assert!(to_empty.added.is_empty());
-
-    let same = journal_diff(&mut e, complete.clone());
-    assert_eq!(same.base_hash, same.current_hash);
-    assert_eq!(same.shared_entries, 2);
-    assert!(same.removed.is_empty() && same.added.is_empty());
-
-    let mut relabelled = complete.clone();
-    relabelled.entries[0].seq = 99;
-    let seq_is_location = journal_diff(&mut e, relabelled);
-    assert_eq!(seq_is_location.shared_entries, 2);
-    assert!(seq_is_location.removed.is_empty() && seq_is_location.added.is_empty());
-    assert_ne!(seq_is_location.base_hash, seq_is_location.current_hash);
-
-    let from_prefix = journal_diff(&mut e, prefix);
-    assert_eq!(from_prefix.shared_entries, 1);
-    assert!(from_prefix.removed.is_empty());
-    assert_eq!(from_prefix.added, complete.entries[1..]);
-
-    ok(&mut e, r#"{"cmd":"journal.undo","steps":1}"#);
-    let hash = e.model_hash();
-    let journal = e.journal().clone();
-    let revision = e.revision();
-    let can_undo = e.can_undo();
-    let can_redo = e.can_redo();
-    let from_longer = journal_diff(&mut e, complete.clone());
-    assert_eq!(from_longer.shared_entries, 1);
-    assert_eq!(from_longer.removed, complete.entries[1..]);
-    assert!(from_longer.added.is_empty());
-    assert_eq!(e.model_hash(), hash);
-    assert_eq!(e.journal(), &journal);
-    assert_eq!((e.revision(), e.can_undo(), e.can_redo()), (revision, can_undo, can_redo));
-}
-
-#[test]
-fn journal_diff_does_not_realign_commands_after_histories_diverge() {
-    let mut current = engine();
-    ok(&mut current, r#"{"cmd":"model.new","name":"current"}"#);
-    ok(&mut current, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
-    let current_journal = current.journal().clone();
-
-    let mut base_engine = engine();
-    ok(&mut base_engine, r#"{"cmd":"model.new","name":"base"}"#);
-    ok(&mut base_engine, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
-    let base = base_engine.journal().clone();
-    assert_eq!(base.entries[1].cmd, current_journal.entries[1].cmd);
-    assert_ne!(base.entries[1].hash_after, current_journal.entries[1].hash_after);
-
-    let diff = journal_diff(&mut current, base.clone());
-    assert_eq!(diff.shared_entries, 0);
-    assert_eq!(diff.removed, base.entries);
-    assert_eq!(diff.added, current_journal.entries);
-}
-
-#[test]
-fn journal_diff_uses_the_typed_authored_command_identity() {
-    let mut e = engine();
-    ok(&mut e, r#"{"cmd":"model.new","name":"typed"}"#);
-    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
-    let current = serde_json::to_value(e.journal()).unwrap();
-
-    // JSON key order and explicit null both become the same typed `Command` as an omitted
-    // optional description, so the first entry remains shared.
-    let first_hash = current["entries"][0]["hashAfter"].clone();
-    let q: Query = serde_json::from_value(serde_json::json!({
-        "base": {"entries": [{
-            "hashAfter": first_hash,
-            "cmd": {"description": null, "name": "typed", "cmd": "model.new"},
-            "seq": 0
-        }]},
-        "query": "query.journalDiff"
-    }))
-    .unwrap();
-    let QueryResult::JournalDiff(normalized) = e.query(q).unwrap() else { panic!() };
-    assert_eq!(normalized.shared_entries, 1);
-    assert!(normalized.removed.is_empty());
-    assert_eq!(normalized.added.len(), 1);
-
-    // Quantity representation and an explicitly written geometric default remain part of
-    // the authored typed Command even when `hashAfter` says the resulting Model was equal.
-    let mut quantity = current.clone();
-    quantity["entries"][1]["cmd"]["size"][0] = serde_json::json!({"value": 1, "unit": "m"});
-    let quantity_base: femlab_engine::Journal = serde_json::from_value(quantity).unwrap();
-    let quantity_diff = journal_diff(&mut e, quantity_base);
-    assert_eq!(quantity_diff.shared_entries, 1);
-    assert_eq!((quantity_diff.removed.len(), quantity_diff.added.len()), (1, 1));
-
-    let mut explicit_default = current;
-    explicit_default["entries"][1]["cmd"]["at"] = serde_json::json!(["0 m", "0 m", "0 m"]);
-    let default_base: femlab_engine::Journal = serde_json::from_value(explicit_default).unwrap();
-    let default_diff = journal_diff(&mut e, default_base);
-    assert_eq!(default_diff.shared_entries, 1);
-    assert_eq!((default_diff.removed.len(), default_diff.added.len()), (1, 1));
-
-    let malformed = serde_json::from_value::<Query>(serde_json::json!({
-        "query": "query.journalDiff",
-        "base": {"entries": [{"seq": 0, "cmd": {"cmd": "model.new"}, "hashAfter": "h"}]}
-    }))
-    .map_err(Error::from)
-    .expect_err("the typed base Journal requires a complete Command");
-    assert_eq!(malformed.code, ErrorCode::Schema);
-    assert!(malformed.cause.contains("missing field"));
-}
-
 /// Renaming is a geometry identity change, not a physical change: the independent
 /// uniaxial solution survives rename, undo/redo, remeshing and Journal replay.
 #[test]
@@ -7085,6 +7002,139 @@ fn implicit_body_thermal_loads_are_transactional_and_survive_undo_and_replay() {
     }
 }
 
+fn journal_diff(e: &mut Engine, base: femlab_engine::Journal) -> femlab_engine::query::JournalDiff {
+    let QueryResult::JournalDiff(diff) = e.query(Query::JournalDiff { base }).unwrap() else {
+        panic!("query.journalDiff returns JournalDiff")
+    };
+    diff
+}
+
+#[test]
+fn journal_diff_reports_the_shared_causal_prefix_and_ordered_tails_without_mutation() {
+    let mut empty = engine();
+    let both_empty = journal_diff(&mut empty, femlab_engine::Journal::default());
+    assert_eq!(both_empty.base_hash, both_empty.current_hash);
+    assert_eq!(both_empty.shared_entries, 0);
+    assert!(both_empty.removed.is_empty() && both_empty.added.is_empty());
+
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"current"}"#);
+    let prefix = e.journal().clone();
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
+    let complete = e.journal().clone();
+
+    let from_empty = journal_diff(&mut e, femlab_engine::Journal::default());
+    assert_eq!(from_empty.shared_entries, 0);
+    assert!(from_empty.removed.is_empty());
+    assert_eq!(from_empty.added, complete.entries);
+
+    let to_empty = journal_diff(&mut empty, complete.clone());
+    assert_eq!(to_empty.shared_entries, 0);
+    assert_eq!(to_empty.removed, complete.entries);
+    assert!(to_empty.added.is_empty());
+
+    let same = journal_diff(&mut e, complete.clone());
+    assert_eq!(same.base_hash, same.current_hash);
+    assert_eq!(same.shared_entries, 2);
+    assert!(same.removed.is_empty() && same.added.is_empty());
+
+    let mut relabelled = complete.clone();
+    relabelled.entries[0].seq = 99;
+    let seq_is_location = journal_diff(&mut e, relabelled);
+    assert_eq!(seq_is_location.shared_entries, 2);
+    assert!(seq_is_location.removed.is_empty() && seq_is_location.added.is_empty());
+    assert_ne!(seq_is_location.base_hash, seq_is_location.current_hash);
+
+    let from_prefix = journal_diff(&mut e, prefix);
+    assert_eq!(from_prefix.shared_entries, 1);
+    assert!(from_prefix.removed.is_empty());
+    assert_eq!(from_prefix.added, complete.entries[1..]);
+
+    ok(&mut e, r#"{"cmd":"journal.undo","steps":1}"#);
+    let hash = e.model_hash();
+    let journal = e.journal().clone();
+    let revision = e.revision();
+    let can_undo = e.can_undo();
+    let can_redo = e.can_redo();
+    let from_longer = journal_diff(&mut e, complete.clone());
+    assert_eq!(from_longer.shared_entries, 1);
+    assert_eq!(from_longer.removed, complete.entries[1..]);
+    assert!(from_longer.added.is_empty());
+    assert_eq!(e.model_hash(), hash);
+    assert_eq!(e.journal(), &journal);
+    assert_eq!((e.revision(), e.can_undo(), e.can_redo()), (revision, can_undo, can_redo));
+}
+
+#[test]
+fn journal_diff_does_not_realign_commands_after_histories_diverge() {
+    let mut current = engine();
+    ok(&mut current, r#"{"cmd":"model.new","name":"current"}"#);
+    ok(&mut current, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
+    let current_journal = current.journal().clone();
+
+    let mut base_engine = engine();
+    ok(&mut base_engine, r#"{"cmd":"model.new","name":"base"}"#);
+    ok(&mut base_engine, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
+    let base = base_engine.journal().clone();
+    assert_eq!(base.entries[1].cmd, current_journal.entries[1].cmd);
+    assert_ne!(base.entries[1].hash_after, current_journal.entries[1].hash_after);
+
+    let diff = journal_diff(&mut current, base.clone());
+    assert_eq!(diff.shared_entries, 0);
+    assert_eq!(diff.removed, base.entries);
+    assert_eq!(diff.added, current_journal.entries);
+}
+
+#[test]
+fn journal_diff_uses_the_typed_authored_command_identity() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"typed"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","100 mm","100 mm"]}"#);
+    let current = serde_json::to_value(e.journal()).unwrap();
+
+    // JSON key order and explicit null both become the same typed `Command` as an omitted
+    // optional description, so the first entry remains shared.
+    let first_hash = current["entries"][0]["hashAfter"].clone();
+    let q: Query = serde_json::from_value(serde_json::json!({
+        "base": {"entries": [{
+            "hashAfter": first_hash,
+            "cmd": {"description": null, "name": "typed", "cmd": "model.new"},
+            "seq": 0
+        }]},
+        "query": "query.journalDiff"
+    }))
+    .unwrap();
+    let QueryResult::JournalDiff(normalized) = e.query(q).unwrap() else { panic!() };
+    assert_eq!(normalized.shared_entries, 1);
+    assert!(normalized.removed.is_empty());
+    assert_eq!(normalized.added.len(), 1);
+
+    // Quantity representation and an explicitly written geometric default remain part of
+    // the authored typed Command even when `hashAfter` says the resulting Model was equal.
+    let mut quantity = current.clone();
+    quantity["entries"][1]["cmd"]["size"][0] = serde_json::json!({"value": 1, "unit": "m"});
+    let quantity_base: femlab_engine::Journal = serde_json::from_value(quantity).unwrap();
+    let quantity_diff = journal_diff(&mut e, quantity_base);
+    assert_eq!(quantity_diff.shared_entries, 1);
+    assert_eq!((quantity_diff.removed.len(), quantity_diff.added.len()), (1, 1));
+
+    let mut explicit_default = current;
+    explicit_default["entries"][1]["cmd"]["at"] = serde_json::json!(["0 m", "0 m", "0 m"]);
+    let default_base: femlab_engine::Journal = serde_json::from_value(explicit_default).unwrap();
+    let default_diff = journal_diff(&mut e, default_base);
+    assert_eq!(default_diff.shared_entries, 1);
+    assert_eq!((default_diff.removed.len(), default_diff.added.len()), (1, 1));
+
+    let malformed = serde_json::from_value::<Query>(serde_json::json!({
+        "query": "query.journalDiff",
+        "base": {"entries": [{"seq": 0, "cmd": {"cmd": "model.new"}, "hashAfter": "h"}]}
+    }))
+    .map_err(Error::from)
+    .expect_err("the typed base Journal requires a complete Command");
+    assert_eq!(malformed.code, ErrorCode::Schema);
+    assert!(malformed.cause.contains("missing field"));
+}
+
 #[test]
 fn body_rename_and_duplicate_reject_cut_names_without_mutation() {
     let mut e = engine();
@@ -7126,6 +7176,144 @@ fn body_rename_and_duplicate_reject_cut_names_without_mutation() {
     let mut replayed = engine();
     pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
     assert_eq!(serde_json::to_value(replayed.export_file()).unwrap(), after);
+}
+
+/// Two steel cubes meeting at x = 1 m, meshed as separate Bodies so only a tie joins them.
+fn two_cubes(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"assembly"}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"a","size":["1 m","1 m","1 m"]}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"],"at":["1 m","0 m","0 m"]}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["a","b"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm"},"order":1}"#);
+}
+
+/// `contact.add` is a Constraint object with two Set references: it validates both, is listed as
+/// a Connection rather than a Constraint, follows a rename of either Set or of a Body, and holds
+/// the geometry it names in use.
+#[test]
+fn contact_add_is_a_connection_that_tracks_the_sets_it_names() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    ok(&mut e, r#"{"cmd":"contact.add","name":"weld","master":"a.xmax","slave":"b.xmin","kind":"bonded"}"#);
+
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert!(m.constraints.is_empty(), "a tie is not a Constraint row: {:?}", m.constraints);
+    assert_eq!(m.connections.len(), 1);
+    let row = &m.connections[0];
+    assert_eq!((row.name.as_str(), row.kind.as_str()), ("weld", "bonded"));
+    assert_eq!((row.master.as_str(), row.slave.as_str()), ("a.xmax", "b.xmin"));
+    assert_eq!(row.summary, "bonded, pairing tolerance from the mesh size");
+
+    // A named tolerance is reported in the Model's own units.
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm"}}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"contact.add","name":"weld","master":"a.xmax","slave":"b.xmin","kind":"bonded","tol":"0.25 mm"}"#,
+    );
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.connections[0].summary, "bonded, pairing within 0.25 mm");
+
+    // Renaming the master's Body rewrites the reference, as it does for `on`.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"a","to":"left"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.connections[0].master, "left.xmax");
+    // The Body under the master face is in use, even though no `on` names it.
+    let body = err(&mut e, r#"{"cmd":"geometry.remove","name":"left"}"#);
+    assert_eq!(body.code, ErrorCode::InUse);
+    assert!(body.cause.contains("constraint 'weld'"), "{}", body.cause);
+    // And so does renaming a named Set the tie points at.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameFace","name":"weldface","of":"left","where":{"kind":"plane","normal":[1,0,0],"offset":"1 m"}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"contact.add","name":"weld","master":"weldface","slave":"b.xmin","kind":"bonded"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"weldface","to":"seam"}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!() };
+    assert_eq!(m.connections[0].master, "seam");
+    // The tie holds that Set, and the Body under it, in use.
+    let held = err(&mut e, r#"{"cmd":"geometry.remove","name":"seam"}"#);
+    assert_eq!(held.code, ErrorCode::InUse);
+    assert!(held.cause.contains("constraint 'weld'"), "{}", held.cause);
+    // A cut whose wall a tie names is held the same way.
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.subtractBox","name":"slot","from":"b","size":["100 mm","100 mm","2 m"],"at":["1.4 m","0.4 m","-0.5 m"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"contact.add","name":"weld","master":"slot.xmin","slave":"b.xmin","kind":"bonded"}"#);
+    let cut = err(&mut e, r#"{"cmd":"geometry.remove","name":"slot"}"#);
+    assert_eq!(cut.code, ErrorCode::InUse);
+    assert!(cut.cause.contains("constraint 'weld'"), "{}", cut.cause);
+}
+
+/// Everything `contact.add` refuses, and where it says the fault is.
+#[test]
+fn contact_add_refuses_an_unknown_or_self_referential_pair() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    let unknown =
+        err(&mut e, r#"{"cmd":"contact.add","name":"weld","master":"nope","slave":"b.xmin","kind":"bonded"}"#);
+    assert_eq!(unknown.code, ErrorCode::NotFound);
+    assert_eq!(unknown.where_.as_deref(), Some("master"));
+    let slave = err(&mut e, r#"{"cmd":"contact.add","name":"weld","master":"a.xmax","slave":"nope","kind":"bonded"}"#);
+    assert_eq!(slave.where_.as_deref(), Some("slave"));
+    let itself =
+        err(&mut e, r#"{"cmd":"contact.add","name":"weld","master":"a.xmax","slave":"a.xmax","kind":"bonded"}"#);
+    assert_eq!(itself.code, ErrorCode::ModelIllPosed);
+    assert_eq!(itself.where_.as_deref(), Some("slave"));
+    assert!(itself.suggestion.as_deref().is_some_and(|s| s.contains("two different Bodies")));
+    let named = err(&mut e, r#"{"cmd":"contact.add","name":"a.b","master":"a.xmax","slave":"b.xmin","kind":"bonded"}"#);
+    assert_eq!((named.code, named.where_.as_deref()), (ErrorCode::Schema, Some("name")));
+    let unit = err(
+        &mut e,
+        r#"{"cmd":"contact.add","name":"weld","master":"a.xmax","slave":"b.xmin","kind":"bonded","tol":"1 kg"}"#,
+    );
+    assert_eq!((unit.code, unit.where_.as_deref()), (ErrorCode::UnitDimension, Some("tol")));
+    assert!(e.model().constraints.is_empty(), "nothing was recorded");
+}
+
+/// A tie in a Step joins the two Bodies into one operator: the assembly under uniform tension
+/// carries the applied load through to the held end, and the tie itself reports no reaction.
+/// Removing the tie is refused while the Step lists it, and the Step then refuses to solve.
+#[test]
+fn a_step_that_lists_a_tie_solves_the_assembly_as_one_part() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"a.xmin","dofs":["ux"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symy","on":"a.ymin","dofs":["uy"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"symz","on":"a.zmin","dofs":["uz"]}"#);
+    ok(&mut e, r#"{"cmd":"contact.add","name":"weld","master":"a.xmax","slave":"b.xmin","kind":"bonded"}"#);
+    ok(&mut e, r#"{"cmd":"load.traction","name":"pull","on":"b.xmax","total":["1 MN","0 N","0 N"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"static","procedure":"static","constraints":["root","symy","symz","weld"],"loads":["pull"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let QueryResult::Result(r) = e.query(Query::Result { step: None }).unwrap() else { panic!() };
+    assert!(r.balance.abs() < 1e-9, "the reactions balance: {}", r.balance);
+    // Three supports report; the tie is not one of them, however much force it carries.
+    assert_eq!(r.reactions.len(), 3);
+    assert!(r.reactions.iter().all(|row| row.constraint != "weld"));
+    let carried: f64 = r.reactions.iter().map(|row| row.total[0].value).sum();
+    assert!((carried + r.applied_total[0].value).abs() < 1e-6, "{carried} against {:?}", r.applied_total[0]);
+    assert!(r.warnings.is_empty(), "a matched, closed tie warns about nothing: {:?}", r.warnings);
+
+    let held = err(&mut e, r#"{"cmd":"constraint.remove","name":"weld"}"#);
+    assert_eq!(held.code, ErrorCode::InUse);
+    // A tie the mesh cannot pair refuses the solve rather than welding across the gap.
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"],"at":["1.5 m","0 m","0 m"]}"#);
+    let unpaired = err(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    assert_eq!(unpaired.code, ErrorCode::ContactUnpaired);
+    assert!(unpaired.cause.contains("more than the tolerance"), "{}", unpaired.cause);
+
+    // Move it back to within the default tolerance but leave a gap the tie has to bridge: the
+    // solve runs and says so, in the Result the user reads.
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"b","size":["1 m","1 m","1 m"],"at":["1.00005 m","0 m","0 m"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let QueryResult::Result(r) = e.query(Query::Result { step: None }).unwrap() else { panic!() };
+    assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+    assert_eq!(r.warnings[0].code, "contact.gap");
+    assert_eq!(r.warnings[0].where_.as_deref(), Some("contact 'weld'"));
 }
 
 /// `load.radiation` validates its Set, its emissivity and its absolute surrounding temperature

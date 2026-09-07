@@ -14,7 +14,8 @@ use crate::fem::assembly::resolve;
 use crate::fem::element::min_det_j;
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::Load;
-use crate::fem::problem::{empty_set, no_material, Problem};
+use crate::fem::mpc::{self, Mpc};
+use crate::fem::problem::{empty_set, no_material, Coupling, Problem};
 use crate::model::Idealisation;
 
 /// A restricted rigid mode this small is not constrained at all.
@@ -27,8 +28,40 @@ pub fn all(p: &Problem<'_>) -> Vec<Error> {
     out.extend(empty_sets(p));
     out.extend(inverted(p.mesh));
     out.extend(resolve(p).err());
-    out.extend(if p.heat { unheld_temperature(p) } else { rigid_modes(p) });
+    // The couplings are checked whatever the physics: a tie a heat Step cannot pair is as
+    // broken as one a static Step cannot. Without a valid `Mpc` the rigid-body test would be
+    // answering a different question, so it waits for the next run.
+    match mpc::build(p) {
+        Err(e) => out.push(e),
+        Ok(m) => {
+            out.extend(tied_and_held(p, &m));
+            out.extend(if p.heat { unheld_temperature(p) } else { rigid_modes(p, &m) });
+        }
+    }
     out
+}
+
+/// A DOF that a Constraint prescribes and a coupling also eliminates: the two ask for different
+/// things and the elimination would silently win.
+fn tied_and_held(p: &Problem<'_>, mpc: &Mpc) -> Option<Error> {
+    let rc = resolve(p).ok()?;
+    let dpn = p.dofs_per_node();
+    let (&(dof, _), &owner) =
+        rc.fixed.iter().zip(&rc.owner).find(|(&(d, _), _)| mpc.slaves.binary_search(&d).is_ok())?;
+    let row = &mpc.rows[mpc.slaves.binary_search(&dof).expect("the row that matched")];
+    let comp = ["ux", "uy", "uz"][dof as usize % dpn];
+    let (c, tie) = (&p.constraints[owner].name, p.couplings[row.owner].name());
+    Some(
+        Error::new(
+            ErrorCode::ConstraintConflict,
+            format!(
+                "'{c}' prescribes {comp} of node {} while contact '{tie}' ties it to another part",
+                dof as usize / dpn
+            ),
+        )
+        .at(format!("contact '{tie}'"))
+        .suggest("constraint.remove one of them, or make the other face of the pair the slave"),
+    )
 }
 
 /// A heat Problem with no fixed temperature and no boundary that carries heat away in
@@ -79,6 +112,7 @@ fn empty_sets(p: &Problem<'_>) -> Vec<Error> {
         .constraints
         .iter()
         .map(|c| c.nodes.as_str())
+        .chain(p.couplings.iter().flat_map(Coupling::sets))
         .chain(p.loads.iter().filter_map(Load::set))
         .chain(p.heat_loads.iter().filter_map(HeatLoad::set));
     named.filter(|n| p.sets.get(*n).is_none_or(|s| s.nodes.is_empty())).map(empty_set).collect()
@@ -175,13 +209,23 @@ fn rigid_basis(mesh: &Mesh, id: &Idealisation) -> Vec<(&'static str, Vec<f64>)> 
 /// Restrict every rigid mode to the constrained DOFs and Gram–Schmidt the resulting columns: a
 /// column whose remaining norm vanishes adds no new restriction, so some combination of the
 /// modes leaves every constrained DOF at zero and the body can still move.
-fn rigid_modes(p: &Problem<'_>) -> Option<Error> {
+///
+/// A multipoint constraint restricts a mode too — the residual `mode[slave] − Σ a·mode[master]`
+/// of every row is one more entry in the same column — which is what keeps a part held only
+/// through a tie from being reported as floating.
+fn rigid_modes(p: &Problem<'_>, mpc: &Mpc) -> Option<Error> {
     let rc = resolve(p).ok()?;
     let held: Vec<usize> = rc.fixed.iter().map(|&(d, _)| d as usize).collect();
     let mut basis: Vec<Vec<f64>> = Vec::new();
     let mut free: Vec<&str> = Vec::new();
     for (name, mode) in rigid_basis(p.mesh, &p.idealisation) {
-        let mut col: Vec<f64> = held.iter().map(|&d| mode[d]).collect();
+        let mut col: Vec<f64> =
+            held.iter()
+                .map(|&d| mode[d])
+                .chain(mpc.rows.iter().map(|r| {
+                    mode[r.slave as usize] - r.masters.iter().map(|&(m, a)| a * mode[m as usize]).sum::<f64>()
+                }))
+                .collect();
         for b in &basis {
             let dot: f64 = col.iter().zip(b).map(|(x, y)| x * y).sum();
             for (x, y) in col.iter_mut().zip(b) {

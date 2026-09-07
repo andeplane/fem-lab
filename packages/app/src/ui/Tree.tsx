@@ -235,6 +235,23 @@ export function treeGroups(s: UiState, shapes: { kind: string; hint: string }[] 
       })),
     ),
     group(
+      'Connections',
+      'Bonded contact between parts: the two faces behave as one, so an assembly solves like a single body.',
+      { what: 'connection', cmd: 'contact.add' },
+      (m?.connections ?? []).map((x) => ({
+        cmd: 'form.edit',
+        args: { kind: 'constraint', name: x.name },
+        run: true,
+        kind: 'constraint',
+        glyph: '⋈',
+        glyphClass: 'glyph cyan',
+        name: x.name,
+        summary: `${x.summary} · ${x.master} to ${x.slave}`,
+        select: { sets: [x.master, x.slave] },
+        remove: 'constraint.remove',
+      })),
+    ),
+    group(
       'Loads',
       'Pressure, traction, total force, gravity or temperature on a named face — each with its total.',
       { what: 'load', cmd: 'load.pressure' },
