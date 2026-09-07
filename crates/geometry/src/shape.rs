@@ -468,6 +468,10 @@ mod tests {
         let named = Shape::Named { name: "beam".into(), shape: Box::new(b.clone()) };
         assert_eq!(named.dim(), 3);
         assert!(named.contains([0.5, 0.5, 0.5]).unwrap());
+        // A line body is a curve: dimension 1, with no interior for a point to be inside of.
+        let line = Shape::Polyline { points: vec![[0.0; 3], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 2 };
+        assert_eq!(line.dim(), 1);
+        assert!(!line.contains([0.5, 0.0, 0.0]).unwrap());
         assert_eq!(Shape::Union { shapes: vec![] }.dim(), 3);
         assert_eq!(Shape::Subtract { from: Box::new(sheet.clone()), cut: vec![] }.dim(), 2);
         let bad = Shape::Sheet { sketch: Sketch { outer: vec![], holes: vec![] } };
@@ -546,6 +550,11 @@ mod tests {
     #[test]
     fn validation() {
         assert!(Shape::Box { size: [1.0, 0.0, 1.0] }.validate().unwrap_err().0.contains("size[1]"));
+        // A Polyline's validation is the line mesher's, so both name the same cause.
+        let line = Shape::Polyline { points: vec![[0.0; 3], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 1 };
+        assert!(line.validate().is_ok());
+        let short = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1 };
+        assert!(short.validate().unwrap_err().0.contains("at least 2 points"));
         assert!(Shape::Cylinder { radius: -1.0, height: 1.0, segments: None }.validate().is_err());
         assert!(Shape::Cylinder { radius: 1.0, height: 0.0, segments: None }.validate().is_err());
         assert!(Shape::Cylinder { radius: 1.0, height: 1.0, segments: Some(2) }.validate().is_err());

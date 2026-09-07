@@ -728,6 +728,13 @@ mod tests {
     }
 
     #[test]
+    fn a_line_body_never_becomes_a_solid() {
+        let line = Shape::Polyline { points: vec![[0.0; 3], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 1 };
+        let e = Solid::evaluate(&line).unwrap_err();
+        assert!(e.0.contains("no volume"), "{}", e.0);
+    }
+
+    #[test]
     fn sheet_loop_transform_refuses_overflow() {
         let at = Affine3 { scale: [1e308, 1.0, 1.0], ..Default::default() };
         let error = transformed_sheet_loops(&Sketch::rect(2.0, 1.0), &at, "", 0.1).unwrap_err();
