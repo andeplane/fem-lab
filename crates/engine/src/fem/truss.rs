@@ -167,7 +167,9 @@ impl Element for Truss2 {
             return Ok(());
         };
         let (e1, _) = axis(c.coords).ok_or_else(inverted)?;
-        let f = axial_modulus(c)? * section_of(c)?.a * c.material.alpha * dt;
+        // A member carries only axial strain, and its own axis is material axis 1, so the first
+        // expansion coefficient is the one that acts along it.
+        let f = axial_modulus(c)? * section_of(c)?.a * c.material.alpha[0] * dt;
         for i in 0..3 {
             out[i] = -f * e1[i];
             out[3 + i] = f * e1[i];
@@ -191,7 +193,7 @@ impl Element for Truss2 {
         strain.fill(0.0);
         let axial: f64 = (0..3).map(|i| (u[3 + i] - u[i]) * e1[i]).sum::<f64>() / (2.0 * half);
         strain[0] = axial;
-        let mechanical = axial - delta_t(c).map_or(0.0, |dt| c.material.alpha * dt);
+        let mechanical = axial - delta_t(c).map_or(0.0, |dt| c.material.alpha[0] * dt);
         stress[0] = axial_modulus(c)? * mechanical;
         Ok(())
     }
