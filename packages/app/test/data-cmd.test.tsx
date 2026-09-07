@@ -50,6 +50,18 @@ const objects = (): ObjectRef[] => [
 
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
 
+const withSteps = (names: string[]): ModelSummary => ({
+  ...model(),
+  steps: names.map((name) => ({ name, procedure: 'static', constraints: ['fix'], loads: ['p'], solved: false })),
+} as unknown as ModelSummary);
+
+function dragEvent(type: string, transfer: DataTransfer, clientY = 0): DragEvent {
+  const event = new DragEvent(type, { bubbles: true, cancelable: true, clientY });
+  // happy-dom does not implement DragEventInit.dataTransfer yet.
+  Object.defineProperties(event, { dataTransfer: { value: transfer }, clientY: { value: clientY } });
+  return event;
+}
+
 const journal = (...commands: Record<string, unknown>[]): JournalDump =>
   ({
     entries: commands.map((cmd, seq) => ({ seq, cmd, hashAfter: `h${seq}` })),
@@ -224,6 +236,55 @@ describe('the shell', () => {
     store.togglePanel('examples', true);
     await afterEffects();
     expect(root.querySelector('.menu')).toBeNull();
+  });
+
+  it('reorders Steps once per completed drag and leaves the tree controlled by the Model', async () => {
+    const { root, commands } = mount({ model: withSteps(['heat', 'static', 'modal']) });
+    await afterEffects();
+    const source = root.querySelector<HTMLElement>('[data-step="modal"]')!;
+    const transfer = new DataTransfer();
+
+    // happy-dom does not declare native `ondrag*` properties, so Preact retains the JSX case.
+    source.dispatchEvent(dragEvent('DragStart', transfer));
+    expect(transfer.getData('text/plain')).toBe('modal');
+    await afterEffects();
+    expect(root.querySelector('[data-step="modal"]')!.classList.contains('dragging')).toBe(true);
+    const currentTarget = root.querySelector<HTMLElement>('[data-step="heat"]')!;
+    currentTarget.getBoundingClientRect = () => ({ top: 100, height: 40 } as DOMRect);
+    currentTarget.dispatchEvent(dragEvent('DragOver', transfer, 105));
+    await afterEffects();
+    const markedTarget = root.querySelector<HTMLElement>('[data-step="heat"]')!;
+    expect(markedTarget.classList.contains('drop-before'), markedTarget.className).toBe(true);
+    markedTarget.dispatchEvent(dragEvent('Drop', transfer, 105));
+    source.dispatchEvent(dragEvent('DragEnd', transfer));
+    await afterEffects();
+
+    expect(commands).toEqual([{ cmd: 'step.reorder', order: ['modal', 'heat', 'static'] }]);
+    expect([...root.querySelectorAll('[data-step] .name')].map((el) => el.textContent)).toEqual(['heat', 'static', 'modal']);
+    expect(root.querySelector('.drop-before, .drop-after, .dragging')).toBeNull();
+  });
+
+  it('offers a keyboard reorder and dispatches nothing for cancelled or same-position drags', async () => {
+    const { root, commands } = mount({ model: withSteps(['heat', 'static', 'modal']) });
+    await afterEffects();
+    root.querySelector<HTMLButtonElement>('[aria-label="Move heat later"]')!.click();
+    expect(commands).toEqual([{ cmd: 'step.reorder', order: ['static', 'heat', 'modal'] }]);
+
+    const cancelled = root.querySelector<HTMLElement>('[data-step="modal"]')!;
+    const cancelledTransfer = new DataTransfer();
+    cancelled.dispatchEvent(dragEvent('DragStart', cancelledTransfer));
+    await afterEffects();
+    root.querySelector<HTMLElement>('[data-step="heat"]')!.dispatchEvent(dragEvent('DragOver', cancelledTransfer, 0));
+    root.querySelector<HTMLElement>('[data-step="modal"]')!.dispatchEvent(dragEvent('DragEnd', cancelledTransfer));
+    await afterEffects();
+    expect(commands).toHaveLength(1);
+
+    const row = root.querySelector<HTMLElement>('[data-step="static"]')!;
+    const transfer = new DataTransfer();
+    row.dispatchEvent(dragEvent('DragStart', transfer));
+    row.dispatchEvent(dragEvent('Drop', transfer));
+    row.dispatchEvent(dragEvent('DragEnd', transfer));
+    expect(commands).toHaveLength(1);
   });
 
   it('names only Commands the registry has on every clickable', () => {
@@ -466,11 +527,15 @@ describe('the shell', () => {
     expect(journalTarget({ cmd: 'solve.run', step: 'static' }, current, refs)).toBeNull();
   });
 
-  it('selects and highlights a Journal target while keeping copy separate', async () => {
+  it.each([false, true])('selects and highlights a Journal target while keeping copy separate (comparison=%s)', async (comparison) => {
     const dispatch = vi.fn<Dispatch>(async () => undefined);
     const entries = journal({ cmd: 'model.new', name: 'demo' }, { cmd: 'geometry.addBox', name: 'beam', size: ['1 m', '1 m', '1 m'] }, { cmd: 'geometry.addBox', name: 'deleted', size: ['1 m', '1 m', '1 m'] });
-    const { root, store } = mount({ tab: 'journal', journal: entries }, dispatch);
+    const { root, store } = mount({ tab: 'journal', journal: entries, ...(comparison ? {
+      journalComparison: { baseHash: 'base', currentHash: 'current', sharedEntries: 1, added: entries.entries.slice(1), removed: [entries.entries[1]!] },
+      comparisonSource: 'imported' as const,
+    } : {}) }, dispatch);
     const row = root.querySelector<HTMLElement>('[data-target-ref="body:beam"]')!;
+    expect(row.closest('.comparison-added') !== null).toBe(comparison);
     const select = row.querySelector<HTMLButtonElement>('.jrow-main')!;
 
     row.dispatchEvent(new MouseEvent('mouseenter'));
@@ -487,6 +552,22 @@ describe('the shell', () => {
     row.querySelector<HTMLButtonElement>('.jcopy')!.click();
     expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
     expect(store.state.journal).toBe(entries);
+    if (comparison) {
+      // The same live body name in an imported, removed row must never select or highlight
+      // the current object. Copy still exports that baseline Command independently.
+      const removed = root.querySelector<HTMLElement>('.comparison-removed .jrow')!;
+      expect(removed.dataset['targetRef']).toBeUndefined();
+      expect(removed.querySelector<HTMLButtonElement>('.jrow-main')!.disabled).toBe(true);
+      expect(removed.querySelector('.jwho')!.textContent).toBe('unknown');
+      expect(removed.querySelector('.jtime')!.textContent).toBe('');
+      expect(removed.parentElement!.querySelector('.boundary')).toBeNull();
+      dispatch.mockClear();
+      removed.dispatchEvent(new MouseEvent('mouseenter'));
+      removed.querySelector<HTMLButtonElement>('.jrow-main')!.click();
+      expect(dispatch).not.toHaveBeenCalled();
+      removed.querySelector<HTMLButtonElement>('.jcopy')!.click();
+      expect(dispatch).toHaveBeenLastCalledWith({ cmd: 'clipboard.copy', what: { kind: 'text', text: 'await fem.geometry.addBox({ name: "beam", size: ["1 m", "1 m", "1 m"] });' } });
+    }
 
     const unavailable = [...root.querySelectorAll<HTMLElement>('.jrow')].find((item) => item.textContent?.includes('deleted'))!;
     expect(unavailable.dataset['targetRef']).toBeUndefined();

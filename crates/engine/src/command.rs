@@ -139,7 +139,8 @@ pub enum Solver {
 
 /// Result fields. Reaction is support force in N for structural Results and removed heat
 /// power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
-/// display units.
+/// display units. Transient thermal reactions include stored energy and refer to the last
+/// θ-method integration stage, not an endpoint steady-state residual.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
@@ -1068,6 +1069,10 @@ pub enum Command {
     /// requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
     /// `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
     /// on its own answer — today a radiation load — and are ignored by a Step that is linear.
+    /// Heat Results report net applied power, positive removed heat and stored-energy rate;
+    /// transient powers belong to the last θ-method integration stage (radiation uses weighted
+    /// endpoint fluxes), while temperature fields belong to its endpoint.
+
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -1117,8 +1122,9 @@ pub enum Command {
     #[serde(rename = "step.remove", rename_all = "camelCase")]
     StepRemove { name: String },
 
-    /// Set the run order of Steps; `order` must list every Step name exactly once. Steps run in
-    /// this order and a later Step may inherit state (a temperature field) from an earlier one.
+    /// Set the run order of Steps; `order` must list every Step name exactly once and keep each
+    /// Step after the prerequisite named by its `after` field. Steps run in this order and a
+    /// later Step may inherit state (a temperature field) from an earlier one.
     #[serde(rename = "step.reorder", rename_all = "camelCase")]
     StepReorder { order: Vec<String> },
 
