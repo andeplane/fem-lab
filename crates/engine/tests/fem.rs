@@ -1770,6 +1770,8 @@ fn a_material_with_the_wrong_props_fails_every_integral_that_calls_the_law() {
             el.thermal_load(&c, &mut v).err(),
             el.recover(&c, &u, &mut sig, &mut eps).err(),
             el.omega_max(&c).err(),
+            // the geometric stiffness recovers its own stress through the law, so it fails too
+            el.geometric(&c, &u, &mut k).err(),
         ];
         for e in fails {
             let e = e.expect("a props mismatch must fail");
