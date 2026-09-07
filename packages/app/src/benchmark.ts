@@ -75,6 +75,13 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
     source: 'Self-weight closed form σ = ρgL · bundled benchmark metadata',
   },
   'column-buckling': null,
+  'concrete-floor-slab': {
+    locator: { kind: 'probe', field: 'displacement', component: 2, at: ['3 m', '500 mm', '100 mm'] },
+    reference: { values: [7.6171], unit: 'mm', label: '|uᶻ| at mid-span on the neutral axis' },
+    tolerance: { kind: 'percent', value: 2 },
+    magnitude: true,
+    source: 'Simply supported UDL closed form 5wL⁴/384EI with the wL²/8GAs shear term · EN 1992-1-1 §7.4.1 serviceability check',
+  },
   'cook-membrane': {
     locator: { kind: 'probe', field: 'displacement', component: 1, at: ['48 mm', '52 mm', '0 mm'] },
     reference: { values: [23.9], unit: 'mm', label: 'uʸ at loaded-edge midpoint C' },

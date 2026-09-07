@@ -5,6 +5,7 @@ import cantilever from '../../tutorials/cantilever.json';
 import columnBuckling from '../../tutorials/column-buckling.json';
 import freeFreeModal from '../../tutorials/free-free-modal.json';
 import compositeBlockShear from '../../tutorials/composite-block-shear.json';
+import concreteFloorSlab from '../../tutorials/concrete-floor-slab.json';
 import heatConduction from '../../tutorials/heat-conduction.json';
 import journalAsProgram from '../../tutorials/journal-as-program.json';
 import meshConvergence from '../../tutorials/mesh-convergence.json';
@@ -40,6 +41,7 @@ export const TUTORIALS: Tutorial[] = [
   solveCostAndSolvers,
   steelRoofTruss,
   columnBuckling,
+  concreteFloorSlab,
 ] as Tutorial[];
 
 export function tutorialById(id: string): Tutorial | undefined {
