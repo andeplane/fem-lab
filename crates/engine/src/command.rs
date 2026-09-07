@@ -177,6 +177,21 @@ pub enum Procedure {
     StaticNonlinear,
     /// Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.
     Modal,
+    /// Linear (eigenvalue) buckling. Solves the Step statically, builds the stress stiffening
+    /// that state produces, and reports the load factors `lambda` of `(K + lambda K_sigma) phi = 0`
+    /// with the smallest `|lambda|` first; `nModes` (default 1) says how many. Multiply this
+    /// Step's Loads by `lambda` to get the critical load.
+    ///
+    /// Read the answer carefully. A mode shape has **arbitrary amplitude** — it shows *where*
+    /// the structure buckles, never how far — so never report a displacement from it. A
+    /// **negative** factor is not an error: it means the structure buckles under the *reversed*
+    /// load, which matters if the load can change sign. And the factor is an **upper bound**: it
+    /// ignores imperfections, pre-buckling rotation and yielding, so a real column carries less
+    /// than this predicts. It is not a safety factor; treat it as the ceiling a perfect,
+    /// perfectly elastic structure would reach. Not available for the axisymmetric idealisation,
+    /// and it needs the direct solver: the iteration back-substitutes hundreds of times through
+    /// one factorisation, which `cpu-pcg` and `gpu-pcg` do not build.
+    Buckling,
     /// Steady heat conduction with convection, flux and source boundaries; needs `k`.
     HeatSteady,
     /// Transient heat conduction by the θ-method; needs `k`, `rho`, `cp`, `dt` and `tEnd`.
@@ -1346,7 +1361,8 @@ pub enum Command {
     /// reactions). Steps run in the order given by step.reorder, and `after` names an earlier
     /// Step whose Result this one continues — a static Step after a heat Step picks up its
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
-    /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
+    /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `nModes`
+    /// alone (default 1) to buckling, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
     /// `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
     /// `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to

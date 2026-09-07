@@ -419,6 +419,15 @@ fn one_result(r: &ResultSummary, st: Option<&StudyReport>) -> String {
             "unreachable",
         );
     }
+    if !r.buckling_factors.is_empty() {
+        s += "#### Buckling load factors\n\n";
+        s += &table(
+            &["Mode", "Load factor"],
+            r.buckling_factors.iter().enumerate().map(|(i, l)| vec![(i + 1).to_string(), fmt_sig(*l, 4)]).collect(),
+            "unreachable",
+        );
+        s += "A load factor multiplies this Step's Loads; a negative one buckles under the reversed load. It is an upper bound that ignores imperfections, pre-buckling rotation and yielding, so it is not a safety factor.\n\n";
+    }
     if !r.history.is_empty() {
         s += "#### History\n\n";
         s += &table(
@@ -687,6 +696,7 @@ mod tests {
             applied_total: [zero.clone(), zero.clone(), zero],
             assumptions: vec![],
             frequencies: vec![],
+            buckling_factors: vec![],
             history: vec![],
             sweep: vec![],
             balance: 0.0,

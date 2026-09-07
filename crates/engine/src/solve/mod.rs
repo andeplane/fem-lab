@@ -105,6 +105,22 @@ pub async fn solve(
     gpu: Option<&crate::gpu::Gpu>,
     progress: OnProgress<'_>,
 ) -> Result<(Vec<f64>, SolveInfo), Error> {
+    solve_reusable(k, b, opts, pool, gpu, progress).await.map(|(x, info, _)| (x, info))
+}
+
+/// [`solve`], plus the factorisation when the direct path produced one.
+///
+/// A procedure that needs many more right-hand sides against the same operator — linear
+/// buckling's subspace iteration — takes it from here rather than factorising a second time.
+/// The iterative paths answer `None`: they never build one.
+pub async fn solve_reusable(
+    k: &Csr,
+    b: &[f64],
+    opts: &SolveOptions,
+    pool: &Pool,
+    gpu: Option<&crate::gpu::Gpu>,
+    progress: OnProgress<'_>,
+) -> Result<(Vec<f64>, SolveInfo, Option<direct::Direct>), Error> {
     let chosen = resolve_solver(opts.solver, k.n, gpu.is_some());
     if !progress(Progress {
         phase: "solve",
@@ -117,7 +133,7 @@ pub async fn solve(
         Solver::CpuDirect => pool.install(|| {
             let mut factored = direct::Direct::factor(k)?;
             let mut x = vec![0.0; k.n];
-            factored.solve_with_tolerance(b, &mut x, opts.rel_tol).map(|info| (x, info))
+            factored.solve_with_tolerance(b, &mut x, opts.rel_tol).map(|info| (x, info, Some(factored)))
         }),
         // The iterative paths run on rayon's global pool rather than the engine's: `progress` is
         // a `&mut dyn FnMut` and cannot cross into `Pool::install`, which needs `Send`. Every
@@ -125,12 +141,20 @@ pub async fn solve(
         // answer does not depend on which pool ran it.
         Solver::CpuPcg => {
             let mut inner = crate::gpu::cg::Inner::Cpu(pcg::CpuPcg::new(k, opts.inner_tol, opts.max_iterations));
-            refine::refine(k, b, &mut inner, "cpu-pcg", opts.rel_tol, opts.max_outer, progress).await
+            refine::refine(k, b, &mut inner, "cpu-pcg", opts.rel_tol, opts.max_outer, progress).await.map(no_factor)
         }
         // `Auto` is already resolved, so what is left is the GPU. Its whole body — including
         // the "no adapter" error — lives under `src/gpu/`, so nothing here needs a device.
-        _ => crate::gpu::cg::solve_refined(gpu, k, b, opts, progress).await,
+        _ => crate::gpu::cg::solve_refined(gpu, k, b, opts, progress).await.map(no_factor),
     }
+}
+
+/// An iterative answer, with the `None` that says it built no factorisation.
+///
+/// A named function rather than a closure per arm: a host without a GPU never runs the GPU
+/// arm's success path, and a closure there would be a function no test could enter.
+fn no_factor((x, info): (Vec<f64>, SolveInfo)) -> (Vec<f64>, SolveInfo, Option<direct::Direct>) {
+    (x, info, None)
 }
 
 /// Counting scratch is bounded independently of the requested matrix size. The adjacency

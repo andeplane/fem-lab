@@ -397,6 +397,9 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
         Procedure::Modal => {
             procedure::Step::Modal { n_modes: step.n_modes.unwrap_or(6) as usize, shift: step.shift, solver: opts }
         }
+        // One factor by default: the smallest is the one that decides whether the structure
+        // stands, and asking for more costs a wider subspace.
+        Procedure::Buckling => procedure::Step::Buckling { n_modes: step.n_modes.unwrap_or(1) as usize, solver: opts },
         Procedure::HeatSteady => procedure::Step::HeatSteady { solver: opts, control: control(step) },
         Procedure::HeatTransient => procedure::Step::HeatTransient {
             control: control(step),
@@ -507,9 +510,9 @@ pub(crate) fn planned_cost(
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "static")) });
         }
-        procedure::Step::Static { solver, .. } | procedure::Step::Modal { solver, .. } => {
-            crate::solve::cost_estimate(mesh, mesh.dim, solver.solver)
-        }
+        procedure::Step::Static { solver, .. }
+        | procedure::Step::Modal { solver, .. }
+        | procedure::Step::Buckling { solver, .. } => crate::solve::cost_estimate(mesh, mesh.dim, solver.solver),
         // A nonlinear Step keeps one displacement field per converged increment — the
         // load–deflection curve — so its retained history is counted exactly as a transient's.
         // It is reported rather than enforced: `outputEvery`, which the budget error suggests,
@@ -956,6 +959,9 @@ impl Engine {
             applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
             assumptions: res.assumptions.clone(),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
+            // Dimensionless, so no display conversion: a load factor is a load factor in any unit
+            // system the Model is written in.
+            buckling_factors: res.buckling_factors.clone(),
             history: res
                 .history
                 .iter()
