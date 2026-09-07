@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-06
 ---
 
@@ -31,7 +31,7 @@ reported feature set, separated numeric factorization from triangular solution:
 Thus the demonstrated failing stage is parallel numeric factorization. The exact
 internal faer kernel defect is not yet identified. The fixture raw SHA256 is
 `676daedcc4c2be0c6f5c9b5519e2c9bc619eaa8ae78f5b2baf1282982d198cad`;
-`tools/replay-le10-266` is the portable upstream reproducer, including CPU logs,
+the [archived PR223 reproducer](https://github.com/andeplane/fem-lab/tree/22d945dea63f9b61e1ac9b1c9798312894face12/tools/replay-le10-266) is the portable upstream reproducer, including CPU logs,
 lossless provenance, full-operator residual and unchanged CLI physical checks.
 The earlier small integer-product/SPD-grid discriminator passed on Windows/Linux;
 it is insufficient to clear this large sparse factorization path.
@@ -59,7 +59,7 @@ solution is disproved by the stage-isolation control above.
 
 Verification includes the unchanged LE10 Hex20/Tet10 stress and force-balance
 checks on Windows with default/one/four threads, plus original-operator residuals.
-The host-only `verify_direct_266` example in the CLI crate also reads the exact
+The [archived host-only `verify_direct_266` example](https://github.com/andeplane/fem-lab/blob/22d945dea63f9b61e1ac9b1c9798312894face12/crates/femlab/examples/verify_direct_266.rs) also reads the exact
 captured CSR and calls production `Direct` at those same thread counts; it keeps
 fixture I/O outside the engine and leaves the failing baseline reproducer intact.
 A separate harmonic Dirichlet problem has exact linear nodal values at three

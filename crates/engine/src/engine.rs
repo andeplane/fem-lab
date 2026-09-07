@@ -724,6 +724,32 @@ impl Engine {
                 let l = Load { name: name.clone(), kind: LoadKind::Convection { on: on.clone(), h: hv, t_inf: tv } };
                 Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
             }
+            Command::LoadRadiation { name, on, emissivity, t_inf } => {
+                check_name(name)?;
+                self.check_set(on)?;
+                if !(*emissivity > 0.0 && *emissivity <= 1.0) {
+                    return Err(Error::schema(format!("emissivity must be a fraction in (0, 1], got {emissivity}"))
+                        .at("emissivity")
+                        .suggest("load.radiation with emissivity between 0 and 1, 1 for a black body"));
+                }
+                let tv = t_inf.si().map_err(|e| e.at("tInf"))?;
+                // Absolute temperature: a fourth power of a negative kelvin is meaningless, and
+                // 0 K (a deep-space sink) is the one legitimate edge of the range. `si` has
+                // already refused a non-finite quantity, so this comparison is total.
+                if tv < 0.0 {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("load '{name}' radiates to {tv} K, below absolute zero"),
+                    )
+                    .at("tInf")
+                    .suggest("load.radiation with tInf at or above 0 K"));
+                }
+                let l = Load {
+                    name: name.clone(),
+                    kind: LoadKind::Radiation { on: on.clone(), emissivity: *emissivity, t_inf: tv },
+                };
+                Ok(upsert(&mut self.model.loads, l, |l| &l.name, ObjectKind::Load))
+            }
             Command::LoadHeatFlux { name, on, q } => {
                 check_name(name)?;
                 self.check_set(on)?;
@@ -766,8 +792,24 @@ impl Engine {
                 dt_factor,
                 amplitude,
                 initial,
+                nonlinear_tolerance,
+                nonlinear_max_iterations,
             } => {
                 check_name(name)?;
+                if let Some(tol) = nonlinear_tolerance {
+                    if !(*tol > 0.0 && tol.is_finite()) {
+                        return Err(Error::schema(format!(
+                            "nonlinearTolerance must be finite and positive, got {tol}"
+                        ))
+                        .at("nonlinearTolerance")
+                        .suggest("step.add with nonlinearTolerance 1e-6"));
+                    }
+                }
+                if nonlinear_max_iterations == &Some(0) {
+                    return Err(Error::schema("nonlinearMaxIterations must be at least 1")
+                        .at("nonlinearMaxIterations")
+                        .suggest("step.add with nonlinearMaxIterations 50"));
+                }
                 for c in constraints {
                     self.model
                         .constraint(c)
@@ -803,6 +845,8 @@ impl Engine {
                     dt_factor: *dt_factor,
                     amplitude: amplitude.as_ref().map(to_amplitude).transpose()?,
                     initial: opt_si(initial, "initial")?,
+                    nonlinear_tolerance: *nonlinear_tolerance,
+                    nonlinear_max_iterations: *nonlinear_max_iterations,
                 };
                 Ok(upsert(&mut self.model.steps, s, |s| &s.name, ObjectKind::Step))
             }
@@ -1101,6 +1145,7 @@ impl Engine {
                         | LoadKind::Traction { on, .. }
                         | LoadKind::Force { on, .. }
                         | LoadKind::Convection { on, .. }
+                        | LoadKind::Radiation { on, .. }
                         | LoadKind::HeatFlux { on, .. } => *on = rename_set_ref(on, name, to),
                         LoadKind::Temperature { bodies, .. } | LoadKind::HeatSource { bodies, .. } => {
                             for b in bodies {
@@ -1161,6 +1206,7 @@ impl Engine {
                         | LoadKind::Traction { on, .. }
                         | LoadKind::Force { on, .. }
                         | LoadKind::Convection { on, .. }
+                        | LoadKind::Radiation { on, .. }
                         | LoadKind::HeatFlux { on, .. } => {
                             if on == name {
                                 *on = to.into();
