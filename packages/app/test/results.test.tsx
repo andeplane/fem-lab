@@ -9,7 +9,7 @@ import schema from '../../registry/src/generated/engine.schema.json';
 import { readHostCaps } from '../src/capabilities';
 import { FIELD_CHOICES, choiceOf, displayUnitOf, fieldChoices, formatNumber, legendTicks, siUnitOf } from '../src/fields';
 import { appHostCommands, makeHostContext } from '../src/host';
-import { ResultsView, fieldKeyOf, magnitude } from '../src/results';
+import { ResultsView, available, fieldKeyOf, magnitude } from '../src/results';
 import { fitsSurface, nice, niceTick } from '../src/viewer/scale';
 import { Store, initialState, solveLabel, stageOf, verificationState, type AssistantVerification } from '../src/store';
 import { exaggerationHelp, probeLine } from '../src/ui/App';
@@ -58,6 +58,13 @@ const RESULT: ResultSummary = {
   reactions: [{ constraint: 'root', total: [kN(0), kN(0), kN(1)] }],
   appliedTotal: [kN(0), kN(0), kN(-1)],
   balance: 0,
+};
+
+const BUCKLING_RESULT: ResultSummary = {
+  ...RESULT,
+  step: 'buckle',
+  frequencies: [],
+  bucklingFactors: [17.3996, 17.3996],
 };
 
 
@@ -358,6 +365,16 @@ describe('ResultsView', () => {
     transport.query.mockRejectedValueOnce({ code: 'internal', cause: 'read failed' });
     await expect(results.refresh()).rejects.toMatchObject({ code: 'internal', cause: 'read failed' });
     expect(viewer.current.setSurface).toHaveBeenCalledTimes(calls);
+  });
+
+  it('uses buckling factors when frequencies are empty for mode animation and fallback selection', async () => {
+    expect(available('mode:99', BUCKLING_RESULT, false)).toBe('mode:1');
+    const { store, viewer, results, transport } = harness(BUCKLING_RESULT);
+    await results.animate({ step: 'buckle', mode: 2, playing: false, frame: 50 });
+    expect(transport.field).toHaveBeenCalledWith('buckle', 'mode:2', undefined, BUCKLING_RESULT.resultId);
+    expect(store.state).toMatchObject({ fieldKey: 'mode:2', phase: 0.5, viewMode: 'results' });
+    expect(viewer.current.animate).toHaveBeenLastCalledWith(false, 1, 0.5);
+    await expect(results.animate({ step: 'buckle', mode: 3, playing: true })).rejects.toThrow('has no mode 3');
   });
 
   it('animates the explicitly requested Step and mode with speed and phase, updating the same UI state', async () => {
