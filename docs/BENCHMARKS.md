@@ -77,6 +77,9 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | near-incompressible-049 | green | 4/4 | 5.9894e-5 | 5.9898e-5 | 0.01 % |
 | near-incompressible-0499 | green | 4/4 | 5.9951e-5 | 5.9990e-5 | 0.07 % |
 | near-incompressible-04999 | green | 4/4 | 5.9609e-5 | 5.9999e-5 | 0.65 % |
+| nlgeom-cantilever-hex20 | green | 6/6 | -382.167439 | -387.25775 | 1.31 % |
+| nlgeom-small-strain-hex20 | green | 4/4 | -0.190407 | -0.190407 | 0.00 % |
+| nlgeom-uniaxial-svk | green | 6/6 | 24255 | 24255 | 0.00 % |
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
@@ -236,7 +239,7 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B3 | MacNeal–Harder twisted beam (90° twist, 12 elements) | 0.005424 in (in-plane), 0.001754 in (out-of-plane) — **verify against the paper** | 2 % | warped elements | |
 | B4 | Cantilever modal, first three bending modes | β_nL = 1.8751, 4.6941, 7.8548 → f_n = (β_n²/2π)·√(EI/ρAL⁴) | 1.5 % (mode 1), 3 % (modes 2 and 3, Timoshenko drift) | mass matrix, eigen solver | engine test + green |
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
-| B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
+| B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | green as **K2** (end force). The end-moment half needs a moment load, which no Command applies; filed separately |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
 | B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
 | B9 | Truss axial patch: three collinear bars at 1, 2 and 5 elements | u(x) = F x / (E A) at every node; 1 mm at the tip with E = 200 GPa, A = 1000 mm², L = 2 m, F = 100 kN | 1e-12 rel, identical at all three meshes | the bar element reproduces its own exact field, whatever the subdivision | green |
@@ -702,6 +705,47 @@ rows, because their oracles are the geometry itself:
 | # | Case | Method |
 |---|---|---|
 | I1 | Export B1, C5, D1 as Abaqus `.inp`, run in CalculiX, compare nodal displacements | within 1e-6 relative for identical mesh and element type; documented run, not CI |
+
+## K. Geometric nonlinearity (phase 6)
+
+Total Lagrangian, Newton–Raphson, load stepping (`procedure: static-nonlinear`, issue #59).
+Green–Lagrange strain and second Piola–Kirchhoff stress go through the *existing* linear
+elastic law, which on that pair is the St Venant–Kirchhoff material, so every row below tests
+kinematics and the Newton loop rather than a new constitutive model. Solid and plane-strain
+idealisations only.
+
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| K1 | Uniaxial St Venant–Kirchhoff bar, ν = 0, stretched 10 % | exact: E₁₁ = (λ²−1)/2 = 0.105, Cauchy σ₁₁ = λE·E₁₁ = 24255 MPa, root reaction λS₁₁A₀ = 242.55 MN | 1e-9 rel | the strain measure, the stress measure and the push-forward, against closed form; a small-strain formulation misses σ by 13 % | green |
+| K2 | Large-deflection cantilever, fixed-direction tip force, hex20, α = PL²/EI = 1.3791547 | exact elastica by quadrature of its own first integral: x_tip = 0.90488893 L, y_tip = 0.38725775 L | 2 % across, 5 % along | the whole loop under a 39 % tip deflection; linear theory is 19 % out | green |
+| K3 | The same cantilever at 1/1000 of B1's load, `static-nonlinear` against `static` | B1's own hex20 answer, 0.1904070 mm | 1e-5 rel | the finite-strain kernel degenerates to the linear one exactly | green |
+| K4 | Finite-deformation patch test: triaxial stretch, simple shear, a 0.4 rad rotation and a general `F`, on a distorted mesh, every element kind | exact constant `E` and Cauchy `σ` from the same `F` | 1e-9 rel on displacement, 1e-8·E on stress | `B_L`, the geometric stiffness and the assembly, on all eight kinds | engine test |
+| K5 | Rigid-body motion of one element: rotations of 0.37, π/2, π rad and a general 3D rotation, plus a translation | zero strain, zero stress, zero internal force | 1e-12 strain, 1e-9·E stress | total Lagrangian outright — a small-strain formulation fails this at any angle | engine test |
+| K6 | Consistent tangent against the central difference of the internal force, every kind | `K_T v = d f_int/du · v` | 1e-6 rel | the tangent is the derivative, which is what makes Newton quadratic (ADR 0007: calculus, not a second implementation) | engine test |
+| K7 | Beam-column: cantilever under a tip load *and* an axial compression at `u = L√(P/EI)` = 0.5, 1.0, 1.4 | `δ(P)/δ(0) = 3(tan u/u − 1)/u²`, exact, running away at `u = π/2` — the cantilever Euler load | 2 % | the geometric stiffness alone (the ratio cancels the discretisation), up to 79 % of the critical load | engine test |
+| K8 | Determinism: K2's beam at 1 and 4 threads | bit-identical displacement, stress, reaction and every scalar | exact | the scatter, the norms and therefore every convergence decision are fixed-order (ADR 0013) | engine test |
+| K9 | A beam cut in two and bonded back together, at K2's deflection | the single-Body beam's own answer | 1e-6 rel | the multipoint elimination happens *inside* the Newton loop: `TᵀK_T T` and `Tᵀr` per iteration, the correction recovered onto the slaves, and the tie force kept out of the support reactions | engine test |
+
+K2's reference is derived, not transcribed. `EI θ'' = −P cos θ` with `θ(0) = 0` and `θ'(L) = 0`
+integrates once to `θ' = √(2P/EI)·√(sin θ_L − sin θ)`, so a chosen tip slope `θ_L` fixes the load
+parameter and the tip position as three integrals of one integrand;
+`the_large_deflection_cantilever_follows_the_elastica` evaluates them and checks that the same
+quadrature reduces to `θ_L = α/2` and `y = αL/3` as `α → 0`, which is Euler–Bernoulli. Bisshopp
+& Drucker (1945) tabulate the same curve and their published values stay **resolve** until the
+paper is on hand; no row here depends on them.
+
+K2 is gated at 2 % on 20 elements because that is where the mesh is, not the formulation:
+refining to 40 elements moves the tip deflection from −382.2 mm to −385.3 mm against the
+elastica's −387.3 mm, so the error falls from 1.31 % to 0.49 %. The cheap mesh keeps the case
+fast; the engine test in `crates/engine/tests/fem.rs` runs the same beam at both slopes.
+
+**What is deliberately not here.** Follower loads: the external force is deformation-independent,
+so a pressure keeps the direction and the area it had on the reference mesh. Line search: the
+only robustness measure is halving cutback, which every row above converges with; snap-through
+needs arc-length control (#75). Plane stress and axisymmetry: the finite-strain kernel has
+`F₃₃ = 1`, and both are refused by name rather than approximated. B5's pinned Euler column stays
+#58's linear-buckling job; K7 measures the same critical load through the beam-column solution,
+whose end conditions a three-dimensional solid can reproduce without ambiguity.
 
 ## Substituted cases
 
