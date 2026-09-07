@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use crate::mesh::{ElementBlock, ElementKind, Face, Mesh};
 use crate::mesher::structured::{CORNERS, FACE_LOCAL_2D, FACE_LOCAL_3D, SET_NAMES};
 use crate::predicate::face_centroid_normal;
-use crate::solid::Solid;
+use crate::solid::{point_triangle_distance, Solid};
 use crate::GeomError;
 
 /// A boundary face inherits a Solid face's tag only if their normals agree within 45°.
@@ -184,11 +184,13 @@ fn neighbour(c: [usize; 3], a: usize, side: usize, cells: [usize; 3]) -> Option<
     Some(n)
 }
 
+type Triangle = [[f64; 3]; 3];
+
 /// The Solid's tagged faces, ready to name a mesh boundary face by proximity.
 struct Tagger<'a> {
     solid: &'a Solid,
-    /// 3D only: per Solid triangle its centroid, unit normal and tag.
-    tris: Vec<([f64; 3], [f64; 3], &'a str)>,
+    /// 3D only: per Solid triangle its vertices, unit normal and tag.
+    tris: Vec<(Triangle, [f64; 3], &'a str)>,
 }
 
 impl<'a> Tagger<'a> {
@@ -200,12 +202,7 @@ impl<'a> Tagger<'a> {
             .enumerate()
             .map(|(t, v)| {
                 let p = [tri.positions[v[0] as usize], tri.positions[v[1] as usize], tri.positions[v[2] as usize]];
-                let c = [
-                    (p[0][0] + p[1][0] + p[2][0]) / 3.0,
-                    (p[0][1] + p[1][1] + p[2][1]) / 3.0,
-                    (p[0][2] + p[1][2] + p[2][2]) / 3.0,
-                ];
-                (c, unit_normal(p), tri.tag_of(t))
+                (p, unit_normal(p), tri.tag_of(t))
             })
             .collect();
         Tagger { solid, tris }
@@ -233,7 +230,9 @@ impl<'a> Tagger<'a> {
         self.tris
             .iter()
             .filter(|(_, n, _)| dot(*n, normal) >= TAG_COS)
-            .map(|(c, _, tag)| (distance2(*c, centroid), *tag))
+            // Triangle centroids are not a surface-distance proxy: a broad cavity wall
+            // can lose to a nearby outer wall even when the mesh face lies on the cavity.
+            .map(|(p, _, tag)| (point_triangle_distance(centroid, p), *tag))
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, tag)| tag)
     }
@@ -243,12 +242,7 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn distance2(a: [f64; 3], b: [f64; 3]) -> f64 {
-    let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    dot(d, d)
-}
-
-fn unit_normal(p: [[f64; 3]; 3]) -> [f64; 3] {
+fn unit_normal(p: Triangle) -> [f64; 3] {
     let u = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
     let v = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
     let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
