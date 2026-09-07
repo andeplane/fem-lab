@@ -9019,7 +9019,8 @@ fn a_nonlinear_step_refuses_the_idealisations_it_has_no_kernel_for() {
     let bodies = vec!["sheet".to_string()];
     for (id, what) in [
         (Idealisation::PlaneStress { thickness: THICKNESS }, "plane stress"),
-        (Idealisation::Axisymmetric, "axisymmetric"),
+        (Idealisation::Axisymmetric { twist: false }, "axisymmetric"),
+        (Idealisation::Axisymmetric { twist: true }, "axisymmetric"),
     ] {
         let p =
             problem(&mesh, &sets, &bodies, id, Formulation::Full, vec![fix("root", "xmin", [true, true, false], 0.0)]);
