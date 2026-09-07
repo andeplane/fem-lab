@@ -87,6 +87,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 | tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
+| tie-nonmatching-patch-refined | green | 9/9 | 16 | 16 | 0.00 % |
+| tie-nonmatching-patch | green | 9/9 | 4 | 4 | 0.00 % |
 | tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
 | truss-axial-patch | green | 8/8 | 1 | 1 | 0.00 % |
 | truss-space-determinate | green | 5/5 | -0.390625 | -0.390625 | 0.00 % |
