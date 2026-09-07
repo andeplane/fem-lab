@@ -2427,7 +2427,7 @@ fn stl_gives_a_degenerate_triangle_a_zero_normal() {
 /// An affine map. Its Jacobian is constant, so an element's volume is one determinant times its
 /// reference measure and every rule integrates a constant exactly — which is what lets the
 /// closed form below be written without touching the kernel's quadrature.
-fn affine(p: [f64; 3]) -> [f64; 3] {
+fn affine_map(p: [f64; 3]) -> [f64; 3] {
     [
         2.0 + 1.3 * p[0] + 0.2 * p[1] + 0.1 * p[2],
         1.0 + 0.15 * p[0] + 1.1 * p[1] + 0.2 * p[2],
@@ -2437,7 +2437,7 @@ fn affine(p: [f64; 3]) -> [f64; 3] {
 
 /// One kind's affine element, flattened onto `z = 0` in 2D.
 fn affine_coords(kind: ElementKind) -> Vec<f64> {
-    let mut v = map_nodes(kind, affine);
+    let mut v = map_nodes(kind, affine_map);
     if kind.dim() == 2 {
         for a in 0..kind.n_nodes() {
             v[3 * a + 2] = 0.0;
