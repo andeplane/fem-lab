@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 test('@cpu screenshot requests render exact pixels and restore the interactive camera and canvas', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(async () => {
     await window.fem.model.new({ name: 'image-size' });
     await window.fem.geometry.addBox({ name: 'box', size: ['2 m', '1 m', '1 m'] });
@@ -72,7 +72,7 @@ test('@cpu animation selects the requested mode and scrubs real geometry through
   const source = JSON.parse(await readFile(new URL('../../../crates/engine/benches/journals/cantilever-modal.json', import.meta.url), 'utf8')) as { cmd: Record<string, unknown> }[];
   const commands = source.map(({ cmd }) => cmd.cmd === 'mesh.set' ? { ...cmd, mesher: { kind: 'lattice', size: { nx: 4, ny: 1, nz: 1 } } } : cmd.cmd === 'step.add' ? { ...cmd, nModes: 2 } : cmd);
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(async (commands) => { for (const cmd of commands) await window.fem.dispatch(cmd as { cmd: string }); }, commands);
   await expect(page.locator('.deform-bar')).toBeVisible();
   const original = await page.evaluate(() => window.fem.query.journal());
@@ -97,10 +97,11 @@ test('@cpu animation selects the requested mode and scrubs real geometry through
   await page.evaluate(() => {
     const observed = window as unknown as { phaseCommands: unknown[] };
     observed.phaseCommands = [];
-    const dispatch = window.fem.registry.dispatch.bind(window.fem.registry);
-    window.fem.registry.dispatch = async (cmd) => {
+    const registry = Object.getPrototypeOf(window.fem.registry) as typeof window.fem.registry;
+    const dispatch = registry.dispatch;
+    registry.dispatch = async function (cmd) {
       if (cmd.cmd === 'view.animate') observed.phaseCommands.push(cmd);
-      return dispatch(cmd);
+      return dispatch.call(this, cmd);
     };
   });
   const phase = (await page.locator('.deform-bar input.phase').boundingBox())!;

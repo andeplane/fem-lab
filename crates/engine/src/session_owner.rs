@@ -153,6 +153,17 @@ impl SessionOwner {
         document_snapshot(&mut self.inner, self.stamp.clone())
     }
 
+    /// Explicitly select one retained Result's mesh, under the same session check as its fields.
+    pub fn render_result(
+        &self,
+        context: &ExecutionContext,
+        result_id: &str,
+    ) -> Result<(Stamp, crate::engine::RenderView<'_>), Error> {
+        self.check_context(context)?;
+        let record = self.inner.result_record(None, Some(result_id))?;
+        Ok((self.stamp(), crate::engine::RenderView::Mesh(&record.built)))
+    }
+
     /// The read borrow keeps the admission check and all rendering inputs in one version.
     pub fn render_view(&mut self, context: &ExecutionContext) -> Result<(Stamp, crate::engine::RenderView<'_>), Error> {
         self.check_context(context)?;

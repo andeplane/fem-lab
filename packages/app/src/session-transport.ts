@@ -1,6 +1,6 @@
 // A channel never changes Workers. A producer never acquires a different session implicitly.
 import { decodeBulk, FemError, type Ack, type Command, type DocumentSnapshot, type EngineTransport, type ExecutionContext, type ExportedFile, type ExportSpec, type Field, type FieldData, type ImportAck, type JournalEntry, type ModelFile, type Progress, type Query, type QueryResult, type ResultField, type RunLease, type SessionRef, type Stamp } from '@femlab/registry';
-import type { AppSurface } from './worker-transport';
+import type { AppSurface } from './surface';
 import type { ReplacementSource, SessionMessage, SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 
 export const sameSession = (a: SessionRef, b: SessionRef): boolean => a.backendEpoch === b.backendEpoch && a.sessionId === b.sessionId;
@@ -18,6 +18,8 @@ interface Pending {
 
 /** Owns one immutable Worker endpoint; closing it revokes pending and future traffic. */
 export class SessionChannel {
+  private readonly lifetime = new AbortController();
+  get signal(): AbortSignal { return this.lifetime.signal; }
   private nextId = 0;
   private closed = false;
   private history: { stamp: Stamp; entries: JournalEntry[]; revision: number } | undefined;
@@ -76,10 +78,11 @@ export class SessionChannel {
     }
     this.history = { stamp: structuredClone(stamp), entries, revision: ack.revision };
   }
-  private failed(error: unknown): void { this.close(error); this.onFailure?.(error); }
+  private failed(error: unknown): void { if (this.closed) return; this.close(error); this.onFailure?.(error); }
   close(error: unknown = expired()): void {
     if (this.closed) return;
     this.closed = true;
+    this.lifetime.abort(error);
     this.worker.terminate();
     for (const item of this.pending.values()) item.reject(error);
     this.pending.clear();
@@ -96,10 +99,10 @@ export class SessionTransport implements EngineTransport {
   constructor(readonly channel: SessionChannel, private lease: RunLease, private readonly replace: Replace, private readonly recover: (origin: SessionTransport) => Promise<void> = async origin => origin.release()) {}
   onReplacement(listener: (next: SessionTransport) => void): void { this.replacementListener = listener; }
   async replaceWith(source: ReplacementSource): Promise<SessionTransport> {
-    const next = await this.replace(this, source);
-    this.replacementListener?.(next);
-    return next;
+    return this.replace(this, source);
   }
+  /** Called at the activation commit, before the previous endpoint is revoked. */
+  adopted(next: SessionTransport): void { this.replacementListener?.(next); }
   get stamp(): Stamp { return structuredClone(this.lease.stamp); }
   get runId(): string { return this.lease.runId; }
   onProgress(sink: (p: Progress) => void): void { this.sink = sink; }
@@ -135,7 +138,8 @@ export class SessionTransport implements EngineTransport {
       return snapshot;
     });
   }
-  dispatch(command: Command, onProgress?: (p: Progress) => void): Promise<Ack> {
+  dispatch(input: Command, onProgress?: (p: Progress) => void): Promise<Ack> {
+    const command = structuredClone(input);
     if (command.cmd === 'model.new') return this.replaceWith({ kind: 'commands', commands: [structuredClone(command)] }).then(async (next) => {
       const snapshot = await next.snapshot();
       return { seq: 0, revision: snapshot.model.revision, hash: snapshot.model.hash!, warnings: [], output: { type: 'none' } } as Ack;
@@ -146,18 +150,19 @@ export class SessionTransport implements EngineTransport {
       return this.accept(reply) as Ack;
     });
   }
-  query(query: Query): Promise<QueryResult> {
+  query(input: Query): Promise<QueryResult> {
+    const query = structuredClone(input);
     return this.ordered(async () => {
       const value = this.accept(await this.channel.request({ op: 'query', context: this.context(), query })) as Record<string, unknown>;
       if (value['values'] instanceof Float64Array) value['values'] = Array.from(value['values']);
       return value as unknown as QueryResult;
     });
   }
-  surface(): Promise<AppSurface> {
-    return this.ordered(async () => this.accept(await this.channel.request({ op: 'surface', context: this.context() })) as AppSurface);
+  surface(resultId?: string): Promise<AppSurface> {
+    return this.ordered(async () => this.accept(await this.channel.request({ op: 'surface', context: this.context(), ...(resultId === undefined ? {} : { resultId }) })) as AppSurface);
   }
-  async field(step: string, field: Field, component?: number): Promise<FieldData> {
-    const result = await this.query({ query: 'query.field', step, field }) as ResultField;
+  async field(step: string, field: Field, component?: number, resultId?: string): Promise<FieldData> {
+    const result = await this.query({ query: 'query.field', step, field, ...(resultId === undefined ? {} : { resultId }) }) as ResultField;
     const values = new Float32Array(component === undefined ? result.values : result.values.filter((_, index) => index % result.components === component));
     let min = values[0] ?? 0; let max = min;
     for (const value of values) { min = Math.min(min, value); max = Math.max(max, value); }

@@ -1,7 +1,7 @@
 import type { SessionEngine, PreparedEngine } from './generated/wasm/femlab_engine_wasm.js';
 import type { BufferSpec, DocumentSnapshot, Stamp } from '@femlab/registry';
 import type { SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
-import { toStructured } from './protocol';
+import { toStructured } from './engine-error';
 const json = JSON.stringify;
 class Publication { constructor(readonly stamp: Stamp, readonly value: unknown) {} }
 interface Bulk { value: unknown; buffers: BufferSpec[]; raw: ArrayBuffer[] }
@@ -48,7 +48,7 @@ const need = (): SessionEngine => {
     }
     case 'snapshot': return JSON.parse(need().snapshot(json(req.context)));
     case 'surface': {
-      const value = need().surface(json(req.context)) as Record<string, unknown>;
+      const value = need().surface(json(req.context), req.resultId) as Record<string, unknown>;
       value['triFace'] = value['triSet']; delete value['triSet'];
       value['faceNames'] = value['setNames']; value['setNames'] = value['membershipNames']; delete value['membershipNames'];
       value['edgeFace'] = value['edgeSet']; delete value['edgeSet'];

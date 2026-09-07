@@ -8,6 +8,7 @@ import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Store } from '../src/store';
+import { bindRegistryProducer } from '../src/producer-registry';
 import { afterEffects, waitFor, waitForGone, waitForText } from './wait-for';
 import { Tour } from '../src/tutorial/Tour';
 import { TutorialPanel } from '../src/tutorial/TutorialPanel';
@@ -27,7 +28,9 @@ function fakeRegistry(): Registry & { dispatch: ReturnType<typeof vi.fn>; query:
     return { seq: journal.entries.length - 1 };
   });
   const query = vi.fn(async (q: { query: string }) => (q.query === 'query.journal' ? journal : model));
-  return { dispatch, query } as unknown as Registry & { dispatch: typeof dispatch; query: typeof query };
+  const registry = { dispatch, query } as unknown as Registry & { dispatch: typeof dispatch; query: typeof query };
+  bindRegistryProducer(registry, async () => ({ registry, signal: new AbortController().signal, store: () => undefined, release: async () => undefined }));
+  return registry;
 }
 
 /**
@@ -52,6 +55,12 @@ function storeDispatch(store: Store, hold?: () => Promise<void>) {
 /** Put a Journal on the Store the way a refresh would, with no dispatch involved. */
 const journalOf = (store: Store, cmds: ({ cmd: string } & Record<string, unknown>)[]): void =>
   store.set({ journal: { entries: cmds.map((cmd, seq) => ({ seq, cmd, hashAfter: `h${seq}` })), revision: cmds.length, canUndo: true, canRedo: false } as never });
+
+function withProducer(store: Store, registry = fakeRegistry()): Registry {
+  bindRegistryProducer(registry, async () => ({ registry: { ...registry, dispatch: store.dispatch! } as unknown as Registry,
+    signal: new AbortController().signal, store: () => store, release: async () => undefined }));
+  return registry;
+}
 
 let root: HTMLElement;
 
@@ -126,11 +135,12 @@ describe('TutorialPanel', () => {
     target.remove();
   });
 
-  it('goes through the app\'s own dispatch when the Store carries one, and advances on its Journal', async () => {
+  it('uses its captured producer dispatch and advances on the published Journal', async () => {
     const store = new Store();
     store.togglePanel('tutorial', true);
     const registry = fakeRegistry();
     const calls = storeDispatch(store);
+    withProducer(store, registry);
     render(<TutorialPanel registry={registry} store={store} />, root);
     await afterEffects();
     await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
@@ -138,7 +148,7 @@ describe('TutorialPanel', () => {
     await waitForText(progress, 'step 2 of');
     expect(calls.map((c) => c.cmd)).toEqual(['model.new']);
     expect(registry.dispatch).not.toHaveBeenCalled(); // issue #12: never the bare registry
-    expect(registry.query).not.toHaveBeenCalled(); // the app's dispatch already refreshed
+    expect(registry.query).toHaveBeenCalledWith({ query: 'query.journal' }); // explicit observation before writing
   });
 
   it('disables "Do it for me" while the Command is in the air, and re-enables it after', async () => {
@@ -146,7 +156,7 @@ describe('TutorialPanel', () => {
     store.togglePanel('tutorial', true);
     let release = (): void => undefined;
     storeDispatch(store, () => new Promise<void>((r) => (release = r)));
-    render(<TutorialPanel registry={fakeRegistry()} store={store} />, root);
+    render(<TutorialPanel registry={withProducer(store)} store={store} />, root);
     await afterEffects();
     await click(await waitFor(() => root.querySelector('.tutorial-pick'), 'a tutorial to pick'));
     const doIt = (): HTMLButtonElement | null => root.querySelector<HTMLButtonElement>('.tutorial-btn.primary');

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
 import { Store } from '../src/store';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const transport = { dispatch: async () => undefined, query: async () => undefined } as unknown as WorkerTransport;
 

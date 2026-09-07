@@ -284,3 +284,30 @@ fn cross_worker_retirement_checks_the_reservation_and_revokes_posted_work() {
     lease.stamp = owner.stamp(); // Explicit acquisition cannot revive a retired endpoint either.
     assert_eq!(owner.begin_run(&lease.stamp.session).unwrap_err().code, ErrorCode::SessionExpired);
 }
+
+#[test]
+fn batch_replay_without_recorded_hashes_still_requires_a_consistent_file() {
+    let (mut owner, lease) = setup();
+    let before = owner.snapshot(&context(&lease, "read")).unwrap();
+    let ticket = owner.begin_replacement(context(&lease, "2"), lease.stamp.state_version.clone()).unwrap();
+    let mut entries = before.file.journal.entries.clone();
+    for entry in &mut entries {
+        entry.hash_after.clear();
+    }
+    let candidate =
+        pollster::block_on(Candidate::new(ticket.clone(), None, Box::new(NoClock), 1).replay(entries, true, false))
+            .unwrap();
+    assert_eq!(candidate.finish().unwrap().snapshot().file.model, before.file.model);
+    let mut inconsistent = before.file.clone();
+    inconsistent.model.name = "different".into();
+    let error = pollster::block_on(Candidate::new(ticket.clone(), None, Box::new(NoClock), 1).file_with_options(
+        inconsistent,
+        true,
+        false,
+    ))
+    .err()
+    .unwrap();
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert_eq!(owner.snapshot(&context(&lease, "read")).unwrap().file, before.file);
+    owner.abandon_replacement(&ticket).unwrap();
+}

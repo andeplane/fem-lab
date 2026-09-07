@@ -10,11 +10,12 @@ test('@cpu deformation previews while dragging and commits once on release', asy
   const journal = await page.evaluate(() => window.fem.query.journal());
   const before = await page.evaluate(() => window.fem.registry.query({ query: 'query.screenshot', legend: false }));
   await page.evaluate(() => {
-    const dispatch = window.fem.registry.dispatch.bind(window.fem.registry);
+    const registry = Object.getPrototypeOf(window.fem.registry) as typeof window.fem.registry;
+    const dispatch = registry.dispatch;
     (window as unknown as { scaleCommands: unknown[] }).scaleCommands = [];
-    window.fem.registry.dispatch = async (command) => {
+    registry.dispatch = async function (command) {
       if (command.cmd === 'view.setDeformScale') (window as unknown as { scaleCommands: unknown[] }).scaleCommands.push(command);
-      return dispatch(command);
+      return dispatch.call(this, command);
     };
   });
   const box = (await slider.boundingBox())!;

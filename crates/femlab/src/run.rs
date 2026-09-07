@@ -4,7 +4,105 @@ use std::path::Path;
 use std::time::Instant;
 
 use femlab_engine::query::{Query, QueryResult};
-use femlab_engine::{Command, Engine, Host, JournalEntry, ModelFile, Progress};
+use femlab_engine::replacement::Candidate;
+use femlab_engine::session::{ExecutionContext, ReadRequest, WriteRequest};
+use femlab_engine::session_owner::{DocumentSnapshot, RunLease};
+use femlab_engine::{Command, Host, JournalEntry, ModelFile, Progress, SessionOwner};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// One CLI invocation owns one producer. No mutable core Engine escapes the owner.
+pub struct BatchEngine {
+    owner: SessionOwner,
+    lease: RunLease,
+    operation: u64,
+    threads: usize,
+    cpu: bool,
+}
+impl BatchEngine {
+    fn context(&mut self) -> ExecutionContext {
+        self.operation += 1;
+        ExecutionContext {
+            session: self.lease.stamp.session.clone(),
+            run_id: self.lease.run_id.clone(),
+            operation_id: self.operation.to_string(),
+        }
+    }
+    fn candidate(
+        &mut self,
+    ) -> Result<(Candidate, femlab_engine::replacement::ReplacementTicket), femlab_engine::Error> {
+        let context = self.context();
+        let ticket = self.owner.begin_replacement(context, self.lease.stamp.state_version.clone())?;
+        Ok((Candidate::new(ticket.clone(), device(self.cpu), Box::new(SystemClock::default()), self.threads), ticket))
+    }
+    pub async fn load(&mut self, input: Input, skip: bool, verify: bool) -> Result<Vec<String>, femlab_engine::Error> {
+        let (candidate, ticket) = self.candidate()?;
+        let built = match input {
+            Input::File(file) => candidate.file_with_options(*file, skip, verify).await,
+            other => {
+                let (entries, has_hashes) = entries_of(other);
+                candidate.replay(entries, skip, verify && has_hashes).await
+            }
+        };
+        let prepared = match built.and_then(Candidate::finish) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.owner.abandon_replacement(&ticket)?;
+                return Err(error);
+            }
+        };
+        let snapshot = self.owner.commit_replacement(prepared)?;
+        self.lease.stamp = snapshot.stamp;
+        Ok(snapshot.journal.entries.into_iter().map(|entry| entry.hash_after).collect())
+    }
+    pub fn query(&mut self, query: Query) -> Result<QueryResult, femlab_engine::Error> {
+        let request = ReadRequest { context: self.context(), query };
+        let reply = self.owner.query(request)?;
+        self.lease.stamp = reply.stamp;
+        Ok(reply.value)
+    }
+    pub fn snapshot(&mut self) -> Result<DocumentSnapshot, femlab_engine::Error> {
+        let context = self.context();
+        self.owner.snapshot(&context)
+    }
+    async fn dispatch(&mut self, cmd: Command) -> Result<femlab_engine::Ack, femlab_engine::Error> {
+        let mut progress = |_: Progress| true;
+        if matches!(cmd, Command::ModelNew { .. }) {
+            let (candidate, ticket) = self.candidate()?;
+            let prepared = match candidate.commands(vec![cmd], &mut progress).await.and_then(Candidate::finish) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.owner.abandon_replacement(&ticket)?;
+                    return Err(error);
+                }
+            };
+            let snapshot = self.owner.commit_replacement(prepared)?;
+            self.lease.stamp = snapshot.stamp;
+            return Ok(femlab_engine::Ack {
+                seq: 0,
+                revision: snapshot.model.revision,
+                hash: snapshot.model.hash,
+                warnings: vec![],
+                output: femlab_engine::Output::None,
+            });
+        }
+        let request = WriteRequest {
+            context: self.context(),
+            expected_version: self.lease.stamp.state_version.clone(),
+            command: cmd,
+        };
+        let reply = self.owner.dispatch(request, &mut progress).await?;
+        self.lease.stamp = reply.stamp;
+        Ok(reply.ack)
+    }
+}
+
+fn device(cpu: bool) -> Option<femlab_engine::Gpu> {
+    if cpu {
+        None
+    } else {
+        pollster::block_on(femlab_engine::Gpu::request(femlab_engine::Gpu::default_backends())).ok()
+    }
+}
 
 /// The CLI's clock.
 pub struct SystemClock(Instant);
@@ -23,14 +121,14 @@ impl Host for SystemClock {
 
 /// A native engine; `cpu` skips the GPU request. A missing adapter is not an error here:
 /// the CPU solvers work without one and `query.capabilities` says so.
-pub fn new_engine(threads: Option<usize>, cpu: bool) -> Engine {
+pub fn new_engine(threads: Option<usize>, cpu: bool) -> BatchEngine {
+    static EPOCH: AtomicU64 = AtomicU64::new(0);
     let n = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    let gpu = if cpu {
-        None
-    } else {
-        pollster::block_on(femlab_engine::Gpu::request(femlab_engine::Gpu::default_backends())).ok()
-    };
-    Engine::new(gpu, Box::new(SystemClock::default()), n)
+    let epoch = format!("cli-{}-{}", std::process::id(), EPOCH.fetch_add(1, Ordering::Relaxed));
+    let mut owner =
+        SessionOwner::new(device(cpu), Box::new(SystemClock::default()), n, epoch).expect("nonempty CLI epoch");
+    let lease = owner.begin_run(&owner.stamp().session).expect("fresh CLI session");
+    BatchEngine { owner, lease, operation: 0, threads: n, cpu }
 }
 
 pub struct RunOptions {
@@ -81,10 +179,9 @@ pub fn entries_of(input: Input) -> (Vec<JournalEntry>, bool) {
     }
 }
 
-/// Read a `femlab/1` file, a Journal or a Command list as entries, plus whether those entries
-/// carry recorded hashes (a bare Command list does not, so `--verify` has nothing to compare).
+/// Read a Model file, Journal or Command list without discarding the supplied Model snapshot.
 /// The `Err` is the exit code the caller should return.
-pub fn read_entries(file: &Path) -> Result<(Vec<JournalEntry>, bool), i32> {
+pub fn read_input(file: &Path) -> Result<Input, i32> {
     let text = std::fs::read_to_string(file).map_err(|e| {
         eprintln!("cannot read {}: {e}", file.display());
         1
@@ -93,17 +190,16 @@ pub fn read_entries(file: &Path) -> Result<(Vec<JournalEntry>, bool), i32> {
         eprintln!("{}: {e}", file.display());
         1
     })?;
-    Ok(entries_of(input))
+    Ok(input)
 }
 
 pub fn run(file: &Path, opts: RunOptions) -> i32 {
-    let (entries, has_hashes) = match read_entries(file) {
+    let input = match read_input(file) {
         Ok(x) => x,
         Err(code) => return code,
     };
-    let verify = opts.verify && has_hashes;
     let mut engine = new_engine(opts.threads, opts.cpu);
-    let hashes = match pollster::block_on(engine.replay(&entries, opts.skip_solves, verify)) {
+    let hashes = match pollster::block_on(engine.load(input, opts.skip_solves, opts.verify)) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("{}", serde_json::to_string(&e).unwrap_or_else(|_| e.to_string()));
@@ -130,13 +226,21 @@ pub fn run(file: &Path, opts: RunOptions) -> i32 {
         }
         return 0;
     }
-    if opts.as_script {
-        print!("{}", engine.journal().as_script(femlab_engine::version()));
-        return 0;
-    }
-    if opts.journal {
-        println!("{}", serde_json::to_string_pretty(&engine.journal().entries).unwrap_or_default());
-        return 0;
+    if opts.as_script || opts.journal {
+        return match engine.snapshot() {
+            Ok(snapshot) => {
+                if opts.as_script {
+                    print!("{}", snapshot.script);
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&snapshot.journal.entries).unwrap_or_default());
+                }
+                0
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                1
+            }
+        };
     }
     match engine.query(Query::Model {}) {
         Ok(QueryResult::Model(m)) => {
@@ -235,7 +339,6 @@ pub fn schema(out: Option<&Path>, check: bool) -> i32 {
 }
 
 /// Dispatch helper shared by run and bench.
-pub fn dispatch(engine: &mut Engine, cmd: Command) -> Result<femlab_engine::Ack, femlab_engine::Error> {
-    let mut nop = |_: Progress| true;
-    pollster::block_on(engine.dispatch(cmd, &mut nop))
+pub fn dispatch(engine: &mut BatchEngine, cmd: Command) -> Result<femlab_engine::Ack, femlab_engine::Error> {
+    pollster::block_on(engine.dispatch(cmd))
 }
