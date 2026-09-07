@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::GeomError;
 
 /// The element kinds the engine integrates: eight isoparametric solids and the two-node
-/// line member (a truss), which is embedded in a 3D mesh rather than being of its dimension.
+/// line members (a truss and a beam), which are embedded in a 3D mesh rather than being of
+/// their dimension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ElementKind {
@@ -29,6 +30,9 @@ pub enum ElementKind {
     Tri6,
     /// Two-node straight line member carrying axial force only, in a 3D mesh.
     Truss2,
+    /// Two-node straight Timoshenko beam carrying axial force, shear, bending and torsion, in a
+    /// 3D mesh; its nodes carry three rotations as well as the three displacements.
+    Beam2,
 }
 
 /// The shape of an element face: a quad or triangle in 3D, a line in 2D.
@@ -100,7 +104,7 @@ impl ElementKind {
             ElementKind::Quad8 => 8,
             ElementKind::Tri3 => 3,
             ElementKind::Tri6 => 6,
-            ElementKind::Truss2 => 2,
+            ElementKind::Truss2 | ElementKind::Beam2 => 2,
         }
     }
     /// Corner nodes; the first `n_corners` entries of the connectivity.
@@ -109,7 +113,7 @@ impl ElementKind {
             ElementKind::Hex8 | ElementKind::Hex20 => 8,
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Quad4 | ElementKind::Quad8 => 4,
             ElementKind::Tri3 | ElementKind::Tri6 => 3,
-            ElementKind::Truss2 => 2,
+            ElementKind::Truss2 | ElementKind::Beam2 => 2,
         }
     }
     /// The element's own dimension: 3 for solids, 2 for plane elements, 1 for a line member.
@@ -117,7 +121,7 @@ impl ElementKind {
         match self {
             ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Tet4 | ElementKind::Tet10 => 3,
             ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Tri3 | ElementKind::Tri6 => 2,
-            ElementKind::Truss2 => 1,
+            ElementKind::Truss2 | ElementKind::Beam2 => 1,
         }
     }
     /// Faces in 3D, edges in 2D.
@@ -126,7 +130,7 @@ impl ElementKind {
             ElementKind::Hex8 | ElementKind::Hex20 => 6,
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Quad4 | ElementKind::Quad8 => 4,
             ElementKind::Tri3 | ElementKind::Tri6 => 3,
-            ElementKind::Truss2 => 0,
+            ElementKind::Truss2 | ElementKind::Beam2 => 0,
         }
     }
     pub const fn face_kind(self) -> FaceKind {
@@ -137,7 +141,7 @@ impl ElementKind {
             ElementKind::Tet10 => FaceKind::Tri6,
             ElementKind::Quad4 | ElementKind::Tri3 => FaceKind::Line2,
             ElementKind::Quad8 | ElementKind::Tri6 => FaceKind::Line3,
-            ElementKind::Truss2 => FaceKind::Line2,
+            ElementKind::Truss2 | ElementKind::Beam2 => FaceKind::Line2,
         }
     }
     /// Element-local nodes of face `f` (Abaqus S1..S6 identity), corners first, counter-clockwise
@@ -153,7 +157,7 @@ impl ElementKind {
             ElementKind::Tri3 => &TRI3_FACES[f],
             ElementKind::Tri6 => &TRI6_FACES[f],
             // A line member has no faces; `n_faces() == 0`, so `f` never names one.
-            ElementKind::Truss2 => &[],
+            ElementKind::Truss2 | ElementKind::Beam2 => &[],
         }
     }
     /// Element-local corner pairs of every edge; for quadratic kinds node `n_corners() + i` is the
@@ -164,7 +168,7 @@ impl ElementKind {
             ElementKind::Tet4 | ElementKind::Tet10 => &TET_EDGES,
             ElementKind::Quad4 | ElementKind::Quad8 => &QUAD_EDGES,
             ElementKind::Tri3 | ElementKind::Tri6 => &TRI_EDGES,
-            ElementKind::Truss2 => &LINE_EDGES,
+            ElementKind::Truss2 | ElementKind::Beam2 => &LINE_EDGES,
         }
     }
 }

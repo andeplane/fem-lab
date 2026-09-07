@@ -13,7 +13,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::{face_set_area, face_set_polar_moment, Load};
-use crate::fem::problem::{Constraint, Coupling, PointMass, Problem};
+use crate::fem::problem::{Constraint, Coupling, PointMass, Problem, NODE_DOFS_MAX};
 use crate::mesh::{scale_mesher, BuiltMesh};
 use crate::model::{Axial, ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
@@ -24,7 +24,9 @@ use crate::query::{
     StudyRow, SweepRow, Valued,
 };
 use crate::solve::SolveOptions;
-use crate::units::{Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Q};
+use crate::units::{
+    Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Torque, Q,
+};
 
 /// The two built-in laws a Model material resolves to; plugins add their own later.
 const LAW: &str = "linear-elastic";
@@ -66,6 +68,8 @@ pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
         Field::Temperature => Temperature::DIM,
         Field::Strain => Dimension::NONE,
         Field::Stress | Field::StressUnaveraged | Field::VonMises | Field::Principal => Stress::DIM,
+        Field::SectionForce => Force::DIM,
+        Field::SectionMoment => Torque::DIM,
     }
 }
 
@@ -149,26 +153,38 @@ fn build_problem_with_temperature<'a>(
                 });
                 continue;
             }
+            // A fix of every displacement that names no rotation is a clamp, so a beam joint
+            // under it cannot turn either; the Model keeps the three-component form every
+            // Journal recorded, and the rotations are added here where the DOFs exist.
             ConstraintKind::Fix { dofs } => {
-                let mut on = [false; 3];
+                let mut on = [false; NODE_DOFS_MAX];
                 for d in dofs {
                     on[d.index()] = true;
                 }
+                if on[..3].iter().all(|&h| h) && !on[3..].iter().any(|&h| h) {
+                    on[3..].fill(true);
+                }
                 (on, 0.0)
             }
+            ConstraintKind::Pin => ([true, true, true, false, false, false], 0.0),
             ConstraintKind::Prescribe { dof, value } => {
-                let mut on = [false; 3];
+                let mut on = [false; NODE_DOFS_MAX];
                 on[dof.index()] = true;
                 (on, *value)
             }
+            // A mirror plane holds the displacement along its normal and, where a node can
+            // rotate, the two rotations about the in-plane axes.
             ConstraintKind::Symmetry { normal } => {
-                let mut on = [false; 3];
+                let mut on = [false; NODE_DOFS_MAX];
                 on[normal.index()] = true;
+                for a in 0..3 {
+                    on[3 + a] = a != normal.index();
+                }
                 (on, 0.0)
             }
             // The heat DOF is component 0; a temperature Constraint in a structural Step holds
             // nothing, which is what an all-false `dofs` means, so it is inert there.
-            ConstraintKind::Temperature { value } => ([heat, false, false], *value),
+            ConstraintKind::Temperature { value } => ([heat, false, false, false, false, false], *value),
         };
         constraints.push(Constraint { name: c.name.clone(), nodes: c.on.clone(), dofs, value });
     }
@@ -180,6 +196,8 @@ fn build_problem_with_temperature<'a>(
             model.sections.iter().position(|s| s.name == name)
         })
         .collect();
+    let orientation_of_block =
+        built.body_of_block.iter().map(|body| model.body(body).and_then(|b| b.orientation)).collect();
     let mut p = Problem {
         mesh: &built.mesh,
         sets: &built.sets,
@@ -188,6 +206,7 @@ fn build_problem_with_temperature<'a>(
         materials,
         section_of_block,
         sections: model.sections.iter().map(|s| s.section).collect(),
+        orientation_of_block,
         idealisation: model.idealisation.clone(),
         formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),
         constraints,
@@ -211,6 +230,10 @@ fn build_problem_with_temperature<'a>(
             LoadKind::Force { on, total } => {
                 let n = p.set(on)?.nodes.len() as f64;
                 loads.push(Load::NodalForce { nodes: on.clone(), f: total.map(|x| x / n) });
+            }
+            LoadKind::Moment { on, total } => {
+                let n = p.set(on)?.nodes.len() as f64;
+                loads.push(Load::NodalMoment { nodes: on.clone(), m: total.map(|x| x / n) });
             }
             LoadKind::Gravity { g } => loads.push(Load::Gravity { g: *g }),
             // Composed once below, including references for an inherited heat field.
@@ -470,7 +493,8 @@ fn initial_velocity_of(p: &Problem<'_>, step: &Step) -> Result<Option<Vec<f64>>,
                 }
             }
             given[node as usize] = Some(i);
-            for c in 0..dpn {
+            // A velocity is a translation; a beam joint's rotations start at rest.
+            for c in 0..dpn.min(3) {
                 v[node as usize * dpn + c] = entry.value[c];
             }
         }
@@ -1122,6 +1146,8 @@ mod tests {
             (Field::StressUnaveraged, "stressUnaveraged", Stress::DIM),
             (Field::VonMises, "vonMises", Stress::DIM),
             (Field::Principal, "principal", Stress::DIM),
+            (Field::SectionForce, "sectionForce", Force::DIM),
+            (Field::SectionMoment, "sectionMoment", Torque::DIM),
         ];
         for (field, name, dim) in all {
             assert_eq!(field_name(field), name);

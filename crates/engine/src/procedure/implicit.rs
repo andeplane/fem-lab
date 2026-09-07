@@ -234,8 +234,11 @@ pub fn run(
     }
     // The unknown is the acceleration, which is zero on every held DOF, so both reductions run
     // against zero prescribed values; the prescribed displacements enter through `K ũ`.
-    let rc0 =
-        ResolvedConstraints { fixed: rc.fixed.iter().map(|&(dof, _)| (dof, 0.0)).collect(), owner: rc.owner.clone() };
+    let rc0 = ResolvedConstraints {
+        fixed: rc.fixed.iter().map(|&(dof, _)| (dof, 0.0)).collect(),
+        owner: rc.owner.clone(),
+        inert: rc.inert.clone(),
+    };
     let zeros = vec![0.0; n];
     let red = reduce(&k_eff, &zeros, &rc0, &[]);
     drop(k_eff);

@@ -357,6 +357,7 @@ impl Engine {
                         "fix {}",
                         dofs.iter().map(|d| format!("{d:?}").to_lowercase()).collect::<Vec<_>>().join(", ")
                     ),
+                    ConstraintKind::Pin => "pin".to_string(),
                     ConstraintKind::Prescribe { dof, value } => {
                         let v = display(m, *value, Length::DIM);
                         format!("{} = {} {}", format!("{dof:?}").to_lowercase(), units::fmt_sig(v.value, 4), v.unit)
@@ -381,6 +382,9 @@ impl Engine {
                     }
                     LoadKind::Traction { total, .. } => ("traction", format!("total {}", vec3(m, *total, Force::DIM))),
                     LoadKind::Force { total, .. } => ("force", format!("total {}", vec3(m, *total, Force::DIM))),
+                    LoadKind::Moment { total, .. } => {
+                        ("moment", format!("total {}", vec3(m, *total, crate::units::Torque::DIM)))
+                    }
                     LoadKind::Gravity { g } => ("gravity", format!("g = {}", vec3(m, *g, Acceleration::DIM))),
                     LoadKind::Convection { h, t_inf, .. } => {
                         let hv = display(m, *h, HeatTransfer::DIM);

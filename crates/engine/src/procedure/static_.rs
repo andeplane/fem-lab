@@ -118,6 +118,14 @@ pub(crate) fn stress_fields(p: &Problem<'_>, u: &[f64], pool: &Pool, fields: &mu
     fields.insert(Field::Stress, nodal_stress);
     fields.insert(Field::StressUnaveraged, unaveraged);
     fields.insert(Field::Strain, nodal_strain);
+    // Per-member section forces exist only where a beam does; a Result without beams keeps
+    // exactly the fields it had.
+    if p.has_beams() {
+        let (force, moment) =
+            pool.install(|| stress::section_fields(p, u)).expect("the stiffness integral accepted this member");
+        fields.insert(Field::SectionForce, force);
+        fields.insert(Field::SectionMoment, moment);
+    }
 }
 
 /// Solve one linear static Step, over one increment or over an amplitude's schedule.

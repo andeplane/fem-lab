@@ -23,7 +23,8 @@ use crate::error::{Error, ErrorCode};
 
 fn gmsh_type(kind: ElementKind) -> u32 {
     match kind {
-        ElementKind::Truss2 => 1,
+        // Gmsh has one two-node line type; a beam written out comes back as a truss.
+        ElementKind::Truss2 | ElementKind::Beam2 => 1,
         ElementKind::Tri3 => 2,
         ElementKind::Quad4 => 3,
         ElementKind::Tet4 => 4,
@@ -157,7 +158,7 @@ pub fn gmsh_permutation(kind: ElementKind) -> &'static [u8] {
         ElementKind::Quad8 => &QUAD8_PERM,
         ElementKind::Tri3 => &TRI3_PERM,
         ElementKind::Tri6 => &TRI6_PERM,
-        ElementKind::Truss2 => &TRUSS2_PERM,
+        ElementKind::Truss2 | ElementKind::Beam2 => &TRUSS2_PERM,
     }
 }
 

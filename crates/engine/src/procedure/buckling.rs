@@ -66,7 +66,8 @@ pub fn assemble_geometric(p: &Problem<'_>, pat: &Pattern, u: &[f64]) -> Result<C
     let mut ke = Vec::new();
     for blk in &p.mesh.blocks {
         let element = element_for(blk.kind);
-        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * dpn);
+        let ldpn = p.node_dofs(blk.kind);
+        let (nn, nd) = (blk.kind.n_nodes(), blk.kind.n_nodes() * ldpn);
         for i in 0..blk.n_elems() {
             let elem = blk.first_elem + i as u32;
             coords.resize(nn * 3, 0.0);
@@ -76,9 +77,7 @@ pub fn assemble_geometric(p: &Problem<'_>, pat: &Pattern, u: &[f64]) -> Result<C
             p.gather_temperature(elem, &mut temperature);
             ue.clear();
             ue.resize(nd, 0.0);
-            for (a, &node) in p.mesh.elem_nodes(elem).iter().enumerate() {
-                ue[a * dpn..(a + 1) * dpn].copy_from_slice(&u[node as usize * dpn..(node as usize + 1) * dpn]);
-            }
+            crate::fem::assembly::gather(u, p.mesh.elem_nodes(elem), ldpn, dpn, &mut ue);
             ke.clear();
             ke.resize(nd * nd, 0.0);
             // One `?`: the context and the geometric integral fail on the same material, and the

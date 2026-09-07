@@ -382,8 +382,11 @@ pub async fn run(
     let (f_ref, applied) = pool.install(|| reference_load(p)).expect("the checks accepted every Load Set and material");
     // `checks::all` has already resolved these and found no conflict.
     let rc = assembly::resolve(p).expect("the checks resolved the constraints");
-    let rc_zero =
-        ResolvedConstraints { fixed: rc.fixed.iter().map(|&(d, _)| (d, 0.0)).collect(), owner: rc.owner.clone() };
+    let rc_zero = ResolvedConstraints {
+        fixed: rc.fixed.iter().map(|&(d, _)| (d, 0.0)).collect(),
+        owner: rc.owner.clone(),
+        inert: rc.inert.clone(),
+    };
     let mut free = vec![true; p.n_dofs()];
     for &(dof, _) in &rc.fixed {
         free[dof as usize] = false;

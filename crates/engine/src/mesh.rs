@@ -299,7 +299,7 @@ fn bodies(
     for body in &model.bodies {
         // A line Body is its own geometry: no Solid, no faces, and its node sets carry the
         // Body's name so `truss.p0` is the joint a Constraint targets.
-        if let Shape::Polyline { points, members, divisions } = &body.shape {
+        if let Shape::Polyline { points, members, divisions, beam } = &body.shape {
             if dim != 3 {
                 return Err(Error::new(
                     ErrorCode::ModelIllPosed,
@@ -309,7 +309,8 @@ fn bodies(
                 .suggest("model.setIdealisation with solid3d"));
             }
             has_lines = true;
-            let part = line(points, members, *divisions, ElementKind::Truss2).map_err(|e| {
+            let kind = if *beam { ElementKind::Beam2 } else { ElementKind::Truss2 };
+            let part = line(points, members, *divisions, kind).map_err(|e| {
                 Error::new(ErrorCode::MeshFailed, e.0)
                     .at(format!("body '{}'", body.name))
                     .suggest("geometry.addLine with joints that do not coincide")

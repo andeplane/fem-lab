@@ -57,7 +57,7 @@ pub(crate) fn axis(coords: &[f64]) -> Option<([f64; 3], f64)> {
 }
 
 /// The midpoint of the member, which is where its single Gauss point sits.
-fn midpoint(coords: &[f64]) -> [f64; 3] {
+pub(crate) fn midpoint(coords: &[f64]) -> [f64; 3] {
     let mut sh = [0.0; 2];
     shape_of(ElementKind::Truss2, centre_xi(ElementKind::Truss2), &mut sh);
     let mut x = [0.0; 3];
@@ -72,7 +72,7 @@ fn midpoint(coords: &[f64]) -> [f64; 3] {
 /// The Section of the element, or the `model.no-section` error. `checks::missing_sections`
 /// reports the same thing per Body before a solve starts; this is what an element integrated
 /// on its own reports.
-fn section_of<'a>(c: &ElementCtx<'a>) -> Result<&'a Section, Error> {
+pub(crate) fn section_of<'a>(c: &ElementCtx<'a>) -> Result<&'a Section, Error> {
     c.section.ok_or_else(|| {
         Error::new(ErrorCode::ModelNoSection, "a line member has no cross-section to carry force over")
             .at("element")
@@ -83,17 +83,21 @@ fn section_of<'a>(c: &ElementCtx<'a>) -> Result<&'a Section, Error> {
 /// The modulus relating σ₁₁ to ε₁₁ with the other five stress components free, which is
 /// `1 / (D⁻¹)₀₀` over the three normal rows: the determinant of that block over its (0,0)
 /// cofactor. Exactly `E` for the isotropic law.
-fn axial_modulus(c: &ElementCtx<'_>) -> Result<f64, Error> {
-    let d = tangent_at_zero(c, 1)?;
+pub(crate) fn axial_modulus(c: &ElementCtx<'_>) -> Result<f64, Error> {
+    Ok(axial_modulus_of(&tangent_at_zero(c, 1)?))
+}
+
+/// The same, from one Gauss point's `VOIGT × VOIGT` tangent.
+pub(crate) fn axial_modulus_of(d: &[f64]) -> f64 {
     let at = |i: usize, j: usize| d[i * VOIGT + j];
     let det = at(0, 0) * (at(1, 1) * at(2, 2) - at(1, 2) * at(2, 1))
         - at(0, 1) * (at(1, 0) * at(2, 2) - at(1, 2) * at(2, 0))
         + at(0, 2) * (at(1, 0) * at(2, 1) - at(1, 1) * at(2, 0));
-    Ok(det / (at(1, 1) * at(2, 2) - at(1, 2) * at(2, 1)))
+    det / (at(1, 1) * at(2, 2) - at(1, 2) * at(2, 1))
 }
 
 /// Mean temperature rise over the member, or `None` when the Problem has no temperature field.
-fn delta_t(c: &ElementCtx<'_>) -> Option<f64> {
+pub(crate) fn delta_t(c: &ElementCtx<'_>) -> Option<f64> {
     let t = c.temperature?;
     Some(0.5 * (t[0] + t[1]) - c.t_ref)
 }

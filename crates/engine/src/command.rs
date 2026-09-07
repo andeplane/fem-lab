@@ -43,13 +43,18 @@ pub enum CoupleKind {
     Rigid,
 }
 
-/// A displacement component.
+/// A nodal degree of freedom: a displacement component, or a rotation about a global axis.
+/// Rotations exist only on the joints of beam Bodies (`geometry.addLine` with `kind: beam`);
+/// on every other node they are inert, so holding them there changes nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Dof {
     Ux,
     Uy,
     Uz,
+    Rx,
+    Ry,
+    Rz,
 }
 
 impl Dof {
@@ -58,8 +63,26 @@ impl Dof {
             Dof::Ux => 0,
             Dof::Uy => 1,
             Dof::Uz => 2,
+            Dof::Rx => 3,
+            Dof::Ry => 4,
+            Dof::Rz => 5,
         }
     }
+
+    /// Every component, in DOF order: the three translations, then the three rotations.
+    pub const ALL: [Dof; 6] = [Dof::Ux, Dof::Uy, Dof::Uz, Dof::Rx, Dof::Ry, Dof::Rz];
+}
+
+/// What the members of a line Body are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LineKind {
+    /// Pin-jointed bars carrying axial force only (the default).
+    #[default]
+    Truss,
+    /// Timoshenko beams carrying axial force, shear, bending and torsion; their joints gain
+    /// three rotational degrees of freedom.
+    Beam,
 }
 
 /// A coordinate axis.
@@ -278,6 +301,13 @@ pub enum Field {
     Strain,
     Reaction,
     Temperature,
+    /// Per-member section forces of beam elements at each element end: `N` (axial, positive
+    /// in tension), `V_y` and `V_z` (shear along the member's local y and z). One triple per
+    /// element node (`elementNode` location), zero on every element that is not a beam.
+    SectionForce,
+    /// Per-member section moments of beam elements at each element end: `T` (torque about the
+    /// member axis), `M_y` and `M_z` (bending about local y and z). Same layout as sectionForce.
+    SectionMoment,
 }
 
 /// Element formulation for linear hexahedra and quadrilaterals.
@@ -1066,16 +1096,20 @@ pub enum Command {
     #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryAdd { name: String, shape: ShapeSpec },
 
-    /// Add a Body made of straight line members: a truss. `points` are the joints, in order,
-    /// and `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.
-    /// Each member is cut into `divisions` elements of equal length (default 1). Joint `i`
-    /// becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,
-    /// and joints of different line Bodies that sit at the same point are welded into one node
-    /// when the Mesh is built. A member carries axial force only, so give the Body a Section
-    /// with section.assign as well as a Material, and hold enough joints that none of them can
-    /// drift sideways — an under-braced truss is singular and fails in the solver, not here.
-    /// Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
-    /// Replacing a Body that has cuts therefore fails without changing the Model.
+    /// Add a Body made of straight line members: a truss or a frame. `points` are the joints,
+    /// in order, and `members` are index pairs into them; the default is a chain 0-1, 1-2, and
+    /// so on. Each member is cut into `divisions` elements of equal length (default 1). Joint
+    /// `i` becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force
+    /// targets, and joints of different line Bodies that sit at the same point are welded into
+    /// one node when the Mesh is built. `kind` is `truss` (the default: pin-jointed bars that
+    /// carry axial force only, so hold enough joints that none can drift sideways — an
+    /// under-braced truss is singular and fails in the solver, not here) or `beam` (Timoshenko
+    /// beams carrying axial force, shear, bending and torsion; every joint then has three
+    /// rotations rx, ry, rz as well as ux, uy, uz, so constraint.fix clamps it and
+    /// constraint.pin pins it, and load.moment can act on it). Either way give the Body a
+    /// Section with section.assign as well as a Material. Line Bodies need the 3D
+    /// idealisation and are not cut, meshed or previewed as solids. Replacing a Body that has
+    /// cuts therefore fails without changing the Model.
     #[serde(rename = "geometry.addLine", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     GeometryAddLine {
@@ -1085,6 +1119,8 @@ pub enum Command {
         members: Option<Vec<[u32; 2]>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         divisions: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<LineKind>,
     },
 
     /// Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a
@@ -1237,10 +1273,22 @@ pub enum Command {
     /// Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
     /// one without it is reported by query.model warnings and blocks solve.run with
     /// model.no-section. A Section on a solid or sheet Body is carried but never used: those
-    /// Bodies get their cross-section from their geometry.
+    /// Bodies get their cross-section from their geometry. `orientation` sets the section's
+    /// local z-axis (its `height` direction, the one `iY` resists bending along) for the beams
+    /// of these Bodies: local z is the given vector made perpendicular to each member's axis,
+    /// and local y completes the right-handed triad (y = z × x). It may not be parallel to a
+    /// member. Without it the rule is: local z is global Z made perpendicular to the member,
+    /// so a horizontal beam has its height vertical; a member within 1e-6 of vertical uses
+    /// global X instead, so a column's local z points along +X. `iZ` then resists bending
+    /// along local y. Trusses ignore it.
     #[serde(rename = "section.assign", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
-    SectionAssign { section: String, bodies: Vec<String> },
+    SectionAssign {
+        section: String,
+        bodies: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        orientation: Option<[f64; 3]>,
+    },
 
     /// Remove a Section that is not assigned to any Body. Fails with in-use listing the Bodies
     /// that still use it; assign them another Section first with section.assign.
@@ -1288,9 +1336,13 @@ pub enum Command {
         step: Option<String>,
     },
 
-    /// Fix displacement components to zero on a Set (default: all components, a clamped
-    /// support). For a roller give only the normal component. Fixing every node of a Body
-    /// makes the solve trivial; fix faces, not bodies.
+    /// Fix degrees of freedom to zero on a Set (default: all displacement components, a
+    /// clamped support). A fix that holds all three displacements and names no rotation is a
+    /// clamp: on a beam joint it holds the three rotations rx, ry, rz as well, so a beam's
+    /// fixed end is what `constraint.fix` without `dofs` means. For a pinned beam support use
+    /// constraint.pin; for a roller give only the normal component; name rx, ry or rz to hold
+    /// a rotation on its own. Rotations are inert on every node that is not a beam joint.
+    /// Fixing every node of a Body makes the solve trivial; fix faces, not bodies.
     #[serde(rename = "constraint.fix", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintFix {
@@ -1300,6 +1352,13 @@ pub enum Command {
         dofs: Option<Vec<Dof>>,
     },
 
+    /// Pin a Set: fix its three displacements and leave every rotation free. On a beam joint
+    /// this is the pinned support of a simply supported beam or a portal frame's base hinge;
+    /// the only difference from constraint.fix is the rotational restraint. On a solid's
+    /// nodes it is the same as constraint.fix, because those carry no rotation.
+    #[serde(rename = "constraint.pin", rename_all = "camelCase")]
+    ConstraintPin { name: String, on: SetRef },
+
     /// Prescribe a non-zero displacement of one component on a Set, for example a settlement
     /// of "2 mm" in uy. Reactions on prescribed Sets are reported like any other constraint.
     #[serde(rename = "constraint.prescribe", rename_all = "camelCase")]
@@ -1307,8 +1366,9 @@ pub enum Command {
     ConstraintPrescribe { name: String, on: SetRef, dof: Dof, value: Q<Length> },
 
     /// Symmetry plane: fixes the displacement component along `normal` on the Set (the cut
-    /// face of a half or quarter model). Model a half and say so in the report; loads on the
-    /// symmetry plane itself must be halved by you.
+    /// face of a half or quarter model), and on beam joints the two rotations about the axes
+    /// in the plane. Model a half and say so in the report; loads on the symmetry plane
+    /// itself must be halved by you.
     #[serde(rename = "constraint.symmetry", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     ConstraintSymmetry { name: String, on: SetRef, normal: Axis },
@@ -1405,6 +1465,14 @@ pub enum Command {
     #[serde(rename = "load.force", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     LoadForce { name: String, on: SetRef, total: [Q<Force>; 3] },
+
+    /// A concentrated moment, as a total vector about the global axes, split equally over the
+    /// nodes of a node Set. It acts on the rotational degrees of freedom, which only the
+    /// joints of beam Bodies have: on any other node it has nothing to act on and the Step
+    /// fails with model.ill-posed naming the Load. Right-handed about each axis, in the
+    /// Model's torque unit ("5 kN m").
+    #[serde(rename = "load.moment", rename_all = "camelCase")]
+    LoadMoment { name: String, on: SetRef, total: [Q<Torque>; 3] },
 
     /// Gravity (or any uniform acceleration) as a body force on every Body whose Material has
     /// a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
@@ -1766,6 +1834,10 @@ mod tests {
         assert_eq!(Dof::Uz.index(), 2);
         assert_eq!(Dof::Uy.index(), 1);
         assert_eq!(Dof::Ux.index(), 0);
+        for (i, d) in Dof::ALL.iter().enumerate() {
+            assert_eq!(d.index(), i);
+        }
+        assert_eq!(LineKind::default(), LineKind::Truss);
         assert_eq!(Axis::X.index(), 0);
         assert_eq!(Axis::Y.index(), 1);
         assert_eq!(Axis::Z.index(), 2);

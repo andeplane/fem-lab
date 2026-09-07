@@ -44,6 +44,7 @@ pub fn stress_gp(p: &Problem<'_>, u: &[f64]) -> Result<(FieldData, FieldData), E
     let mut strain = Vec::new();
     for blk in &p.mesh.blocks {
         let element = element_for(blk.kind);
+        let ldpn = p.node_dofs(blk.kind);
         let (nn, n_gp) = (blk.kind.n_nodes(), element.n_gp());
         for lo in (0..blk.n_elems()).step_by(CHUNK) {
             let hi = (lo + CHUNK).min(blk.n_elems());
@@ -53,10 +54,8 @@ pub fn stress_gp(p: &Problem<'_>, u: &[f64]) -> Result<(FieldData, FieldData), E
                 p.mesh.elem_coords(elem, &mut coords);
                 let mut t = vec![0.0; nn];
                 p.gather_temperature(elem, &mut t);
-                let mut ue = vec![0.0; nn * dpn];
-                for (a, &node) in p.mesh.elem_nodes(elem).iter().enumerate() {
-                    ue[a * dpn..(a + 1) * dpn].copy_from_slice(&u[node as usize * dpn..(node as usize + 1) * dpn]);
-                }
+                let mut ue = vec![0.0; nn * ldpn];
+                crate::fem::assembly::gather(u, p.mesh.elem_nodes(elem), ldpn, dpn, &mut ue);
                 let (mut sig, mut eps) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
                 p.ctx(elem, &coords, &t).and_then(|c| element.recover(&c, &ue, &mut sig, &mut eps)).map(|()| (sig, eps))
             });
@@ -68,6 +67,39 @@ pub fn stress_gp(p: &Problem<'_>, u: &[f64]) -> Result<(FieldData, FieldData), E
         }
     }
     Ok((FieldData::new(Per::ElemGp, VOIGT, stress), FieldData::new(Per::ElemGp, VOIGT, strain)))
+}
+
+/// The section forces (`N, V_y, V_z`) and moments (`T, M_y, M_z`) of every beam element at
+/// each of its two nodes, as two [`Per::ElemNode`] fields of three components, elements in
+/// order; every node of every other element carries zeros, so the two fields line up with
+/// `stressUnaveraged`. This is the per-member view a joint's averaged stress cannot give.
+pub fn section_fields(p: &Problem<'_>, u: &[f64]) -> Result<(FieldData, FieldData), Error> {
+    let dpn = p.dofs_per_node();
+    let mut force = Vec::new();
+    let mut moment = Vec::new();
+    for blk in &p.mesh.blocks {
+        let nn = blk.kind.n_nodes();
+        if blk.kind != ElementKind::Beam2 {
+            force.resize(force.len() + blk.n_elems() * nn * 3, 0.0);
+            moment.resize(moment.len() + blk.n_elems() * nn * 3, 0.0);
+            continue;
+        }
+        let mut coords = vec![0.0; nn * 3];
+        let mut t = vec![0.0; nn];
+        let mut ue = vec![0.0; nn * dpn];
+        for i in 0..blk.n_elems() {
+            let elem = blk.first_elem + i as u32;
+            p.mesh.elem_coords(elem, &mut coords);
+            p.gather_temperature(elem, &mut t);
+            crate::fem::assembly::gather(u, p.mesh.elem_nodes(elem), dpn, dpn, &mut ue);
+            let ends = p.ctx(elem, &coords, &t).and_then(|c| crate::fem::beam::section_forces(&c, &ue))?;
+            for end in ends {
+                force.extend_from_slice(&end[..3]);
+                moment.extend_from_slice(&end[3..]);
+            }
+        }
+    }
+    Ok((FieldData::new(Per::ElemNode, 3, force), FieldData::new(Per::ElemNode, 3, moment)))
 }
 
 /// Rows of the `n_nodes × n_gp` extrapolation matrix of one element kind, row-major.

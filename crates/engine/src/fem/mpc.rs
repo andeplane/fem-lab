@@ -277,7 +277,8 @@ fn bonded_rows(
         let mut w = vec![0.0; fk.n_nodes()];
         face_shape_of(fk, s, &mut w);
         let nodes: Vec<u32> = p.mesh.face_nodes(face).collect();
-        for c in 0..dpn {
+        // A tie carries translations only: a beam joint bonded to a face is pinned to it.
+        for c in 0..dpn.min(3) {
             let masters = nodes
                 .iter()
                 .zip(&w)
@@ -405,10 +406,11 @@ fn couple_rows(
             .suggest("constraint.couple to a face Set, from geometry.nameFace or an auto face"));
     }
     let dpn = p.dofs_per_node() as u32;
+    let translations = dpn.min(3);
     match kind {
         CoupleKind::Rigid => {
             for &n in &set.nodes {
-                for c in 0..dpn {
+                for c in 0..translations {
                     out.push(Row { slave: n * dpn + c, masters: vec![(node * dpn + c, 1.0)], owner });
                 }
             }
@@ -416,7 +418,7 @@ fn couple_rows(
         CoupleKind::Distributed => {
             let area = lumped_areas(p, set)?;
             let total: f64 = area.values().sum();
-            for c in 0..dpn {
+            for c in 0..translations {
                 let masters = area.iter().map(|(&n, &a)| (n * dpn + c, a / total)).collect();
                 out.push(Row { slave: node * dpn + c, masters, owner });
             }

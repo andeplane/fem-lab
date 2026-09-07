@@ -6935,9 +6935,11 @@ fn an_imported_line_body_the_mesher_refuses_names_itself() {
             points: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
             members: vec![[0, 1]],
             divisions: 1,
+            beam: false,
         },
         material: None,
         section: None,
+        orientation: None,
     });
     e.import_file(file).unwrap();
     let er = e.query(Query::Mesh {}).expect_err("a zero-length member");
@@ -7032,6 +7034,7 @@ fn definitions_refuse_internal_imported_shapes_without_erasing_face_tags() {
             shape,
             material: None,
             section: None,
+            orientation: None,
         });
         e.import_file(file).unwrap();
         let before = e.model().clone();

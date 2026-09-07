@@ -61,6 +61,10 @@ pub struct Body {
     /// The cross-section of its line members; unused by a solid or sheet Body.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
+    /// The reference vector the beams of this Body take their local z-axis from
+    /// (`section.assign` `orientation`); `None` is the default rule. Unused by a truss or a solid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<[f64; 3]>,
 }
 
 /// A named cross-section, resolved to SI properties by the section library.
@@ -216,6 +220,8 @@ pub enum ConstraintKind {
     Fix {
         dofs: Vec<Dof>,
     },
+    /// The three displacements held at zero and every rotation free: `constraint.pin`.
+    Pin,
     Prescribe {
         dof: Dof,
         value: f64,
@@ -278,6 +284,7 @@ impl Constraint {
             ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }
+            | ConstraintKind::Pin
             | ConstraintKind::Prescribe { .. }
             | ConstraintKind::Symmetry { .. }
             | ConstraintKind::Temperature { .. } => {}
@@ -293,6 +300,7 @@ impl Constraint {
             ConstraintKind::Cyclic { from, .. } => out.push(from),
             ConstraintKind::Couple { point, .. } => out.push(point),
             ConstraintKind::Fix { .. }
+            | ConstraintKind::Pin
             | ConstraintKind::Prescribe { .. }
             | ConstraintKind::Symmetry { .. }
             | ConstraintKind::Temperature { .. } => {}
@@ -314,6 +322,12 @@ pub enum LoadKind {
         total: [f64; 3],
     },
     Force {
+        on: String,
+        total: [f64; 3],
+    },
+    /// A concentrated moment about the global axes, `total` newton metres split over the Set's
+    /// nodes; it acts on rotational DOFs, which only beam joints have.
+    Moment {
         on: String,
         total: [f64; 3],
     },
@@ -373,6 +387,7 @@ impl LoadKind {
             LoadKind::Pressure { .. }
             | LoadKind::Traction { .. }
             | LoadKind::Force { .. }
+            | LoadKind::Moment { .. }
             | LoadKind::Gravity { .. }
             | LoadKind::Convection { .. }
             | LoadKind::Radiation { .. }
@@ -389,6 +404,7 @@ impl LoadKind {
             LoadKind::Pressure { on, .. }
             | LoadKind::Traction { on, .. }
             | LoadKind::Force { on, .. }
+            | LoadKind::Moment { on, .. }
             | LoadKind::Convection { on, .. }
             | LoadKind::Radiation { on, .. }
             | LoadKind::HeatFlux { on, .. }
@@ -409,6 +425,7 @@ impl LoadKind {
             LoadKind::Pressure { .. }
             | LoadKind::Traction { .. }
             | LoadKind::Force { .. }
+            | LoadKind::Moment { .. }
             | LoadKind::Gravity { .. }
             | LoadKind::Temperature { .. }
             | LoadKind::Convection { .. }
@@ -766,6 +783,7 @@ mod tests {
             shape: Shape::Box { size: [1.0; 3] },
             material: None,
             section: None,
+            orientation: None,
         });
         m.cuts.push(Cut { name: "hole".into(), from: "beam".into(), shape: Shape::Box { size: [0.1; 3] } });
         m.cuts.push(Cut { name: "other".into(), from: "plate".into(), shape: Shape::Box { size: [0.1; 3] } });
@@ -785,6 +803,7 @@ mod tests {
             shape: Shape::Box { size: [1.0; 3] },
             material: Some("s".into()),
             section: None,
+            orientation: None,
         });
         let s = m.body_shape(m.body("plain").unwrap());
         assert_eq!(s, Shape::Named { name: "plain".into(), shape: Box::new(Shape::Box { size: [1.0; 3] }) });

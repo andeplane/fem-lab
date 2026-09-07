@@ -772,6 +772,8 @@ fn ctx<'a>(coords: &'a [f64], mat: &'a Material, id: Idealisation, form: Formula
         coords,
         material: mat,
         section: None,
+        orientation: None,
+        gravity: [0.0; 3],
         idealisation: id,
         formulation: form,
         temperature: None,
@@ -1557,9 +1559,12 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
             }
         }
         let outside_xi = match kind {
-            ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Truss2 => {
-                [1.1, 0.0, 0.0]
-            }
+            ElementKind::Hex8
+            | ElementKind::Hex20
+            | ElementKind::Quad4
+            | ElementKind::Quad8
+            | ElementKind::Truss2
+            | ElementKind::Beam2 => [1.1, 0.0, 0.0],
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Tri3 | ElementKind::Tri6 => [-0.1, 0.0, 0.0],
         };
         el.shape_at(outside_xi, &mut n);
@@ -2733,6 +2738,7 @@ fn problem<'a>(
         material_of_block: vec![Some(0); mesh.blocks.len()],
         materials: vec![steel()],
         section_of_block: vec![None; mesh.blocks.len()],
+        orientation_of_block: vec![None; mesh.blocks.len()],
         sections: Vec::new(),
         idealisation: id,
         formulation: form,
@@ -2747,7 +2753,12 @@ fn problem<'a>(
 }
 
 fn fix(name: &str, on: &str, dofs: [bool; 3], value: f64) -> Constraint {
-    Constraint { name: name.into(), nodes: on.into(), dofs, value }
+    Constraint { name: name.into(), nodes: on.into(), dofs: wide(dofs), value }
+}
+
+/// A three-component mask widened to the six-wide one `Constraint` carries, rotations free.
+fn wide(dofs: [bool; 3]) -> [bool; 6] {
+    [dofs[0], dofs[1], dofs[2], false, false, false]
 }
 
 /// The `[8,2,2]` hex8 cantilever of Benchmark A4: 1 m × 0.1 m × 0.1 m of steel.
@@ -3139,7 +3150,7 @@ fn boundary_constraints(mesh: &Mesh, exact: &[f64]) -> ResolvedConstraints {
         .map(|d| (d, exact[d as usize]))
         .collect();
     let owner = vec![0; fixed.len()];
-    ResolvedConstraints { fixed, owner }
+    ResolvedConstraints { fixed, owner, inert: Vec::new() }
 }
 
 /// A1: every kind reproduces every constant-strain state exactly on a distorted mesh — the
@@ -4728,6 +4739,7 @@ fn heat_problem<'a>(
         material_of_block: vec![Some(0); mesh.blocks.len()],
         materials: vec![material],
         section_of_block: vec![None; mesh.blocks.len()],
+        orientation_of_block: vec![None; mesh.blocks.len()],
         sections: Vec::new(),
         idealisation: id,
         formulation: Formulation::Full,
@@ -4743,7 +4755,7 @@ fn heat_problem<'a>(
 
 /// A held temperature on a Set: the heat DOF is component 0.
 fn hold(name: &str, on: &str, value: f64) -> Constraint {
-    Constraint { name: name.into(), nodes: on.into(), dofs: [true, false, false], value }
+    Constraint { name: name.into(), nodes: on.into(), dofs: wide([true, false, false]), value }
 }
 
 fn run_step(p: &Problem<'_>, step: &Step) -> Result<StepResult, Error> {
@@ -6097,6 +6109,7 @@ fn explicit_rejects_a_free_massless_body_in_a_mixed_model_and_recovers() {
         material_of_block: vec![Some(0), Some(1)],
         materials: vec![steel(), conductor(0.0, 0.0, 0.0)],
         section_of_block: vec![None, None],
+        orientation_of_block: vec![None, None],
         sections: Vec::new(),
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::Full,
@@ -6158,6 +6171,7 @@ fn explicit_rejects_massless_stiffness_even_when_shared_nodes_have_mass() {
         material_of_block: vec![Some(0), Some(1)],
         materials: vec![steel(), conductor(0.0, 0.0, 0.0)],
         section_of_block: vec![None, None],
+        orientation_of_block: vec![None, None],
         sections: Vec::new(),
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::Full,
@@ -7617,6 +7631,8 @@ fn truss_ctx<'a>(
         coords,
         material: mat,
         section,
+        orientation: None,
+        gravity: [0.0; 3],
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::Full,
         temperature,
@@ -7913,6 +7929,7 @@ fn a_line_body_without_a_section_is_reported_by_the_well_posedness_checks() {
         material_of_block: vec![Some(0)],
         materials: vec![steel()],
         section_of_block: vec![None],
+        orientation_of_block: vec![None],
         sections: Vec::new(),
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::Full,
@@ -9806,6 +9823,7 @@ fn f4e_a_finite_interface_conductance_matches_the_series_resistance_closed_form(
         material_of_block: vec![Some(0), Some(1)],
         materials: vec![conductor(k1, 1.0, 1.0), conductor(k2, 1.0, 1.0)],
         section_of_block: vec![None, None],
+        orientation_of_block: vec![None, None],
         sections: Vec::new(),
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::Full,
@@ -9916,6 +9934,8 @@ fn a_constant_film_reproduces_the_convection_face_integral_bit_for_bit() {
         coords: &FILM_COORDS,
         material: &material,
         section: None,
+        orientation: None,
+        gravity: [0.0; 3],
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::IncompatibleModes,
         temperature: None,
@@ -11147,7 +11167,7 @@ fn prescribe_field(mesh: &Mesh, sets: &mut BTreeMap<String, ResolvedSet>, exact:
             ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![n], elems: Vec::new() },
         );
         for c in 0..mesh.dim {
-            let mut dofs = [false; 3];
+            let mut dofs = [false; 6];
             dofs[c] = true;
             constraints.push(Constraint {
                 name: format!("{set}.{c}"),
@@ -13464,7 +13484,7 @@ fn error_rule(kind: ElementKind) -> (Vec<[f64; 3]>, Vec<f64>) {
     let mut points = Vec::new();
     let mut weights = Vec::new();
     match kind {
-        ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Truss2 => {
+        ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Truss2 | ElementKind::Beam2 => {
             for &(a, wa) in gl {
                 for &(b, wb) in gl {
                     for &(c, wc) in gl {

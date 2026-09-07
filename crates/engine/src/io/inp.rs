@@ -16,6 +16,7 @@ fn abaqus_type(kind: ElementKind) -> &'static str {
         ElementKind::Tri3 => "CPS3",
         ElementKind::Tri6 => "CPS6",
         ElementKind::Truss2 => "T3D2",
+        ElementKind::Beam2 => "B31",
     }
 }
 

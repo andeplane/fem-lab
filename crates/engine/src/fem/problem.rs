@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use femlab_geometry::mesh::ElementKind;
 use femlab_geometry::Mesh;
 
 use crate::command::{CoupleKind, Formulation};
@@ -28,10 +29,15 @@ pub struct Constraint {
     pub name: String,
     /// Name of the Set whose nodes are constrained.
     pub nodes: String,
-    /// Which of `ux, uy, uz` this Constraint holds (heat would use `dofs[0]`).
-    pub dofs: [bool; 3],
+    /// Which of `ux, uy, uz, rx, ry, rz` this Constraint holds (heat would use `dofs[0]`). The
+    /// three rotations only ever reach a node a beam element touches; on every other node
+    /// they are inert and [`crate::fem::assembly::resolve`] skips them.
+    pub dofs: [bool; NODE_DOFS_MAX],
     pub value: f64,
 }
+
+/// The most unknowns any node carries: three displacements and three rotations.
+pub const NODE_DOFS_MAX: usize = 6;
 
 /// One resolved connection between parts: a linear relation between DOFs rather than a
 /// prescribed value, turned into eliminated rows by [`crate::fem::mpc::build`].
@@ -116,6 +122,9 @@ pub struct Problem<'a> {
     /// `checks::missing_sections`; a solid block never needs one.
     pub section_of_block: Vec<Option<usize>>,
     pub sections: Vec<Section>,
+    /// Per block: the reference vector its beams take their local z-axis from, or `None` for
+    /// the default rule (`section.assign`'s `orientation`). Ignored by every other element.
+    pub orientation_of_block: Vec<Option<[f64; 3]>>,
     pub idealisation: Idealisation,
     pub formulation: Formulation,
     pub constraints: Vec<Constraint>,
@@ -136,16 +145,62 @@ pub struct Problem<'a> {
 }
 
 impl Problem<'_> {
-    /// Unknowns per node: one temperature for a heat Step, else whatever the idealisation
-    /// carries (3 displacements in 3D, 2 in a plane idealisation, 3 under axisymmetric twist).
-    /// Every element kernel and assembly path takes its DOF stride from here, so a new
-    /// idealisation with more (or fewer) unknowns per node needs no change anywhere else.
+    /// Unknowns per node — the **global** DOF stride: one temperature for a heat Step, six
+    /// (three displacements and three rotations) as soon as the Mesh holds a beam block, else
+    /// whatever the idealisation carries (3 displacements in 3D, 2 in a plane idealisation, 3
+    /// under axisymmetric twist). Every assembly and post-processing path takes its stride
+    /// from here; an element's own matrices use [`Problem::node_dofs`] of its kind, and the
+    /// gather/scatter in `assembly` maps between the two, so a solid next to a beam still
+    /// integrates its `3 × n_nodes` matrix and never sees the rotations.
     pub fn dofs_per_node(&self) -> usize {
         if self.heat {
             1
+        } else if self.has_beams() {
+            NODE_DOFS_MAX
         } else {
             self.idealisation.dofs_per_node()
         }
+    }
+
+    /// The unknowns per node an element of `kind` carries in its own matrices: six for a beam,
+    /// the idealisation's count for everything else (a truss is a solid's three).
+    pub fn node_dofs(&self, kind: ElementKind) -> usize {
+        local_dofs(kind, self.dofs_per_node())
+    }
+
+    /// Does the Mesh hold a beam block, which is what widens the stride to six.
+    pub fn has_beams(&self) -> bool {
+        self.mesh.blocks.iter().any(|b| b.kind == ElementKind::Beam2)
+    }
+
+    /// Per node: does a beam element reach it, so its three rotations are real unknowns. On
+    /// every other node of a six-DOF Problem the rotations are inert: no element gives them
+    /// stiffness or mass, so [`crate::fem::assembly::resolve`] lists them as `inert` and the
+    /// reduction drops them exactly like a DOF fixed at zero.
+    pub fn rotational_nodes(&self) -> Vec<bool> {
+        let mut out = vec![false; self.mesh.n_nodes()];
+        for blk in self.mesh.blocks.iter().filter(|b| b.kind == ElementKind::Beam2) {
+            for &n in &blk.conn {
+                out[n as usize] = true;
+            }
+        }
+        out
+    }
+
+    /// The inert rotational DOFs of a six-DOF Problem, ascending: rotations of nodes no beam
+    /// reaches. Empty unless the stride is six.
+    pub fn inert_dofs(&self) -> Vec<u32> {
+        if self.dofs_per_node() != NODE_DOFS_MAX {
+            return Vec::new();
+        }
+        let rot = self.rotational_nodes();
+        let mut out = Vec::new();
+        for (node, &has) in rot.iter().enumerate() {
+            if !has {
+                out.extend((3..NODE_DOFS_MAX).map(|c| (node * NODE_DOFS_MAX + c) as u32));
+            }
+        }
+        out
     }
 
     pub fn n_dofs(&self) -> usize {
@@ -154,8 +209,8 @@ impl Problem<'_> {
 
     /// The component names an error names a DOF by, indexed the same way `dofs_per_node`
     /// counts them: `ur`/`uz`/`utheta` under axisymmetric (the third only ever reached with
-    /// twist), `ux`/`uy`/`uz` everywhere else.
-    pub fn dof_labels(&self) -> [&'static str; 3] {
+    /// twist), `ux`/`uy`/`uz` and the rotations `rx`/`ry`/`rz` everywhere else.
+    pub fn dof_labels(&self) -> [&'static str; NODE_DOFS_MAX] {
         dof_labels(&self.idealisation)
     }
 
@@ -173,15 +228,32 @@ impl Problem<'_> {
     /// `temperature` is the element's gathered nodal temperature, ignored when the Problem
     /// has no temperature field.
     pub fn ctx<'b>(&'b self, elem: u32, coords: &'b [f64], temperature: &'b [f64]) -> Result<ElementCtx<'b>, Error> {
+        let block = self.mesh.block_of(elem).0;
         Ok(ElementCtx {
             coords,
             material: self.material_of(elem)?,
-            section: self.section_of_block[self.mesh.block_of(elem).0].map(|i| &self.sections[i]),
+            section: self.section_of_block[block].map(|i| &self.sections[i]),
+            orientation: self.orientation_of_block[block],
+            gravity: self.gravity(),
             idealisation: self.idealisation.clone(),
             formulation: self.formulation,
             temperature: self.temperature.as_ref().map(|_| temperature),
             t_ref: self.temperature.as_ref().map_or(0.0, |(_, t)| *t),
         })
+    }
+
+    /// The sum of every gravity Load's acceleration: the body force per unit density a beam
+    /// subtracts its fixed-end forces for when it recovers section forces.
+    pub fn gravity(&self) -> [f64; 3] {
+        let mut g = [0.0; 3];
+        for l in &self.loads {
+            if let Load::Gravity { g: gl } = l {
+                for k in 0..3 {
+                    g[k] += gl[k];
+                }
+            }
+        }
+        g
     }
 
     /// The nodal temperature of one element gathered into `out`; a no-op when the Problem has
@@ -224,10 +296,23 @@ pub fn empty_set(name: &str) -> Error {
 }
 
 /// The DOF component names an error message quotes, indexed `dof % dofs_per_node`: `ur`/`uz`
-/// (and, with twist, `utheta`) under axisymmetric, `ux`/`uy`/`uz` everywhere else.
-pub fn dof_labels(id: &Idealisation) -> [&'static str; 3] {
+/// (and, with twist, `utheta`) under axisymmetric, `ux`/`uy`/`uz` and the rotations
+/// `rx`/`ry`/`rz` everywhere else.
+pub fn dof_labels(id: &Idealisation) -> [&'static str; NODE_DOFS_MAX] {
     match id {
-        Idealisation::Axisymmetric { .. } => ["ur", "uz", "utheta"],
-        _ => ["ux", "uy", "uz"],
+        Idealisation::Axisymmetric { .. } => ["ur", "uz", "utheta", "rx", "ry", "rz"],
+        _ => ["ux", "uy", "uz", "rx", "ry", "rz"],
+    }
+}
+
+/// The unknowns per node an element of `kind` carries in its own matrices, given the global
+/// stride `dofs_per_node`. The only stride an element narrows is six: a solid or a truss next
+/// to a beam still integrates three displacements per node, and the assembler's gather and
+/// scatter leave the rotational slots of its nodes untouched.
+pub fn local_dofs(kind: ElementKind, dofs_per_node: usize) -> usize {
+    if dofs_per_node == NODE_DOFS_MAX && kind != ElementKind::Beam2 {
+        3
+    } else {
+        dofs_per_node
     }
 }

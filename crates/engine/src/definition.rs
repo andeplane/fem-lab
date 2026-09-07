@@ -104,11 +104,12 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
         ObjectKind::Body => {
             let b = m.body(name).ok_or_else(missing)?;
             match &b.shape {
-                Shape::Polyline { points, members, divisions } => Command::GeometryAddLine {
+                Shape::Polyline { points, members, divisions, beam } => Command::GeometryAddLine {
                     name: b.name.clone(),
                     points: points.iter().map(|p| p.map(length)).collect(),
                     members: Some(members.clone()),
                     divisions: Some(*divisions),
+                    kind: Some(if *beam { LineKind::Beam } else { LineKind::Truss }),
                 },
                 other => Command::GeometryAdd { name: b.name.clone(), shape: shape(other)? },
             }
@@ -190,6 +191,7 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
             let on = x.on.clone();
             match &x.kind {
                 ConstraintKind::Fix { dofs } => Command::ConstraintFix { name, on, dofs: Some(dofs.clone()) },
+                ConstraintKind::Pin => Command::ConstraintPin { name, on },
                 ConstraintKind::Prescribe { dof, value } => {
                     Command::ConstraintPrescribe { name, on, dof: *dof, value: length(*value) }
                 }
@@ -230,6 +232,9 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 }
                 LoadKind::Force { on, total } => {
                     Command::LoadForce { name, on: on.clone(), total: total.map(|v| Q::new(v, "N")) }
+                }
+                LoadKind::Moment { on, total } => {
+                    Command::LoadMoment { name, on: on.clone(), total: total.map(|v| Q::new(v, "N*m")) }
                 }
                 LoadKind::Gravity { g } => Command::LoadGravity { name, g: g.map(|v| Q::new(v, "m/s^2")) },
                 LoadKind::Temperature { bodies, value, reference } => Command::LoadTemperature {
