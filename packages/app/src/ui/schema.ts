@@ -15,6 +15,7 @@ const DIMENSIONS: Record<string, { si: string; exp: [number, number, number, num
   stress: { si: 'Pa', exp: [-1, 1, -2, 0] },
   density: { si: 'kg/m^3', exp: [-3, 1, 0, 0] },
   acceleration: { si: 'm/s^2', exp: [1, 0, -2, 0] },
+  velocity: { si: 'm/s', exp: [1, 0, -1, 0] },
   thermal_expansion: { si: '1/K', exp: [0, 0, 0, -1] },
   conductivity: { si: 'W/(m K)', exp: [1, 1, -3, -1] },
   specific_heat: { si: 'J/(kg K)', exp: [2, 0, -2, -1] },

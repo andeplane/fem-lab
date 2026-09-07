@@ -2,6 +2,8 @@
 //! descriptions, so they say what, when, the effect on names and Sets, and the common mistake.
 //! Physical values are `Q<D>` (unit strings); lengths inside shapes too.
 
+use std::collections::BTreeMap;
+
 use femlab_geometry::{
     Affine3, FacePredicate as GeoFacePredicate, RegionPredicate as GeoRegionPredicate, Segment, Shape, Sketch,
 };
@@ -10,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::units::{
-    Acceleration, Area, Conductivity, Density, Force, HeatFlux, HeatSource, HeatTransfer, Length, Mass, SecondMoment,
-    SpecificHeat, Stress, Temperature, ThermalExpansion, Time, UnitSet, Q,
+    Acceleration, Area, Conductivity, Density, Force, Frequency, HeatFlux, HeatSource, HeatTransfer, Length, Mass,
+    SecondMoment, SpecificHeat, Stress, Temperature, ThermalExpansion, Time, UnitSet, Velocity, Q,
 };
 
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
@@ -129,6 +131,20 @@ pub enum Procedure {
     HeatTransient,
     /// Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.
     Explicit,
+    /// Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on
+    /// the consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,
+    /// `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.
+    Implicit,
+}
+
+/// A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start
+/// from rest. Constrained components are held at zero whatever this says; two entries that
+/// give one node different velocities are `model.ill-posed`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialVelocitySpec {
+    pub on: SetRef,
+    pub value: [Q<Velocity>; 3],
 }
 
 /// A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
@@ -340,7 +356,17 @@ pub enum SweepSpec {
 pub enum MesherSpec {
     /// Structured hexahedra (or quadrilaterals in 2D) on an axis-aligned lattice covering
     /// every Body; exact for box geometry, stair-stepped for curved bodies.
-    Lattice { size: LatticeSize },
+    Lattice {
+        size: LatticeSize,
+        /// Optional positive element lengths keyed by existing Body name. Each entry overrides
+        /// `size` (including counts) for that Body; omitted Bodies use `size`. Use a finer slave
+        /// size to build a nonmatching bonded interface. Line Bodies use geometry.addLine divisions
+        /// and cannot have size overrides. Names follow model.rename; remove an override before
+        /// removing its Body. A new mesh.set replaces all overrides; convergence studies scale
+        /// them with the global size, preserving the refinement ratio.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        sizes: BTreeMap<String, Q<Length>>,
+    },
     /// Structured quadrilaterals on one or more mapped blocks, merged where they touch. The
     /// blocks *are* the geometry: no geometry.add is needed, and the Body they make is named by
     /// `body` (default "sheet"), so each block edge tag becomes the face Set `<body>.<tag>`.
@@ -782,6 +808,9 @@ fn many(shapes: &[ShapeSpec], where_: &str) -> Result<Vec<Shape>, Error> {
 /// Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "cmd")]
+// `step.add` carries every procedure's optional fields and is the one wide variant; Commands
+// are parsed, journaled and applied once each, never stored by the million.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Start a new, empty Model and Journal with this name. Discards the current Model, its
     /// Results and the undo history; it is the first entry of every Journal, so call it once
@@ -1206,9 +1235,20 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and
-    /// `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
-    /// `amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and
+    /// `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
+    /// `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
+    /// implicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and
+    /// `increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An
+    /// implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
+    /// (default 0, Newmark average acceleration: second order, unconditionally stable and
+    /// energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
+    /// Rayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal
+    /// damping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).
+    /// Its `amplitude` scales the Loads only and is refused with a non-zero prescribed
+    /// displacement; its initial acceleration is solved from the loads at t = 0, so a suddenly
+    /// applied load is exactly that. Its reactions include the inertia and damping forces and
+    /// its applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the
+    /// scalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and
     /// prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
     /// defaulting to the whole of it, so a table written in step fraction works unchanged) and
     /// keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
@@ -1257,6 +1297,25 @@ pub enum Command {
         amplitude: Option<AmplitudeSpec>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initial: Option<Q<Temperature>>,
+        /// HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark
+        /// average acceleration, no numerical damping); -0.05 is the usual choice when the
+        /// mesh-frequency ringing of a sudden load should die out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alpha: Option<f64>,
+        /// Mass-proportional Rayleigh damping coefficient of an implicit Step, `C = a·M + b·K`.
+        /// Default "0 Hz"; must be non-negative.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rayleigh_alpha: Option<Q<Frequency>>,
+        /// Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default
+        /// "0 s"; must be non-negative.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rayleigh_beta: Option<Q<Time>>,
+        /// Initial velocities of an explicit or implicit Step, one uniform vector per Set of
+        /// nodes; nodes in no entry start from rest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_velocity: Option<Vec<InitialVelocitySpec>>,
+        /// Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+        /// the solution between two passes. Default 1e-6.
         /// Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
         /// (default 10). More increments cost proportionally more but start each Newton solve
         /// closer to equilibrium, which is what makes a stiffening or buckling model converge.

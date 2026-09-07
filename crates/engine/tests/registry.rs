@@ -1134,7 +1134,7 @@ fn enum_helpers_used_by_hosts() {
     assert_eq!(Procedure::Static, Procedure::Static);
     let spec = IdealisationSpec::PlaneStrain;
     assert_eq!(serde_json::to_string(&spec).unwrap(), r#"{"kind":"planeStrain"}"#);
-    let m = MesherSpec::Lattice { size: LatticeSize::Counts { nx: 1, ny: 2, nz: 3 } };
+    let m = MesherSpec::Lattice { size: LatticeSize::Counts { nx: 1, ny: 2, nz: 3 }, sizes: Default::default() };
     assert!(serde_json::to_string(&m).unwrap().contains("\"nx\":1"));
     let p = FacePredicate::Normal { normal: [0.0, 0.0, 1.0], max_angle_deg: None };
     assert!(p.to_si().is_ok());
@@ -4352,6 +4352,7 @@ fn every_procedure_runs_the_well_posedness_checks_first() {
         (r#""heat-transient","dt":"1 s","tEnd":"2 s""#, "transient"),
         (r#""explicit","tEnd":"1 ms""#, "explicit"),
         (r#""static-nonlinear","increments":2"#, "nlgeom"),
+        (r#""implicit","dt":"1 ms","tEnd":"1 ms""#, "implicit"),
     ];
     for (procedure, name) in cases {
         let mut e = engine();
@@ -5848,16 +5849,19 @@ fn convergence_studies_use_explicit_dynamics_for_a_falling_block() {
     ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
     ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
     ok(&mut e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+    ok(&mut e, r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"block"}}"#);
+    // Thrown downwards at 1 m/s: the study resolves the initial velocity on every mesh it builds.
     ok(
         &mut e,
-        r#"{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"1 ms","dtFactor":0.8}"#,
+        r#"{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"1 ms","dtFactor":0.8,
+            "initialVelocity":[{"on":"whole","value":["0 m/s","0 m/s","-1 m/s"]}]}"#,
     );
     let r = study(
         &mut e,
         r#"{"cmd":"study.converge","step":"fall","sizes":["0.1 m","0.05 m","0.025 m"],
         "quantity":{"kind":"probe","field":"displacement","component":2,"at":["0.05 m","0.05 m","0.05 m"]},"restore":false}"#,
     );
-    let expected = -0.5 * 9.81 * 1e-6;
+    let expected = -1e-3 - 0.5 * 9.81 * 1e-6;
     for row in &r.rows {
         assert!((row.value - expected).abs() < 0.01 * expected.abs(), "{row:?}");
     }
@@ -7852,6 +7856,157 @@ fn two_cubes(e: &mut Engine) {
     ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm"},"order":1}"#);
 }
 
+#[test]
+fn lattice_body_sizes_validate_references_and_survive_rename_replay_and_undo() {
+    let mut e = engine();
+    two_cubes(&mut e);
+    let original = e.model_hash();
+    for (body, value, code) in [
+        ("missing", "250 mm", ErrorCode::NotFound),
+        ("b", "1 kg", ErrorCode::UnitDimension),
+        ("b", "0 mm", ErrorCode::Schema),
+        ("b", "-1 mm", ErrorCode::Schema),
+    ] {
+        let error = err(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":"500 mm","sizes":{{"{body}":"{value}"}}}}}}"#
+            ),
+        );
+        assert_eq!(error.code, code);
+        assert_eq!(error.where_.as_deref(), Some(format!("mesher.sizes.{body}").as_str()));
+        assert_eq!(e.model_hash(), original);
+    }
+    for fallback in [r#""500 mm""#, r#"{"nx":2,"ny":2,"nz":2}"#] {
+        ok(
+            &mut e,
+            &format!(
+                r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":{fallback},"sizes":{{"b":"250 mm"}}}}}}"#
+            ),
+        );
+        assert_eq!(set_info(&mut e, "a.xmax").count, 4);
+        assert_eq!(set_info(&mut e, "b.xmin").count, 16);
+        assert_eq!(mesh_summary(&mut e).elements, 72);
+        let before_rename = e.model_hash();
+        ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"b","to":"fine"}"#);
+        assert_eq!(set_info(&mut e, "fine.xmin").count, 16);
+        assert_eq!(err(&mut e, r#"{"cmd":"geometry.remove","name":"fine"}"#).code, ErrorCode::InUse);
+        let mut replayed = engine();
+        pollster::block_on(replayed.replay(&e.export_file().journal.entries, false, true)).unwrap();
+        assert_eq!(replayed.model_hash(), e.model_hash());
+        assert_eq!(mesh_summary(&mut replayed), mesh_summary(&mut e));
+        ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+        assert_eq!(e.model_hash(), before_rename);
+        assert_eq!(set_info(&mut e, "b.xmin").count, 16);
+        ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm"}}"#);
+        assert_eq!(mesh_summary(&mut e).elements, 16);
+    }
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm","sizes":{"b":"250 mm"}}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"b","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    let error = e.query(Query::Mesh {}).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(error.where_.as_deref(), Some("mesher.sizes.b"));
+    ok(&mut e, r#"{"cmd":"journal.undo","steps":2}"#);
+    // A line uses its own member divisions and must never silently ignore an override.
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"line","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"500 mm","sizes":{"line":"250 mm"}}}"#).code,
+        ErrorCode::Unsupported
+    );
+    ok(&mut e, r#"{"cmd":"geometry.remove","name":"b"}"#);
+}
+
+#[test]
+fn lattice_body_sizes_run_the_installed_nonmatching_patch_at_two_refinements() {
+    for text in [
+        include_str!("../../femlab/benches/cases/tie-nonmatching-patch.json"),
+        include_str!("../../femlab/benches/cases/tie-nonmatching-patch-refined.json"),
+    ] {
+        let case: serde_json::Value = serde_json::from_str(text).unwrap();
+        let mut reference = None;
+        for threads in [1, 4] {
+            let mut e = Engine::new(None, Box::new(NoClock), threads);
+            for command in case["journal"].as_array().unwrap() {
+                ok(&mut e, &command.to_string());
+            }
+            let QueryResult::Field(stress) =
+                e.query(Query::Field { step: None, result_id: None, field: "vonMises".into() }).unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(
+                &stress.values,
+                reference.get_or_insert(stress.values.clone()),
+                "thread count must not change the field"
+            );
+            assert_eq!(stress.unit, "Pa");
+            assert!(!stress.values.is_empty());
+            for value in stress.values {
+                assert!((value - 1e6).abs() < 0.1, "uniform tension must carry 1 MPa at every node, got {value}");
+            }
+            for check in case["checks"].as_array().unwrap() {
+                let query = serde_json::from_value(check["query"].clone()).unwrap();
+                let result = serde_json::to_value(e.query(query).unwrap()).unwrap();
+                let got = result.pointer(check["path"].as_str().unwrap()).unwrap();
+                if let Some(expected) = check["expect"].as_f64() {
+                    let tolerance = check["tol"].as_f64().unwrap();
+                    let scale = if check["rel"] == true { expected.abs() } else { 1.0 };
+                    assert!((got.as_f64().unwrap() - expected).abs() <= tolerance * scale, "{check}: got {got}");
+                } else {
+                    assert_eq!(got, &check["expect"]);
+                }
+            }
+            let before_study = e.model_hash();
+            let summary = study(
+                &mut e,
+                r#"{"cmd":"study.converge","step":"static","sizes":["1 m","500 mm"],"quantity":{"kind":"max","field":"displacement"},"restore":false}"#,
+            );
+            assert_eq!(summary.rows[0].dofs, 105);
+            assert_eq!(summary.rows[1].dofs, 456);
+            assert_eq!(set_info(&mut e, "a.xmax").count, 4);
+            assert_eq!(set_info(&mut e, "b.xmin").count, 16);
+            let mut replayed = engine();
+            pollster::block_on(replayed.replay(&e.export_file().journal.entries, true, true)).unwrap();
+            assert_eq!(replayed.model_hash(), e.model_hash());
+            ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+            assert_eq!(e.model_hash(), before_study);
+        }
+    }
+}
+
+#[test]
+fn lattice_body_sizes_scale_with_convergence_while_preserving_ratios() {
+    use femlab_engine::model::{MesherSettings, Sweep};
+    for fallback in [r#""500 mm""#, r#"{"nx":2,"ny":2,"nz":2}"#] {
+        let spec: MesherSpec =
+            serde_json::from_str(&format!(r#"{{"kind":"lattice","size":{fallback},"sizes":{{"b":"250 mm"}}}}"#))
+                .unwrap();
+        let original = femlab_engine::mesh::mesher_settings(&spec).unwrap();
+        let mut swept = MesherSettings::Sweep {
+            base: Box::new(original.clone()),
+            sweep: Sweep::Extrude { layers: 1, height: 1.0 },
+        };
+        assert!(swept.references_body("b"));
+        assert!(!swept.references_body("a"));
+        swept.rename_body("b", "fine");
+        assert!(swept.references_body("fine"));
+        assert!(!swept.references_body("b"));
+        let scaled = femlab_engine::mesh::scale_mesher(&original, 0.5, 0.25);
+        let json = serde_json::to_value(&scaled).unwrap();
+        assert_eq!(json["sizes"]["b"], 0.125);
+        let twice = femlab_engine::mesh::scale_mesher(&original, 0.5, 0.125);
+        assert_eq!(serde_json::to_value(twice).unwrap()["sizes"]["b"], 0.0625);
+    }
+    // A dimensional global size defines the ratio even if the first study size differs.
+    let spec: MesherSpec =
+        serde_json::from_str(r#"{"kind":"lattice","size":"500 mm","sizes":{"b":"250 mm"}}"#).unwrap();
+    let original = femlab_engine::mesh::mesher_settings(&spec).unwrap();
+    assert_eq!(
+        serde_json::to_value(femlab_engine::mesh::scale_mesher(&original, 0.25, 0.125)).unwrap()["sizes"]["b"],
+        0.0625
+    );
+}
+
 /// `contact.add` is a Constraint object with two Set references: it validates both, is listed as
 /// a Connection rather than a Constraint, follows a rename of either Set or of a Body, and holds
 /// the geometry it names in use.
@@ -8779,4 +8934,151 @@ fn the_cost_of_a_nonlinear_step_counts_the_curve_it_will_retain() {
     assert_eq!(nl.retained_bytes, 6 * (nodes * 3 + 1) * 8);
     assert!(nl.bytes > lin.bytes);
     assert_eq!(nl.feasible, None);
+}
+
+// ------------------------------------------- implicit dynamics and initial velocity (#72, #348)
+
+fn thrown_block(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"thrown"}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"block","size":["0.1 m","0.1 m","0.1 m"]}"#);
+    ok(e, r#"{"cmd":"geometry.nameRegion","name":"whole","where":{"kind":"body","name":"block"}}"#);
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["block"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#);
+    ok(e, r#"{"cmd":"load.gravity","name":"g","g":["0 m/s^2","0 m/s^2","-9.81 m/s^2"]}"#);
+}
+
+/// Benchmark F2c in Command form: an implicit Step thrown with an initial velocity falls as
+/// `u = v₀ t + g t²/2`, its definition round-trips every new field, and its cost plan counts
+/// the frames it retains.
+#[test]
+fn an_implicit_step_is_defined_costed_and_run_through_the_registry() {
+    let mut e = engine();
+    thrown_block(&mut e);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"fall","procedure":"implicit","constraints":[],"loads":["g"],"output":["displacement"],
+            "dt":"1 ms","tEnd":"5 ms","alpha":-0.05,"rayleighAlpha":"0 Hz","rayleighBeta":"0 s","outputEvery":2,
+            "initialVelocity":[{"on":"whole","value":["0.3 m/s","-0.2 m/s","100 mm/s"]}]}"#,
+    );
+    let QueryResult::Definition(def) =
+        e.query(Query::Definition { kind: ObjectKind::Step, name: "fall".into() }).unwrap()
+    else {
+        panic!("a definition")
+    };
+    let Command::StepAdd { alpha, rayleigh_alpha, rayleigh_beta, initial_velocity, .. } = &def.command else {
+        panic!("a step.add")
+    };
+    assert_eq!(*alpha, Some(-0.05));
+    assert_eq!(rayleigh_alpha.as_ref().map(|q| q.si().unwrap()), Some(0.0));
+    assert_eq!(rayleigh_beta.as_ref().map(|q| q.si().unwrap()), Some(0.0));
+    let velocity = initial_velocity.as_ref().expect("the initial velocity survives");
+    assert_eq!(velocity.len(), 1);
+    assert_eq!(velocity[0].on, "whole");
+    assert_eq!(velocity[0].value.iter().map(|q| q.si().unwrap()).collect::<Vec<_>>(), [0.3, -0.2, 0.1]);
+    let QueryResult::Cost(cost) = e.query(Query::Cost { step: "fall".into() }).unwrap() else { panic!() };
+    assert_eq!(cost.retained_frames, 4, "initial, steps 2 and 4, and the final fifth");
+    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+    let t = 5e-3;
+    let want = [0.3 * t, -0.2 * t, 0.1 * t - 0.5 * 9.81 * t * t];
+    for (c, want) in want.iter().enumerate() {
+        let got = probe_at(&mut e, "fall", Field::Displacement, Some(c as u8), ["50 mm", "50 mm", "50 mm"]);
+        assert!((got - want).abs() <= 1e-12, "component {c}: {got} vs {want}");
+    }
+    let summary = result_of(&mut e, Some("fall"));
+    assert_eq!((summary.solver.as_str(), summary.iterations, summary.history.len()), ("cpu-direct", 5, 4));
+    // A free body has nothing to react against, and its d'Alembert total `f − M a` is round-off
+    // of the 76.5 N it weighs.
+    assert!(summary.reactions.is_empty());
+    for v in &summary.applied_total {
+        assert!(v.value.abs() <= 1e-6 && v.unit == "N", "{v:?}");
+    }
+}
+
+/// The initial-velocity list is validated like every other Command input: units per component,
+/// Sets that exist, and no node told to move two ways at once.
+#[test]
+fn initial_velocity_entries_are_checked_for_units_sets_and_agreement() {
+    let mut e = engine();
+    thrown_block(&mut e);
+    let step = |velocity: &str| {
+        format!(
+            r#"{{"cmd":"step.add","name":"fall","procedure":"explicit","constraints":[],"loads":["g"],"tEnd":"0.1 ms",
+                "initialVelocity":{velocity}}}"#
+        )
+    };
+    let bad = err(&mut e, &step(r#"[{"on":"whole","value":["1 m/s","0 m/s","3 m"]}]"#));
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::UnitDimension, Some("initialVelocity[0].value[2]")));
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"fall","procedure":"implicit","constraints":[],"loads":["g"],"dt":"1 ms","tEnd":"5 ms","rayleighAlpha":"1 s"}"#,
+    );
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::UnitDimension, Some("rayleighAlpha")));
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"step.add","name":"fall","procedure":"implicit","constraints":[],"loads":["g"],"dt":"1 ms","tEnd":"5 ms","rayleighBeta":"1 Hz"}"#,
+    );
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::UnitDimension, Some("rayleighBeta")));
+    // A Set that resolves to nothing is `set.empty` at solve time, like a Constraint's.
+    ok(&mut e, &step(r#"[{"on":"nowhere","value":["1 m/s","0 m/s","0 m/s"]}]"#));
+    assert_eq!(err(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#).code, ErrorCode::SetEmpty);
+    // Two entries that overlap on the loaded face: the same velocity is fine, a different one is not.
+    ok(
+        &mut e,
+        &step(
+            r#"[{"on":"whole","value":["1 m/s","0 m/s","0 m/s"]},{"on":"block.xmax","value":["1 m/s","0 m/s","0 m/s"]}]"#,
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+    ok(
+        &mut e,
+        &step(
+            r#"[{"on":"whole","value":["1 m/s","0 m/s","0 m/s"]},{"on":"block.xmax","value":["2 m/s","0 m/s","0 m/s"]}]"#,
+        ),
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("initialVelocity[1]")));
+    assert!(bad.cause.contains("'whole'") && bad.cause.contains("'block.xmax'"), "{}", bad.cause);
+    assert!(bad.suggestion.as_deref().is_some_and(|s| s.contains("initialVelocity")));
+    // An empty list is starting from rest.
+    ok(&mut e, &step("[]"));
+    ok(&mut e, r#"{"cmd":"solve.run","step":"fall"}"#);
+    let uz = probe_at(&mut e, "fall", Field::Displacement, Some(2), ["50 mm", "50 mm", "50 mm"]);
+    assert!((uz + 0.5 * 9.81 * 1e-8).abs() <= 1e-12, "{uz}");
+    // An implicit Step without a clock is a schema error naming the field when it runs.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"still","procedure":"implicit","constraints":[],"loads":["g"],"tEnd":"5 ms"}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"still"}"#);
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("dt")));
+    let bad = e.query(Query::Cost { step: "still".into() }).expect_err("no clock, no plan");
+    assert_eq!(bad.where_.as_deref(), Some("dt"));
+    // ... and without an end, or with a zero dt, the same way the heat transient is refused.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"still","procedure":"implicit","constraints":[],"loads":["g"],"dt":"1 ms"}"#,
+    );
+    let bad = err(&mut e, r#"{"cmd":"solve.run","step":"still"}"#);
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("tEnd")));
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"still","procedure":"implicit","constraints":[],"loads":["g"],"dt":"0 s","tEnd":"5 ms"}"#,
+    );
+    let bad = e.query(Query::Cost { step: "still".into() }).expect_err("the grid is invalid");
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some("dt")));
+    // A convergence study resolves the velocity on every mesh it builds, and refuses the same
+    // disagreement the plain solve does.
+    ok(
+        &mut e,
+        &step(
+            r#"[{"on":"whole","value":["1 m/s","0 m/s","0 m/s"]},{"on":"block.xmax","value":["2 m/s","0 m/s","0 m/s"]}]"#,
+        ),
+    );
+    let bad = err(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"fall","sizes":["0.1 m","0.05 m"],
+        "quantity":{"kind":"probe","field":"displacement","component":2,"at":["0.05 m","0.05 m","0.05 m"]},"restore":false}"#,
+    );
+    assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("initialVelocity[1]")));
 }

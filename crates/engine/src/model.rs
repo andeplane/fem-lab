@@ -1,7 +1,7 @@
 //! The Model: the complete, serialisable description of one analysis, in SI.
 //! Only `Engine::dispatch` changes it. No mesh, no results: those are derived.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use femlab_geometry::{FacePredicate, QuadBlock, RefineBox, RegionPredicate, Shape};
 use schemars::JsonSchema;
@@ -252,6 +252,14 @@ pub enum Amplitude {
     Table { t: Vec<f64>, value: Vec<f64> },
 }
 
+/// A uniform initial velocity on a Set of nodes, SI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialVelocity {
+    pub on: String,
+    pub value: [f64; 3],
+}
+
 /// A Step. Everything after `output` belongs to one procedure each and is `None` for the rest;
 /// `after` names the Step whose Result this one continues (plan B §2.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -290,6 +298,14 @@ pub struct Step {
     pub nonlinear_tolerance: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonlinear_max_iterations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rayleigh_alpha: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rayleigh_beta: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_velocity: Option<Vec<InitialVelocity>>,
 }
 
 /// Mesher settings, SI.
@@ -299,23 +315,15 @@ pub enum MesherSettings {
     Lattice {
         size: Option<f64>,
         counts: Option<[u32; 3]>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        sizes: BTreeMap<String, f64>,
     },
     /// Mapped blocks, which are their own geometry: `body` is the implicit Body they make.
-    Mapped {
-        body: String,
-        blocks: Vec<QuadBlock>,
-    },
+    Mapped { body: String, blocks: Vec<QuadBlock> },
     /// Free triangles inside the sketch of the Body `of`.
-    Free {
-        of: String,
-        size: f64,
-        refine: Vec<RefineBox>,
-    },
+    Free { of: String, size: f64, refine: Vec<RefineBox> },
     /// A 2D mesher swept into 3D.
-    Sweep {
-        base: Box<MesherSettings>,
-        sweep: Sweep,
-    },
+    Sweep { base: Box<MesherSettings>, sweep: Sweep },
 }
 
 /// How a swept mesher turns its 2D base into a 3D mesh; SI, but the angle stays in degrees.
@@ -336,7 +344,20 @@ impl MesherSettings {
                 }
             }
             Self::Sweep { base, .. } => base.rename_body(from, to),
-            Self::Lattice { .. } => {}
+            Self::Lattice { sizes, .. } => {
+                if let Some(size) = sizes.remove(from) {
+                    sizes.insert(to.into(), size);
+                }
+            }
+        }
+    }
+
+    /// Whether removing a Body would leave a dangling mesher reference.
+    pub fn references_body(&self, name: &str) -> bool {
+        match self {
+            Self::Lattice { sizes, .. } => sizes.contains_key(name),
+            Self::Sweep { base, .. } => base.references_body(name),
+            _ => self.source_body() == Some(name),
         }
     }
 
@@ -616,6 +637,10 @@ mod tests {
             max_cutbacks: None,
             nonlinear_tolerance: None,
             nonlinear_max_iterations: None,
+            alpha: None,
+            rayleigh_alpha: None,
+            rayleigh_beta: None,
+            initial_velocity: None,
         });
         m.sets.push(NamedSet {
             name: "top".into(),

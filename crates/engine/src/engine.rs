@@ -732,6 +732,9 @@ impl Engine {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
                 }
                 let settings = crate::mesh::mesher_settings(mesher)?;
+                if let crate::model::MesherSettings::Lattice { sizes, .. } = &settings {
+                    crate::mesh::validate_body_sizes(&self.model, sizes)?;
+                }
                 let old_body = self.model.implicit_body();
                 let new_body = settings.implicit_body();
                 if let Some(body) = new_body {
@@ -976,6 +979,10 @@ impl Engine {
                 max_cutbacks,
                 nonlinear_tolerance,
                 nonlinear_max_iterations,
+                alpha,
+                rayleigh_alpha,
+                rayleigh_beta,
+                initial_velocity,
             } => {
                 check_name(name)?;
                 if let Some(tol) = nonlinear_tolerance {
@@ -1031,6 +1038,10 @@ impl Engine {
                     max_cutbacks: *max_cutbacks,
                     nonlinear_tolerance: *nonlinear_tolerance,
                     nonlinear_max_iterations: *nonlinear_max_iterations,
+                    alpha: *alpha,
+                    rayleigh_alpha: opt_si(rayleigh_alpha, "rayleighAlpha")?,
+                    rayleigh_beta: opt_si(rayleigh_beta, "rayleighBeta")?,
+                    initial_velocity: initial_velocity.as_deref().map(to_initial_velocity).transpose()?,
                 };
                 Ok(upsert(&mut self.model.steps, s, |s| &s.name, ObjectKind::Step))
             }
@@ -1224,7 +1235,7 @@ impl Engine {
                 users.push(format!("set '{}'", s.name));
             }
         }
-        if m.mesh.as_ref().and_then(|mesh| mesh.mesher.source_body()) == Some(name) {
+        if m.mesh.as_ref().is_some_and(|mesh| mesh.mesher.references_body(name)) {
             users.push("mesher geometry".into());
         }
         if !users.is_empty() {
@@ -1623,6 +1634,22 @@ fn opt_si<D: crate::units::Dim>(q: &Option<Q<D>>, field: &str) -> Result<Option<
         Some(v) => Ok(Some(v.si().map_err(|e| e.at(field))?)),
         None => Ok(None),
     }
+}
+
+/// The initial-velocity list in SI, each component error naming its entry.
+fn to_initial_velocity(
+    list: &[crate::command::InitialVelocitySpec],
+) -> Result<Vec<crate::model::InitialVelocity>, Error> {
+    list.iter()
+        .enumerate()
+        .map(|(i, spec)| {
+            let mut value = [0.0; 3];
+            for (c, q) in spec.value.iter().enumerate() {
+                value[c] = q.si().map_err(|e| e.at(format!("initialVelocity[{i}].value[{c}]")))?;
+            }
+            Ok(crate::model::InitialVelocity { on: spec.on.clone(), value })
+        })
+        .collect()
 }
 
 /// An `AmplitudeSpec` in SI, with a table checked for the two arrays agreeing.
