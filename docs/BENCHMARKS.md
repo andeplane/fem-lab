@@ -45,6 +45,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 
 | Benchmark | Status | Checks | Measured | Reference | Error |
 |---|---|---|---|---|---|
+| amplitude-ramped-cantilever | green | 9/9 | -0.190407 | -0.191962 | 0.81 % |
 | axisymmetric-thermal-stress | green | 4/4 | 1 | 1 | 0.00 % |
 | cantilever-hex20 | green | 6/6 | -0.190407 | -0.191962 | 0.81 % |
 | cantilever-hex8-full | green | 6/6 | -0.18378 | -0.18378 | 0.00 % |
@@ -111,6 +112,27 @@ while unequal increments are rejected with both Load names and the Body. A8's nu
 `a_step_result_is_bit_identical_at_one_and_many_threads`, which asserts every field of a
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, faer's parallel
 `LLᵀ` included.
+
+Direct-solver acceptance (#266) is also checked independently of factorization success.
+`a_direct_solve_rejects_an_incorrect_or_unrepresentable_answer` supplies a full operator whose
+one-triangle factorization gives `(2/3,-1/3)` but whose actual residual is exactly `(0,-2/3)`
+for `b=(1,0)`: returning that candidate as a successful solve fails the test. An SPD scalar
+system whose exact solution is `1e500` must return a structured error. Conversely, `3x=b`
+for `b=1e-300,1,1e300` must recover `x/b=1/3` within 1e-15 without norm overflow. A 3–4–5
+norm-ratio check verifies the same residual ratio at those scales, plus zero and nonfinite
+cases. NaN, infinite, nonpositive and allowance-overflowing tolerances are rejected before
+changing the solution vector. Direct solves reject a nonfinite residual or one above the existing
+refinement floor of `100*tolerance` (default 1e-8); this is an acceptance guard, not a replacement for D1's
+published stress and force-balance oracles. Command regressions keep Model/Journal/previous
+Result intact on rejection and ensure transient heat and modal analysis propagate the error
+without a panic. The modal case uses the first Bathe inverse iterate, whose coefficients
+scale as `rho²/E`: finite `rho=1e100 kg/m³` and `E=1e-200 Pa` exceed the f64 range.
+
+Windows uses per-call sequential numeric factorization, retaining parallel assembly and
+triangular solution ([ADR0019](adr/0019-windows-direct-factorization-parallelism.md)).
+The exact discrete harmonic Dirichlet solution `x_i=(i+1)/(n+1)` checks reusable factors
+at 65/129/257 unknowns, two right-hand sides, one/four threads and concurrent callers.
+The unchanged D1 stress and force-balance checks remain the physical acceptance gate.
 
 A9 runs the shipped CG shaders on the adapter with budgets of 2, 25 and 50 iterations,
 including matrix chunks of three rows and a vector crossing the 256-thread workgroup boundary.
@@ -183,10 +205,27 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B5 | Euler column buckling, pinned–pinned | P_cr = π²EI/L² | 1 % (hex20) | linear buckling (phase 6) | |
 | B6 | Large-deflection cantilever, end moment / end force (Bathe) | closed-form elastica curves | 1 % | NLGEOM Newton loop (phase 6) | |
 | B7 | Axial simplex bar modes, all four simplex kinds | u = sin(πx/2), E = ρ = L = 1: f₁ = 1/4 Hz | finest relative error < 0.001; observed rate > 1.9 (linear), > 3.8 (quadratic) | consistent mass and modal mesh convergence | engine test |
+| B8 | Amplitude-ramped cantilever, load–unload cycle | g(t)·(PL³/3EI + PL/κGA) at every retained increment, g = [0, 1, 0] over 2 s | 1 % against the closed form; the g = 1 frame equals B1's own answer to 1e-14 | load amplitudes and stepping on a static Step | engine test + green |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
 motion and the axial displacement at x=0, with ν=0 and a free end at x=1. Uniform axial
 refinements n=4,8,16 give rates about 2.00 for tri3/tet4 and 4.02/4.05 for tri6/tet10.
+
+B8 (`amplitude-ramped-cantilever`) is B1's hex20 cantilever with a triangular amplitude,
+t = [0, 1, 2] s and g = [0, 1, 0] at dt = 0.25 s: eight increments, nine retained frames. The
+fully loaded frame measures 0.1904070 mm, the same value the un-amplituded `cantilever-hex20`
+case reports, and the half-loaded frames on the way up and the way down are exactly half of it.
+
+**Linear static is affine in the amplitude, not proportional.** `u(t) = u_th + g(t)·u_L`: the
+amplitude scales the Loads and the prescribed displacements, and never the temperature, because
+the thermal strain an element subtracts in `recover` belongs to the temperature field rather
+than to the load history. So a whole schedule costs at most two solves against one reduced
+system, and `an_amplitude_is_affine_in_the_loads_and_never_scales_the_temperature` in
+`tests/fem.rs` is what fails if that is ever "simplified" back into a scaling of one solve: with
+a temperature Load present, the frame at g = 0 must equal a pure thermal solve — fields, stress
+and reactions — and the frame at g = 1 the un-amplituded answer. The exactness of the scaling
+itself is what a linear procedure guarantees; when a nonlinear material, contact or large
+deflection lands, the increments become real solves and this benchmark becomes their gate.
 
 B1 runs as three cases at a 25 mm lattice on a 1 m × 100 mm × 100 mm steel beam under a 1 kN
 tip traction with the root fully fixed: `cantilever-hex8-im` (0.1901125 mm, 0.96 % below the
