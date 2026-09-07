@@ -1406,6 +1406,55 @@ fn set_info(e: &mut Engine, name: &str) -> femlab_engine::query::SetInfo {
 }
 
 #[test]
+fn subtract_cavity_auto_faces_cover_the_entire_lattice_interface() {
+    for margin in [0u32, 10] {
+        for size in [10, 5] {
+            for order in [1, 2] {
+                let mut e = engine();
+                ok(&mut e, r#"{"cmd":"model.new","name":"cavity"}"#);
+                ok(&mut e, r#"{"cmd":"geometry.addBox","name":"block","size":["200 mm","30 mm","200 mm"]}"#);
+                let width = 200 - 2 * margin;
+                let shape = format!(
+                    r#"{{"kind":"box","size":["{width} mm","10 mm","{width} mm"],"at":["{margin} mm","10 mm","{margin} mm"]}}"#
+                );
+                ok(&mut e, &format!(r#"{{"cmd":"geometry.subtract","name":"cavity","from":"block","shape":{shape}}}"#));
+                ok(
+                    &mut e,
+                    &format!(
+                        r#"{{"cmd":"geometry.addBox","name":"core","size":["{width} mm","10 mm","{width} mm"],"at":["{margin} mm","10 mm","{margin} mm"]}}"#
+                    ),
+                );
+                ok(
+                    &mut e,
+                    &format!(
+                        r#"{{"cmd":"mesh.set","mesher":{{"kind":"lattice","size":"{size} mm"}},"order":{order}}}"#
+                    ),
+                );
+                for (tag, y) in [("ymin", 10), ("ymax", 20)] {
+                    ok(
+                        &mut e,
+                        &format!(
+                            r#"{{"cmd":"geometry.nameFace","name":"plane-{tag}","of":"block","where":{{"kind":"plane","normal":[0,1,0],"offset":"{y} mm"}}}}"#
+                        ),
+                    );
+                    let cavity = set_info(&mut e, &format!("cavity.{tag}"));
+                    let core = set_info(&mut e, &format!("core.{tag}"));
+                    assert_eq!(cavity.count, core.count, "margin={margin}, size={size}, order={order}, {tag}");
+                    assert_eq!(cavity.count, (width / size).pow(2));
+                    assert_eq!(cavity.bbox, core.bbox);
+                    let plane = set_info(&mut e, &format!("plane-{tag}"));
+                    assert_eq!(cavity.count, plane.count);
+                    assert_eq!(cavity.bbox, plane.bbox);
+                    // Independent geometric oracle: the complete rectangular cut area.
+                    assert!((cavity.measure.value - (width as f64 * 0.001).powi(2)).abs() < 1e-12);
+                    assert!((cavity.centroid[1].value - y as f64 * 0.001).abs() < 1e-12);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn pressure_area_uses_the_loaded_boundary_measure_without_changing_the_journal() {
     let mut e = engine();
     ok(&mut e, r#"{"cmd":"model.new","name":"pressure-area"}"#);

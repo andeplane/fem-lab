@@ -571,6 +571,14 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F14 | NAFEMS R0016 case 5H, forced harmonic response of the simply-supported thin plate | the published peak displacement and stress table | — | | **resolve** — needs the published table |
 | F15 | NAFEMS R0016 case 5R, random response of the same plate | the published RMS table | — | | **resolve** — needs the published table |
 
+The cavity-face regression for #407 builds a 200 × 30 × 200 mm slab with a
+10 mm-high box cut and a separate matching core. At both 10 and 5 mm lattice sizes,
+for hex8 and hex20, each cut's `ymin`/`ymax` Set must cover the full rectangle:
+`(width / size)²` faces and `width²` area (1e-12 m² absolute tolerance), with the same
+count and bounding box as both the core's face and an explicit plane-predicate Set.
+Both a full-width cut and a cut inset by 10 mm are checked. This catches missing
+interface faces before they can leave a bonded contact partially constrained.
+
 The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
 the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
 and F4c gate at roundoff rather than at an engineering tolerance. F4c's reference is the value
