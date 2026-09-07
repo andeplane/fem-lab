@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use femlab_engine::command::Formulation;
-use femlab_engine::command::{CoupleKind, Field, Solver};
+use femlab_engine::command::{CoupleKind, Field, SectionSpec, Solver};
 use femlab_engine::fem::assembly::{
     assemble_stiffness, expand, pattern, pattern_coupled, reactions, reduce, resolve, Assembled, Csr, Pattern,
     ResolvedConstraints,
@@ -26,6 +26,7 @@ use femlab_engine::fem::problem::{Constraint, Coupling, PointMass, Problem};
 use femlab_engine::fem::quadrature::{
     gauss_legendre, Rule, HEX_2X2X2, HEX_3X3X3, QUAD_2X2, QUAD_3X3, TET_1, TET_4, TRI_1, TRI_3,
 };
+use femlab_engine::fem::section::{properties, Section};
 use femlab_engine::fem::shape::{
     centre_xi, dshape_of, face_dshape_of, face_rule_of, face_shape_of, in_reference, node_xi, rule_of, shape_of, Hex20,
     Hex8, Line2, Line3, Quad4, Quad4F, Quad8, Quad8F, RefElement, RefFace, Tet10, Tet4, Tri3, Tri3F, Tri6, Tri6F,
@@ -40,6 +41,7 @@ use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
 use femlab_engine::procedure::modal::assemble_mass;
 use femlab_engine::procedure::{self, heat, NonlinearControl, Step, StepResult};
 use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
+use femlab_engine::units::{Length, Q};
 use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
 use femlab_engine::{OnProgress, Progress};
 use femlab_geometry::mesh::{ElementKind, FaceKind};
@@ -759,7 +761,15 @@ fn steel() -> Material {
 }
 
 fn ctx<'a>(coords: &'a [f64], mat: &'a Material, id: Idealisation, form: Formulation) -> ElementCtx<'a> {
-    ElementCtx { coords, material: mat, idealisation: id, formulation: form, temperature: None, t_ref: 0.0 }
+    ElementCtx {
+        coords,
+        material: mat,
+        section: None,
+        idealisation: id,
+        formulation: form,
+        temperature: None,
+        t_ref: 0.0,
+    }
 }
 
 /// Every idealisation that applies to a kind: 3D solids are 3D, sheets are all three 2D ones.
@@ -1437,7 +1447,9 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
             }
         }
         let outside_xi = match kind {
-            ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8 => [1.1, 0.0, 0.0],
+            ElementKind::Hex8 | ElementKind::Hex20 | ElementKind::Quad4 | ElementKind::Quad8 | ElementKind::Truss2 => {
+                [1.1, 0.0, 0.0]
+            }
             ElementKind::Tet4 | ElementKind::Tet10 | ElementKind::Tri3 | ElementKind::Tri6 => [-0.1, 0.0, 0.0],
         };
         el.shape_at(outside_xi, &mut n);
@@ -1745,7 +1757,9 @@ fn a_material_with_the_wrong_props_fails_every_integral_that_calls_the_law() {
 
 use femlab_engine::io::msh::gmsh_permutation;
 use femlab_engine::io::vtu::base64;
-use femlab_engine::io::{base64_decode, read_msh, read_stl, write_inp, write_msh, write_stl, write_stl_mesh};
+use femlab_engine::io::{
+    base64_decode, read_msh, read_stl, write_inp, write_msh, write_stl, write_stl_mesh, write_vtu,
+};
 use femlab_geometry::{elliptic_annulus, split_to_simplices, ElementBlock, Face, Shape, Sketch, Solid, TriMesh};
 
 // ---------------------------------------------------------------- msh: gmsh_permutation
@@ -2124,8 +2138,13 @@ fn read_msh_rejects_an_element_at_an_unsupported_entity_dimension() {
 #[test]
 fn read_msh_rejects_a_line_element_placed_in_the_volume_dimension() {
     let (good, _) = good_msh_text();
-    // same entity dim as the mesh (2), but a line2 type, which is never a volume element
-    assert_schema_err(&set_line_after(&good, "$Elements", 4, "2 1 1 1"), "unknown element type 1");
+    // Same entity dim as the mesh (2), but a line2 type. Gmsh type 1 is our own truss, which
+    // belongs in a 3D mesh, so the Mesh refuses it here rather than the type table.
+    assert_schema_err(&set_line_after(&good, "$Elements", 4, "2 1 1 1"), "Truss2 in a 2D mesh");
+    // A line3 has no element kind at all, so that one is still refused by the type table.
+    let mut t = set_line_after(&good, "$Elements", 4, "2 1 8 1");
+    t = set_line_after(&t, "$Elements", 5, "2 1 2 3");
+    assert_schema_err(&t, "unknown element type 8");
 }
 
 #[test]
@@ -2230,6 +2249,35 @@ fn inp_writes_every_set_and_correct_box_face_labels() {
         assert_eq!(lines.len(), 1, "{name}");
         assert!(lines[0].ends_with(&format!(", {want}")), "{name}: {}", lines[0]);
     }
+}
+
+/// A line member travels through all three formats: Gmsh's line element (type 1, both
+/// directions), Abaqus's `T3D2` and VTK's `VTK_LINE`, mixed into a mesh that also has solids.
+#[test]
+fn a_line_block_round_trips_through_msh_and_names_itself_in_inp_and_vtu() {
+    let solid = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let base = solid.n_nodes() as u32;
+    let mut coords = solid.coords.clone();
+    coords.extend([2.0, 0.0, 0.0, 3.0, 1.0, 0.5]);
+    let m = Mesh {
+        dim: 3,
+        coords,
+        blocks: vec![
+            ElementBlock { kind: ElementKind::Hex8, conn: solid.blocks[0].conn.clone(), first_elem: 0 },
+            ElementBlock { kind: ElementKind::Truss2, conn: vec![base, base + 1], first_elem: 1 },
+        ],
+        node_sets: BTreeMap::from([("joints".to_string(), vec![base, base + 1])]),
+        elem_sets: BTreeMap::from([("members".to_string(), vec![1])]),
+        face_sets: BTreeMap::new(),
+    };
+    m.validate().expect("a 1D block belongs in a 3D mesh");
+    assert_msh_round_trips(&m, "hex8 plus truss2");
+    let inp = write_inp(&m, "frame");
+    assert!(inp.contains("*ELEMENT, TYPE=T3D2, ELSET=BLOCK2"), "{inp}");
+    // VTK cell type 3 is VTK_LINE; the types array is base64, so check the mesh writes at all
+    // and that the truss did not become a face or vanish.
+    let vtu = write_vtu(&m, &[], &[]);
+    assert!(vtu.contains("NumberOfCells=\"2\""), "{vtu}");
 }
 
 #[test]
@@ -2380,6 +2428,8 @@ fn problem<'a>(
         body_of_block: bodies,
         material_of_block: vec![Some(0); mesh.blocks.len()],
         materials: vec![steel()],
+        section_of_block: vec![None; mesh.blocks.len()],
+        sections: Vec::new(),
         idealisation: id,
         formulation: form,
         constraints,
@@ -4183,6 +4233,8 @@ fn heat_problem<'a>(
         body_of_block: bodies,
         material_of_block: vec![Some(0); mesh.blocks.len()],
         materials: vec![material],
+        section_of_block: vec![None; mesh.blocks.len()],
+        sections: Vec::new(),
         idealisation: id,
         formulation: Formulation::Full,
         constraints,
@@ -4946,6 +4998,8 @@ fn explicit_rejects_a_free_massless_body_in_a_mixed_model_and_recovers() {
         body_of_block: &bodies,
         material_of_block: vec![Some(0), Some(1)],
         materials: vec![steel(), conductor(0.0, 0.0, 0.0)],
+        section_of_block: vec![None, None],
+        sections: Vec::new(),
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::Full,
         constraints: Vec::new(),
@@ -5005,6 +5059,8 @@ fn explicit_rejects_massless_stiffness_even_when_shared_nodes_have_mass() {
         body_of_block: &bodies,
         material_of_block: vec![Some(0), Some(1)],
         materials: vec![steel(), conductor(0.0, 0.0, 0.0)],
+        section_of_block: vec![None, None],
+        sections: Vec::new(),
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::Full,
         constraints: Vec::new(),
@@ -5715,6 +5771,729 @@ fn consistent_quadratic_gravity_distribution_remains_unchanged() {
         assert_eq!(f[2 * i], 0.0);
     }
 }
+
+// ---------------------------------------------------------------- section library
+
+fn mm(v: f64) -> Q<Length> {
+    Q::new(v, "mm")
+}
+
+fn props(spec: SectionSpec) -> Section {
+    properties(&spec).expect("a valid section")
+}
+
+fn spec_error(spec: SectionSpec) -> Error {
+    properties(&spec).expect_err("an invalid section")
+}
+
+/// Every closed form of the library against an oracle written from the geometry, and the
+/// I-section against the IPE 200 datasheet (Benchmark B20).
+#[test]
+fn section_properties_match_their_closed_forms_and_a_datasheet() {
+    // Rectangle 60 x 100 mm: A = bh, I_y = bh^3/12 about the width axis, I_z = hb^3/12.
+    let (b, h) = (0.060, 0.100);
+    let r = props(SectionSpec::Rectangle { width: mm(60.0), height: mm(100.0) });
+    assert!((r.a - b * h).abs() < 1e-18, "{r:?}");
+    assert!((r.i_y - b * h * h * h / 12.0).abs() < 1e-18, "{r:?}");
+    assert!((r.i_z - h * b * b * b / 12.0).abs() < 1e-18, "{r:?}");
+    assert_eq!((r.c_y, r.c_z), (0.5 * b, 0.5 * h));
+    assert_eq!((r.k_y, r.k_z), (5.0 / 6.0, 5.0 / 6.0));
+    // Roark's rectangle torsion constant is 0.1406 s^4 for a square, whichever side is longer.
+    let square = props(SectionSpec::Rectangle { width: mm(50.0), height: mm(50.0) });
+    // Roark fits 0.14083 where the exact Saint-Venant series gives 0.140577.
+    assert!((square.j / 0.050f64.powi(4) - 0.1406).abs() < 3e-4, "{}", square.j);
+    let tall = props(SectionSpec::Rectangle { width: mm(100.0), height: mm(60.0) });
+    assert!((tall.j - r.j).abs() < 1e-18, "the torsion constant does not depend on which side is which");
+
+    // Circle: A = pi r^2, I = pi r^4 / 4 both ways, J = 2I (the polar moment).
+    let rad = 0.025;
+    let c = props(SectionSpec::Circle { radius: mm(25.0) });
+    assert!((c.a - PI * rad * rad).abs() < 1e-18, "{c:?}");
+    assert!((c.i_y - PI * rad.powi(4) / 4.0).abs() < 1e-20, "{c:?}");
+    assert_eq!((c.i_y, c.j), (c.i_z, 2.0 * c.i_y));
+    assert_eq!((c.c_y, c.c_z, c.k_y, c.k_z), (rad, rad, 0.9, 0.9));
+
+    // Tube 50 mm outside diameter, 5 mm wall: the solid circle minus the bore.
+    let t = props(SectionSpec::Tube { radius: mm(25.0), thickness: mm(5.0) });
+    let bore = 0.020;
+    assert!((t.a - PI * (rad * rad - bore * bore)).abs() < 1e-18, "{t:?}");
+    assert!((t.i_y - PI * (rad.powi(4) - bore.powi(4)) / 4.0).abs() < 1e-20, "{t:?}");
+    assert_eq!((t.j, t.k_y, t.k_z), (2.0 * t.i_y, 0.5, 0.5));
+
+    // IPE 200: h = 200, b = 100, t_w = 5.6, t_f = 8.5 mm. The datasheet gives
+    // A = 2850 mm^2, I_y = 19.43e6 mm^4, I_z = 1.424e6 mm^4. The library models square
+    // corners and the real profile has root fillets, so it lands just below on all three.
+    let i = props(SectionSpec::I {
+        height: mm(200.0),
+        width: mm(100.0),
+        web_thickness: mm(5.6),
+        flange_thickness: mm(8.5),
+    });
+    let (hw, tw, tf, bf) = (0.200 - 2.0 * 0.0085, 0.0056, 0.0085, 0.100);
+    assert!((i.a - (2.0 * bf * tf + hw * tw)).abs() < 1e-18, "{i:?}");
+    // The fillets only ever add material, so a square-cornered model must land below the
+    // datasheet on all three, and by no more than the fillets are worth.
+    for (got, book, what) in [(i.a, 2850e-6, "A"), (i.i_y, 19.43e-6, "I_y"), (i.i_z, 1.424e-6, "I_z")] {
+        let short = 1.0 - got / book;
+        assert!((0.0..0.06).contains(&short), "{what} = {got} is {:.2} % off the IPE 200 datasheet", 100.0 * short);
+    }
+    // The oracle: two flange rectangles about the section's own axis, plus the web.
+    let i_y_oracle = 2.0 * (bf * tf.powi(3) / 12.0 + bf * tf * (0.5 * (0.200 - tf)).powi(2)) + tw * hw.powi(3) / 12.0;
+    assert!((i.i_y / i_y_oracle - 1.0).abs() < 1e-12, "{} vs {i_y_oracle}", i.i_y);
+    assert!((i.i_z - (2.0 * tf * bf.powi(3) + hw * tw.powi(3)) / 12.0).abs() < 1e-20, "{i:?}");
+    assert!((i.j - (2.0 * bf * tf.powi(3) + hw * tw.powi(3)) / 3.0).abs() < 1e-20, "{i:?}");
+    assert!((i.k_z - hw * tw / i.a).abs() < 1e-12 && (i.k_y - 2.0 * bf * tf / i.a).abs() < 1e-12, "{i:?}");
+    assert_eq!((i.c_y, i.c_z), (0.050, 0.100));
+
+    // Channel 200 x 75 mm: the centroid moves off the web, and c_y is the far side of it.
+    let ch = props(SectionSpec::Channel {
+        height: mm(200.0),
+        width: mm(75.0),
+        web_thickness: mm(8.0),
+        flange_thickness: mm(12.0),
+    });
+    let (h, bw, tw, tf) = (0.200, 0.075 - 0.008, 0.008, 0.012);
+    let (a_web, a_fl) = (h * tw, 2.0 * bw * tf);
+    assert!((ch.a - (a_web + a_fl)).abs() < 1e-18, "{ch:?}");
+    let y_bar = (a_web * 0.5 * tw + a_fl * (tw + 0.5 * bw)) / ch.a;
+    // The first moment about the centroid vanishes: the independent check on y_bar.
+    let first = a_web * (0.5 * tw - y_bar) + a_fl * (tw + 0.5 * bw - y_bar);
+    assert!(first.abs() < 1e-18, "{first}");
+    assert!(ch.c_y > 0.5 * 0.075, "an unsymmetric channel's far fibre is past the middle: {}", ch.c_y);
+    assert!((ch.c_y - (0.075 - y_bar)).abs() < 1e-15, "{ch:?}");
+    assert_eq!(ch.c_z, 0.5 * h);
+    assert!(
+        (ch.i_z
+            - (h * tw.powi(3) / 12.0
+                + a_web * (0.5 * tw - y_bar).powi(2)
+                + 2.0 * (tf * bw.powi(3) / 12.0 + bw * tf * (tw + 0.5 * bw - y_bar).powi(2))))
+        .abs()
+            < 1e-20,
+        "{ch:?}"
+    );
+    assert!(
+        (ch.i_y - (tw * h.powi(3) / 12.0 + 2.0 * (bw * tf.powi(3) / 12.0 + bw * tf * (0.5 * (h - tf)).powi(2)))).abs()
+            < 1e-20,
+        "{ch:?}"
+    );
+    assert!((ch.j - (h * tw.powi(3) + 2.0 * bw * tf.powi(3)) / 3.0).abs() < 1e-20, "{ch:?}");
+    assert!((ch.k_y - a_fl / ch.a).abs() < 1e-12 && (ch.k_z - a_web / ch.a).abs() < 1e-12, "{ch:?}");
+
+    // Generic: the numbers pass through untouched, with the documented defaults.
+    let g = props(SectionSpec::Generic {
+        a: Q::new(2850.0, "mm^2"),
+        i_y: Q::new(19.43e6, "mm^4"),
+        i_z: Q::new(1.424e6, "mm^4"),
+        j: Q::new(6.98e4, "mm^4"),
+        k_y: None,
+        k_z: None,
+        c_y: None,
+        c_z: None,
+    });
+    assert!((g.a - 2850e-6).abs() < 1e-18 && (g.i_y - 19.43e-6).abs() < 1e-20, "{g:?}");
+    assert_eq!((g.k_y, g.k_z, g.c_y, g.c_z), (5.0 / 6.0, 5.0 / 6.0, 0.0, 0.0));
+    let g = props(SectionSpec::Generic {
+        a: Q::new(1.0, "m^2"),
+        i_y: Q::new(2.0, "m^4"),
+        i_z: Q::new(3.0, "m^4"),
+        j: Q::new(4.0, "m^4"),
+        k_y: Some(0.4),
+        k_z: Some(1.0),
+        c_y: Some(mm(30.0)),
+        c_z: Some(mm(0.0)),
+    });
+    assert_eq!((g.k_y, g.k_z, g.c_y, g.c_z), (0.4, 1.0, 0.030, 0.0));
+}
+
+#[test]
+fn a_section_that_cannot_exist_is_a_located_schema_error() {
+    // Every dimension of every shape is checked where it is named, so a zero in any one of
+    // them says which one.
+    let zero = mm(0.0);
+    let cases: [(SectionSpec, &str, &str); 22] = [
+        (SectionSpec::Tube { radius: zero.clone(), thickness: mm(1.0) }, "shape.radius", "must be positive"),
+        (SectionSpec::Tube { radius: mm(10.0), thickness: zero.clone() }, "shape.thickness", "must be positive"),
+        (
+            SectionSpec::I { height: zero.clone(), width: mm(10.0), web_thickness: mm(1.0), flange_thickness: mm(1.0) },
+            "shape.height",
+            "must be positive",
+        ),
+        (
+            SectionSpec::I { height: mm(20.0), width: zero.clone(), web_thickness: mm(1.0), flange_thickness: mm(1.0) },
+            "shape.width",
+            "must be positive",
+        ),
+        (
+            SectionSpec::I {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: zero.clone(),
+                flange_thickness: mm(1.0),
+            },
+            "shape.webThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::I {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: mm(1.0),
+                flange_thickness: zero.clone(),
+            },
+            "shape.flangeThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: zero.clone(),
+                width: mm(10.0),
+                web_thickness: mm(1.0),
+                flange_thickness: mm(1.0),
+            },
+            "shape.height",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: mm(20.0),
+                width: zero.clone(),
+                web_thickness: mm(1.0),
+                flange_thickness: mm(1.0),
+            },
+            "shape.width",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: zero.clone(),
+                flange_thickness: mm(1.0),
+            },
+            "shape.webThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel { height: mm(20.0), width: mm(10.0), web_thickness: mm(1.0), flange_thickness: zero },
+            "shape.flangeThickness",
+            "must be positive",
+        ),
+        (SectionSpec::Rectangle { width: mm(0.0), height: mm(1.0) }, "shape.width", "must be positive"),
+        (SectionSpec::Rectangle { width: mm(1.0), height: mm(-1.0) }, "shape.height", "must be positive"),
+        (SectionSpec::Circle { radius: Q::new(1.0, "kg") }, "shape.radius", "expected a length"),
+        (SectionSpec::Tube { radius: mm(10.0), thickness: mm(10.0) }, "shape.radius - thickness", "must be positive"),
+        (
+            SectionSpec::I { height: mm(20.0), width: mm(10.0), web_thickness: mm(1.0), flange_thickness: mm(10.0) },
+            "shape.height - 2 flangeThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::I { height: mm(20.0), width: mm(10.0), web_thickness: mm(1000.0), flange_thickness: mm(1.0) },
+            "shape.width - webThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: mm(1.0),
+                flange_thickness: mm(1000.0),
+            },
+            "shape.height - 2 flangeThickness",
+            "must be positive",
+        ),
+        (
+            SectionSpec::Channel {
+                height: mm(20.0),
+                width: mm(10.0),
+                web_thickness: mm(1000.0),
+                flange_thickness: mm(1.0),
+            },
+            "shape.width - webThickness",
+            "must be positive",
+        ),
+        (generic_with(0.0, 1.0, 1.0, 1.0, None, None), "shape.a", "must be positive"),
+        (generic_with(1.0, 0.0, 1.0, 1.0, None, None), "shape.iY", "must be positive"),
+        (generic_with(1.0, 1.0, -1.0, 1.0, None, None), "shape.iZ", "must be positive"),
+        (generic_with(1.0, 1.0, 1.0, 0.0, None, None), "shape.j", "must be positive"),
+    ];
+    for (spec, where_, cause) in cases {
+        let e = spec_error(spec);
+        assert_eq!(e.where_.as_deref(), Some(where_));
+        assert!(e.cause.contains(cause), "{where_}: {}", e.cause);
+    }
+    for (k, where_) in [(Some(0.0), "shape.kY"), (Some(1.5), "shape.kZ")] {
+        let spec = if where_ == "shape.kY" {
+            generic_with(1.0, 1.0, 1.0, 1.0, k, None)
+        } else {
+            generic_with(1.0, 1.0, 1.0, 1.0, None, k)
+        };
+        let e = spec_error(spec);
+        assert_eq!(e.where_.as_deref(), Some(where_));
+        assert!(e.cause.contains("must be in (0, 1]"), "{}", e.cause);
+    }
+    // A negative extreme fibre is a wrong section; a bad unit on one is a dimension error.
+    let mut spec = generic_with(1.0, 1.0, 1.0, 1.0, None, None);
+    if let SectionSpec::Generic { c_y, c_z, .. } = &mut spec {
+        *c_y = Some(mm(-1.0));
+        *c_z = Some(Q::new(1.0, "s"));
+    }
+    let e = spec_error(spec.clone());
+    assert_eq!(e.where_.as_deref(), Some("shape.cY"));
+    assert!(e.cause.contains("zero or positive"), "{}", e.cause);
+    if let SectionSpec::Generic { c_y, .. } = &mut spec {
+        *c_y = None;
+    }
+    assert_eq!(spec_error(spec).where_.as_deref(), Some("shape.cZ"));
+    // A wrong dimension on the area and the moments is located too.
+    for (field, at) in [(0usize, "shape.a"), (1, "shape.iY"), (2, "shape.iZ"), (3, "shape.j")] {
+        let mut spec = generic_with(1.0, 1.0, 1.0, 1.0, None, None);
+        if let SectionSpec::Generic { a, i_y, i_z, j, .. } = &mut spec {
+            let wrong = "s";
+            match field {
+                0 => *a = Q::new(1.0, wrong),
+                1 => *i_y = Q::new(1.0, wrong),
+                2 => *i_z = Q::new(1.0, wrong),
+                _ => *j = Q::new(1.0, wrong),
+            }
+        }
+        assert_eq!(spec_error(spec).where_.as_deref(), Some(at));
+    }
+}
+
+fn generic_with(a: f64, i_y: f64, i_z: f64, j: f64, k_y: Option<f64>, k_z: Option<f64>) -> SectionSpec {
+    SectionSpec::Generic {
+        a: Q::new(a, "m^2"),
+        i_y: Q::new(i_y, "m^4"),
+        i_z: Q::new(i_z, "m^4"),
+        j: Q::new(j, "m^4"),
+        k_y,
+        k_z,
+        c_y: None,
+        c_z: None,
+    }
+}
+
+// ---------------------------------------------------------------- the truss element
+
+/// A member from the origin along an arbitrary skew direction, so nothing in the element can
+/// quietly assume an axis-aligned bar.
+const TRUSS_DIR: [f64; 3] = [2.0 / 3.0, -1.0 / 3.0, 2.0 / 3.0];
+const TRUSS_LENGTH: f64 = 2.5;
+const TRUSS_AREA: f64 = 0.004;
+
+fn truss_coords() -> Vec<f64> {
+    let mut c = vec![0.3, -0.2, 0.7, 0.0, 0.0, 0.0];
+    for k in 0..3 {
+        c[3 + k] = c[k] + TRUSS_LENGTH * TRUSS_DIR[k];
+    }
+    c
+}
+
+fn truss_section() -> Section {
+    properties(&SectionSpec::Generic {
+        a: Q::new(TRUSS_AREA, "m^2"),
+        i_y: Q::new(1.0, "m^4"),
+        i_z: Q::new(1.0, "m^4"),
+        j: Q::new(1.0, "m^4"),
+        k_y: None,
+        k_z: None,
+        c_y: None,
+        c_z: None,
+    })
+    .expect("a valid generic section")
+}
+
+fn truss_ctx<'a>(
+    coords: &'a [f64],
+    mat: &'a Material,
+    section: Option<&'a Section>,
+    temperature: Option<&'a [f64]>,
+) -> ElementCtx<'a> {
+    ElementCtx {
+        coords,
+        material: mat,
+        section,
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::Full,
+        temperature,
+        t_ref: 0.0,
+    }
+}
+
+/// `K = (EA/L) t tᵀ` with `t = [−e1, e1]`: symmetric, rank one, and driving one end by `δ`
+/// along the axis takes exactly `EAδ/L` — which is Benchmark A5 for a bar, at element level.
+#[test]
+fn the_truss_stiffness_is_ea_over_l_along_its_own_axis_and_nothing_across_it() {
+    let coords = truss_coords();
+    let (mat, sec) = (steel(), truss_section());
+    let c = truss_ctx(&coords, &mat, Some(&sec), None);
+    let el = element_for(ElementKind::Truss2);
+    assert_eq!((el.kind(), el.n_dof(), el.n_gp()), (ElementKind::Truss2, 6, 1));
+    let mut k = vec![0.0; 36];
+    let half = el.stiffness(&c, &mut k).expect("a straight member");
+    assert!((half - 0.5 * TRUSS_LENGTH).abs() < 1e-15, "det J is L/2, got {half}");
+    assert_eq!(half, min_det_j(ElementKind::Truss2, &coords).expect("the same Jacobian"));
+
+    let ea_l = YOUNG * TRUSS_AREA / TRUSS_LENGTH;
+    for i in 0..6 {
+        for j in 0..6 {
+            let (si, sj) = (if i < 3 { -1.0 } else { 1.0 }, if j < 3 { -1.0 } else { 1.0 });
+            let want = ea_l * si * TRUSS_DIR[i % 3] * sj * TRUSS_DIR[j % 3];
+            assert!((k[i * 6 + j] - want).abs() < 1e-6 * ea_l, "K[{i}][{j}] = {} want {want}", k[i * 6 + j]);
+            assert!((k[i * 6 + j] - k[j * 6 + i]).abs() < 1e-9 * ea_l, "K is symmetric");
+        }
+    }
+    // Five independent motions leave the member unstrained: three rigid translations and the
+    // two transverse relative motions. Only stretching along the axis costs energy.
+    let axial: Vec<f64> = (0..6).map(|i| if i < 3 { -TRUSS_DIR[i] } else { TRUSS_DIR[i - 3] }).collect();
+    let transverse = [1.0, 2.0, 0.0];
+    let mut free: Vec<Vec<f64>> =
+        (0..3).map(|a| (0..6).map(|i| if i % 3 == a { 1.0 } else { 0.0 }).collect()).collect();
+    // `transverse` is orthogonal to the axis, so moving one node along it does not stretch.
+    assert!(transverse.iter().zip(TRUSS_DIR).map(|(a, b)| a * b).sum::<f64>().abs() < 1e-15);
+    free.push((0..6).map(|i| if i < 3 { 0.0 } else { transverse[i - 3] }).collect());
+    free.push((0..6).map(|i| if i < 3 { transverse[i] } else { 0.0 }).collect());
+    for u in &free {
+        let energy: f64 = (0..6).map(|i| u[i] * (0..6).map(|j| k[i * 6 + j] * u[j]).sum::<f64>()).sum();
+        assert!(energy.abs() < 1e-6 * ea_l, "a strain-free motion costs no energy, got {energy}");
+    }
+    let energy: f64 = (0..6).map(|i| axial[i] * (0..6).map(|j| k[i * 6 + j] * axial[j]).sum::<f64>()).sum();
+    assert!((energy - 4.0 * ea_l).abs() < 1e-6 * ea_l, "stretching by 2 costs 4 EA/L, got {energy}");
+
+    // A5 for a bar: prescribe the far end by delta and read the force back as EA delta / L.
+    let delta = 1e-4;
+    let u: Vec<f64> = (0..6).map(|i| if i < 3 { 0.0 } else { delta * TRUSS_DIR[i - 3] }).collect();
+    let f: Vec<f64> = (0..6).map(|i| (0..6).map(|j| k[i * 6 + j] * u[j]).sum()).collect();
+    let magnitude = libm::sqrt(f[3] * f[3] + f[4] * f[4] + f[5] * f[5]);
+    assert!((magnitude - ea_l * delta).abs() < 1e-6 * ea_l * delta, "{magnitude} vs {}", ea_l * delta);
+    for i in 0..3 {
+        assert!((f[i] + f[3 + i]).abs() < 1e-6 * ea_l * delta, "the two end forces balance");
+    }
+
+    // Strain and stress come back as the axial Voigt component alone.
+    let (mut sig, mut eps) = (vec![0.0; VOIGT], vec![0.0; VOIGT]);
+    el.recover(&c, &u, &mut sig, &mut eps).expect("recovery");
+    assert!((eps[0] - delta / TRUSS_LENGTH).abs() < 1e-18, "{eps:?}");
+    assert!((sig[0] - YOUNG * delta / TRUSS_LENGTH).abs() < 1e-3, "{sig:?}");
+    assert!(sig[1..].iter().chain(eps[1..].iter()).all(|v| *v == 0.0), "only the axial component");
+}
+
+/// Consistent `ρAL/6 [[2I, I], [I, 2I]]`, lumped `ρAL/2` per direction, both conserving mass;
+/// and `ω_max = (2/L)√(E/ρ)`, the exact largest frequency of the two-node bar.
+#[test]
+fn the_truss_mass_conserves_ral_and_its_frequency_bound_is_the_closed_form() {
+    let coords = truss_coords();
+    let (mat, sec) = (steel(), truss_section());
+    let c = truss_ctx(&coords, &mat, Some(&sec), None);
+    let el = element_for(ElementKind::Truss2);
+    let total = DENSITY * TRUSS_AREA * TRUSS_LENGTH;
+    let mut m = vec![0.0; 36];
+    el.mass(&c, &mut m, false).expect("consistent mass");
+    for a in 0..2 {
+        for b in 0..2 {
+            for i in 0..3 {
+                let want = total / 6.0 * if a == b { 2.0 } else { 1.0 };
+                assert!((m[(3 * a + i) * 6 + 3 * b + i] - want).abs() < 1e-15 * total, "{m:?}");
+            }
+        }
+    }
+    for i in 0..3 {
+        let carried: f64 = (0..2).map(|a| (0..2).map(|b| m[(3 * a + i) * 6 + 3 * b + i]).sum::<f64>()).sum();
+        assert!((carried - total).abs() < 1e-15 * total, "the consistent mass sums to rho A L");
+    }
+    let mut lumped = vec![0.0; 36];
+    el.mass(&c, &mut lumped, true).expect("lumped mass");
+    for i in 0..6 {
+        assert!((lumped[i * 6 + i] - 0.5 * total).abs() < 1e-15 * total, "{lumped:?}");
+    }
+    assert!(lumped.iter().enumerate().all(|(at, v)| at % 7 == 0 || *v == 0.0), "lumped mass is diagonal");
+
+    let want = 2.0 / TRUSS_LENGTH * libm::sqrt(YOUNG / DENSITY);
+    let got = el.omega_max(&c).expect("a frequency bound");
+    assert!((got / want - 1.0).abs() < 1e-12, "{got} vs {want}");
+
+    // A weightless member has no mass matrix at all, and therefore no frequency bound.
+    let massless = Material { rho: 0.0, ..steel() };
+    let c0 = truss_ctx(&coords, &massless, Some(&sec), None);
+    let mut zero = vec![1.0; 36];
+    el.mass(&c0, &mut zero, false).expect("a zero mass matrix");
+    assert!(zero.iter().all(|v| *v == 0.0));
+    assert_eq!(el.omega_max(&c0).expect_err("no frequency").code, ErrorCode::ModelIllPosed);
+    let bad = Material { rho: -1.0, ..steel() };
+    let cb = truss_ctx(&coords, &bad, Some(&sec), None);
+    assert_eq!(el.mass(&cb, &mut zero, false).expect_err("a negative density").code, ErrorCode::ModelIllPosed);
+}
+
+/// Gravity over a member is `ρ A L / 2` at each node; a uniform temperature rise on a member
+/// held at both ends is `σ = −E α ΔT` (Benchmark B11 at element level).
+#[test]
+fn the_truss_body_and_thermal_loads_match_their_closed_forms() {
+    let coords = truss_coords();
+    let (mat, sec) = (steel(), truss_section());
+    let el = element_for(ElementKind::Truss2);
+    let c = truss_ctx(&coords, &mat, Some(&sec), None);
+    let g = [0.0, 0.0, -9.81];
+    let mut f = vec![0.0; 6];
+    el.body_load(&c, &|_x| [DENSITY * g[0], DENSITY * g[1], DENSITY * g[2]], &mut f).expect("gravity");
+    let weight = DENSITY * TRUSS_AREA * TRUSS_LENGTH * g[2];
+    for node in 0..2 {
+        assert!((f[3 * node + 2] - 0.5 * weight).abs() < 1e-12 * weight.abs(), "{f:?}");
+        assert!(f[3 * node] == 0.0 && f[3 * node + 1] == 0.0, "{f:?}");
+    }
+
+    // With no temperature field the thermal load is exactly zero and needs no geometry.
+    let mut th = vec![1.0; 6];
+    el.thermal_load(&c, &mut th).expect("no temperature");
+    assert!(th.iter().all(|v| *v == 0.0));
+
+    let rise = 100.0;
+    let t = [rise; 2];
+    let hot = truss_ctx(&coords, &mat, Some(&sec), Some(&t));
+    el.thermal_load(&hot, &mut th).expect("a temperature rise");
+    let want = YOUNG * TRUSS_AREA * EXPANSION * rise;
+    for i in 0..3 {
+        assert!((th[i] + want * TRUSS_DIR[i]).abs() < 1e-9 * want, "{th:?}");
+        assert!((th[3 + i] - want * TRUSS_DIR[i]).abs() < 1e-9 * want, "{th:?}");
+    }
+    // Held at both ends: zero displacement, so the stress is the fully restrained value.
+    let (mut sig, mut eps) = (vec![0.0; VOIGT], vec![0.0; VOIGT]);
+    el.recover(&hot, &[0.0; 6], &mut sig, &mut eps).expect("recovery");
+    assert_eq!(eps[0], 0.0);
+    assert!((sig[0] + YOUNG * EXPANSION * rise).abs() < 1e-6, "sigma = -E alpha dT, got {}", sig[0]);
+}
+
+/// The reference-element side: one Gauss point at the midpoint, linear shape functions, and a
+/// point map that projects onto the member and stops at its ends.
+#[test]
+fn the_truss_maps_points_onto_its_own_axis_and_stops_at_its_ends() {
+    let coords = truss_coords();
+    let el = element_for(ElementKind::Truss2);
+    assert_eq!(el.gp_xi(0), [0.0, 0.0, 0.0]);
+    let mut n = [0.0; 2];
+    el.shape_at([0.0, 0.0, 0.0], &mut n);
+    assert_eq!(n, [0.5, 0.5]);
+    el.shape_at([1.0, 0.0, 0.0], &mut n);
+    assert_eq!(n, [0.0, 1.0]);
+
+    let mid: Vec<f64> = (0..3).map(|k| 0.5 * (coords[k] + coords[3 + k])).collect();
+    assert_eq!(el.inverse_map(&coords, [mid[0], mid[1], mid[2]]), Some([0.0, 0.0, 0.0]));
+    let end = [coords[3], coords[4], coords[5]];
+    let back = el.inverse_map(&coords, end).expect("the far end is on the member");
+    assert!((back[0] - 1.0).abs() < 1e-12, "{back:?}");
+    // Off the axis but abreast of the midpoint: a member is a curve, so a point beside it is
+    // in no element rather than in whichever member happened to be checked first.
+    let abreast = [mid[0] + 1.0, mid[1] + 2.0, mid[2]];
+    assert_eq!(el.inverse_map(&coords, abreast), None);
+    // A point on the axis a quarter of the way along is inside, and says where.
+    let quarter: Vec<f64> = (0..3).map(|k| mid[k] + 0.25 * TRUSS_LENGTH * TRUSS_DIR[k]).collect();
+    let xi = el.inverse_map(&coords, [quarter[0], quarter[1], quarter[2]]).expect("on the member");
+    assert!((xi[0] - 0.5).abs() < 1e-12, "{xi:?}");
+    // Past the end, it is outside.
+    let past: Vec<f64> = (0..3).map(|k| coords[3 + k] + TRUSS_DIR[k]).collect();
+    assert_eq!(el.inverse_map(&coords, [past[0], past[1], past[2]]), None);
+
+    // A member with no length has no axis, which is exactly how a folded element is caught.
+    for degenerate in [vec![0.0; 6], {
+        let mut c = truss_coords();
+        c[3] = f64::NAN;
+        c
+    }] {
+        assert_eq!(el.inverse_map(&degenerate, [0.0; 3]), None);
+        assert_eq!(min_det_j(ElementKind::Truss2, &degenerate), None);
+        let (mat, sec) = (steel(), truss_section());
+        let c = truss_ctx(&degenerate, &mat, Some(&sec), None);
+        let t = [10.0; 2];
+        let hot = truss_ctx(&degenerate, &mat, Some(&sec), Some(&t));
+        let mut out = vec![0.0; 36];
+        assert_eq!(el.stiffness(&c, &mut out).expect_err("no axis").code, ErrorCode::MeshInverted);
+        assert_eq!(el.mass(&c, &mut out, false).expect_err("no axis").code, ErrorCode::MeshInverted);
+        assert_eq!(
+            el.recover(&c, &[0.0; 6], &mut out, &mut [0.0; VOIGT]).expect_err("x").code,
+            ErrorCode::MeshInverted
+        );
+        assert_eq!(el.thermal_load(&hot, &mut out).expect_err("no axis").code, ErrorCode::MeshInverted);
+        assert_eq!(
+            el.body_load(&c, &|_x| [0.0, 0.0, -1.0], &mut out).expect_err("no axis").code,
+            ErrorCode::MeshInverted
+        );
+    }
+}
+
+/// A member has no face and no cross-section geometry: both are structured errors that name
+/// the Command that fixes them.
+#[test]
+fn a_truss_refuses_a_face_load_and_a_missing_section() {
+    let coords = truss_coords();
+    let mat = steel();
+    let el = element_for(ElementKind::Truss2);
+    let sec = truss_section();
+    let c = truss_ctx(&coords, &mat, Some(&sec), None);
+    let mut out = vec![0.0; 6];
+    let e = el.face_load(&c, 0, FaceLoad::Pressure(1.0), &mut out).expect_err("no face");
+    assert_eq!(e.code, ErrorCode::Unsupported);
+    assert!(e.suggestion.as_deref().unwrap().contains("load.force"), "{e:?}");
+
+    let bare = truss_ctx(&coords, &mat, None, None);
+    let t = [10.0; 2];
+    let bare_hot = truss_ctx(&coords, &mat, None, Some(&t));
+    let mut big = vec![0.0; 36];
+    for code in [
+        el.stiffness(&bare, &mut big).expect_err("no section").code,
+        el.mass(&bare, &mut big, false).expect_err("no section").code,
+        el.body_load(&bare, &|_x| [0.0; 3], &mut big).expect_err("no section").code,
+        el.thermal_load(&bare_hot, &mut big).expect_err("no section").code,
+    ] {
+        assert_eq!(code, ErrorCode::ModelNoSection);
+    }
+}
+
+/// A member whose material law refuses its properties fails at every integral that calls the
+/// law, and at none of the ones that do not.
+#[test]
+fn a_truss_reports_a_material_props_mismatch_from_every_integral_that_calls_the_law() {
+    let coords = truss_coords();
+    let sec = truss_section();
+    let bad = Material { props: vec![YOUNG], ..steel() };
+    let t = [30.0; 2];
+    let c = truss_ctx(&coords, &bad, Some(&sec), Some(&t));
+    let el = element_for(ElementKind::Truss2);
+    let mut k = vec![0.0; 36];
+    let mut v = vec![0.0; 6];
+    let (mut sig, mut eps) = (vec![0.0; VOIGT], vec![0.0; VOIGT]);
+    let fails = [
+        el.stiffness(&c, &mut k).err(),
+        el.thermal_load(&c, &mut v).err(),
+        el.recover(&c, &[0.0; 6], &mut sig, &mut eps).err(),
+        el.omega_max(&c).err(),
+    ];
+    for e in fails {
+        let e = e.expect("a props mismatch must fail");
+        assert_eq!(e.code, ErrorCode::MaterialProps);
+        assert_eq!(e.where_.as_deref(), Some("material.props"));
+    }
+    // The geometry is fine: mass and a body load never call the law.
+    assert!(el.mass(&c, &mut k, true).is_ok());
+    assert!(el.body_load(&c, &|_x| [0.0; 3], &mut v).is_ok());
+}
+
+/// A line Body with no Section is refused before a solve starts, naming the Body.
+#[test]
+fn a_line_body_without_a_section_is_reported_by_the_well_posedness_checks() {
+    let mesh = Mesh {
+        dim: 3,
+        coords: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        blocks: vec![femlab_geometry::ElementBlock { kind: ElementKind::Truss2, conn: vec![0, 1], first_elem: 0 }],
+        node_sets: BTreeMap::new(),
+        elem_sets: BTreeMap::new(),
+        face_sets: BTreeMap::new(),
+    };
+    let sets = BTreeMap::new();
+    let bodies = vec!["chord".to_string()];
+    let mut p = Problem {
+        mesh: &mesh,
+        sets: &sets,
+        body_of_block: &bodies,
+        material_of_block: vec![Some(0)],
+        materials: vec![steel()],
+        section_of_block: vec![None],
+        sections: Vec::new(),
+        idealisation: Idealisation::Solid3d,
+        formulation: Formulation::Full,
+        constraints: Vec::new(),
+        loads: Vec::new(),
+        temperature: None,
+        heat: false,
+        heat_loads: Vec::new(),
+        couplings: Vec::new(),
+        points: Vec::new(),
+    };
+    let errors = checks::all(&p);
+    let missing = errors.iter().find(|e| e.code == ErrorCode::ModelNoSection).expect("model.no-section");
+    assert!(missing.cause.contains("chord"), "{missing:?}");
+    assert!(missing.suggestion.as_deref().unwrap().contains("section.assign"), "{missing:?}");
+
+    // With a Section assigned the check is silent, and the member assembles.
+    p.sections = vec![truss_section()];
+    p.section_of_block = vec![Some(0)];
+    assert!(!checks::all(&p).iter().any(|e| e.code == ErrorCode::ModelNoSection));
+    let pat = pattern(&mesh, p.dofs_per_node());
+    let a = assemble_stiffness(&p, &pat).expect("a truss assembles like any other block");
+    assert_eq!(a.min_det_j, 0.5);
+    assert!((a.k.diag()[0] - YOUNG * TRUSS_AREA / 1.0).abs() < 1e-3, "{:?}", a.k.diag());
+}
+
+/// Benchmark B12: the axial modes of a fixed-free bar meshed with truss elements converge to
+/// `f_n = (2n-1)/(4L) sqrt(E/rho)` at the second order a linear element gives.
+#[test]
+fn truss_axial_modes_converge_to_the_closed_form_bar_frequency() {
+    let mut errors = Vec::new();
+    for n in [4u32, 8, 16] {
+        let mesh = femlab_geometry::line(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], &[[0, 1]], n, ElementKind::Truss2)
+            .expect("a straight bar");
+        let sets = BTreeMap::from([
+            (
+                "root".to_string(),
+                ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![0], elems: Vec::new() },
+            ),
+            (
+                "all".to_string(),
+                ResolvedSet {
+                    kind: SetKind::Node,
+                    faces: Vec::new(),
+                    nodes: (0..mesh.n_nodes() as u32).collect(),
+                    elems: Vec::new(),
+                },
+            ),
+        ]);
+        let bodies = vec!["bar".to_string()];
+        let mut p = problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            Formulation::Full,
+            vec![
+                fix("root", "root", [true, false, false], 0.0),
+                // A bar carries no transverse stiffness, so every node has to be held across
+                // the axis or the model is a mechanism rather than a bar.
+                fix("transverse", "all", [false, true, true], 0.0),
+            ],
+        );
+        p.materials[0].props = vec![1.0, 0.0];
+        p.materials[0].rho = 1.0;
+        p.sections = vec![unit_section()];
+        p.section_of_block = vec![Some(0)];
+        let res = run_step(&p, &Step::Modal { n_modes: 3, shift: None, solver: SolveOptions::default() })
+            .expect("axial bar modes");
+        // E = rho = L = 1, so f_n = (2n - 1) / 4.
+        for (i, f) in res.frequencies.iter().enumerate() {
+            let exact = (2.0 * (i as f64 + 1.0) - 1.0) / 4.0;
+            assert!(f / exact - 1.0 > -1e-12, "a discrete bar is stiffer than the continuum: {f} vs {exact}");
+        }
+        errors.push((res.frequencies[0] / 0.25 - 1.0).abs());
+    }
+    let rate = observed_rate(&[0.25, 0.125, 0.0625], &errors);
+    assert!(rate > 1.9, "modal rate {rate}: {errors:?}");
+    assert!(errors[2] < 0.01, "1 % at sixteen elements: {errors:?}");
+}
+
+/// A generic section of unit area, so `E = rho = A = L = 1` makes every closed form a round
+/// number.
+fn unit_section() -> Section {
+    properties(&SectionSpec::Generic {
+        a: Q::new(1.0, "m^2"),
+        i_y: Q::new(1.0, "m^4"),
+        i_z: Q::new(1.0, "m^4"),
+        j: Q::new(1.0, "m^4"),
+        k_y: None,
+        k_z: None,
+        c_y: None,
+        c_z: None,
+    })
+    .expect("a valid generic section")
+}
+
 // ---------------------------------------------------------------- multipoint constraints
 
 /// Two meshes as one, `b` translated by `shift` and sharing no node with `a`: the two-part
@@ -6761,6 +7540,7 @@ fn a_constant_film_reproduces_the_convection_face_integral_bit_for_bit() {
     let c = ElementCtx {
         coords: &FILM_COORDS,
         material: &material,
+        section: None,
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::IncompatibleModes,
         temperature: None,

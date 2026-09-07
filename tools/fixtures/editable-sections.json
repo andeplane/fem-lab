@@ -1,0 +1,9 @@
+[
+  {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "rectangle","width": "60 mm","height": "100 mm"}}},
+  {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "circle","radius": "25 mm"}}},
+  {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "tube","radius": "25 mm","thickness": "5 mm"}}},
+  {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "i","height": "200 mm","width": "100 mm","webThickness": "5.6 mm","flangeThickness": "8.5 mm"}}},
+  {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "channel","height": "200 mm","width": "75 mm","webThickness": "8 mm","flangeThickness": "12 mm"}}},
+  {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "generic","a": "2850 mm^2","iY": "19.43e6 mm^4","iZ": "1.424e6 mm^4","j": "6.98e4 mm^4"}}},
+  {"kind": "section","command": {"cmd": "section.add","name": "editable","shape": {"kind": "generic","a": "1 m^2","iY": "2 m^4","iZ": "3 m^4","j": "4 m^4","kY": 0.4,"kZ": 1,"cY": "30 mm","cZ": "40 mm"}}}
+]

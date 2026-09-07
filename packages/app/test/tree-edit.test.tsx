@@ -63,7 +63,7 @@ describe('editing Model tree objects', () => {
     try {
       const before = JSON.parse(app.engine.export_file()).model;
       expect(app.sent[0]).toEqual({ cmd: 'form.edit', kind: c.kind, name: 'editable' });
-      expect(app.store.state.form!.cmd).toBe(c.kind === 'body' ? 'geometry.add' : c.command.cmd);
+      expect(app.store.state.form!.cmd).toBe(c.command.cmd);
       app.root.querySelector<HTMLButtonElement>('.apply')!.click(); await app.done();
       expect(JSON.parse(app.engine.export_file()).model).toEqual(before);
     } finally { app.close(); }

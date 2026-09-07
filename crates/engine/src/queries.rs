@@ -139,11 +139,51 @@ impl Engine {
         })
     }
 
+    /// A line Body as a row of [`query_model`](Engine::query_model): its bounding box and the
+    /// total length of its members, which is the measure a 1D Body has. `None` for a Body that
+    /// is not made of line members, which is what sends it down the Solid path instead.
+    fn line_body_row(m: &crate::model::Model, b: &crate::model::Body) -> Option<BodyRow> {
+        let (points, members) = match &b.shape {
+            femlab_geometry::Shape::Polyline { points, members, .. } => (points, members),
+            _ => return None,
+        };
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        for p in points {
+            for k in 0..3 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        let length: f64 = members
+            .iter()
+            .map(|e| {
+                let (a, c) = (points[e[0] as usize], points[e[1] as usize]);
+                libm::sqrt((0..3).map(|k| (a[k] - c[k]) * (a[k] - c[k])).sum::<f64>())
+            })
+            .sum();
+        Some(BodyRow {
+            name: b.name.clone(),
+            material: b.material.clone(),
+            bbox: bbox6(m, lo, hi),
+            measure: display(m, length, Length::DIM),
+            mass: None,
+            faces: Vec::new(),
+        })
+    }
+
     pub(crate) fn query_model(&mut self) -> Result<ModelSummary, Error> {
         let names: Vec<String> = self.model.bodies.iter().map(|b| b.name.clone()).collect();
         let implicit = self.implicit_body_row();
         let mut bodies = Vec::with_capacity(names.len() + usize::from(implicit.is_some()));
         for n in &names {
+            // A line Body has no Solid: its extent and its measure come from its own joints,
+            // and it has no faces to list.
+            let line = Self::line_body_row(&self.model, self.model.body(n).expect("listed above"));
+            if let Some(row) = line {
+                bodies.push(row);
+                continue;
+            }
             let solid = self.solid(n)?.clone();
             let m = &self.model;
             let b = m.body(n).expect("listed above");
@@ -615,6 +655,21 @@ impl Engine {
                     kind: "material".into(),
                     name: mat.name.clone(),
                     summary: format!("E = {} Pa, nu = {}", units::fmt_sig(mat.e, 4), mat.nu),
+                });
+            }
+        }
+        if want(ObjectKind::Section) {
+            for sec in &m.sections {
+                objects.push(ObjectRef {
+                    ref_: format!("section:{}", sec.name),
+                    kind: "section".into(),
+                    name: sec.name.clone(),
+                    summary: format!(
+                        "A = {} m^2, Iy = {} m^4, Iz = {} m^4",
+                        units::fmt_sig(sec.section.a, 4),
+                        units::fmt_sig(sec.section.i_y, 4),
+                        units::fmt_sig(sec.section.i_z, 4)
+                    ),
                 });
             }
         }

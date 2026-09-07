@@ -11,6 +11,9 @@ use crate::GeomError;
 /// Default number of facets around a circle for cylinders, spheres and revolutions.
 pub const DEFAULT_SEGMENTS: u32 = 32;
 
+/// A boolean over shapes of different dimensions has no meaning.
+const DIM_MIX: &str = "cannot combine 1D line members, 2D sheets and 3D solids";
+
 /// Scale, then rotate about x, y, z (degrees, in that order), then translate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -138,6 +141,11 @@ pub enum Shape {
     Transform { shape: Box<Shape>, at: Affine3 },
     /// A named sub-shape: its faces are tagged `<name>.<tag>`.
     Named { name: String, shape: Box<Shape> },
+    /// Straight line members between joints: a truss or a frame. `points` are the joints,
+    /// `members` index pairs into them, and each member is cut into `divisions` elements. It
+    /// has no volume and no surface, so it never becomes a [`crate::Solid`]; the line mesher
+    /// is its own geometry. Its node sets are `p0 … pN`, one per joint.
+    Polyline { points: Vec<[f64; 3]>, members: Vec<[u32; 2]>, divisions: u32 },
     /// A triangle mesh read from a file (`geometry.import`), welded into a solid by the
     /// geometry kernel. Its faces are patches of triangles that meet more smoothly than
     /// `feature_angle`, tagged `face0`, `face1`, … largest area first.
@@ -156,9 +164,10 @@ pub enum Shape {
 }
 
 impl Shape {
-    /// 2 for sheets (and booleans of sheets), 3 otherwise.
+    /// 1 for line members, 2 for sheets (and booleans of sheets), 3 otherwise.
     pub fn dim(&self) -> usize {
         match self {
+            Shape::Polyline { .. } => 1,
             Shape::Sheet { .. } => 2,
             Shape::Union { shapes } | Shape::Intersect { shapes } => shapes.first().map_or(3, Shape::dim),
             Shape::Subtract { from, .. } => from.dim(),
@@ -226,7 +235,7 @@ impl Shape {
                 for s in shapes {
                     s.validate()?;
                     if s.dim() != d {
-                        return Err(GeomError("cannot combine 2D sheets with 3D solids".into()));
+                        return Err(GeomError(DIM_MIX.into()));
                     }
                 }
                 Ok(())
@@ -236,7 +245,7 @@ impl Shape {
                 for c in cut {
                     c.validate()?;
                     if c.dim() != from.dim() {
-                        return Err(GeomError("cannot combine 2D sheets with 3D solids".into()));
+                        return Err(GeomError(DIM_MIX.into()));
                     }
                 }
                 Ok(())
@@ -251,6 +260,7 @@ impl Shape {
                 }
                 shape.validate()
             }
+            Shape::Polyline { points, members, divisions } => crate::mesher::line::check(points, members, *divisions),
             Shape::Mesh { positions, triangles, feature_angle, simplify_below } => {
                 if triangles.len() < 4 {
                     return Err(GeomError(format!(
@@ -350,6 +360,8 @@ impl Shape {
             }
             Shape::Transform { shape, at } => shape.contains(at.inverse(p))?,
             Shape::Named { shape, .. } => shape.contains(p)?,
+            // A member is a curve: it has no interior for a point to be inside of.
+            Shape::Polyline { .. } => false,
             // An imported mesh has no analytic form; `Solid` ray-casts the evaluated
             // manifold instead, which is the only place the answer exists.
             Shape::Mesh { .. } => {
@@ -456,6 +468,10 @@ mod tests {
         let named = Shape::Named { name: "beam".into(), shape: Box::new(b.clone()) };
         assert_eq!(named.dim(), 3);
         assert!(named.contains([0.5, 0.5, 0.5]).unwrap());
+        // A line body is a curve: dimension 1, with no interior for a point to be inside of.
+        let line = Shape::Polyline { points: vec![[0.0; 3], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 2 };
+        assert_eq!(line.dim(), 1);
+        assert!(!line.contains([0.5, 0.0, 0.0]).unwrap());
         assert_eq!(Shape::Union { shapes: vec![] }.dim(), 3);
         assert_eq!(Shape::Subtract { from: Box::new(sheet.clone()), cut: vec![] }.dim(), 2);
         let bad = Shape::Sheet { sketch: Sketch { outer: vec![], holes: vec![] } };
@@ -534,6 +550,11 @@ mod tests {
     #[test]
     fn validation() {
         assert!(Shape::Box { size: [1.0, 0.0, 1.0] }.validate().unwrap_err().0.contains("size[1]"));
+        // A Polyline's validation is the line mesher's, so both name the same cause.
+        let line = Shape::Polyline { points: vec![[0.0; 3], [1.0, 0.0, 0.0]], members: vec![[0, 1]], divisions: 1 };
+        assert!(line.validate().is_ok());
+        let short = Shape::Polyline { points: vec![[0.0; 3]], members: vec![[0, 1]], divisions: 1 };
+        assert!(short.validate().unwrap_err().0.contains("at least 2 points"));
         assert!(Shape::Cylinder { radius: -1.0, height: 1.0, segments: None }.validate().is_err());
         assert!(Shape::Cylinder { radius: 1.0, height: 0.0, segments: None }.validate().is_err());
         assert!(Shape::Cylinder { radius: 1.0, height: 1.0, segments: Some(2) }.validate().is_err());
