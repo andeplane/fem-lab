@@ -155,21 +155,22 @@ test('@cpu meshed Sheet boundaries survive order, visibility and Results transit
   const pickedMoved = await selectedNear(page, moved.x, moved.y, 'plate.right');
   await expect(page.locator('.probe')).not.toContainText('plate.right');
 
+  // Mesh mode restores the current, undeformed model. The retained deformation belongs
+  // to Results and must not move model boundaries or survive visibility rebuilds here.
   await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setMode', mode: 'mesh' }));
-  await selected(page, pickedMoved.x, pickedMoved.y, 'plate.right', false);
+  await selected(page, outer.x, outer.y, 'plate.right', false);
   await page.evaluate(async () => {
     await window.fem.dispatch({ cmd: 'selection.clear' });
     await window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['plate'], on: false });
   });
-  await page.mouse.click(pickedMoved.x, pickedMoved.y);
+  await page.mouse.click(outer.x, outer.y);
   await expect.poll(() => page.evaluate(() => window.fem.registry.query({ query: 'query.selection' }))).toMatchObject({ refs: [] });
   await expect(page.locator('.probe')).toHaveText('');
   await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['plate'], on: true }));
+  await selected(page, outer.x, outer.y, 'plate.right', false);
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setMode', mode: 'results' }));
   await selected(page, pickedMoved.x, pickedMoved.y, 'plate.right', false);
-  await page.evaluate(async () => {
-    await window.fem.dispatch({ cmd: 'view.setMode', mode: 'results' });
-    await window.fem.dispatch({ cmd: 'view.setDeformScale', scale: 0 });
-  });
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setDeformScale', scale: 0 }));
   await page.evaluate(() => window.fem.dispatch({ cmd: 'selection.clear' }));
   await page.mouse.click(interior.x, interior.y);
   await expect.poll(() => page.evaluate(() => window.fem.registry.query({ query: 'query.selection' }))).toMatchObject({ refs: [] });
