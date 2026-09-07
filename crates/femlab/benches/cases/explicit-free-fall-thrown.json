@@ -1,0 +1,167 @@
+{
+  "name": "explicit-free-fall-thrown",
+  "reference": "Benchmark F2c, explicit: the free-fall block of F2b thrown with an initial velocity of (0.3, -0.2, 0.1) m/s on every node. Central differences are exact for a constant acceleration, so after 1 ms u = v0 t + g t^2/2 = (0.3, -0.2, 0.095095) mm to round-off; the half-step kick makes the leapfrog centred from a non-zero start.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "explicit-free-fall-thrown"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "block",
+      "size": [
+        "100 mm",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "whole",
+      "where": {
+        "kind": "body",
+        "name": "block"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "block"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 2,
+          "ny": 2,
+          "nz": 2
+        }
+      }
+    },
+    {
+      "cmd": "load.gravity",
+      "name": "g",
+      "g": [
+        "0 m/s^2",
+        "0 m/s^2",
+        "-9.81 m/s^2"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "throw",
+      "procedure": "explicit",
+      "constraints": [],
+      "loads": [
+        "g"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "tEnd": "1 ms",
+      "initialVelocity": [
+        {
+          "on": "whole",
+          "value": [
+            "0.3 m/s",
+            "-0.2 m/s",
+            "0.1 m/s"
+          ]
+        }
+      ],
+      "dtFactor": 0.9,
+      "outputEvery": 100
+    },
+    {
+      "cmd": "solve.run",
+      "step": "throw"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "50 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 0
+      },
+      "path": "/value/value",
+      "expect": 0.3,
+      "tol": 1e-06,
+      "rel": true,
+      "note": "v0x t after 1 ms, in mm"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "50 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 1
+      },
+      "path": "/value/value",
+      "expect": -0.2,
+      "tol": 1e-06,
+      "rel": true,
+      "note": "v0y t"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "50 mm",
+          "50 mm",
+          "50 mm"
+        ],
+        "component": 2
+      },
+      "path": "/value/value",
+      "expect": 0.095095,
+      "tol": 1e-06,
+      "rel": true,
+      "note": "v0z t + g t^2/2 = 0.1 mm - 4.905 um"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "0 mm",
+          "0 mm",
+          "0 mm"
+        ],
+        "component": 2
+      },
+      "path": "/value/value",
+      "expect": 0.095095,
+      "tol": 1e-06,
+      "rel": true,
+      "note": "every node moves together: no strain"
+    }
+  ]
+}

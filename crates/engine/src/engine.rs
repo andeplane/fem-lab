@@ -134,7 +134,7 @@ impl Engine {
         let before = self.model.clone();
         let solids_before = self.solids.clone();
         // The Mesh is derived from the Model, so any Command can stale it; it rebuilds lazily.
-        self.mesh = None;
+        let mesh_before = self.mesh.take();
         match self.apply(&cmd, on_progress).await {
             Ok(output @ (Output::Undo { .. } | Output::Redo { .. })) => {
                 let hash = self.model_hash();
@@ -147,6 +147,7 @@ impl Engine {
             Err(e) => {
                 self.model = before;
                 self.solids = solids_before;
+                self.mesh = mesh_before;
                 Err(e)
             }
         }
@@ -1008,6 +1009,10 @@ impl Engine {
                 max_cutbacks,
                 nonlinear_tolerance,
                 nonlinear_max_iterations,
+                alpha,
+                rayleigh_alpha,
+                rayleigh_beta,
+                initial_velocity,
             } => {
                 check_name(name)?;
                 if let Some(tol) = nonlinear_tolerance {
@@ -1063,6 +1068,10 @@ impl Engine {
                     max_cutbacks: *max_cutbacks,
                     nonlinear_tolerance: *nonlinear_tolerance,
                     nonlinear_max_iterations: *nonlinear_max_iterations,
+                    alpha: *alpha,
+                    rayleigh_alpha: opt_si(rayleigh_alpha, "rayleighAlpha")?,
+                    rayleigh_beta: opt_si(rayleigh_beta, "rayleighBeta")?,
+                    initial_velocity: initial_velocity.as_deref().map(to_initial_velocity).transpose()?,
                 };
                 Ok(upsert(&mut self.model.steps, s, |s| &s.name, ObjectKind::Step))
             }
@@ -1179,14 +1188,7 @@ impl Engine {
                 Error::new(ErrorCode::NameTaken, format!("'{name}' is already a cut")).at(format!("body '{name}'"))
             );
         }
-        shape.validate().map_err(|e| geom_error(e, "shape"))?;
         let dim = shape.dim();
-        // A line Body never becomes a Solid — the line mesher is its own geometry — so
-        // `validate` above is the whole of its geometric check.
-        if dim > 1 {
-            let _ = Solid::evaluate(&Shape::Named { name: name.to_string(), shape: Box::new(shape.clone()) })
-                .map_err(|e| geom_error(e, "shape"))?;
-        }
         let old = self.model.body(name);
         let body = Body {
             name: name.to_string(),
@@ -1194,7 +1196,16 @@ impl Engine {
             material: old.and_then(|b| b.material.clone()),
             section: old.and_then(|b| b.section.clone()),
         };
-        let _ = dim;
+        // An upsert keeps the Body's existing cuts, so validate the effective replacement
+        // before committing it. This catches both an empty result and a dimensionality change
+        // to line geometry, which cannot retain solid or sheet cuts.
+        let trial_shape = self.model.body_shape(&body);
+        trial_shape.validate().map_err(|e| geom_error(e, "shape"))?;
+        // A line Body never becomes a Solid — the line mesher is its own geometry — so the
+        // complete shape validation above is the whole of its geometric check.
+        if dim > 1 {
+            let _ = Solid::evaluate(&trial_shape).map_err(|e| geom_error(e, "shape"))?;
+        }
         self.invalidate_geometry();
         Ok(upsert(&mut self.model.bodies, body, |b| &b.name, ObjectKind::Body))
     }
@@ -1728,6 +1739,22 @@ fn check_orientation_fits(
     ))
     .at("orientation.axis")
     .suggest("material.add with orientation.axis [0, 0, 1], or model.setIdealisation solid3d"))
+}
+
+/// The initial-velocity list in SI, each component error naming its entry.
+fn to_initial_velocity(
+    list: &[crate::command::InitialVelocitySpec],
+) -> Result<Vec<crate::model::InitialVelocity>, Error> {
+    list.iter()
+        .enumerate()
+        .map(|(i, spec)| {
+            let mut value = [0.0; 3];
+            for (c, q) in spec.value.iter().enumerate() {
+                value[c] = q.si().map_err(|e| e.at(format!("initialVelocity[{i}].value[{c}]")))?;
+            }
+            Ok(crate::model::InitialVelocity { on: spec.on.clone(), value })
+        })
+        .collect()
 }
 
 /// An `AmplitudeSpec` in SI, with a table checked for the two arrays agreeing.

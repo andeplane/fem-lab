@@ -718,6 +718,45 @@ export type Command =
           )
         | null;
       /**
+       * HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark
+       * average acceleration, no numerical damping); -0.05 is the usual choice when the
+       * mesh-frequency ringing of a sudden load should die out.
+       */
+      alpha?: number | null;
+      /**
+       * Mass-proportional Rayleigh damping coefficient of an implicit Step, `C = a·M + b·K`.
+       * Default "0 Hz"; must be non-negative.
+       */
+      rayleighAlpha?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default
+       * "0 s"; must be non-negative.
+       */
+      rayleighBeta?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Initial velocities of an explicit or implicit Step, one uniform vector per Set of
+       * nodes; nodes in no entry start from rest.
+       */
+      initialVelocity?: InitialVelocitySpec[] | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
        * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
        * (default 10). More increments cost proportionally more but start each Newton solve
        * closer to equilibrium, which is what makes a stiffening or buckling model converge.
@@ -1721,7 +1760,8 @@ export type CoupleKind = "distributed" | "rigid";
 /**
  * Analysis procedures.
  */
-export type Procedure = "static" | "static-nonlinear" | "modal" | "heat-steady" | "heat-transient" | "explicit";
+export type Procedure =
+  "static" | "static-nonlinear" | "modal" | "heat-steady" | "heat-transient" | "explicit" | "implicit";
 /**
  * Result fields. Reaction is support force in N for structural Results and removed heat
  * power in W for thermal Results (component 0; components 1 and 2 zero). Queries use Model
@@ -2798,6 +2838,45 @@ export type ModelFile_Command =
           )
         | null;
       /**
+       * HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark
+       * average acceleration, no numerical damping); -0.05 is the usual choice when the
+       * mesh-frequency ringing of a sudden load should die out.
+       */
+      alpha?: number | null;
+      /**
+       * Mass-proportional Rayleigh damping coefficient of an implicit Step, `C = a·M + b·K`.
+       * Default "0 Hz"; must be non-negative.
+       */
+      rayleighAlpha?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default
+       * "0 s"; must be non-negative.
+       */
+      rayleighBeta?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      /**
+       * Initial velocities of an explicit or implicit Step, one uniform vector per Set of
+       * nodes; nodes in no entry start from rest.
+       */
+      initialVelocity?: InitialVelocitySpec[] | null;
+      /**
+       * Convergence tolerance for a Step that must iterate: the relative sup-norm change of
+       * the solution between two passes. Default 1e-6.
        * Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
        * (default 10). More increments cost proportionally more but start each Newton solve
        * closer to equilibrium, which is what makes a stiffening or buckling model converge.
@@ -3993,6 +4072,43 @@ export interface RefineBoxSpec {
         value: number;
         unit: string;
       };
+}
+/**
+ * A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start
+ * from rest. Constrained components are held at zero whatever this says; two entries that
+ * give one node different velocities are `model.ill-posed`.
+ */
+export interface InitialVelocitySpec {
+  on: string;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   *
+   * Items: A velocity with unit, e.g. "1 m/s". Any unit of the right dimension is accepted.
+   */
+  value: [
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    ),
+    (
+      | string
+      | {
+          value: number;
+          unit: string;
+        }
+    )
+  ];
 }
 /**
  * One explicit retained field used by `query.difference`.
@@ -5400,6 +5516,21 @@ export interface Step {
   maxCutbacks?: number | null;
   nonlinearTolerance?: number | null;
   nonlinearMaxIterations?: number | null;
+  alpha?: number | null;
+  rayleighAlpha?: number | null;
+  rayleighBeta?: number | null;
+  initialVelocity?: InitialVelocity[] | null;
+}
+/**
+ * A uniform initial velocity on a Set of nodes, SI.
+ */
+export interface InitialVelocity {
+  on: string;
+  /**
+   * @minItems 3
+   * @maxItems 3
+   */
+  value: [number, number, number];
 }
 /**
  * A Plugin used by the Model (phase P).
