@@ -614,7 +614,6 @@ impl Engine {
                     formulation: formulation.unwrap_or_default(),
                     simplices: simplices.unwrap_or(false),
                 });
-
                 Ok(Output::None)
             }
             Command::MeshExport { format, step } => self.mesh_export(*format, step.as_deref()),

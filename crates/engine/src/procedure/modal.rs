@@ -9,9 +9,13 @@
 //! depends on a random seed.
 //!
 //! The dense `q × q` work runs under `Par::Seq`: it is tiny, and a sequential reduction keeps
-//! the frequencies bit-identical at any thread count.
+//! the frequencies bit-identical at any thread count. That parallelism is passed per call, so a
+//! modal Step never touches faer's process-global setting other Engines read (ADR 0019).
 
-use faer::Side;
+use dyn_stack::{MemBuffer, MemStack};
+use faer::linalg::cholesky::llt::factor::{cholesky_in_place, cholesky_in_place_scratch};
+use faer::linalg::evd::{self_adjoint_evd, self_adjoint_evd_scratch, ComputeEigenvectors};
+use faer::Par;
 
 use crate::command::Field;
 use crate::engine::OnProgress;
@@ -31,6 +35,8 @@ const TOL: f64 = 1e-10;
 const MAX_SWEEPS: usize = 60;
 /// `σ = −SHIFT · tr(K)/tr(M)` when the Step does not name one.
 const SHIFT: f64 = 1e-6;
+/// The `q × q` dense reduction is sequential at any host thread count, per call, never globally.
+const DENSE_PAR: Par = Par::Seq;
 
 /// `M = ∫ ρ NᵀN dV` for the whole mesh, into a fresh copy of `pat.csr`.
 ///
@@ -231,20 +237,44 @@ fn project(a: &Csr, x: &[Vec<f64>], q: usize, n: usize) -> Vec<f64> {
 /// eigendecomposition returns them nondecreasing, and `z = L⁻ᵀ Q` makes the eigenvectors
 /// M̂-orthonormal, which is what keeps the iterated subspace M-orthonormal too.
 fn dense_eigen(k_hat: &[f64], m_hat: &[f64], q: usize) -> (Vec<f64>, Vec<f64>) {
-    faer::set_global_parallelism(faer::Par::Seq);
-    let m = faer::Mat::<f64>::from_fn(q, q, |i, j| m_hat[i * q + j]);
     // `M̂ = X̄ᵀ M X̄` with `M` positive definite (the density check above) and `X̄` of full rank,
-    // so the factorisation and the symmetric eigendecomposition below cannot fail.
-    let llt = m.llt(Side::Lower).expect("the projected mass matrix is positive definite");
-    let l = llt.L();
+    // so the factorisation and the symmetric eigendecomposition below cannot fail. Both are the
+    // low-level faer entry points, which take the parallelism as an argument: the high-level
+    // `llt`/`self_adjoint_eigen` read the process-global setting instead, and pinning that to
+    // `Par::Seq` here would pin it for every other Engine in the host as well.
+    let mut lower = faer::Mat::<f64>::from_fn(q, q, |i, j| if j <= i { m_hat[i * q + j] } else { 0.0 });
+    cholesky_in_place(
+        lower.as_mut(),
+        Default::default(),
+        DENSE_PAR,
+        MemStack::new(&mut MemBuffer::new(cholesky_in_place_scratch::<f64>(q, DENSE_PAR, Default::default()))),
+        Default::default(),
+    )
+    .expect("the projected mass matrix is positive definite");
+    // Only the lower triangle and the diagonal are ever read below, which is all `cholesky_in_place` writes.
+    let l = lower.as_ref();
     // c = L⁻¹ K̂ L⁻ᵀ, built as (L⁻¹ (L⁻¹ K̂)ᵀ), which is the same matrix because it is symmetric.
     let mut c: Vec<f64> = forward(&l, k_hat, q);
     c = forward(&l, &transpose(&c, q), q);
-    let eig = faer::Mat::<f64>::from_fn(q, q, |i, j| c[i * q + j])
-        .self_adjoint_eigen(Side::Lower)
-        .expect("a real symmetric matrix has a real eigendecomposition");
-    let lambda: Vec<f64> = (0..q).map(|i| eig.S()[i]).collect();
-    let qmat: Vec<f64> = (0..q * q).map(|idx| eig.U()[(idx / q, idx % q)]).collect();
+    let a = faer::Mat::<f64>::from_fn(q, q, |i, j| c[i * q + j]);
+    let mut s = faer::diag::Diag::<f64>::zeros(q);
+    let mut u = faer::Mat::<f64>::zeros(q, q);
+    self_adjoint_evd(
+        a.as_ref(),
+        s.as_mut(),
+        Some(u.as_mut()),
+        DENSE_PAR,
+        MemStack::new(&mut MemBuffer::new(self_adjoint_evd_scratch::<f64>(
+            q,
+            ComputeEigenvectors::Yes,
+            DENSE_PAR,
+            Default::default(),
+        ))),
+        Default::default(),
+    )
+    .expect("a real symmetric matrix has a real eigendecomposition");
+    let lambda: Vec<f64> = (0..q).map(|i| s.column_vector()[i]).collect();
+    let qmat: Vec<f64> = (0..q * q).map(|idx| u[(idx / q, idx % q)]).collect();
     (lambda, backward(&l, &qmat, q))
 }
 

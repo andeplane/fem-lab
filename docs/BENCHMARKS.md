@@ -113,12 +113,6 @@ while unequal increments are rejected with both Load names and the Body. A8's nu
 `StepResult` bit for bit at one thread and at `max(2, available_parallelism())`, including
 faer factorization/triangular solution under the platform policy documented below.
 
-The standalone [faer platform discriminator](../tools/diagnose-faer-266/README.md) isolates
-#266 below FEM assembly: integer rank-one block products must match every entry exactly,
-and 3D Dirichlet grids of widths 5, 9, 13 must recover the constant solution 1 with maximum
-error and relative residual ≤1e-10. Seq, one-thread Rayon and four-thread Rayon run the same
-closed forms, with CPU capabilities recorded. This diagnostic complements D1's LE10 oracles.
-
 The same-machine Windows follow-up (`tools/replay-le10-266`) runs the immutable
 unguarded CLI with default/1/4 threads and replays the verified 15,432-equation
 LE10 Hex20 operator in faer Seq/Rayon1/Rayon4. Its 3.54 MB lossless fixture retains
