@@ -72,6 +72,20 @@ pub enum Query {
     #[schemars(extend("x-returns" = "RetainedResults"))]
     Results {},
 
+    /// The triangulated boundary of a retained Result's solved Mesh, with f64 SI positions,
+    /// original node indices, Body identities and face-Set memberships. Explicit resultId
+    /// reads that immutable solve even after Model edits; an omitted id selects the latest
+    /// compatible Result for step (or the last solved Step), rejecting stale or missing Results.
+    /// This never substitutes the current Mesh or a geometry preview. Use query.results for ids.
+    #[serde(rename = "query.surface", rename_all = "camelCase")]
+    #[schemars(extend("x-returns" = "ResultSurface"))]
+    Surface {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        result_id: Option<String>,
+    },
+
     /// A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.
     /// Field names include mode:k for one-based modal shapes. Explicit ids use solved metadata;
     /// omitted ids refuse stale Results. Retained samples use query.frame's existing protocol.
@@ -903,6 +917,7 @@ pub enum QueryResult {
     Set(SetInfo),
     Result(ResultSummary),
     Results(RetainedResults),
+    Surface(ResultSurface),
     Field(ResultField),
     Difference(DifferenceField),
     Frames(FramesResult),
@@ -1070,6 +1085,35 @@ pub struct RetainedResult {
 pub struct RetainedResults {
     pub limit: usize,
     pub records: Vec<RetainedResult>,
+}
+
+/// A solved Mesh surface. Flat arrays preserve original node identities for field lookup.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultSurface {
+    pub result_id: String,
+    pub step: String,
+    pub node_count: usize,
+    /// Position unit, always metres.
+    pub unit: String,
+    /// Every solved Mesh node, xyz component-fastest, in f64 SI.
+    pub positions: Vec<f64>,
+    /// Triangle node indices, three per triangle, oriented outward.
+    pub indices: Vec<u32>,
+    pub tri_body: Vec<u32>,
+    /// First face Set for each triangle; u32::MAX means no face Set (including 2D interiors).
+    pub tri_face: Vec<u32>,
+    pub face_names: Vec<String>,
+    /// Every named Set, including overlapping face aliases; memberships are CSR by triangle.
+    pub set_names: Vec<String>,
+    pub tri_set_offsets: Vec<u32>,
+    pub tri_sets: Vec<u32>,
+    pub body_names: Vec<String>,
+    /// Sheet boundary edges and line members, two node indices per segment.
+    pub edges: Vec<u32>,
+    /// u32::MAX means no face Set, including line members.
+    pub edge_face: Vec<u32>,
+    pub edge_body: Vec<u32>,
 }
 
 /// Final scientific values are f64 SI in component-fastest entity order.

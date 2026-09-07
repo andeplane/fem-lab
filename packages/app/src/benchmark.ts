@@ -87,6 +87,12 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
     magnitude: true,
     source: 'Constant-acceleration closed form gt²/2 · catalogue F1/F2',
   },
+  'free-free-beam-modal': {
+    locator: { kind: 'frequencies' },
+    reference: { values: [0, 0, 0, 0, 0, 0, 133.34, 266.68], unit: 'Hz', label: 'the six rigid modes, then f₇ and f₈' },
+    tolerance: { kind: 'absolute', value: 3, unit: 'Hz' },
+    source: 'Six rigid-body modes at zero, then the free-free beam frequency formula with β₁ = 4.730041',
+  },
   'heated-fin-convection': {
     locator: { kind: 'extreme', field: 'temperature', component: 0, pick: 'min' },
     reference: { values: [37.39], unit: 'degC', label: 'temperature at the adiabatic tip' },

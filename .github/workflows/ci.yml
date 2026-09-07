@@ -117,6 +117,7 @@ jobs:
         run: npm run test:package -w packages/mcp
       - run: cargo build -p femlab --release
       - run: node tools/test-transient-replay.mjs
+      - run: node tools/test-retained-replay.mjs
       - run: ./target/release/femlab schema --out engine.schema.json
       - name: replay every fixture natively and in wasm
         run: |

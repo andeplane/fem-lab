@@ -53,6 +53,7 @@ to one that resolves it, since `docs/BENCHMARKS.md` owns the resolved answers.
 | `cantilever` | tip deflection δ | 0.1905 mm (PL³/3EI) | 0.19011 mm | −0.19 % | 0.04 s |
 | `cantilever-hex20` | tip deflection δ | 0.1905 mm (PL³/3EI) | 0.18994 mm | −0.28 % | 0.03 s |
 | `cantilever-modal` | f₁ … f₄ | 20.96 / 41.91 / 131.32 / 262.66 Hz (Euler–Bernoulli) | 21.06 / 42.01 / 131.67 / 260.33 Hz | +0.50 / +0.23 / +0.27 / −0.89 % | 0.22 s |
+| `free-free-beam-modal` | f₁ … f₈ | 0×6, 133.3, 266.7 Hz (rigid modes, then free-free Euler–Bernoulli) | ~0×6 (≤ 0.0012 Hz), 133.1, 264.4 Hz | −0.18 / −0.87 % on the two real modes | 0.24 s |
 | `mesh-convergence-cantilever` | Richardson estimate of δ | 0.1905 mm (PL³/3EI) | 0.19073 mm | +0.13 % | 0.23 s |
 | `heated-fin-convection` | tip temperature | 37.39 °C (1D fin, adiabatic tip) | 37.41 °C | +0.03 % | 0.03 s |
 | `bar-transient-heat` | T 20 mm inside the driven face, t = 32 s | 36.60 (NAFEMS T3) | 36.79 | +0.53 % | 0.04 s |
@@ -82,6 +83,7 @@ path, not a stress: the lattice puts two or three elements across a bolt hole),
 | `cantilever` | 1 | A steel cantilever under a tip load — the first model to build, and the standard check against beam theory. | δ = PL³/3EI = 0.1905 mm | [cantilever](../packages/app/tutorials/cantilever.json) |
 | `cantilever-hex20` | 1 | The same cantilever at quadratic order (hex20) — bending accuracy from one lattice mesh setting. | δ = PL³/3EI = 0.1905 mm | [cantilever](../packages/app/tutorials/cantilever.json) |
 | `cantilever-modal` | 2 | A clamped-free steel beam with a rectangular section — four bending frequencies from one modal Step, two in each plane. | fₙ = (βₙ²/2π)·√(EI/ρAL⁴) | [modal-analysis](../packages/app/tutorials/modal-analysis.json) |
+| `free-free-beam-modal` | 3 | The same rectangular-section beam as `cantilever-modal`, this time with no constraints at all — six zero-frequency rigid-body modes, then the beam's own bending frequencies. | Free-free fₙ = (βₙ²/2π)·√(EI/ρAL⁴), β₁ = 4.730041 | [free-free-modal](../packages/app/tutorials/free-free-modal.json) |
 | `mesh-convergence-cantilever` | 2 | The cantilever solved at three mesh sizes by `study.converge`, with the observed rate and a Richardson estimate of the converged value. | δ = PL³/3EI = 0.1905 mm | [mesh-convergence](../packages/app/tutorials/mesh-convergence.json) |
 | `heated-fin-convection` | 2 | An aluminium fin held at its root temperature and cooled by air on all four long faces — steady conduction against the 1D fin formula. | θ/θ_b = cosh m(L−x) / cosh mL | [heat-conduction](../packages/app/tutorials/heat-conduction.json) |
 | `thermal-stress-plate` | 3 | A heat Step conducts a linear temperature field through a plate, and a static Step named after it picks that field up as thermal stress. | σₓₓ = −EαΔT/(1−ν) = −150 MPa | [thermal-stress-chaining](../packages/app/tutorials/thermal-stress-chaining.json) |
@@ -153,5 +155,5 @@ Every tutorial's `doIt` sequence is validated by `packages/app/test/tutorial-fix
 which replays it through the wasm build in Node — the same engine the browser gets. Where a
 tutorial shadows an example (`cantilever`, `plate-with-hole-2d`, `heated-fin`,
 `cantilever-modal`, `bar-transient-heat`, `mesh-convergence-cantilever`,
-`kirsch-quarter-plate`), it is by construction the same Command sequence the CLI has also
-checked, so a tutorial can never drift from a Model with a known answer.
+`kirsch-quarter-plate`, `free-free-beam-modal`), it is by construction the same Command sequence
+the CLI has also checked, so a tutorial can never drift from a Model with a known answer.
