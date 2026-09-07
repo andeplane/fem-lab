@@ -81,7 +81,7 @@ pub fn tet(solid: &Solid, size: f64, quadratic: bool, max_elements: usize) -> Re
         counts[a] = libm::ceil((hi[a] - lo[a]) / size).max(1.0) + 2.0;
         estimate *= counts[a];
     }
-    if !(estimate <= max_elements as f64) {
+    if estimate > max_elements as f64 {
         return Err(GeomError(format!(
             "an element size of {size} needs about {} background tetrahedra, above the limit of {max_elements}; \
              use a larger element size or raise maxElements",
@@ -208,7 +208,7 @@ impl<'a> Stuffing<'a> {
         let sign: Vec<Sign> =
             self.coords.iter().map(|&p| if solid.contains(p) { Sign::In } else { Sign::Out }).collect();
         self.sign = sign;
-        if !self.sign.iter().any(|s| *s == Sign::In) {
+        if !self.sign.contains(&Sign::In) {
             return Err(GeomError(format!(
                 "no lattice vertex of the {}×{}×{} background lattice is inside the body; use a smaller element size",
                 self.cells[0], self.cells[1], self.cells[2]
@@ -276,8 +276,8 @@ impl<'a> Stuffing<'a> {
             }
         }
         let mut warped: Vec<u32> = Vec::new();
-        for v in 0..self.n_lattice {
-            if let Some((_, cut)) = best[v] {
+        for (v, b) in best.iter().enumerate().take(self.n_lattice) {
+            if let Some((_, cut)) = *b {
                 self.coords[v] = self.coords[cut as usize];
                 self.sign[v] = Sign::On;
                 warped.push(v as u32);
