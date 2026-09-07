@@ -52,6 +52,50 @@ fn cantilever(e: &mut Engine) {
 }
 
 #[test]
+fn changing_the_model_name_preserves_results_history_and_replay_identity() {
+    let mut e = engine();
+    cantilever(&mut e);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"static"}"#);
+    let before = e.export_file();
+    let before_hash = e.model_hash();
+    let QueryResult::Result(solved) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
+    let displacement = e.field(Some("static"), Field::Displacement).expect("displacement before rename").clone();
+    ok(&mut e, r#"{"cmd":"model.setName","name":"renamed cantilever"}"#);
+    let after = e.export_file();
+    assert_eq!(after.model.name, "renamed cantilever");
+    assert_ne!(before_hash, e.model_hash());
+    assert_eq!(after.model.bodies, before.model.bodies);
+    assert_eq!(after.journal.entries.len(), before.journal.entries.len() + 1);
+    assert_eq!(&after.journal.entries[..before.journal.entries.len()], &before.journal.entries);
+    let QueryResult::Result(renamed) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else {
+        panic!()
+    };
+    assert!(!renamed.stale);
+    assert_eq!(e.field(Some("static"), Field::Displacement).expect("displacement after rename"), &displacement);
+    assert_eq!(renamed.extremes, solved.extremes);
+    assert_eq!(renamed.reactions, solved.reactions);
+    ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+    assert_eq!(e.export_file(), before);
+    let QueryResult::Result(undone) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
+    assert!(!undone.stale);
+    ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+    assert_eq!(e.export_file(), after);
+    let mut replayed = engine();
+    let hashes = pollster::block_on(replayed.replay(&after.journal.entries, true, true)).unwrap();
+    assert_eq!(hashes.last(), Some(&e.model_hash()));
+    assert_eq!(replayed.export_file().model, after.model);
+    let rejected = err(&mut e, r#"{"cmd":"model.setName","name":"  "}"#);
+    assert_eq!(rejected.code, ErrorCode::Schema);
+    assert_eq!(e.export_file(), after);
+    // Renaming must never turn an already stale physics result current.
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"new-pressure","on":"beam.zmax","value":"1 Pa"}"#);
+    ok(&mut e, r#"{"cmd":"model.setName","name":"still stale"}"#);
+    let QueryResult::Result(stale) = e.query(Query::Result { step: Some("static".into()) }).unwrap() else { panic!() };
+    assert!(stale.stale);
+}
+
+#[test]
 fn builds_a_cantilever_and_reports_it() {
     let mut e = engine();
     cantilever(&mut e);
@@ -3887,6 +3931,19 @@ fn solved_thermal_chain() -> Engine {
     e
 }
 
+/// A display-name edit changes document identity, but keeps a solved predecessor usable.
+#[test]
+fn a_renamed_model_can_continue_its_current_thermal_result() {
+    let mut e = solved_thermal_chain();
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    let before = e.field(Some("stress"), Field::Displacement).expect("displacement").clone();
+    let hash = e.model_hash();
+    ok(&mut e, r#"{"cmd":"model.setName","name":"renamed thermal chain"}"#);
+    assert_ne!(e.model_hash(), hash);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert_eq!(e.field(Some("stress"), Field::Displacement).expect("renamed displacement"), &before);
+}
+
 fn assert_stale_predecessor(e: &mut Engine) {
     let stale = err(e, r#"{"cmd":"solve.run","step":"stress"}"#);
     assert_eq!(stale.code, ErrorCode::ResultStale);
@@ -6319,6 +6376,58 @@ fn frame_ramp(e: &mut Engine, nx: usize, order: u8, dt: f64, end: f64, every: u3
         ),
     );
     ok(e, r#"{"cmd":"solve.run","step":"warm"}"#);
+}
+
+/// A display rename changes document identity, never the solved identity or T=t heating field.
+#[test]
+fn model_rename_preserves_transient_solve_identity_and_validity() {
+    use serde_json::json;
+    for order in [1, 2] {
+        for nx in [2, 4] {
+            let mut e = engine();
+            frame_ramp(&mut e, nx, order, 0.2, 1.0, 2);
+            let solved_hash = e.model_hash();
+            let catalogue = frames_of(&mut e);
+            assert_eq!(catalogue.model_hash, solved_hash);
+            assert!(!catalogue.stale);
+            let revision = result(&mut e).revision;
+            let frame = frame_of(&mut e, 1);
+            for value in frame.values.chunks_exact(3) {
+                assert!((value[0] - 0.4).abs() < 1e-10);
+            }
+            let probe = json!({"query":"query.probe","field":"temperature","component":0,"at":["0.25 m","0.05 m","0.05 m"],"sample":{"kind":"frame","index":1}});
+            let path = json!({"query":"query.path","field":"temperature","from":["0 m","0.05 m","0.05 m"],"to":["1 m","0.05 m","0.05 m"],"n":3,"sample":{"kind":"frame","index":1}});
+            let sampled_probe = frame_query(&mut e, probe.clone()).unwrap();
+            let sampled_path = frame_query(&mut e, path.clone()).unwrap();
+            assert_eq!(sampled_probe["sample"]["modelHash"], solved_hash);
+            assert_eq!(sampled_path["sample"]["modelHash"], solved_hash);
+            ok(&mut e, r#"{"cmd":"model.setName","name":"renamed heating"}"#);
+            assert_ne!(e.model_hash(), solved_hash);
+            assert_eq!(frames_of(&mut e), catalogue);
+            assert_eq!(frame_of(&mut e, 1), frame);
+            assert_eq!(frame_query(&mut e, probe.clone()).unwrap(), sampled_probe);
+            assert_eq!(frame_query(&mut e, path.clone()).unwrap(), sampled_path);
+            assert_eq!(result(&mut e).revision, revision);
+            let renamed = e.export_file();
+            ok(&mut e, r#"{"cmd":"journal.undo"}"#);
+            assert_eq!(e.model_hash(), solved_hash);
+            assert_eq!(frames_of(&mut e), catalogue);
+            ok(&mut e, r#"{"cmd":"journal.redo"}"#);
+            assert_eq!(e.export_file(), renamed);
+            let mut replayed = engine();
+            pollster::block_on(replayed.replay(&renamed.journal.entries, false, true)).unwrap();
+            assert_eq!(frames_of(&mut replayed), catalogue);
+            assert_eq!(frame_of(&mut replayed, 1), frame);
+            ok(&mut e, r#"{"cmd":"load.heatSource","name":"source","bodies":["bar"],"q":"12 W/m^3"}"#);
+            ok(&mut e, r#"{"cmd":"model.setName","name":"still stale heating"}"#);
+            let stale = frames_of(&mut e);
+            assert!(stale.stale);
+            assert_eq!(stale.model_hash, solved_hash);
+            for query in [json!({"query":"query.frame","index":1}), probe, path] {
+                assert_eq!(frame_query(&mut e, query).unwrap_err().code, ErrorCode::ResultStale);
+            }
+        }
+    }
 }
 
 /// Uniform heating follows conservation rho cp dT/dt=q: T=t K at every node, independently

@@ -406,6 +406,10 @@ The retained-frame registry checks (#243) read every uniform-heating value throu
 strides, integral and nonintegral endpoint ratios, and initial/final-only output. The values
 must equal `T=t` K within `1e-10 K`; SI arrays remain labelled K when Model display units
 are Celsius. The final frame is exactly the final primary FieldData, including zero padding.
+The document-name regression (#123) repeats both orders and 2/4 axial cells: rename,
+undo/redo and full replay preserve the original solved Model hash, frame catalogue and
+`T(0.4 s)=0.4 K` values, while sampled probes/paths stay unchanged. A subsequent heat-source
+edit remains stale even after another rename, and sampled access rejects it.
 
 An independent cooled-slab Fourier series checks every retained node at 0.05, 0.10 and 0.15 s:
 `T(x,t) = Σ_(odd n) 400/(nπ) sin(nπx) exp(−n²π²t)` K for a 1 m slab initially at 100 K,

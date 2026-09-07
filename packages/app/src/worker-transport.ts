@@ -1,7 +1,7 @@
 // `EngineTransport` over a Worker. Calls are serialised (the engine is single-instance and
 // `&mut self`), progress is routed back to the caller, and cancel is terminate + recreate +
 // replay of the Journal so far (plan B §4.2, §5.3).
-import type { Ack, Command, EngineTransport, ExportSpec, ExportedFile, Field, FieldData, FrameResult, ModelFile, Progress, Query, QueryResult, Surface } from '@femlab/registry';
+import type { Ack, ImportAck, Command, EngineTransport, ExportSpec, ExportedFile, Field, FieldData, FrameResult, ModelFile, Progress, Query, QueryResult, Surface } from '@femlab/registry';
 import { FemError, decodeBulk } from '@femlab/registry';
 import type { AppOp, AppReq, AppRes } from './protocol';
 
@@ -106,12 +106,15 @@ export class WorkerTransport implements EngineTransport {
     return (await this.call('exportFile')) as ModelFile;
   }
 
-  async importFile(file: ModelFile): Promise<Ack> {
+  async importFile(file: ModelFile): Promise<ImportAck> {
     const saved = structuredClone(file);
     return await this.call('importFile', saved, undefined, (value) => {
-      this.shadow = saved.journal.entries as unknown as ShadowEntry[];
-      this.revision = (value as Ack).revision;
-    }) as Ack;
+      const ack = value as ImportAck;
+      // The engine normalizes omitted/default fields. Its receipt, rather than the input file,
+      // is the authoritative Journal for both recovery and the explicit-open saved baseline.
+      this.shadow = ack.journal.entries as ShadowEntry[];
+      this.revision = ack.revision;
+    }) as ImportAck;
   }
 
   /** Σ i for i in 1..=n on the engine's GPU; the `gpu` smoke calls it through `window.fem`. */
