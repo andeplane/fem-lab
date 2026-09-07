@@ -135,6 +135,10 @@ pub enum Procedure {
     /// the consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,
     /// `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.
     Implicit,
+    /// Steady-state response to a sinusoidal load over a frequency sweep, by mode
+    /// superposition (ADR 0020). Needs `after` naming a solved `modal` Step, plus `fStart`,
+    /// `fStop` and `points`.
+    Harmonic,
 }
 
 /// A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start
@@ -145,6 +149,18 @@ pub enum Procedure {
 pub struct InitialVelocitySpec {
     pub on: SetRef,
     pub value: [Q<Velocity>; 3],
+}
+
+/// How a harmonic Step spaces the frequencies between `fStart` and `fStop`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SweepSpacing {
+    /// Equal steps in frequency; both endpoints are hit exactly.
+    #[default]
+    Linear,
+    /// Equal ratios between neighbours, which is what a resonance plot wants. `fStart` must be
+    /// above zero.
+    Log,
 }
 
 /// A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
@@ -880,11 +896,16 @@ fn many(shapes: &[ShapeSpec], where_: &str) -> Result<Vec<Shape>, Error> {
 }
 
 /// Every Command. Serialised with a `cmd` tag: `{ "cmd": "geometry.addBox", "name": "beam", … }`.
+///
+/// `step.add` is much the largest variant, and by design: it is the union of every procedure's
+/// arguments, so it grows with each new procedure while the rest stay put. Boxing it would put
+/// a heap indirection on the Journal's replay path — the one place a Command is actually read
+/// in bulk — to save a few hundred kilobytes across a Journal of a few hundred entries.
+// ponytail: unboxed union variant, ~600 bytes. Box the `step.add` payload behind a
+// `#[serde(flatten)]` struct if a Journal ever gets large enough for the memory to show up.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "cmd")]
-// `step.add` carries every procedure's optional fields and is the one wide variant; Commands
-// are parsed, journaled and applied once each, never stored by the million.
-#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Start a new, empty Model and Journal with this name. Discards the current Model, its
     /// Results and the undo history; it is the first entry of every Journal, so call it once
@@ -1320,8 +1341,10 @@ pub enum Command {
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
     /// `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
     /// `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
-    /// implicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and
-    /// `increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An
+    /// implicit, `fStart`, `fStop`, `points`, `sweep`, `dampingRatio`, `rayleighAlpha`,
+    /// `rayleighBeta` and `outputEvery` to harmonic, `amplitude`, `dt`, `tEnd` and
+    /// `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
+    /// `amplitude` to static-nonlinear. An
     /// implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
     /// (default 0, Newmark average acceleration: second order, unconditionally stable and
     /// energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
@@ -1347,6 +1370,13 @@ pub enum Command {
     /// Heat Results report net applied power, positive removed heat and stored-energy rate;
     /// transient powers belong to the last θ-method integration stage (radiation uses weighted
     /// endpoint fluxes), while temperature fields belong to its endpoint.
+    /// A harmonic Step requires `after` to name a Step whose `modal` Result is current: it
+    /// superposes those mode shapes rather than solving anything (ADR 0020), so its accuracy is
+    /// bounded by that Step's `nModes`. It drives its own Loads at each swept frequency and
+    /// answers a nodal amplitude and a phase lag per retained frequency; `displacement` is the
+    /// amplitude at the frequency of peak response. Its Constraints may only hold DOFs at zero
+    /// — a moving support is base excitation, which this procedure does not do.
+
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -1385,12 +1415,14 @@ pub enum Command {
         /// mesh-frequency ringing of a sudden load should die out.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         alpha: Option<f64>,
-        /// Mass-proportional Rayleigh damping coefficient of an implicit Step, `C = a·M + b·K`.
-        /// Default "0 Hz"; must be non-negative.
+        /// Mass-proportional Rayleigh damping α of `C = αM + βK`, read by an implicit Step
+        /// (directly) and a harmonic one (as `ζ = α / (2ω)`, most of it at low frequency).
+        /// Default "0 Hz"; must be non-negative, e.g. "0.5 1/s".
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rayleigh_alpha: Option<Q<Frequency>>,
-        /// Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default
-        /// "0 s"; must be non-negative.
+        /// Stiffness-proportional Rayleigh damping β of `C = αM + βK`, read by an implicit Step
+        /// (directly) and a harmonic one (as `ζ = βω / 2`, most of it at high frequency).
+        /// Default "0 s"; must be non-negative, e.g. "1e-5 s".
         #[serde(default, skip_serializing_if = "Option::is_none")]
         rayleigh_beta: Option<Q<Time>>,
         /// Initial velocities of an explicit or implicit Step, one uniform vector per Set of
@@ -1421,6 +1453,22 @@ pub enum Command {
         /// five iterations from a good starting point).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nonlinear_max_iterations: Option<u32>,
+        /// First frequency of a harmonic sweep, e.g. "1 Hz".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        f_start: Option<Q<Frequency>>,
+        /// Last frequency of a harmonic sweep; must be above fStart.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        f_stop: Option<Q<Frequency>>,
+        /// How many frequencies the sweep evaluates, including both endpoints. At least 2.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        points: Option<u32>,
+        /// Frequency spacing of a harmonic sweep; default linear.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sweep: Option<SweepSpacing>,
+        /// Constant modal damping ratio ζ applied to every mode of a harmonic Step, e.g. 0.02
+        /// for 2 % of critical. In [0, 1). Added to whatever the Rayleigh terms give.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        damping_ratio: Option<f64>,
     },
 
     /// Remove a Step and the Result it produced, if any. Constraints and Loads it referenced

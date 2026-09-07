@@ -1922,6 +1922,16 @@ fn resample(shape: &Shape) -> Shape {
     }
 }
 
+fn predicate_kind(predicate: &FacePredicate) -> &'static str {
+    match predicate {
+        FacePredicate::Plane { .. } => "plane",
+        FacePredicate::Normal { .. } => "normal",
+        FacePredicate::Bbox { .. } => "bbox",
+        FacePredicate::Cylinder { .. } => "cylinder",
+        FacePredicate::Any { .. } => "any",
+    }
+}
+
 /// The unit cube [0,1]^3 as a soup, wound counter-clockwise seen from outside.
 fn cube_soup() -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
     let positions = vec![
@@ -1972,6 +1982,96 @@ fn an_imported_cube_is_exact_with_six_named_patches() {
     assert!(!s.contains([-0.5, 0.5, 0.5]));
     assert!(s.contains([0.125, 0.125, 0.125]));
     assert!(format!("{s:?}").contains("MeshIndex(12 triangles)"));
+}
+
+/// Patch measurements use triangle area and first moments, while the predicate classification
+/// is checked against analytic planes and a circular cylinder after a world-space transform.
+#[test]
+fn imported_patch_summaries_have_independent_geometric_oracles() {
+    let (positions, triangles) = cube_soup();
+    let cube = Solid::evaluate(&mesh_shape(positions, triangles)).unwrap();
+    let patches = cube.triangles().face_patches();
+    assert_eq!(patches.len(), 6);
+    for p in &patches {
+        assert_eq!(p.triangle_count, 2);
+        assert!((p.area - 1.0).abs() < 1e-12);
+        assert!((dot(p.mean_normal, p.mean_normal) - 1.0).abs() < 1e-12);
+        let FacePredicate::Plane { normal, offset, tol } = &p.suggested_predicate else {
+            panic!("cube patch is not planar: {p:?}")
+        };
+        assert!((dot(*normal, p.centroid) - offset).abs() <= tol.expect("explicit tolerance"));
+    }
+
+    let at = Affine3 { translate: [3.0, -2.0, 5.0], rotate: [23.0, 37.0, -19.0], scale: [2.0; 3] };
+    let cylinder = Shape::Transform {
+        shape: Box::new(Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(32) }),
+        at: at.clone(),
+    };
+    let imported = Solid::evaluate(&resample(&cylinder)).unwrap();
+    let patches = imported.triangles().face_patches();
+    assert_eq!(patches.len(), 3);
+    assert_eq!(patches.iter().filter(|p| predicate_kind(&p.suggested_predicate) == "plane").count(), 2);
+    let side =
+        patches.iter().find(|p| predicate_kind(&p.suggested_predicate) == "cylinder").expect("one cylindrical side");
+    let FacePredicate::Cylinder { point, axis, radius, tol } = side.suggested_predicate else { panic!() };
+    let p0 = at.apply([0.0, 0.0, 0.0]);
+    let p1 = at.apply([0.0, 0.0, 1.0]);
+    let expected_axis = sub(p1, p0);
+    assert!((radius - 2.0).abs() < 1e-9, "radius {radius}");
+    assert!((dot(axis, expected_axis).abs() - 2.0).abs() < 1e-9, "axis {axis:?}");
+    assert!(tol.expect("faceting tolerance") > 0.0);
+    assert!(libm::sqrt(dot(side.mean_normal, side.mean_normal)) < 1e-12, "{:?}", side.mean_normal);
+    let d = sub(point, p0);
+    let axial = dot(d, axis);
+    let radial = sub(d, [axis[0] * axial, axis[1] * axial, axis[2] * axial]);
+    assert!(libm::sqrt(dot(radial, radial)) < 1e-9, "axis point {point:?}");
+
+    let imported_shape = resample(&cylinder);
+    assert!(imported_shape.is_imported());
+    assert!(Shape::Transform { shape: Box::new(imported_shape), at: at.clone() }.is_imported());
+    assert!(Shape::Named { name: "part".into(), shape: Box::new(resample(&cylinder)) }.is_imported());
+    assert!(!cylinder.is_imported());
+
+    let along_x = Shape::Transform {
+        shape: Box::new(Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(16) }),
+        at: Affine3 { rotate: [0.0, 90.0, 0.0], ..Default::default() },
+    };
+    let along_x = Solid::evaluate(&resample(&along_x)).unwrap();
+    assert!(along_x.triangles().face_patches().iter().any(|p| predicate_kind(&p.suggested_predicate) == "cylinder"));
+
+    let sphere = Solid::evaluate(&resample(&Shape::Sphere { radius: 1.0, segments: Some(16) })).unwrap();
+    let sphere_patches = sphere.triangles().face_patches();
+    assert_eq!(sphere_patches.len(), 1);
+    assert_eq!(predicate_kind(&sphere_patches[0].suggested_predicate), "bbox");
+
+    let shallow = femlab_geometry::TriMesh {
+        positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.1]],
+        triangles: vec![[0, 1, 2], [0, 1, 3]],
+        tags: vec![0, 0],
+        tag_names: vec!["shallow".into()],
+    };
+    assert_eq!(predicate_kind(&shallow.face_patches()[0].suggested_predicate), "bbox");
+
+    let n = 16;
+    let mut positions = Vec::new();
+    for z in [0.0, 1.0] {
+        for i in 0..n {
+            let angle = 2.0 * PI * i as f64 / n as f64;
+            positions.push([2.0 * libm::cos(angle), libm::sin(angle), z]);
+        }
+    }
+    let mut triangles = Vec::new();
+    for i in 0..n as u32 {
+        let j = (i + 1) % n as u32;
+        triangles.extend([[i, j, n as u32 + j], [i, n as u32 + j, n as u32 + i]]);
+    }
+    let ellipse = femlab_geometry::TriMesh {
+        tags: vec![0; triangles.len()],
+        tag_names: vec!["ellipse".into()],
+        positions,
+        triangles,
+    };
+    assert_eq!(predicate_kind(&ellipse.face_patches()[0].suggested_predicate), "bbox");
 }
 
 #[test]

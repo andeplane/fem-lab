@@ -22,9 +22,10 @@ pub struct Valued {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "query")]
 pub enum Query {
-    /// Everything about the Model in one read: bodies with volumes and materials, materials,
-    /// named Sets, constraints, loads with their totals, steps, mesh settings, and the
-    /// well-posedness warnings that would block a solve. Read this before changing anything.
+    /// Everything about the Model in one read: bodies with volumes and materials, imported
+    /// face patches with paste-ready naming predicates, named Sets, constraints, loads with
+    /// their totals, steps, mesh settings, and the well-posedness warnings that would block a
+    /// solve. Read this before changing anything.
     #[serde(rename = "query.model")]
     #[schemars(extend("x-returns" = "ModelSummary"))]
     Model {},
@@ -273,6 +274,24 @@ pub struct BodyRow {
     pub mass: Option<Valued>,
     /// Auto-named faces of this body (`beam.xmin` …), plus its cuts' faces.
     pub faces: Vec<String>,
+    /// Measured source patches and durable naming suggestions, for an imported mesh Body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patches: Vec<ImportedPatchRow>,
+}
+
+/// One face patch of an imported mesh Body.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedPatchRow {
+    /// The import's ordinal face name. Use `suggestedPredicate` to create a durable name.
+    pub tag: String,
+    pub triangle_count: u32,
+    pub area: Valued,
+    pub centroid: [Valued; 3],
+    /// Area-weighted mean of the triangles' outward unit normals. It is zero for a complete curved side.
+    pub mean_normal: [f64; 3],
+    /// Paste this value into `geometry.nameFace.where`.
+    pub suggested_predicate: crate::command::FacePredicate,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -579,6 +598,9 @@ pub struct ResultSummary {
     /// One row per retained output time: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
+    /// One row per retained frequency of a harmonic sweep; empty for every other procedure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sweep: Vec<SweepRow>,
     /// Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
     /// conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
     /// Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
@@ -588,6 +610,19 @@ pub struct ResultSummary {
     /// across a gap, a slave face coarser than its master. Retained with the Result.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
+}
+
+/// One retained frequency of a harmonic sweep.
+///
+/// `amplitude` is the largest displacement amplitude any DOF reached at this frequency, and
+/// `phase` is that same DOF's lag behind the driving load, so the pair describes one real
+/// motion: `u(t) = amplitude · cos(2π f t − phase)`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SweepRow {
+    pub frequency: Valued,
+    pub amplitude: Valued,
+    pub phase: Valued,
 }
 
 /// One retained output time in a Step's history: the extremes of the field at that instant.

@@ -163,6 +163,7 @@ pub async fn run(
         frequencies: Vec::new(),
         modes: Vec::new(),
         history,
+        sweep: None,
         solver,
         warnings: mpc.warnings,
         assumptions: Vec::new(),
