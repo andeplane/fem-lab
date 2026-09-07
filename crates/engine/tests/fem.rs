@@ -1399,6 +1399,15 @@ impl Element for LegacyInverseMap {
     fn recover(&self, c: &ElementCtx<'_>, u: &[f64], stress: &mut [f64], strain: &mut [f64]) -> Result<(), Error> {
         self.inner.recover(c, u, stress, strain)
     }
+    fn tangent_and_force(
+        &self,
+        c: &ElementCtx<'_>,
+        u: &[f64],
+        state_in: &[f64],
+        out: TangentOut<'_>,
+    ) -> Result<f64, Error> {
+        self.inner.tangent_and_force(c, u, state_in, out)
+    }
     fn gp_xi(&self, i: usize) -> [f64; 3] {
         self.inner.gp_xi(i)
     }
@@ -1419,6 +1428,19 @@ fn inverse_map_round_trips_the_gauss_points_and_rejects_the_rest() {
     assert_eq!(legacy.inverse_map_status(&[], [0.0; 3]), InverseMap::Inside([0.25, -0.5, 0.75]));
     let legacy = LegacyInverseMap { inner: element_for(ElementKind::Hex8), mapped: None };
     assert_eq!(legacy.inverse_map_status(&[], [0.0; 3]), InverseMap::Failed);
+    // every other method is the inner element's, the finite-strain one included
+    let (coords, mat) = (distorted(ElementKind::Hex8), steel());
+    let c = ctx(&coords, &mat, Idealisation::Solid3d, Formulation::Full);
+    let u: Vec<f64> = (0..legacy.n_dof()).map(|i| 1e-3 * (i as f64 + 1.0)).collect();
+    let (nd, n_gp) = (legacy.n_dof(), legacy.n_gp());
+    let (mut k, mut f) = (vec![0.0; nd * nd], vec![0.0; nd]);
+    let (mut stress, mut strain) = (vec![0.0; n_gp * VOIGT], vec![0.0; n_gp * VOIGT]);
+    let mut state = Vec::new();
+    let out = TangentOut { k: &mut k, f: &mut f, stress: &mut stress, strain: &mut strain, state: &mut state };
+    legacy.tangent_and_force(&c, &u, &[], out).expect("the wrapper forwards");
+    let (k_inner, f_inner, s_inner, e_inner) =
+        element_tangent(ElementKind::Hex8, &c, &u).expect("the inner element answers");
+    assert_eq!((k, f, stress, strain), (k_inner, f_inner, s_inner, e_inner));
 
     for kind in ALL_KINDS {
         let el = element_for(kind);
@@ -3058,6 +3080,7 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
     let opts = SolveOptions::default();
     let names: Vec<&str> = [
         static_step(opts),
+        Step::StaticNonlinear(nl_options(1)),
         Step::Modal { n_modes: 3, shift: None, solver: opts },
         Step::HeatSteady { solver: opts, control: NonlinearControl::default() },
         Step::HeatTransient {
@@ -3075,7 +3098,7 @@ fn the_gpu_solver_needs_a_gpu_and_every_procedure_names_itself() {
     .iter()
     .map(Step::name)
     .collect();
-    assert_eq!(names, ["static", "modal", "heat-steady", "heat-transient", "explicit"]);
+    assert_eq!(names, ["static", "static-nonlinear", "modal", "heat-steady", "heat-transient", "explicit"]);
 }
 
 /// The checks pass but the material does not: a law given the wrong number of properties
