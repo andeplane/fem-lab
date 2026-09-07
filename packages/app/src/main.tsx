@@ -52,6 +52,7 @@ class Bundle {
   private latest: SaveJob | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private saving: Promise<unknown> = Promise.resolve();
+  private refreshing: Promise<void> = Promise.resolve();
   private autosave = localStorage.getItem('femlab.autosave') !== 'off';
   private version = '0';
   disposed = false;
@@ -76,12 +77,18 @@ class Bundle {
     await this.primeProjects();
   }
   private publishSnapshot(snapshot: DocumentSnapshot): void {
+    if (this.disposed) throw expired();
     if (!sameSession(snapshot.stamp.session, this.transport.stamp.session)) throw expired();
     if (BigInt(snapshot.stamp.stateVersion) < BigInt(this.version)) return;
     this.version = snapshot.stamp.stateVersion;
     this.store.set({ model: snapshot.model, journal: snapshot.journal, script: snapshot.script, objects: snapshot.objects.objects, revision: snapshot.model.revision });
   }
-  async refresh(): Promise<void> {
+  refresh(): Promise<void> {
+    const result = this.refreshing.then(() => this.refreshSnapshot());
+    this.refreshing = result.catch(() => undefined);
+    return result;
+  }
+  private async refreshSnapshot(): Promise<void> {
     if (this.disposed) throw expired();
     const snapshot = await this.transport.snapshot();
     this.publishSnapshot(snapshot);
@@ -103,6 +110,7 @@ class Bundle {
     }
   }
   async prepareToLeave(): Promise<void> {
+    await this.refreshing;
     const snapshot = await this.transport.snapshot();
     if (snapshot.file.journal.entries.length === 0 || !this.autosave || this.projectDeleted) return;
     if (!this.binding) this.binding = await repository.claim(nextMeta(snapshot.model.name), snapshot, null);
@@ -163,9 +171,6 @@ class Bundle {
         await this.primeProjects();
       },
       save: () => this.save(),
-      // Main publishes coherent snapshots directly; legacy note/fork are not part of this path.
-      note: () => { throw new FemError('internal', 'use the session snapshot save path'); },
-      fork: () => { throw new FemError('internal', 'use atomic session replacement'); },
       setEnabled: (enabled) => { this.autosave = enabled; if (!enabled && this.timer !== undefined) { clearTimeout(this.timer); this.timer = undefined; } },
       enabled: () => this.autosave, flush: async () => { await this.save(); await this.saving; },
     };
@@ -244,7 +249,7 @@ class Producer {
         return result;
       } finally { child.lifetime.signal.removeEventListener('abort', stop); child.bundle.store.set({ scriptRunning: false, source: 'you' }); scriptJobs.delete(job); }
     };
-    ctx.script.stop = () => { for (const job of scriptJobs) { job.runner.stop(); job.producer.lifetime.abort(); void job.producer.transport.release().catch(() => undefined); } };
+    ctx.script.stop = () => { for (const job of scriptJobs) { if (job.producer.bundle !== bundle) continue; job.runner.stop(); job.producer.lifetime.abort(); void job.producer.transport.release().catch(() => undefined); } };
     const registry = new Registry({ schema: schema as unknown as EngineSchema, host: ctx, hostCommands: [...HOST_COMMANDS, ...appHostCommands(bundle.store, transport, bundle.viewer, () => bundle.refresh(), bundle.results, () => this.registry)], hostQueries: [...HOST_QUERIES, ...appHostQueries(bundle.store)] });
     return registry;
   }

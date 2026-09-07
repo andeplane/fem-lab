@@ -205,3 +205,36 @@ describe('reply ownership', () => {
     gate.resolve();
   });
 });
+
+it('ships only the checked WASM owner and captures command inputs before queueing', async () => {
+  expect(wasm).not.toHaveProperty('Engine');
+  const { workspace } = setup();
+  const a = (await workspace.start()).transport;
+  const command = { ...body, name: 'captured' };
+  const pending = a.dispatch(command);
+  command.name = 'changed-after-admission';
+  await pending;
+  expect((await a.snapshot()).model.bodies.map(b => b.name)).toEqual(['captured']);
+  a.channel.close();
+});
+
+it('recovers export entries and a branched undo history after a Worker failure', async () => {
+  const { workspace, workers } = setup();
+  const a = (await workspace.start()).transport;
+  await a.dispatch(body);
+  await a.dispatch({ cmd: 'mesh.set', mesher: { kind: 'lattice', size: '1 m' }, order: 1 });
+  await a.export({ format: 'vtu' });
+  await a.dispatch({ cmd: 'model.setName', name: 'undone' });
+  await a.dispatch({ cmd: 'journal.undo', steps: 1 });
+  await a.dispatch({ cmd: 'model.setName', name: 'branch' });
+  const before = await a.snapshot();
+  workers[0]!.onerror!({ message: 'worker stopped' } as ErrorEvent);
+  await vi.waitFor(() => expect(workspace.active.transport.channel).not.toBe(a.channel));
+  const b = workspace.active.transport;
+  const after = await b.snapshot();
+  expect(after.file).toEqual(before.file);
+  expect(after.journal).toEqual(before.journal);
+  expect(after.canRedo).toBe(false);
+  await expect(a.dispatch(remove)).rejects.toMatchObject({ code: 'session.expired' });
+  b.channel.close();
+});

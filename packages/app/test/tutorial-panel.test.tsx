@@ -28,7 +28,9 @@ function fakeRegistry(): Registry & { dispatch: ReturnType<typeof vi.fn>; query:
     return { seq: journal.entries.length - 1 };
   });
   const query = vi.fn(async (q: { query: string }) => (q.query === 'query.journal' ? journal : model));
-  return { dispatch, query } as unknown as Registry & { dispatch: typeof dispatch; query: typeof query };
+  const registry = { dispatch, query } as unknown as Registry & { dispatch: typeof dispatch; query: typeof query };
+  bindRegistryProducer(registry, async () => ({ registry, signal: new AbortController().signal, store: () => undefined, release: async () => undefined }));
+  return registry;
 }
 
 /**

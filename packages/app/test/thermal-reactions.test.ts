@@ -1,10 +1,11 @@
+import { batchModule } from '../../../tools/checked-batch.mjs';
 // The browser's wasm engine produces SI power; the host converts it using Result metadata.
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import type { ResultSummary } from '@femlab/registry';
 import { displayUnitOf, siUnitOf } from '../src/fields';
 
-const { Engine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as typeof import('../src/generated/wasm/femlab_engine_wasm.js');
+const { Engine } = batchModule(createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js'));
 
 describe('thermal reaction units through the actual wasm engine', () => {
   it('keeps the exact flux power in SI and converts the host view independently of force', async () => {

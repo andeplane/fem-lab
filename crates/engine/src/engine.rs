@@ -102,6 +102,7 @@ impl Engine {
         }
     }
 
+    #[cfg(feature = "test-internals")]
     pub fn gpu(&self) -> Option<&crate::gpu::Gpu> {
         self.gpu.as_ref()
     }
@@ -109,6 +110,7 @@ impl Engine {
         self.gpu.as_mut()
     }
 
+    #[cfg(feature = "test-internals")]
     pub fn model(&self) -> &Model {
         &self.model
     }
@@ -131,6 +133,7 @@ impl Engine {
         self.pool.threads()
     }
     /// The host's monotonic clock, in milliseconds.
+    #[cfg(feature = "test-internals")]
     pub fn now_ms(&self) -> f64 {
         self.host.now_ms()
     }
@@ -230,6 +233,7 @@ impl Engine {
     }
 
     /// Install a saved file as-is (no replay); clears undo, redo and caches.
+    #[cfg(feature = "test-internals")]
     pub fn import_file(&mut self, f: ModelFile) -> Result<(), Error> {
         if f.format != FILE_FORMAT {
             return Err(
@@ -454,6 +458,7 @@ impl Engine {
     }
 
     /// The mesh skin the viewer draws.
+    #[cfg(feature = "test-internals")]
     pub fn mesh_surface(&mut self) -> Result<femlab_geometry::Surface, Error> {
         Ok(self.mesh()?.mesh.surface())
     }

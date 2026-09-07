@@ -6,7 +6,7 @@ import { appHostCommands, appHostQueries, makeHostContext } from '../src/host';
 import type { HostCaps } from '../src/capabilities';
 import { Store, unsaved } from '../src/store';
 import { Bottom } from '../src/ui/Bottom';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const first: JournalEntry = { seq: 0, cmd: { cmd: 'model.new', name: 'A' }, hashAfter: 'a' };
 const second: JournalEntry = { seq: 1, cmd: { cmd: 'model.setName', name: 'B' }, hashAfter: 'b' };

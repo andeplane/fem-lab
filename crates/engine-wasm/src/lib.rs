@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use femlab_engine::{Command, Host, JournalEntry, ModelFile, Progress, Query};
+use femlab_engine::{Host, Progress};
 use wasm_bindgen::prelude::*;
 
 /// The browser's clock.
@@ -60,163 +60,6 @@ fn face_memberships<T: Copy + Eq + Hash>(
         offsets.push(members.len() as u32);
     }
     (offsets, members)
-}
-
-/// One engine instance.
-#[wasm_bindgen]
-pub struct Engine {
-    inner: femlab_engine::Engine,
-}
-
-#[wasm_bindgen]
-impl Engine {
-    /// A CPU engine. `threads` is recorded for capabilities; the single-threaded wasm build
-    /// runs every parallel path sequentially with the same fixed-order reductions.
-    #[wasm_bindgen(constructor)]
-    pub fn new(threads: u32) -> Engine {
-        Engine { inner: femlab_engine::Engine::new(None, Box::new(JsHost), threads.max(1) as usize) }
-    }
-
-    /// An engine with a WebGPU device when `opts.gpu` is true and the browser has one;
-    /// otherwise a CPU engine (see `query.capabilities`). `opts = { gpu: boolean, threads: number }`.
-    pub async fn create(opts: JsValue) -> Result<Engine, JsValue> {
-        let want_gpu = js_sys::Reflect::get(&opts, &"gpu".into()).map(|v| v.is_truthy()).unwrap_or(false);
-        let threads =
-            js_sys::Reflect::get(&opts, &"threads".into()).ok().and_then(|v| v.as_f64()).unwrap_or(1.0).max(1.0)
-                as usize;
-        let gpu = if want_gpu {
-            femlab_engine::Gpu::request(femlab_engine::Gpu::default_backends()).await.ok()
-        } else {
-            None
-        };
-        Ok(Engine { inner: femlab_engine::Engine::new(gpu, Box::new(JsHost), threads) })
-    }
-
-    /// Run the dot-product kernel on the engine's GPU: Σ i·1 for i in 1..=n, i.e. n(n+1)/2.
-    /// Rejects when the engine has no GPU. The CI harness compares it with the native value.
-    pub async fn gpu_self_test(&mut self, n: u32) -> Result<f64, JsValue> {
-        let a: Vec<f32> = (1..=n).map(|i| i as f32).collect();
-        let b = vec![1.0f32; n as usize];
-        let gpu = self.inner.gpu_mut().ok_or_else(|| throw(&femlab_engine::Error::unsupported("gpu (no adapter)")))?;
-        gpu.dot(&a, &b).await.map(|v| v as f64).map_err(|e| throw(&e))
-    }
-
-    /// Apply a Command given as JSON text. Resolves to the Ack as JSON text; rejects with the
-    /// structured Error object. `on_progress(phase, fraction, message)` may return `false`
-    /// to cancel a long Command.
-    pub async fn dispatch(
-        &mut self,
-        cmd_json: String,
-        on_progress: Option<js_sys::Function>,
-    ) -> Result<String, JsValue> {
-        let cmd: Command = serde_json::from_str(&cmd_json).map_err(schema_err)?;
-        let mut cb = |p: Progress| -> bool {
-            match &on_progress {
-                Some(f) => {
-                    let r = f.call3(
-                        &JsValue::NULL,
-                        &JsValue::from_str(p.phase),
-                        &JsValue::from_f64(p.fraction),
-                        &JsValue::from_str(&p.message),
-                    );
-                    !matches!(r, Ok(v) if v.is_falsy() && !v.is_undefined())
-                }
-                None => true,
-            }
-        };
-        let ack = self.inner.dispatch(cmd, &mut cb).await.map_err(|e| throw(&e))?;
-        serde_json::to_string(&ack).map_err(schema_err)
-    }
-
-    /// Answer a Query given as JSON text; returns the result as JSON text.
-    pub fn query(&mut self, query_json: String) -> Result<String, JsValue> {
-        let q: Query = serde_json::from_str(&query_json).map_err(schema_err)?;
-        let r = self.inner.query(q).map_err(|e| throw(&e))?;
-        serde_json::to_string(&r).map_err(schema_err)
-    }
-
-    /// The same schema-owned Query as `query`, with a frame's values copied into a fresh
-    /// Float64Array for Worker transfer. The retained History and wasm memory never escape.
-    /// Other Query responses retain their JSON shape. This is transport staging, not a
-    /// separate frame resolver or an f32 rendering conversion.
-    pub fn query_transfer(&mut self, query_json: String) -> Result<JsValue, JsValue> {
-        let q: Query = serde_json::from_str(&query_json).map_err(schema_err)?;
-        let result = self.inner.query(q).map_err(|e| throw(&e))?;
-        let (json, values) = match result {
-            femlab_engine::query::QueryResult::Frame(mut frame) => {
-                let values = std::mem::take(&mut frame.values);
-                (serde_json::to_string(&frame), Some(values))
-            }
-            other => (serde_json::to_string(&other), None),
-        };
-        let out = js_sys::JSON::parse(&json.map_err(schema_err)?)?;
-        if let Some(values) = values {
-            js_sys::Reflect::set(&out, &"values".into(), &js_sys::Float64Array::from(&values[..]))?;
-        }
-        Ok(out)
-    }
-
-    /// What the viewer draws, as fresh typed arrays: the Mesh skin once the Model has mesh
-    /// settings, otherwise the Bodies' geometry triangles and tagged Sheet outlines.
-    /// `edges` contains vertex-index pairs, with `edgeSet`/`edgeBody` identifying each edge.
-    /// `triSet` indexes `setNames`
-    /// (`u32::MAX` for a triangle in no Set) and `triBody` indexes `bodyNames`.
-    pub fn surface(&mut self) -> Result<JsValue, JsValue> {
-        render_surface(self.inner.render_view().map_err(|e| throw(&e))?)
-    }
-
-    /// One Result field as a fresh `Float32Array`: the whole thing component-fastest, or one
-    /// component when `component` is given. `step` defaults to the last solved Step and
-    /// `field` is the Query's own spelling (`displacement`, `stress`, `vonMises`, ...), or
-    /// `mode:k` for the k-th mode shape of a modal Step.
-    pub fn field(
-        &self,
-        step: Option<String>,
-        field: String,
-        component: Option<u8>,
-    ) -> Result<js_sys::Float32Array, JsValue> {
-        let data = self.inner.field_named(step.as_deref(), &field).map_err(|e| throw(&e))?;
-        let values = match component {
-            Some(c) => data.component(c as usize),
-            None => data.data.clone(),
-        };
-        let out: Vec<f32> = values.iter().map(|v| *v as f32).collect();
-        Ok(js_sys::Float32Array::from(&out[..]))
-    }
-
-    /// The saved file (`femlab/1`) as JSON text.
-    pub fn export_file(&self) -> String {
-        serde_json::to_string(&self.inner.export_file()).unwrap_or_default()
-    }
-
-    /// Install a saved file as-is (no replay).
-    pub fn import_file(&mut self, json: String) -> Result<(), JsValue> {
-        let f: ModelFile = serde_json::from_str(&json).map_err(schema_err)?;
-        self.inner.import_file(f).map_err(|e| throw(&e))
-    }
-
-    pub fn model_hash(&self) -> String {
-        self.inner.model_hash()
-    }
-
-    pub fn revision(&self) -> u32 {
-        self.inner.revision()
-    }
-
-    /// Replay a Journal (JSON array of entries) onto a fresh Model; returns the per-entry hash
-    /// list as a JSON array. `verify` fails on the first divergence from the recorded hashes.
-    /// `skip_solves` omits numerical work but preserves Model changes and undo history, including
-    /// the final mesh settings of a non-restoring convergence study.
-    pub async fn replay_hashes(
-        &mut self,
-        journal_json: String,
-        skip_solves: bool,
-        verify: bool,
-    ) -> Result<String, JsValue> {
-        let entries: Vec<JournalEntry> = serde_json::from_str(&journal_json).map_err(schema_err)?;
-        let hashes = self.inner.replay(&entries, skip_solves, verify).await.map_err(|e| throw(&e))?;
-        serde_json::to_string(&hashes).map_err(schema_err)
-    }
 }
 
 #[cfg(test)]
@@ -311,7 +154,7 @@ fn start() {
 }
 
 /// Checked session surface. Hosts must capture a RunLease and send its context on every call.
-/// The older Engine export is a migration adapter and must be removed before isolation rollout.
+/// There is no unchecked live-engine export. Replay is confined to private candidates.
 #[wasm_bindgen]
 pub struct SessionEngine {
     inner: femlab_engine::session_owner::SessionOwner,
@@ -467,10 +310,15 @@ impl PreparedEngine {
         Ok(())
     }
 
-    pub async fn journal(&mut self, entries_json: String, skip_solves: bool) -> Result<(), JsValue> {
+    pub async fn journal(
+        &mut self,
+        entries_json: String,
+        skip_solves: bool,
+        verify: Option<bool>,
+    ) -> Result<(), JsValue> {
         let candidate = self.take_building()?;
         let entries = serde_json::from_str(&entries_json).map_err(schema_err)?;
-        let prepared = candidate.journal(entries, skip_solves).await.map_err(|e| throw(&e))?;
+        let prepared = candidate.replay(entries, skip_solves, verify.unwrap_or(true)).await.map_err(|e| throw(&e))?;
         self.state = CandidateState::Building(Box::new(prepared));
         Ok(())
     }
@@ -533,7 +381,7 @@ async fn session_device(opts: JsValue) -> Result<(Option<femlab_engine::Gpu>, us
     Ok((gpu, threads))
 }
 
-fn render_surface(view: femlab_engine::engine::RenderView<'_>) -> Result<JsValue, JsValue> {
+fn render_surface(view: femlab_engine::RenderView<'_>) -> Result<JsValue, JsValue> {
     let mut positions: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut tri_set: Vec<u32> = Vec::new();
@@ -547,7 +395,7 @@ fn render_surface(view: femlab_engine::engine::RenderView<'_>) -> Result<JsValue
     let mut membership_names: Vec<String> = Vec::new();
     let mut body_names: Vec<String> = Vec::new();
     let source = match view {
-        femlab_engine::engine::RenderView::Mesh(built) => {
+        femlab_engine::RenderView::Mesh(built) => {
             let s = built.mesh.surface();
             positions.extend(s.positions.iter().flat_map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]));
             indices.extend(s.triangles.iter().flatten().copied());
@@ -566,7 +414,7 @@ fn render_surface(view: femlab_engine::engine::RenderView<'_>) -> Result<JsValue
             body_names = built.body_of_block.clone();
             "mesh"
         }
-        femlab_engine::engine::RenderView::Geometry(previews) => {
+        femlab_engine::RenderView::Geometry(previews) => {
             // CSR always has one more offset than triangles, including an empty surface.
             tri_set_offsets.push(0);
             for preview in previews {

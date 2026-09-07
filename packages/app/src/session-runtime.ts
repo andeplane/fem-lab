@@ -1,7 +1,7 @@
 import type { SessionEngine, PreparedEngine } from './generated/wasm/femlab_engine_wasm.js';
 import type { BufferSpec, DocumentSnapshot, Stamp } from '@femlab/registry';
 import type { SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
-import { toStructured } from './protocol';
+import { toStructured } from './engine-error';
 const json = JSON.stringify;
 class Publication { constructor(readonly stamp: Stamp, readonly value: unknown) {} }
 interface Bulk { value: unknown; buffers: BufferSpec[]; raw: ArrayBuffer[] }

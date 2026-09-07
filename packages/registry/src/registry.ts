@@ -126,9 +126,10 @@ function engineDef(name: string, v: Variant): QueryDef {
 
 function hostDef(d: HostDef, ctx: HostContext): QueryDef {
   const { $schema: _, ...schema } = z.toJSONSchema(d.schema);
+  const execution = executionPolicy(d.execution, d.name);
   return {
     name: d.name,
-    execution: executionPolicy(d.execution, d.name),
+    execution,
     description: d.description,
     schema,
     provider: 'host',
@@ -136,7 +137,7 @@ function hostDef(d: HostDef, ctx: HostContext): QueryDef {
     run: async (input) => {
       const parsed = d.schema.safeParse(input);
       if (!parsed.success) throw schemaError(d.name, parsed.error);
-      return d.run(parsed.data, ctx);
+      return d.run(parsed.data, { ...ctx, transport: policyTransport(ctx.transport, execution, d.name) });
     },
   };
 }
@@ -155,4 +156,27 @@ function executionPolicy(value: unknown, name: string): ExecutionPolicy {
     case 'replacement': case 'producer': case 'control': return value;
     default: throw new FemError('schema', `${name}: missing or invalid execution policy`, 'execution');
   }
+}
+
+/** A handler cannot escalate its declared engine access through HostContext. Bound host
+ * services remain injected by the trusted host; they never acquire a different session. */
+function policyTransport(transport: EngineTransport, policy: ExecutionPolicy, name: string): EngineTransport {
+  const read = ['query', 'surface', 'field', 'exportFile'];
+  const allowed: Record<ExecutionPolicy, readonly string[]> = {
+    modelRead: read, sessionView: read, modelWrite: [...read, 'dispatch', 'export'],
+    replacement: [...read, 'importFile'], workspace: [], producer: [], control: ['cancel'],
+  };
+  return new Proxy(transport, {
+    get(target, key) {
+      if (typeof key !== 'string' || !allowed[policy].includes(key)) {
+        throw new FemError('schema', `${name}: ${policy} cannot access engine ${String(key)}`, 'execution');
+      }
+      if (key === 'dispatch') return (command: Command, progress?: Parameters<EngineTransport['dispatch']>[1]) => {
+        if (command.cmd === 'model.new') throw new FemError('schema', `${name}: model.new requires replacement ownership`, 'execution');
+        return target.dispatch(command, progress);
+      };
+      const method = target[key as keyof EngineTransport];
+      return method.bind(target);
+    },
+  });
 }

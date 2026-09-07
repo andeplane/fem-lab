@@ -8,6 +8,7 @@ import type { EngineHandle } from '../../src/engine';
 let started!: () => void;
 const scriptStarted = new Promise<void>((resolve) => { started = resolve; });
 const engine: EngineHandle = {
+  release: async () => undefined,
   dispatch: async () => null,
   query: async () => { started(); return { name: 'still alive' }; },
   modelFile: () => ({}),
@@ -18,7 +19,7 @@ const script: ScriptDeps = {
   later: (fn, ms) => setTimeout(fn, ms),
   cancel: (id) => clearTimeout(id),
 };
-const registry = createRegistry({ engine, script, validator: nodeScriptValidator(() => new Worker(process.argv[3]!)) });
+const registry = createRegistry({ engine: { acquire: async () => engine }, script, validator: nodeScriptValidator(() => new Worker(process.argv[3]!)) });
 let finished = false;
 const loop = callTool(registry, 'run_script', { code: 'await fem.query.model(); while (true) {}', timeoutMs: 2000 }).then((out) => { finished = true; return out as { error?: string }; });
 await scriptStarted;

@@ -8,7 +8,7 @@ import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { Store } from '../src/store';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import {
   MAX_FRAGMENT,
   MAX_JOURNAL_BYTES,

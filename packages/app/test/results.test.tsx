@@ -1,3 +1,4 @@
+import { batchModule } from '../../../tools/checked-batch.mjs';
 // The results state machine and everything it computes on the way to the screen: the design's
 // states 4–7 as one word, the Solve button's label, the legend's ticks, the balance line, and
 // the field→unit table both the Worker and the viewer read.
@@ -16,7 +17,7 @@ import { exaggerationHelp, probeLine } from '../src/ui/App';
 import { Checks, PathPlot, Results, balanceLine, modelSpan, peakOf, siPoint } from '../src/ui/Results';
 
 import { specOf, unavailable } from '../src/ui/Export';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const mm = (value: number): Valued => ({ value, unit: 'mm' });
 const kN = (value: number): Valued => ({ value, unit: 'kN' });
@@ -359,7 +360,7 @@ describe('ResultsView', () => {
     const heat = { ...RESULT, extremes: [{ ...RESULT.extremes[0]!, field: 'temperature' }] };
     const { store, viewer, results, transport } = harness(heat);
     store.set({ model: { ...MODEL, units: { temperature: 'degC', length: 'm' } } });
-    const { Engine } = createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js') as { Engine: new (threads: number) => { query(json: string): string } };
+    const { Engine } = batchModule(createRequire(import.meta.url)('../../../tools/wasm-node/femlab_engine_wasm.js')) as { Engine: new (threads: number) => { query(json: string): string } };
     const engine = new Engine(1);
     const conversions = vi.fn(async (q: { query: string; quantity?: { value: number }; to?: string }) => {
       if (q.query !== 'query.convert') return heat;

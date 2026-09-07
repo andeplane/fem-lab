@@ -455,7 +455,7 @@ describe('Registry', () => {
     const { z } = await import('zod');
     const registry = new Registry({ schema: engineSchema, host, hostCommands: [{ name: 'x.y', execution: 'workspace', description: 'd', schema: z.object({}), tool: true, run }], hostQueries: [] });
     await expect(registry.dispatch({ cmd: 'x.y' })).resolves.toBe('ok');
-    expect(run).toHaveBeenCalledWith({}, host);
+    expect(run).toHaveBeenCalledWith({}, expect.objectContaining({ view: host.view }));
     expect(registry.list().commands).toHaveLength(schemaCommands.length + 1);
   });
 });

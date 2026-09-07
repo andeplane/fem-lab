@@ -1,6 +1,6 @@
 // A channel never changes Workers. A producer never acquires a different session implicitly.
 import { decodeBulk, FemError, type Ack, type Command, type DocumentSnapshot, type EngineTransport, type ExecutionContext, type ExportedFile, type ExportSpec, type Field, type FieldData, type ImportAck, type JournalEntry, type ModelFile, type Progress, type Query, type QueryResult, type ResultField, type RunLease, type SessionRef, type Stamp } from '@femlab/registry';
-import type { AppSurface } from './worker-transport';
+import type { AppSurface } from './surface';
 import type { ReplacementSource, SessionMessage, SessionOptions, SessionRequest, SessionResponse } from './session-protocol';
 
 export const sameSession = (a: SessionRef, b: SessionRef): boolean => a.backendEpoch === b.backendEpoch && a.sessionId === b.sessionId;
@@ -78,7 +78,7 @@ export class SessionChannel {
     }
     this.history = { stamp: structuredClone(stamp), entries, revision: ack.revision };
   }
-  private failed(error: unknown): void { this.close(error); this.onFailure?.(error); }
+  private failed(error: unknown): void { if (this.closed) return; this.close(error); this.onFailure?.(error); }
   close(error: unknown = expired()): void {
     if (this.closed) return;
     this.closed = true;
@@ -138,7 +138,8 @@ export class SessionTransport implements EngineTransport {
       return snapshot;
     });
   }
-  dispatch(command: Command, onProgress?: (p: Progress) => void): Promise<Ack> {
+  dispatch(input: Command, onProgress?: (p: Progress) => void): Promise<Ack> {
+    const command = structuredClone(input);
     if (command.cmd === 'model.new') return this.replaceWith({ kind: 'commands', commands: [structuredClone(command)] }).then(async (next) => {
       const snapshot = await next.snapshot();
       return { seq: 0, revision: snapshot.model.revision, hash: snapshot.model.hash!, warnings: [], output: { type: 'none' } } as Ack;
@@ -149,7 +150,8 @@ export class SessionTransport implements EngineTransport {
       return this.accept(reply) as Ack;
     });
   }
-  query(query: Query): Promise<QueryResult> {
+  query(input: Query): Promise<QueryResult> {
+    const query = structuredClone(input);
     return this.ordered(async () => {
       const value = this.accept(await this.channel.request({ op: 'query', context: this.context(), query })) as Record<string, unknown>;
       if (value['values'] instanceof Float64Array) value['values'] = Array.from(value['values']);

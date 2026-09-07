@@ -8,7 +8,7 @@ const remove = { cmd: 'geometry.remove', name: 'shared' };
 
 it('fences retained MCP request handles and cancelled queued work with the checked owner', async () => {
   const engine = loadEngine(here);
-  expect(() => engine.dispatch(body)).toThrow('acquire a request lease');
+  expect(engine).not.toHaveProperty('dispatch');
   const a = await engine.acquire!();
   await a.dispatch({ cmd: 'model.new', name: 'A' });
   await a.dispatch(body);
@@ -35,4 +35,17 @@ it('keeps a nested MCP script on its initiating lease across model.new', async (
   const result = await registry.dispatch({ cmd: 'script.run', code: 'await fem.model.new({name:"nested"}); await fem.geometry.addBox({name:"shared",size:["1 m","1 m","1 m"]});' }) as { error?: string };
   expect(result.error).toBeUndefined();
   expect(await registry.query({ query: 'query.model' })).toMatchObject({ name: 'nested', bodies: [{ name: 'shared' }] });
+});
+
+
+it('does not rebind admission queued behind another request’s replacement', async () => {
+  const engine = loadEngine(here);
+  const a = await engine.acquire();
+  const replacing = a.dispatch({ cmd: 'model.new', name: 'next' });
+  const waiting = expect(engine.acquire()).rejects.toMatchObject({ code: 'session.expired' });
+  await replacing;
+  await waiting;
+  const next = await engine.acquire();
+  expect(await next.query({ query: 'query.model' })).toMatchObject({ name: 'next' });
+  await next.release(); await a.release();
 });
