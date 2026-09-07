@@ -52,6 +52,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [model.new](#commands-model-new)
 - [model.rename](#commands-model-rename)
 - [model.setIdealisation](#commands-model-setIdealisation)
+- [model.setName](#commands-model-setName)
 - [model.setUnits](#commands-model-setUnits)
 - [plugin.load](#commands-plugin-load)
 - [section.add](#commands-section-add)
@@ -553,12 +554,18 @@ default incompatible modes or use order 2 when bending matters. Mapped geometry 
 a Body name distinct from explicit geometry. Keeping that name preserves its material;
 changing/removing it requires no remaining Body references and clears its material.
 Use model.rename to change an implicit Body name while preserving its references.
+`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+geometry: the selected mesher still determines the boundary approximation. `formulation`
+has no effect when `simplices` is true, because simplex elements have no incompatible
+modes.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
 | mesher | yes | <code>{"$ref":"#/$defs/MesherSpec"}</code> |  |
 | order | no | <code>{"type":["integer","null"],"format":"uint8","minimum":0,"maximum":255}</code> |  |
 | formulation | no | <code>{"anyOf":[{"$ref":"#/$defs/Formulation"},{"type":"null"}]}</code> |  |
+| simplices | no | <code>{"type":["boolean","null"]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"mesh.set"}</code> |  |
 
 <a id="commands-model-duplicate"></a>
@@ -620,6 +627,19 @@ solid bodies; mixing them makes the Model ill-posed.
 | --- | --- | --- | --- |
 | idealisation | yes | <code>{"$ref":"#/$defs/IdealisationSpec"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"model.setIdealisation"}</code> |  |
+
+<a id="commands-model-setName"></a>
+
+### model.setName
+
+Change the Model's display name without resetting geometry, history or solved Results.
+A name-only edit is undoable and changes the full Model/Journal identity, but does not
+change the Result-validity fingerprint. Whitespace-only names are rejected.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"model.setName"}</code> |  |
 
 <a id="commands-model-setUnits"></a>
 
@@ -3358,6 +3378,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
+      "description": "Change the Model's display name without resetting geometry, history or solved Results.\nA name-only edit is undoable and changes the full Model/Journal identity, but does not\nchange the Result-validity fingerprint. Whitespace-only names are rejected.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "model.setName"
+        }
+      },
+      "required": [
+        "cmd",
+        "name"
+      ]
+    },
+    {
       "description": "Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,\nor axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs\nsolid bodies; mixing them makes the Model ill-posed.",
       "type": "object",
       "properties": {
@@ -3848,7 +3885,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.",
+      "description": "Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`\n1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).\n`formulation: full` is the textbook linear element that locks in bending: keep the\ndefault incompatible modes or use order 2 when bending matters. Mapped geometry owns\na Body name distinct from explicit geometry. Keeping that name preserves its material;\nchanging/removing it requires no remaining Body references and clears its material.\nUse model.rename to change an implicit Body name while preserving its references.\n`simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles\n(tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved\ngeometry: the selected mesher still determines the boundary approximation. `formulation`\nhas no effect when `simplices` is true, because simplex elements have no incompatible\nmodes.",
       "type": "object",
       "properties": {
         "mesher": {
@@ -3871,6 +3908,12 @@ Expand a definition to inspect its complete schema. Definition names are local t
             {
               "type": "null"
             }
+          ]
+        },
+        "simplices": {
+          "type": [
+            "boolean",
+            "null"
           ]
         },
         "cmd": {

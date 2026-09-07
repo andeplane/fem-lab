@@ -1,3 +1,4 @@
+import { treeGroups } from '../src/ui/Tree';
 // ADR 0003, made enforceable: render the whole shell against a fake engine and check that
 // every clickable names a Command the registry actually has. A control with a typo, or one
 // wired to nothing, fails here rather than in front of a person.
@@ -597,15 +598,16 @@ describe('the shell', () => {
     ]);
   });
 
-  it('puts the project name and its saved state in the top bar, and Projects reopens the list', () => {
+  it('keeps the Model name distinct from browser-project autosave status', () => {
     const at = new Date('2026-09-06T12:04:00Z').getTime();
     const { root } = mount({ project: { id: 'a', name: 'corbel-ULS', at, createdAt: at, commands: 41, hash: 'h', thumbnail: null, saving: false, autosave: true } });
     const field = root.querySelector<HTMLInputElement>('input.model-name')!;
-    expect(field.value).toBe('corbel-ULS');
-    expect(field.getAttribute('data-cmd')).toBe('project.rename');
+    expect(field.value).toBe('demo');
+    expect(root.querySelector('.saved-chip')!.getAttribute('title')).toContain('corbel-ULS');
+    expect(field.getAttribute('data-cmd')).toBe('model.setName');
     expect(root.querySelector('.saved-chip')!.textContent).toContain('saved');
     const bar = [...root.querySelectorAll('.topbar [data-cmd]')].map((el) => el.getAttribute('data-cmd'));
-    expect(bar).toContain('project.rename');
+    expect(bar).toContain('model.setName');
     expect(bar).toContain('project.save');
     expect(bar).toContain('file.save');
   });
@@ -615,7 +617,7 @@ describe('the shell', () => {
     const meta = { id: 'a', name: 'x', at, createdAt: at, commands: 1, hash: null, thumbnail: null };
     expect(mount({ project: { ...meta, saving: true, autosave: true } }).root.querySelector('.saved-chip')!.textContent).toContain('saving…');
     await cleanupShells();
-    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('not saved — storage is off');
+    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('autosave off');
   });
 
   // Plan F · #43: the add chip is there with items in the group, and its menu is Commands.
@@ -646,4 +648,18 @@ describe('the shell', () => {
     expect(root.querySelector('.add-menu')).toBeNull();
     expect(document.activeElement).toBe(chip);
   });
+});
+
+it('names simplex element families and preserves the mesh editor arguments', () => {
+  for (const [idealisation, order, element] of [['solid3d', 1, 'Tet 4'], ['solid3d', 2, 'Tet 10'], ['planeStress', 1, 'Tri 3'], ['planeStress', 2, 'Tri 6']] as const) {
+    const store = new Store();
+    const current = model();
+    current.idealisation = idealisation;
+    current.meshSettings = { mesher: { kind: 'lattice', size: 1 }, order, formulation: 'incompatible-modes', simplices: true };
+    store.set({ model: current });
+    const row = treeGroups(store.state).find((group) => group.label === 'Mesh')!.items[0]!;
+    expect(row.summary).toContain(element);
+    expect(row.summary).not.toContain('incompatible-modes');
+    expect(row.args).toEqual(current.meshSettings);
+  }
 });

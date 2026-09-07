@@ -52,6 +52,12 @@ pub struct GeometrySurface {
     pub outlines: Vec<femlab_geometry::sketch::Loop>,
 }
 
+/// Full solve identity stays name-sensitive; validity excludes only the display name (ADR 0017).
+pub(crate) struct ResultHashes {
+    pub model: String,
+    pub validity: String,
+}
+
 /// The engine.
 pub struct Engine {
     pub(crate) model: Model,
@@ -68,7 +74,7 @@ pub struct Engine {
     pub(crate) mesh: Option<crate::mesh::BuiltMesh>,
     /// One Result per Step with the Model hash and Journal line it was solved at. An edit does
     /// not throw a Result away — it makes it stale, and `query.result` says so (plan B §2.1).
-    pub(crate) results: BTreeMap<String, (String, u32, crate::procedure::StepResult)>,
+    pub(crate) results: BTreeMap<String, (ResultHashes, u32, crate::procedure::StepResult)>,
     /// The last `study.converge` report per Step, so `query.report` can append the table. Not
     /// part of the Model and never hashed: a study is a measurement, not a definition.
     pub(crate) studies: BTreeMap<String, crate::query::StudyReport>,
@@ -467,6 +473,13 @@ impl Engine {
                 self.invalidate_geometry();
                 Ok(Output::None)
             }
+            Command::ModelSetName { name } => {
+                if name.trim().is_empty() {
+                    return Err(Error::schema("Model name cannot be blank").at("name"));
+                }
+                self.model.name = name.clone();
+                Ok(Output::None)
+            }
             Command::ModelSetUnits { units } => {
                 units.validate()?;
                 self.model.units = units.clone();
@@ -643,7 +656,7 @@ impl Engine {
                 self.model.sections.retain(|s| s.name != *name);
                 Ok(Output::None)
             }
-            Command::MeshSet { mesher, order, formulation } => {
+            Command::MeshSet { mesher, order, formulation, simplices } => {
                 let order = order.unwrap_or(1);
                 if !(1..=2).contains(&order) {
                     return Err(Error::schema(format!("order must be 1 or 2, got {order}")).at("order"));
@@ -668,8 +681,12 @@ impl Engine {
                     }
                     self.model.mesher_material = None;
                 }
-                self.model.mesh =
-                    Some(MeshSettings { mesher: settings, order, formulation: formulation.unwrap_or_default() });
+                self.model.mesh = Some(MeshSettings {
+                    mesher: settings,
+                    order,
+                    formulation: formulation.unwrap_or_default(),
+                    simplices: simplices.unwrap_or(false),
+                });
                 Ok(Output::None)
             }
             Command::MeshExport { format, step } => self.mesh_export(*format, step.as_deref()),

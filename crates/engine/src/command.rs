@@ -756,6 +756,12 @@ pub enum Command {
     #[serde(rename = "model.setUnits", rename_all = "camelCase")]
     ModelSetUnits { units: UnitSet },
 
+    /// Change the Model's display name without resetting geometry, history or solved Results.
+    /// A name-only edit is undoable and changes the full Model/Journal identity, but does not
+    /// change the Result-validity fingerprint. Whitespace-only names are rejected.
+    #[serde(rename = "model.setName", rename_all = "camelCase")]
+    ModelSetName { name: String },
+
     /// Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,
     /// or axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs
     /// solid bodies; mixing them makes the Model ill-posed.
@@ -925,6 +931,11 @@ pub enum Command {
     /// a Body name distinct from explicit geometry. Keeping that name preserves its material;
     /// changing/removing it requires no remaining Body references and clears its material.
     /// Use model.rename to change an implicit Body name while preserving its references.
+    /// `simplices: true` splits hexes into tetrahedra (tet4/tet10) and quads into triangles
+    /// (tri3/tri6), preserving named faces. It does not make a free tetrahedral mesh of curved
+    /// geometry: the selected mesher still determines the boundary approximation. `formulation`
+    /// has no effect when `simplices` is true, because simplex elements have no incompatible
+    /// modes.
     #[serde(rename = "mesh.set", rename_all = "camelCase")]
     MeshSet {
         mesher: MesherSpec,
@@ -932,6 +943,8 @@ pub enum Command {
         order: Option<u8>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         formulation: Option<Formulation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        simplices: Option<bool>,
     },
 
     /// Write the current Mesh out as text the host saves; the Mesh is built first if it is
