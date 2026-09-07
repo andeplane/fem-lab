@@ -14,7 +14,7 @@ export default defineConfig({
       exclude: ['**/*.d.ts'],
       reporter: ['text', 'json-summary', 'html'],
       // #44: the measured baseline. Raise these with coverage gains; never lower them.
-      thresholds: { lines: 82.1, statements: 79.41, functions: 74.39, branches: 76.28 },
+      thresholds: { lines: 82.5, statements: 79.76, functions: 74.7, branches: 76.43 },
     },
   },
 });
