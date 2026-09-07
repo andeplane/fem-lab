@@ -578,6 +578,21 @@ mod tests {
     }
 
     #[test]
+    fn a_collapsed_tetrahedron_is_dropped_and_a_negative_one_is_turned_over() {
+        let cube = Solid::evaluate(&Shape::Box { size: [1.0, 1.0, 1.0] }).unwrap();
+        let mut s = Stuffing::new(&cube, [0.0; 3], 1.0, [1, 1, 1]);
+        // Primal corners 0, 1, 2, 4 of the padded lattice: an orthogonal corner of volume h³/6.
+        let n_before = s.background.len();
+        s.emit([0, 0, 1, 2]);
+        assert!(s.conn.is_empty() && s.volume == 0.0, "a repeated vertex spans no volume");
+        s.emit([0, 1, 2, 4]);
+        s.emit([0, 2, 1, 4]);
+        assert_eq!(s.conn, [0, 1, 2, 4, 0, 1, 2, 4], "both orders come out positively oriented");
+        assert!((s.volume - 2.0 / 6.0).abs() < 1e-12, "{}", s.volume);
+        assert_eq!(s.background.len(), n_before, "emitting touches nothing else");
+    }
+
+    #[test]
     fn a_mid_edge_node_with_no_surface_in_reach_stays_put() {
         let cube = Solid::evaluate(&Shape::Box { size: [1.0, 1.0, 1.0] }).unwrap();
         // From the centre, a quarter of a 0.1 edge along +z reaches nowhere near the top face.

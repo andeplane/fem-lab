@@ -4923,6 +4923,16 @@ fn the_tet_mesher_refuses_bad_settings_and_geometry_it_cannot_resolve() {
     assert!(missing.cause.contains("missing field `size`"), "{}", missing.cause);
     let not_a_map = serde_json::from_str::<femlab_engine::command::TetSpec>("5").unwrap_err().to_string();
     assert!(not_a_map.contains("a tet mesher spec with `size`"), "{not_a_map}");
+    // Every other way the map can go wrong is refused where serde would refuse a derived one.
+    for (spec, cause) in [
+        (r#"{"kind":"tet","size":5}"#, "size"),
+        (r#"{"kind":"tet","size":"0.3 m","maxElements":"lots"}"#, "maxElements"),
+        (r#"{"kind":"tet","size":"0.3 m","bogus":1}"#, "unknown field `bogus`"),
+    ] {
+        let malformed = err(&mut e, &format!(r#"{{"cmd":"mesh.set","mesher":{spec}}}"#));
+        assert_eq!(malformed.code, ErrorCode::Schema, "{spec}");
+        assert!(malformed.cause.contains(cause), "{spec}: {}", malformed.cause);
+    }
     assert_eq!(e.model(), &before, "no schema error above touched the Model");
 
     // Everything past the settings needs the actual Solid, so it is refused only when the Mesh
