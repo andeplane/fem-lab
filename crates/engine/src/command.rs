@@ -182,7 +182,7 @@ pub enum IdealisationSpec {
     /// torsion. With twist, the third component of a vector Command is the circumferential
     /// direction.
     Axisymmetric {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         twist: bool,
     },
 }

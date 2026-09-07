@@ -24,8 +24,9 @@ pub enum Idealisation {
         /// Adds a third degree of freedom, the circumferential displacement u_theta, so the
         /// section can carry torsion. With twist, the third component of a vector Command is
         /// the circumferential direction. Defaults to false, so every Journal and saved Model
-        /// written before this field existed still loads.
-        #[serde(default)]
+        /// written before this field existed still loads, and an untwisted axisymmetric Model
+        /// serialises byte-identically to before (`MeshSettings::simplices`'s convention).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         twist: bool,
     },
 }
