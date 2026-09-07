@@ -56,6 +56,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cook-membrane-plane-stress-quad8 | green | 3/3 | 23.955125 | 23.9687 | 0.06 % |
 | explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | heat-bar-linear | green | 4/4 | 50 | 50 | 0.00 % |
+| imported-mesh-prism | green | 6/6 | 6.24289 | 6.24289 | 0.00 % |
 | kirsch-quarter-quad8 | green | 4/4 | 302.187087 | 300 | 0.73 % |
 | lame-3d-revolve-hex20 | green | 5/5 | 99.816731 | 100 | 0.18 % |
 | lame-axisymmetric | green | 4/4 | 99.588311 | 100 | 0.41 % |
@@ -597,6 +598,38 @@ payload caches on every Solve Ack even when that hash is unchanged.
 | H1 | Built-in linear elastic law re-implemented as a TS Plugin | identical to built-in, 1e-12 | Extension Point parity |
 | H2 | J2 plasticity as TS, WGSL and wasm (C and Fortran-via-f2c) Plugins | identical to built-in J2 to 1e-12 (TS/wasm) and f32 rounding (WGSL) | three languages, one law |
 | H3 | Plugin hash mismatch on load | refused with message | reproducibility |
+
+## J. Imported geometry (#350)
+
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| J1 | Regular 32-gon prism as an ASCII STL, imported by `geometry.import` | V = (n/2) R² sin(2π/n) h = 6.2428903045 mm³, mass 4.9006688890e-5 kg, bbox 1 mm × 2 mm | 1e-12 rel | a tessellated import is welded into a solid whose volume, mass and extent are exactly the polyhedron's; patches are named; a plane rule resolves on its lattice mesh | green |
+
+J1's oracle owes nothing to the importer: a regular n-gon of circumradius R has area
+(n/2) R² sin(2π/n), so the prism of height h holds (n/2) R² sin(2π/n) h and its side is n
+chords of 2R sin(π/n) by h. The mesh *is* the polyhedron, so these are matched to 1e-12
+relative rather than approached, and `unitLength: "1 mm"` is what turns the file's unitless
+1 and 2 into millimetres — an STL records no units, so getting that wrong is the one way an
+import silently gives a body a thousand times the mass it should have.
+
+The rest of the import is checked in the two crates' test binaries rather than as Benchmark
+rows, because their oracles are the geometry itself:
+
+- **Round trip.** Our own `write_stl` output for a box, a 64-facet cylinder, a 32-facet sphere
+  and a revolve is read back by `read_stl` and re-evaluated; volume, area and bounding box agree
+  with the shape it came from to 1e-9, and the patch counts are 6, 3, 1 and 3.
+- **Topology.** `genus` is the oracle a volume cannot be: 0 for an imported cube, 1 for an
+  imported torus, 1 for a plate with a through bore — and the bore's wall comes back as one
+  smooth patch of exactly n·2R sin(π/n)·h, with the two faces it pierces still whole.
+- **Feature angle.** An imported octagonal prism turns 45° per facet, so at 30° it has 8 + 2
+  patches, at 50° three, and at 91° one.
+- **Meshing.** A lattice over an imported cube gives 64 hexes of total volume 1 and six face
+  Sets of 16 faces each; a `geometry.nameFace` plane rule keeps its Set across a re-import at
+  four times the tessellation, which is why the doc string steers at predicates and not at
+  `face7`.
+- **Never panics.** A proptest sends random triangle soups through `Solid::evaluate`, the ray
+  cast and the lattice mesher; any `Err` is a pass and a panic is the failure, the same rule
+  the free mesher's sketches live under.
 
 ## I. Cross-solver checks (phase 3, manual, documented)
 

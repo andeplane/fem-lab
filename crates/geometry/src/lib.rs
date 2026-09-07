@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod imported;
 pub mod mesh;
 pub mod mesher;
 pub mod predicate;
@@ -13,6 +14,7 @@ pub mod shape;
 pub mod sketch;
 pub mod solid;
 
+pub use imported::{MeshIndex, DEFAULT_FEATURE_ANGLE, MAX_TRIANGLES};
 pub use mesh::{Adjacency, ElementBlock, ElementKind, Face, FaceKind, Mesh, Surface};
 pub use mesher::{
     annulus, elliptic_annulus, extrude, free, free_sheet, lattice, mapped, perturb_interior, revolve,

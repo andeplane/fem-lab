@@ -8,5 +8,5 @@ pub mod vtu;
 
 pub use inp::write_inp;
 pub use msh::{read_msh, write_msh};
-pub use stl::{write_stl, write_stl_mesh};
-pub use vtu::write_vtu;
+pub use stl::{read_stl, write_stl, write_stl_mesh};
+pub use vtu::{base64_decode, write_vtu};

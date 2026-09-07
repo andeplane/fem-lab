@@ -79,6 +79,41 @@ fn i64_bytes(v: &[i64]) -> Vec<u8> {
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+/// The inverse of [`base64`]: `None` for anything that is not standard base64. ASCII
+/// whitespace is skipped, so a payload wrapped across lines still reads back.
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut acc: u32 = 0;
+    let mut have = 0u32;
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let mut padding = 0usize;
+    for c in text.bytes() {
+        if c.is_ascii_whitespace() {
+            continue;
+        }
+        if c == b'=' {
+            padding += 1;
+            continue;
+        }
+        // a character after the padding, or one outside the alphabet, is not base64
+        let value = ALPHABET.iter().position(|a| *a == c)? as u32;
+        if padding > 0 {
+            return None;
+        }
+        acc = (acc << 6) | value;
+        have += 6;
+        if have >= 8 {
+            have -= 8;
+            out.push((acc >> have) as u8);
+        }
+    }
+    // 6 leftover bits is one dropped character, never a whole byte; the padding has to
+    // bring the encoded length to a multiple of four.
+    if have >= 6 || !(out.len() + padding).is_multiple_of(3) || padding > 2 {
+        return None;
+    }
+    Some(out)
+}
+
 /// Standard base64 with `=` padding.
 pub fn base64(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
