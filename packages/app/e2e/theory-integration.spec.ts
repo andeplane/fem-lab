@@ -54,10 +54,10 @@ test('@cpu project replacements clear theory only after success', async ({ page 
   await page.evaluate(() => window.fem.dispatch({ cmd: 'project.new', name: 'fresh project' }));
   await expect(panel).toHaveCount(0);
   await openBenchmark();
-  // #250 tracks the bundled Journal importer; rejection must preserve the active reference.
+  // A failed lookup preserves the active reference; public example.open replaces it on success.
   const exampleFailed = await page.evaluate(async () => {
     try {
-      await window.fem.dispatch({ cmd: 'example.open', name: 'cantilever-hex20' });
+      await window.fem.dispatch({ cmd: 'example.open', name: 'missing-example' });
       return false;
     } catch {
       return true;
@@ -65,4 +65,8 @@ test('@cpu project replacements clear theory only after success', async ({ page 
   });
   expect(exampleFailed).toBe(true);
   await expect(panel.locator('.theory-values')).toBeVisible();
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'example.open', name: 'cantilever-hex20' }));
+  await expect(panel).toHaveAttribute('aria-label', 'Theory for Cantilever beam, hex20');
+  await expect(panel.locator('.theory-values')).toBeVisible();
+  await expect(panel.locator('.surface.pass')).toHaveCount(1);
 });

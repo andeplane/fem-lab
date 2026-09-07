@@ -15,7 +15,7 @@ import {
   type BenchmarkProvenance,
   type ExampleEntry,
 } from '../src/benchmark';
-import { appHostCommands } from '../src/host';
+import { appHostCommands, openExample } from '../src/host';
 import { Store, initialState } from '../src/store';
 import { Theory } from '../src/ui/Theory';
 import type { WorkerTransport } from '../src/worker-transport';
@@ -141,10 +141,12 @@ describe('benchmark comparison registry', () => {
   });
 
   it('clears provenance only when another Model is opened or created', () => {
-    expect(['model.new', 'file.open', 'file.restore', 'project.open', 'project.new', 'example.open'].map((command) => clearsBenchmark(command, {}))).toEqual([true, true, true, true, true, true]);
+    expect(['model.new', 'file.open', 'file.restore', 'project.open', 'project.new'].map((command) => clearsBenchmark(command, {}))).toEqual([true, true, true, true, true]);
     expect(clearsBenchmark('file.restore', null)).toBe(false);
     expect(clearsBenchmark('load.traction')).toBe(false);
     expect(clearsBenchmark('view.fit')).toBe(false);
+    expect(clearsBenchmark('example.open')).toBe(false);
+    expect(clearsBenchmark('file.openExample')).toBe(false);
   });
 
   it('rejects an example omitted from the explicit registry', () => {
@@ -172,7 +174,7 @@ describe('example provenance lifecycle', () => {
         : ({ ok: true, text: async () => JSON.stringify(journal) } as Response),
     );
     vi.stubGlobal('fetch', fetch);
-    const transport = { dispatch: vi.fn(async (cmd: { cmd: string }) => (cmd.cmd === 'solve.run' ? { output: { type: 'solve' } } : cmd.cmd === 'study.converge' ? { output: { type: 'study', report: { rows: [] } } } : { output: { type: 'none' } })) } as unknown as WorkerTransport;
+    const transport = { exportFile: vi.fn(async () => ({ journal: { entries: journal } })), dispatch: vi.fn(async (cmd: { cmd: string }) => (cmd.cmd === 'solve.run' ? { output: { type: 'solve' } } : cmd.cmd === 'study.converge' ? { output: { type: 'study', report: { rows: [] } } } : { output: { type: 'none' } })) } as unknown as WorkerTransport;
     const refresh = vi.fn(async () => {
       expect(store.state.benchmark).toBeNull();
       store.set({
@@ -184,7 +186,7 @@ describe('example provenance lifecycle', () => {
     const results = { onAck: vi.fn(async (_ack: unknown) => expect(store.state.benchmark).toBeNull()) };
     const command = appHostCommands(store, transport, { current: null }, refresh, results as never).find((item) => item.name === 'file.openExample')!;
 
-    await command.run({ name: 'cantilever' }, {} as never);
+    await command.run({ name: 'cantilever' }, { examples: { open: (name: string) => openExample(name, store, transport, refresh, results as never) } } as never);
 
     expect(transport.dispatch).toHaveBeenCalledTimes(3);
     expect(results.onAck.mock.calls.map(([ack]) => (ack as { output: { type: string } }).output.type)).toEqual(['study', 'solve']);

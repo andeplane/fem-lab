@@ -219,7 +219,8 @@ export interface HostContext {
     writeText(path: string, text: string): Promise<void>;
     writeBytes(path: string, bytes: Uint8Array): Promise<void>;
   };
-  examples: { fetch(name: string): Promise<string> };
+  /** Hosts replay bundled example Journals and hydrate their presentation after a complete open. */
+  examples: { open(name: string): Promise<{ name: string; commands: number }> };
   ai: { setKey(key: string | null, provider: AiProvider): void; setModel(model: string): void };
   env: { webgpu: boolean; crossOriginIsolated: boolean; threads: number; userAgent: string; engine: 'local' | 'remote' };
 }
@@ -485,7 +486,7 @@ export const HOST_COMMANDS: HostDef[] = [
       if (saved) ctx.files.markSaved(saved.journal);
       return saved;
     }),
-  def('example.open', 'Open one of the bundled example models by name (see the examples gallery); replaces the current Model and Journal with the example\'s.', z.object({ name: z.string() }), async ({ name }, ctx) => importText(ctx, await ctx.examples.fetch(name))),
+  def('example.open', 'Open a bundled example by name (see the examples gallery), replaying its Journal Commands. A complete open establishes the saved baseline. If replay fails partway through, the partial Model remains visible and the previous saved baseline is preserved.', z.object({ name: z.string() }), ({ name }, ctx) => ctx.examples.open(name)),
   def('solve.cancel', 'Cancel the running solve or convergence study. The Model is restored to its state before the solve; nothing is journaled.', none, (_, ctx) => ctx.transport.cancel()),
   def('ai.setKey', 'Store an AI provider key for this tab session only (sessionStorage), or `null` to forget it. The provider defaults to Anthropic for compatibility. Never journaled, exported or exposed as a tool.', z.object({ key: z.string().nullable(), provider: z.enum(['anthropic', 'openai']).default('anthropic') }), ({ key, provider }, ctx) => ctx.ai.setKey(key, provider), false),
   def('ai.setModel', 'Choose the model id the AI assistant uses for the next turns; the default is the current Opus. Not exposed as a tool.', z.object({ model: z.string() }), ({ model }, ctx) => ctx.ai.setModel(model), false),
