@@ -188,6 +188,25 @@ Source and test paths in the matrix are relative to `packages/app/` unless they 
 | Full-screen calculation report uses real `query.report` Markdown, typeset maths, current viewer image, copy and PDF/print | **Merged + source/test** ([#14](https://github.com/andeplane/fem-lab/issues/14)) | `src/ui/Report.tsx`, `src/ui/report.css`; `test/report.test.tsx` covers Markdown, KaTeX, sanitisation, delayed image decode, copy, print readiness and no-Result/error states | PR #163 had reviewed real-Chromium paper/print evidence, but the baseline has no committed report-specific e2e scenario. The final audit should render and compare the integrated paper and exercise print once more. |
 | Tet4/Tet10 are reachable through `mesh.set`; free tetrahedral meshing is available where promised | **Pending #4 / PR #223 and #22** | `09a1530` includes simplex element infrastructure and related numerical work, but the production registry cannot yet deliver the complete handoff choice | [PR #223](https://github.com/andeplane/fem-lab/pull/223) is open with green branch checks. [#22](https://github.com/andeplane/fem-lab/issues/22) separately tracks free 3D tetrahedral meshing. Neither capability is accepted on this baseline. |
 
+## Remaining acceptance work and dependencies
+
+This separates the existing audit's independent checks from blocked external
+work. It does not add new features or issues.
+
+| Existing acceptance item | Can proceed independently? | Evidence still needed |
+| --- | --- | --- |
+| Whole-screen comparison at 1600 × 1000 and 1180 px with a populated model | Yes | Compare the reference layout, type roles, density and panel controls against one deployed source checkpoint. Existing placement and Gallery observations remain valid only for their named states. |
+| Empty → build → solve → edit/stale → re-solve, errors and cancellation | Yes | One coherent real-engine browser workflow, retaining the existing scenario evidence without rerunning passed checks merely for status. |
+| Keyboard reachability, drawer dismissal and editor shortcut isolation | Yes | Complete the remaining interactions after the verified Gallery filtering/opening and drawer state observations. Source scenarios include `e2e/shortcuts.spec.ts`. |
+| Report Markdown copy and PDF/print | Yes, when browser interaction is available | Verify actual copied bytes and rendered print/PDF output. Existing report unit tests cover command dispatch and image decode readiness; they do not prove the system clipboard or print output. Repeated automation timeouts are not a demonstrated product defect. |
+| Export and animation visual comparison | Yes | Compare the visible export controls and output presentation; `e2e/view-export.spec.ts` already covers exact screenshot pixels, camera restoration and modal frame selection. |
+| Assistant message/tool/verification cards | Yes, using the existing committed browser scenarios where appropriate | Compare the rendered card/composer states to the handoff. The broader live-provider quality evaluation in #317 is separate and does not by itself gate these visual checks. |
+| Complete Assistant project-folder workflow | No, pending #252/#247 validation | Real supported-Chromium directory persistence/restoration and project-files acceptance, followed by the integrated rules/skills/files comparison. Do not retry or bypass the rejected validation action. |
+
+Browser-control interruptions prevented completion of the report and keyboard
+checks in the recorded sessions. They are temporary verification limitations,
+not proof that all independent acceptance work requires external authorization.
+
 ## Audit closure
 
 The audit remains open while any matrix row is partial, pending, after-baseline only, or lacks the
