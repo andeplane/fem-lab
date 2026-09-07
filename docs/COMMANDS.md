@@ -833,9 +833,20 @@ Step whose Result this one continues — a static Step after a heat Step picks u
 temperature field and turns it into thermal stress. The remaining fields belong to one
 procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
 `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and
-`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
-`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and
+`dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
+`rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
+implicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and
+`increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An
+implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
+(default 0, Newmark average acceleration: second order, unconditionally stable and
+energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
+Rayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal
+damping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).
+Its `amplitude` scales the Loads only and is refused with a non-zero prescribed
+displacement; its initial acceleration is solved from the loads at t = 0, so a suddenly
+applied load is exactly that. Its reactions include the inertia and damping forces and
+its applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the
+scalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and
 prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
 defaulting to the whole of it, so a table written in step fraction works unchanged) and
 keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
@@ -869,7 +880,11 @@ endpoint fluxes), while temperature fields belong to its endpoint.
 | dtFactor | no | <code>{"type":["number","null"],"format":"double"}</code> | Maximum fraction of the explicit critical time step (usually 0.9). The increment may be reduced uniformly to finish exactly at tEnd. |
 | amplitude | no | <code>{"anyOf":[{"$ref":"#/$defs/AmplitudeSpec"},{"type":"null"}]}</code> |  |
 | initial | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_temperature"},{"type":"null"}]}</code> |  |
-| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
+| alpha | no | <code>{"type":["number","null"],"format":"double"}</code> | HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark average acceleration, no numerical damping); -0.05 is the usual choice when the mesh-frequency ringing of a sudden load should die out. |
+| rayleighAlpha | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_frequency"},{"type":"null"}]}</code> | Mass-proportional Rayleigh damping coefficient of an implicit Step, &#96;C = a·M + b·K&#96;. Default "0 Hz"; must be non-negative. |
+| rayleighBeta | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_time"},{"type":"null"}]}</code> | Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default "0 s"; must be non-negative. |
+| initialVelocity | no | <code>{"type":["array","null"],"items":{"$ref":"#/$defs/InitialVelocitySpec"}}</code> | Initial velocities of an explicit or implicit Step, one uniform vector per Set of nodes; nodes in no entry start from rest. |
+| increments | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Convergence tolerance for a Step that must iterate: the relative sup-norm change of the solution between two passes. Default 1e-6. Equal load increments a static-nonlinear Step takes over its pseudo-time &#96;[0, tEnd]&#96; (default 10). More increments cost proportionally more but start each Newton solve closer to equilibrium, which is what makes a stiffening or buckling model converge. |
 | maxCutbacks | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Halvings a static-nonlinear Step may use when an increment does not converge (default 5, at most 20). After the last one the Step fails with &#96;newton.diverged&#96;. |
 | nonlinearTolerance | no | <code>{"type":["number","null"],"format":"double"}</code> | Convergence tolerance for a Step that must iterate, relative in both cases: the sup-norm change of the solution between two passes for a radiating heat Step (default 1e-6), and the residual force and the displacement correction of one Newton increment for static-nonlinear (default 1e-8). It is never the *linear* solver's tolerance, which is &#96;solve.run&#96;'s. |
 | nonlinearMaxIterations | no | <code>{"type":["integer","null"],"format":"uint32","minimum":0}</code> | Iteration budget for a Step that must iterate. Exceeding it is &#96;solve.diverged&#96; for a heat Step (default 50); for static-nonlinear it is what makes an increment cut back and try again at half the load (default 20, and full Newton reaches 1e-8 in four or five iterations from a good starting point). |
@@ -1503,6 +1518,35 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>InitialVelocitySpec</summary>
+
+```json
+{
+  "description": "A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start\nfrom rest. Constrained components are held at zero whatever this says; two entries that\ngive one node different velocities are `model.ill-posed`.",
+  "type": "object",
+  "properties": {
+    "on": {
+      "type": "string"
+    },
+    "value": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_velocity"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "required": [
+    "on",
+    "value"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>LatticeSize</summary>
 
 ```json
@@ -1850,6 +1894,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
       "const": "explicit"
+    },
+    {
+      "description": "Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on\nthe consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,\n`rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.",
+      "type": "string",
+      "const": "implicit"
     }
   ]
 }
@@ -1917,6 +1966,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "force"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_frequency</summary>
+
+```json
+{
+  "description": "A frequency with unit, e.g. \"50 Hz\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "frequency"
 }
 ```
 
@@ -2060,6 +2122,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "time"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_velocity</summary>
+
+```json
+{
+  "description": "A velocity with unit, e.g. \"1 m/s\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "velocity"
 }
 ```
 
@@ -4750,7 +4825,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and\n`outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and\n`amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
+      "description": "Define an analysis Step: the procedure, and which Constraints and Loads are active in\nit. `output` lists the fields to compute (default displacement, stress, von Mises and\nreactions). Steps run in the order given by step.reorder, and `after` names an earlier\nStep whose Result this one continues — a static Step after a heat Step picks up its\ntemperature field and turns it into thermal stress. The remaining fields belong to one\nprocedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,\n`tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,\n`dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,\n`rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to\nimplicit, `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well, and\n`increments`, `maxCutbacks`, `tEnd` and `amplitude` to static-nonlinear. An\nimplicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]\n(default 0, Newmark average acceleration: second order, unconditionally stable and\nenergy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and\nRayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal\ndamping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).\nIts `amplitude` scales the Loads only and is refused with a non-zero prescribed\ndisplacement; its initial acceleration is solved from the loads at t = 0, so a suddenly\napplied load is exactly that. Its reactions include the inertia and damping forces and\nits applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the\nscalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and\nprescribed displacements over increments from 0 to `tEnd` (default \"1 s\", with `dt`\ndefaulting to the whole of it, so a table written in step fraction works unchanged) and\nkeeps every `outputEvery`-th increment as a retained frame; a temperature Load is never\nscaled, so its thermal strain is present in full at every increment. Without an\n`amplitude` a static Step is the single solve it has always been and retains nothing.\nA static-nonlinear Step always steps, over `increments` equal pieces of the same\npseudo-time, and keeps every converged one.\nHeat-steady requires a finite positive material conductivity `k`; heat-transient also\nrequires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].\n`nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends\non its own answer — a radiation load, or geometric nonlinearity — and are ignored by a\nStep that is linear.\nHeat Results report net applied power, positive removed heat and stored-energy rate;\ntransient powers belong to the last θ-method integration stage (radiation uses weighted\nendpoint fluxes), while temperature fields belong to its endpoint.",
       "type": "object",
       "properties": {
         "name": {
@@ -4865,8 +4940,48 @@ Expand a definition to inspect its complete schema. Definition names are local t
             }
           ]
         },
+        "alpha": {
+          "description": "HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark\naverage acceleration, no numerical damping); -0.05 is the usual choice when the\nmesh-frequency ringing of a sudden load should die out.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "rayleighAlpha": {
+          "description": "Mass-proportional Rayleigh damping coefficient of an implicit Step, `C = a·M + b·K`.\nDefault \"0 Hz\"; must be non-negative.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_frequency"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rayleighBeta": {
+          "description": "Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default\n\"0 s\"; must be non-negative.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "initialVelocity": {
+          "description": "Initial velocities of an explicit or implicit Step, one uniform vector per Set of\nnodes; nodes in no entry start from rest.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/InitialVelocitySpec"
+          }
+        },
         "increments": {
-          "description": "Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
+          "description": "Convergence tolerance for a Step that must iterate: the relative sup-norm change of\nthe solution between two passes. Default 1e-6.\nEqual load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`\n(default 10). More increments cost proportionally more but start each Newton solve\ncloser to equilibrium, which is what makes a stiffening or buckling model converge.",
           "type": [
             "integer",
             "null"
@@ -5705,6 +5820,35 @@ Expand a definition to inspect its complete schema. Definition names are local t
 </details>
 
 <details>
+<summary>InitialVelocitySpec</summary>
+
+```json
+{
+  "description": "A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start\nfrom rest. Constrained components are held at zero whatever this says; two entries that\ngive one node different velocities are `model.ill-posed`.",
+  "type": "object",
+  "properties": {
+    "on": {
+      "type": "string"
+    },
+    "value": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Q_velocity"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  },
+  "required": [
+    "on",
+    "value"
+  ]
+}
+```
+
+</details>
+
+<details>
 <summary>Journal</summary>
 
 ```json
@@ -6105,6 +6249,11 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "description": "Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.",
       "type": "string",
       "const": "explicit"
+    },
+    {
+      "description": "Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on\nthe consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,\n`rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.",
+      "type": "string",
+      "const": "implicit"
     }
   ]
 }
@@ -6172,6 +6321,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "force"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_frequency</summary>
+
+```json
+{
+  "description": "A frequency with unit, e.g. \"50 Hz\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "frequency"
 }
 ```
 
@@ -6315,6 +6477,19 @@ Expand a definition to inspect its complete schema. Definition names are local t
   "description": "A time with unit, e.g. \"0.5 s\". Any unit of the right dimension is accepted.",
   "$ref": "#/$defs/Quantity",
   "x-dimension": "time"
+}
+```
+
+</details>
+
+<details>
+<summary>Q_velocity</summary>
+
+```json
+{
+  "description": "A velocity with unit, e.g. \"1 m/s\". Any unit of the right dimension is accepted.",
+  "$ref": "#/$defs/Quantity",
+  "x-dimension": "velocity"
 }
 ```
 

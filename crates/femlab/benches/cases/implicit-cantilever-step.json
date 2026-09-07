@@ -1,0 +1,167 @@
+{
+  "name": "implicit-cantilever-step",
+  "reference": "Benchmark F3b: Benchmark B4's slender steel cantilever (1 m, 50 x 50 mm, hex20 at 50 mm) under a 100 N tip load applied suddenly at t = 0, integrated by HHT-alpha at alpha = -0.05 with 100 steps per period. A step load's dynamic amplification factor is 2, so the tip reaches twice B1's Timoshenko static deflection delta = PL^3/3EI + PL/(kappa G A) = 0.30536 mm at half the first period T = 1/41.91 Hz (B4's Euler-Bernoulli value) and again at 3T/2. The gate is 5 %: the mesh is 0.8 % stiff, the higher modes ripple the peak by a percent or two, and HHT damps those modes without moving the first period.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "cantilever-step"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "beam",
+      "size": [
+        "1 m",
+        "50 mm",
+        "50 mm"
+      ]
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7800 kg/m^3"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "beam"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 20,
+          "ny": 2,
+          "nz": 2
+        }
+      },
+      "order": 2
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "root",
+      "on": "beam.xmin"
+    },
+    {
+      "cmd": "load.traction",
+      "name": "tip",
+      "on": "beam.xmax",
+      "total": [
+        "0 N",
+        "0 N",
+        "-100 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "ring",
+      "procedure": "implicit",
+      "constraints": [
+        "root"
+      ],
+      "loads": [
+        "tip"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "dt": "2.386093e-4 s",
+      "tEnd": "4.772186e-2 s",
+      "alpha": -0.05,
+      "outputEvery": 1
+    },
+    {
+      "cmd": "solve.run",
+      "step": "ring"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "1000 mm",
+          "25 mm",
+          "25 mm"
+        ],
+        "component": 2,
+        "sample": {
+          "kind": "time",
+          "time": "1.193047e-2 s",
+          "sampling": "nearest"
+        }
+      },
+      "path": "/value/value",
+      "expect": -0.6107124,
+      "tol": 0.05,
+      "rel": true,
+      "note": "twice the static deflection at T/2"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "1000 mm",
+          "25 mm",
+          "25 mm"
+        ],
+        "component": 2,
+        "sample": {
+          "kind": "time",
+          "time": "3.579140e-2 s",
+          "sampling": "nearest"
+        }
+      },
+      "path": "/value/value",
+      "expect": -0.6107124,
+      "tol": 0.05,
+      "rel": true,
+      "note": "and again at 3T/2: the period is B4's"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "at": [
+          "1000 mm",
+          "25 mm",
+          "25 mm"
+        ],
+        "component": 2,
+        "sample": {
+          "kind": "time",
+          "time": "2.386093e-2 s",
+          "sampling": "nearest"
+        }
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 0.030535620000000003,
+      "rel": false,
+      "note": "back near zero at T"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/history/50/min/value",
+      "expect": -0.6107124,
+      "tol": 0.05,
+      "rel": true,
+      "note": "the history's global minimum is the tip at the first peak"
+    }
+  ]
+}
