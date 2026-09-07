@@ -588,6 +588,9 @@ pub struct ResultSummary {
     /// One row per retained output time: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
+    /// One row per retained frequency of a harmonic sweep; empty for every other procedure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sweep: Vec<SweepRow>,
     /// Structural force equilibrium: |Σ reactions + Σ applied| / largest force. Thermal
     /// conservation: |net applied − removed − storage| divided by Σ|Kij Tθj| + Σ|fi| +
     /// Σ|C dT/dt|, an assembled-power scale that remains meaningful at zero net heat flow.
@@ -597,6 +600,19 @@ pub struct ResultSummary {
     /// across a gap, a slave face coarser than its master. Retained with the Result.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
+}
+
+/// One retained frequency of a harmonic sweep.
+///
+/// `amplitude` is the largest displacement amplitude any DOF reached at this frequency, and
+/// `phase` is that same DOF's lag behind the driving load, so the pair describes one real
+/// motion: `u(t) = amplitude · cos(2π f t − phase)`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SweepRow {
+    pub frequency: Valued,
+    pub amplitude: Valued,
+    pub phase: Valued,
 }
 
 /// One retained output time in a Step's history: the extremes of the field at that instant.
