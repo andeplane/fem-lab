@@ -202,6 +202,7 @@ fn build_problem_with_temperature<'a>(
             LoadKind::HeatSource { bodies, q } => {
                 heat_loads.push(HeatLoad::Source { bodies: bodies.clone(), q: *q });
             }
+            LoadKind::ThermalContact { of, h } => heat_loads.push(HeatLoad::Contact { of: of.clone(), h: *h }),
         }
     }
     p.loads = loads;
