@@ -65,6 +65,18 @@ export interface Fem {
      */
     add(args: Omit<Extract<Command, { cmd: 'geometry.add' }>, 'cmd'>): Promise<Ack>;
     /**
+     * Add a Body made of straight line members: a truss. `points` are the joints, in order,
+     * and `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.
+     * Each member is cut into `divisions` elements of equal length (default 1). Joint `i`
+     * becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,
+     * and joints of different line Bodies that sit at the same point are welded into one node
+     * when the Mesh is built. A member carries axial force only, so give the Body a Section
+     * with section.assign as well as a Material, and hold enough joints that none of them can
+     * drift sideways — an under-braced truss is singular and fails in the solver, not here.
+     * Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
+     */
+    addLine(args: Omit<Extract<Command, { cmd: 'geometry.addLine' }>, 'cmd'>): Promise<Ack>;
+    /**
      * Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a
      * cylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape
      * is positioned in world coordinates, so use its `at` or a transform to place it.
@@ -128,6 +140,28 @@ export interface Fem {
      * that still use it; assign them another Material first with material.assign.
      */
     remove(args: Omit<Extract<Command, { cmd: 'material.remove' }>, 'cmd'>): Promise<Ack>;
+  };
+  section: {
+    /**
+     * Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,
+     * I, channel, or the properties given directly. A line member has no cross-section
+     * geometry of its own, so the Section is where its area, second moments, torsion constant,
+     * shear factors and extreme-fibre distances come from. Re-issuing with an existing name
+     * edits the section in place. Assign it to Bodies with section.assign.
+     */
+    add(args: Omit<Extract<Command, { cmd: 'section.add' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
+     * one without it is reported by query.model warnings and blocks solve.run with
+     * model.no-section. A Section on a solid or sheet Body is carried but never used: those
+     * Bodies get their cross-section from their geometry.
+     */
+    assign(args: Omit<Extract<Command, { cmd: 'section.assign' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * Remove a Section that is not assigned to any Body. Fails with in-use listing the Bodies
+     * that still use it; assign them another Section first with section.assign.
+     */
+    remove(args: Omit<Extract<Command, { cmd: 'section.remove' }>, 'cmd'>): Promise<Ack>;
   };
   mesh: {
     /**
@@ -290,17 +324,21 @@ export interface Fem {
      * temperature field and turns it into thermal stress. The remaining fields belong to one
      * procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-     * `dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
-     * `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+     * `dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and
+     * `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
+     * `amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and
      * prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
      * defaulting to the whole of it, so a table written in step fraction works unchanged) and
      * keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
      * scaled, so its thermal strain is present in full at every increment. Without an
      * `amplitude` a static Step is the single solve it has always been and retains nothing.
+     * A static-nonlinear Step always steps, over `increments` equal pieces of the same
+     * pseudo-time, and keeps every converged one.
      * Heat-steady requires a finite positive material conductivity `k`; heat-transient also
      * requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
      * `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
-     * on its own answer — today a radiation load — and are ignored by a Step that is linear.
+     * on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
+     * Step that is linear.
      * Heat Results report net applied power, positive removed heat and stored-energy rate;
      * transient powers belong to the last θ-method integration stage (radiation uses weighted
      * endpoint fluxes), while temperature fields belong to its endpoint.
