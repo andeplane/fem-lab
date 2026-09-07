@@ -114,7 +114,10 @@ export class ProjectRepository {
     const captured = clone(job);
     const saved = await this.storage.update(job.id, previous => {
       if (!previous?.meta || previous.generation !== captured.generation || later(previous.version, captured.version)) throw conflict();
-      if (previous.version === captured.version && identity(previous.cmds) !== identity(captured.cmds)) throw conflict();
+      if (previous.version === captured.version) {
+        if (identity(previous.cmds) !== identity(captured.cmds)) throw conflict();
+        if (previous.meta.thumbnail === captured.meta.thumbnail) return previous;
+      }
       return { id: captured.id, generation: captured.generation, version: captured.version, meta: { ...captured.meta, name: previous.meta.name }, cmds: captured.cmds };
     });
     return saved.meta!;

@@ -11,10 +11,11 @@ import { fakeTransport } from '../../registry/test/fakes';
 import { AssistantPanel, ToolCard, chatBridge, resultAssumptions } from '../src/ai/AssistantPanel';
 import { parseVerification } from '../src/ai/context';
 import { Store } from '../src/store';
+import { bindRegistryProducer } from '../src/producer-registry';
 import { Checks } from '../src/ui/Results';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { readHostCaps } from '../src/capabilities';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import type { ChatRequest } from '../src/ai/provider';
 import { BUILTIN_SKILLS } from '../src/ai/skills';
 import * as project from '../src/ai/project';
@@ -32,6 +33,7 @@ async function mount(patch: Partial<Store['state']> = {}) {
   host.chat.clear = () => chatBridge.clear();
   const registry = new Registry({ schema: schema as unknown as EngineSchema, host, hostCommands: [...HOST_COMMANDS, ...appHostCommands(store, transport as WorkerTransport, viewer, async () => undefined)] });
 
+  bindRegistryProducer(registry, async () => ({ registry, signal: new AbortController().signal, store: () => store, release: async () => undefined }));
   store.set({ ready: true, ...patch });
   const root = document.createElement('div');
   document.body.append(root);
@@ -50,7 +52,7 @@ const paint = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r,
 async function type(root: HTMLElement, text: string) {
   const box = root.querySelector('textarea')!;
   // A person focuses the box before typing in it, and that is what loads the mention index.
-  box.dispatchEvent(new Event('focus', { bubbles: true }));
+  box.focus();
   await tick();
   box.value = text;
   box.dispatchEvent(new Event('input', { bubbles: true }));
@@ -394,6 +396,34 @@ describe('the assistant drawer', () => {
     expect(root.querySelector('.popover')!.textContent).toContain('beam');
     await type(root, 'ask about @zzz');
     expect(root.querySelector('.popover')).toBeNull();
+  });
+
+  it('discards a mention index that finishes after the panel changes sessions', async () => {
+    const previous = await mount();
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const oldQuery = previous.registry.query.bind(previous.registry);
+    previous.registry.query = async query => {
+      const result = await oldQuery(query);
+      if (query.query === 'query.objects') await gate;
+      return result;
+    };
+    previous.root.querySelector('textarea')!.focus();
+    await tick();
+    const next = await mount();
+    const nextQuery = next.registry.query.bind(next.registry);
+    next.registry.query = async query => query.query === 'query.objects'
+      ? { objects: [{ ref: 'body:new-part', kind: 'body', name: 'new-part', summary: 'new session' }] }
+      : nextQuery(query);
+    render(null, next.root);
+    render(<AssistantPanel registry={next.registry} store={next.store} />, previous.root);
+    await paint();
+    previous.root.querySelector('textarea')!.blur();
+    await type(previous.root, '@');
+    expect(previous.root.querySelector('.popover')!.textContent).toContain('new-part');
+    finish(); await paint();
+    expect(previous.root.querySelector('.popover')!.textContent).toContain('new-part');
+    expect(previous.root.querySelector('.popover')!.textContent).not.toContain('beam');
   });
 
   it('groups the candidates by kind, with the two context rows pinned above them', async () => {

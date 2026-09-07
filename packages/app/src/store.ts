@@ -455,12 +455,6 @@ export class Store {
     this.markSaved(journal);
   }
 
-  /** A successful new Model has no saved baseline and invalidates older save completions. */
-  newDocument(): void {
-    this.documentIdentity = {};
-    this.set({ savedJournal: null, savedBaseline: null, journalComparison: null, comparisonSource: null, comparisonBaseline: null });
-  }
-
   markSaved(journal: { entries: JournalDump['entries'] }): void {
     this.set({
       savedJournal: journalIdentity(journal.entries),

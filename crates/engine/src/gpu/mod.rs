@@ -292,3 +292,12 @@ impl Gpu {
 pub fn adapter_name(gpu: Option<&Gpu>) -> Option<String> {
     gpu.map(|g| g.adapter.clone())
 }
+
+impl crate::session_owner::SessionOwner {
+    /// Read-only device diagnostic admitted against the caller's live session and run.
+    pub async fn gpu_self_test(&mut self, context: &crate::session::ExecutionContext, n: u32) -> Result<f64, Error> {
+        let gpu = self.diagnostic_gpu(context)?;
+        let a: Vec<f32> = (1..=n).map(|i| i as f32).collect();
+        gpu.dot(&a, &vec![1.0; n as usize]).await.map(|v| v as f64)
+    }
+}

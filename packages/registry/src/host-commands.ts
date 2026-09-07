@@ -479,7 +479,7 @@ export const HOST_COMMANDS: HostDef[] = [
     completeSave(file.journal);
     return receipt;
   }),
-  def('file.export', 'modelRead', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
+  def('file.export', 'modelWrite', 'Export in any format query.exportFormats lists: the mesh (vtu, msh, inp, stl), a result table as CSV, the viewer as PNG or a WebM mode-shape sweep, the Journal as a TypeScript script or as a `femlab/1` file. For WebM, select a mode and give `width` and `height` in pixels; optional `fps` (default 30) and `duration` in seconds (default 4) control the recording. Lands in the open project folder when there is one (or `to: "folder"`), else downloads.', z.object({
     spec: z.union([
       AnimationCaptureOptions.extend({ format: z.literal('webm') }),
       z.looseObject({ format: z.string().refine((format) => format !== 'webm') }),

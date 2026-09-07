@@ -3,7 +3,6 @@ import { expect, test, type Page } from '@playwright/test';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 async function persistedProject(page: Page): Promise<unknown> {
@@ -61,10 +60,6 @@ test.describe('@cpu opening a model file', () => {
       await expect(page.locator('.legend')).toBeVisible();
       await expect(page.locator('.model-name')).toHaveValue('cantilever');
       await expect.poll(() => persistedProject(page)).toMatchObject({ name: 'cantilever' });
-      // Place the ray through the imported cube's centre. A stale cantilever surface cannot
-      // produce an imported-cube pick, even if the tree and result legend refreshed correctly.
-      await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setCamera', position: [3, -4, 3], target: [0.5, 0.5, 0.5] }));
-
       if (route === 'picker') {
         const choosing = page.waitForEvent('filechooser');
         await page.getByRole('button', { name: 'Open', exact: true }).click();
@@ -90,6 +85,9 @@ test.describe('@cpu opening a model file', () => {
       await expect(page.locator('.script-view')).toContainText('imported-cube');
       await expect(page.locator('.script-view')).not.toContainText('cantilever');
 
+      // The new session owns its camera too. Aim through the imported cube after activation;
+      // an old cantilever surface still cannot produce an imported-cube pick.
+      await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setCamera', position: [3, -4, 3], target: [0.5, 0.5, 0.5] }));
       const canvas = page.locator('.viewer canvas');
       const bounds = (await canvas.boundingBox())!;
       await canvas.click({ position: { x: bounds.width / 2, y: bounds.height / 2 } });

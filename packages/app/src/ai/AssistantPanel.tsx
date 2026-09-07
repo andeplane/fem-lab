@@ -241,6 +241,11 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const [tokens, setTokens] = useState<string[]>([]);
   const [images, setImages] = useState<ImageBlock[]>([]);
   const [index, setIndex] = useState<IndexEntry[]>([]);
+  const indexOwner = useRef({ registry, request: 0 });
+  useLayoutEffect(() => {
+    indexOwner.current = { registry, request: 0 };
+    setIndex([]);
+  }, [registry]);
   const { folder, skills } = ui;
   const [provider, setProvider] = useState<ProviderId>(() => defaultProvider());
   const [model, setModel] = useState(() => storedModel(defaultProvider()));
@@ -437,7 +442,10 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   }, [images, provider, model, store, registry]);
 
   const refreshIndex = useCallback(async () => {
-    setIndex(await objectIndex(registry).catch(() => []));
+    const owner = indexOwner.current;
+    const request = ++owner.request;
+    const entries = await objectIndex(registry).catch(() => []);
+    if (indexOwner.current === owner && owner.registry === registry && owner.request === request) setIndex(entries);
   }, [registry]);
 
   // `chat.send` from a script, the palette or a viewer click reaches the same code the Send button

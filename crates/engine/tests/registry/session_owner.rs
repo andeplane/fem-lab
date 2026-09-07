@@ -299,3 +299,32 @@ fn cancelled_session_producers_cannot_fork_to_bypass_revocation() {
     owner.cancel_run(&client.lease.stamp.session, &client.lease.run_id).unwrap();
     assert_eq!(owner.fork_run(&client.context()).unwrap_err().code, ErrorCode::Cancelled);
 }
+
+#[test]
+fn session_render_retained_mesh_uses_the_selected_result_and_checks_ownership() {
+    let mut owner = owner("retained-render");
+    let mut client = Client::acquire(&mut owner);
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("../../benches/journals/cantilever.json")).unwrap();
+    // The live owner cannot replay model.new; a fresh owner already has an empty Model.
+    for entry in entries.into_iter().skip(1) {
+        client.write(&mut owner, &serde_json::to_string(&entry["cmd"]).unwrap()).unwrap();
+    }
+    let snapshot = owner.snapshot(&client.context()).unwrap();
+    let id = &snapshot.results.records[0].id;
+    let nodes = snapshot.results.records[0].nodes;
+    client
+        .write(&mut owner, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":1,"ny":1,"nz":1}}}"#)
+        .unwrap();
+    let (stamp, view) = owner.render_result(&client.context(), id).unwrap();
+    assert_eq!(stamp, client.lease.stamp);
+    if let femlab_engine::RenderView::Mesh(mesh) = view {
+        assert_eq!(mesh.mesh.n_nodes(), nodes);
+    } else {
+        panic!("retained mesh expected");
+    }
+    assert_eq!(owner.render_result(&client.context(), "missing").err().unwrap().code, ErrorCode::NotFound);
+    let mut stale = client.context();
+    stale.session.session_id = "old".into();
+    assert_eq!(owner.render_result(&stale, id).err().unwrap().code, ErrorCode::SessionExpired);
+}

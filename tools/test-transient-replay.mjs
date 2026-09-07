@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { batchModule } from './checked-batch.mjs';
 // Full-solve parity through the existing replay tool and native CLI. With a directory argument,
 // replay the Journals recorded by Chromium; otherwise record the same fixtures in Node WASM.
 import assert from 'node:assert/strict';
@@ -11,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const native = process.env.FEMLAB_NATIVE ?? path.join(root, 'target', 'release', 'femlab');
-const { Engine } = createRequire(import.meta.url)(path.join(root, 'tools/wasm-node/femlab_engine_wasm.js'));
+const { Engine } = batchModule(createRequire(import.meta.url)(path.join(root, 'tools/wasm-node/femlab_engine_wasm.js')));
 const recorded = process.argv[2];
 const scratch = mkdtempSync(path.join(tmpdir(), 'femlab-transient-replay-'));
 const query = (engine, q) => JSON.parse(engine.query(JSON.stringify(q)));

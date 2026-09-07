@@ -93,6 +93,9 @@ for (const backend of ['memory', 'indexeddb'] as const) describe(`project owners
     await a.write({ cmd: 'model.setName', name: 'new name' });
     const job = binding.capture(a.snapshot(), 10, 'thumbnail');
     await binding.save(job);
+    const unchanged = await repo.read('a');
+    await binding.save(binding.capture(a.snapshot(), 11, 'thumbnail'));
+    expect(await repo.read('a')).toEqual(unchanged);
     await expect(repo.claim(meta('a'), a.snapshot(), stale)).rejects.toMatchObject({ code: 'session.conflict' });
     await binding.save(binding.capture(a.snapshot(), 11, 'better thumbnail'));
     expect((await repo.read('a')).meta?.thumbnail).toBe('better thumbnail');

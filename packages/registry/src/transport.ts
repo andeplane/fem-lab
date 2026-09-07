@@ -50,8 +50,8 @@ export interface EngineTransport {
   /** Rejects with a structured `EngineError`, never a bare string. */
   dispatch(cmd: Command, onProgress?: (p: Progress) => void): Promise<Ack>;
   query(q: Query): Promise<QueryResult>;
-  surface(): Promise<Surface>;
-  field(step: string, field: Field, component?: number): Promise<FieldData>;
+  surface(resultId?: string): Promise<Surface>;
+  field(step: string, field: Field, component?: number, resultId?: string): Promise<FieldData>;
   export(spec: ExportSpec): Promise<ExportedFile>;
   exportFile(): Promise<ModelFile>;
   importFile(file: ModelFile): Promise<ImportAck>;

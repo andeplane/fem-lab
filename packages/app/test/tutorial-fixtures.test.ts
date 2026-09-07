@@ -1,3 +1,4 @@
+import { batchModule } from '../../../tools/checked-batch.mjs';
 // A Node-only check (no DOM): every bundled `tutorials/*.json` and every example
 // `benches/journals/*.json` parses, every tutorial has the shape `types.ts` promises, and each
 // tutorial's `doIt` Commands, replayed in order through the wasm build, actually run — the same
@@ -16,7 +17,7 @@ const tutorialsDir = path.resolve(here, '..', 'tutorials');
 const journalsDir = path.join(root, 'crates', 'engine', 'benches', 'journals');
 
 const require = createRequire(import.meta.url);
-const wasm = require(path.join(root, 'tools', 'wasm-node', 'femlab_engine_wasm.js')) as {
+const wasm = batchModule(require(path.join(root, 'tools', 'wasm-node', 'femlab_engine_wasm.js'))) as {
   Engine: new (threads: number) => { replay_hashes(json: string, skipSolves: boolean, verify: boolean): Promise<string> };
 };
 
