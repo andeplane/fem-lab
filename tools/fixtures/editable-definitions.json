@@ -610,6 +610,26 @@
   {
     "kind": "constraint",
     "command": {
+      "cmd": "constraint.couple",
+      "name": "editable",
+      "point": "ref",
+      "on": "base.xmax",
+      "kind": "distributed"
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
+      "cmd": "constraint.couple",
+      "name": "editable",
+      "point": "ref",
+      "on": "base.xmin",
+      "kind": "rigid"
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
       "cmd": "contact.add",
       "name": "editable",
       "master": "base.xmax",
