@@ -105,6 +105,12 @@ export const BENCHMARK_COMPARISONS: Record<string, BenchmarkComparison | null> =
     tolerance: { kind: 'percent', value: 2 },
     source: 'Kirsch (1898), infinite plate Kₜ = 3 · catalogue C1',
   },
+  'lame-cylinder-axisymmetric': {
+    locator: { kind: 'extreme', field: 'stress', component: 2, pick: 'max' },
+    reference: { values: [100], unit: 'MPa', label: 'σθθ at the bore' },
+    tolerance: { kind: 'percent', value: 2 },
+    source: 'Lamé thick-cylinder solution · catalogue C2',
+  },
   'lame-cylinder-plane-strain': {
     locator: { kind: 'extreme', field: 'stress', component: 0, pick: 'min' },
     reference: { values: [-60], unit: 'MPa', label: 'σᵣᵣ at the bore' },
