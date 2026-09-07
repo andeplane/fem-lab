@@ -20,7 +20,7 @@ async function ready(page: Page): Promise<void> {
   await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
-async function patch(page: Page, x: number, y: number): Promise<{ bright: number; maxSat: number }> {
+async function patch(page: Page, x: number, y: number): Promise<{ bright: number; maxSat: number; mean: [number, number, number] }> {
   return page.evaluate(({ x, y }) => {
     const canvas = document.querySelector('canvas')!;
     const rect = canvas.getBoundingClientRect();
@@ -35,13 +35,21 @@ async function patch(page: Page, x: number, y: number): Promise<{ bright: number
     const data = context.getImageData(px - 5, py - 5, 11, 11).data;
     let bright = 0;
     let maxSat = 0;
+    let sumR = 0;
+    let sumG = 0;
+    let sumB = 0;
     for (let i = 0; i < data.length; i += 4) {
       const hi = Math.max(data[i]!, data[i + 1]!, data[i + 2]!);
       const lo = Math.min(data[i]!, data[i + 1]!, data[i + 2]!);
-      if (hi > 70) bright++;
+      if (hi > 70) {
+        bright++;
+        sumR += data[i]!;
+        sumG += data[i + 1]!;
+        sumB += data[i + 2]!;
+      }
       maxSat = Math.max(maxSat, hi - lo);
     }
-    return { bright, maxSat };
+    return { bright, maxSat, mean: bright === 0 ? [0, 0, 0] : [sumR / bright, sumG / bright, sumB / bright] };
   }, { x, y });
 }
 
@@ -78,12 +86,19 @@ test('@cpu draws and colors two-bar line members while preserving visibility and
   const hit = await screen(page, left.x, left.y);
   await page.mouse.click(hit.x, hit.y);
   await expect(page.locator('.probe')).toContainText('truss');
+  await page.evaluate(() => window.fem.dispatch({ cmd: 'selection.clear' }));
 
   await page.evaluate(() => window.fem.dispatch({ cmd: 'solve.run', step: 'static' }));
   await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setDeformScale', scale: 0 }));
   await page.getByRole('button', { name: 'uy', exact: true }).click();
   await expect.poll(() => patch(page, left.x, left.y).then((p) => p.maxSat)).toBeGreaterThan(25);
   await expect.poll(() => patch(page, right.x, right.y).then((p) => p.maxSat)).toBeGreaterThan(25);
+  const uyColour = await patch(page, left.x, left.y);
+  await page.getByRole('button', { name: '|u|', exact: true }).click();
+  await expect(page.locator('.legend-field')).toHaveText('|u|');
+  const umagColour = await patch(page, left.x, left.y);
+  const fieldColourDelta = Math.abs(uyColour.mean[0] - umagColour.mean[0]) + Math.abs(uyColour.mean[1] - umagColour.mean[1]) + Math.abs(uyColour.mean[2] - umagColour.mean[2]);
+  expect(fieldColourDelta).toBeGreaterThan(6);
 
   await page.evaluate(() => window.fem.dispatch({ cmd: 'view.setVisible', bodies: ['truss'], on: false }));
   await expect.poll(() => patch(page, left.x, left.y).then((p) => p.bright)).toBe(0);
