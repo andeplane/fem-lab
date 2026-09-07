@@ -1,0 +1,949 @@
+{
+  "source": "docs/TUTORIAL-COVERAGE.md",
+  "epic": 432,
+  "about": "One entry per numbered vendor-tutorial row of docs/TUTORIAL-COVERAGE.md §1. status_written is the verdict the doc wrote on the day it was written (can-do, variant, partial, cannot) and does not change; needs lists the sub-issues of epic #432 whose capabilities the tutorial requires, including the ones that have since landed, so tools/tutorial-coverage.mjs decides doability from live issue state rather than from the prose. note records where the mapping needed judgment.",
+  "tutorials": [
+    {
+      "id": 1,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "Appendix B: Creating and Analyzing a Simple Model in Abaqus/CAE",
+      "url": "https://ceae-server.colorado.edu/v2016/books/gsa/ap02.html",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 2,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "4.4 Mesh convergence",
+      "url": "https://ceae-server.colorado.edu/v2016/books/gsa/ch04s04.html",
+      "status_written": "partial",
+      "needs": [
+        22,
+        80,
+        351
+      ]
+    },
+    {
+      "id": 3,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "10.4 Example: Connecting Lug with Plasticity",
+      "url": "https://ceae-server.colorado.edu/v2016/books/gsa/ch10s04.html",
+      "status_written": "cannot",
+      "needs": [
+        22,
+        60,
+        80,
+        351
+      ]
+    },
+    {
+      "id": 4,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "12.11 Abaqus/Explicit example: circuit board drop test",
+      "url": "https://ceae-server.colorado.edu/v2016/books/gsa/ch12s11.html",
+      "status_written": "cannot",
+      "needs": [
+        60,
+        62,
+        64,
+        67,
+        74
+      ],
+      "note": "Also wants an initial-velocity condition; §2 item 18 says to file that as its own issue and the #432 list has none yet."
+    },
+    {
+      "id": 5,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "Vibrational frequencies analysis",
+      "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEGSARefMap/simagsa-c-stppipingsysexa.htm",
+      "status_written": "cannot",
+      "needs": [
+        65,
+        344
+      ]
+    },
+    {
+      "id": 6,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "Buckling of a column with general contact",
+      "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEBMKRefMap/simabmk-c-sscxsec.htm",
+      "status_written": "cannot",
+      "needs": [
+        58,
+        59,
+        60,
+        62,
+        64
+      ]
+    },
+    {
+      "id": 7,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "Shell-to-solid submodeling and shell-to-solid coupling of a pipe joint",
+      "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEEXARefMap/simaexa-c-shellsolidpipe.htm",
+      "status_written": "cannot",
+      "needs": [
+        64,
+        76
+      ]
+    },
+    {
+      "id": 8,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "Axisymmetric stress/displacement submodeling with twist",
+      "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEVERRefMap/simaver-c-submodelaxitwist.htm",
+      "status_written": "cannot",
+      "needs": [
+        76,
+        82
+      ]
+    },
+    {
+      "id": 9,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "Thermal-stress analysis of a reactor pressure vessel bolted closure",
+      "url": "https://docs.software.vt.edu/abaqusv2025/English/SIMACAEEXARefMap/simaexa-c-reactor.htm",
+      "status_written": "cannot",
+      "needs": [
+        22,
+        62,
+        63,
+        80,
+        81,
+        351
+      ]
+    },
+    {
+      "id": 10,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "LE6: Skew plate under normal pressure",
+      "url": "https://ceae-server.colorado.edu/v2016/books/bmk/ch04s02anf06.html",
+      "status_written": "partial",
+      "needs": [
+        64
+      ]
+    },
+    {
+      "id": 11,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "Beam/gap example",
+      "url": "https://ceae-server.colorado.edu/v2016/books/bmk/ch01s01ach01.html",
+      "status_written": "cannot",
+      "needs": [
+        62,
+        65
+      ]
+    },
+    {
+      "id": 12,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "FV4: Cantilever with off-center point masses",
+      "url": "https://ceae-server.colorado.edu/v2016/books/bmk/ch04s04anf17.html",
+      "status_written": "cannot",
+      "needs": [
+        65,
+        67
+      ]
+    },
+    {
+      "id": 13,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "The Hertz contact problem",
+      "url": "https://ceae-server.colorado.edu/v2016/books/bmk/ch01s01ach11.html",
+      "status_written": "cannot",
+      "needs": [
+        62
+      ]
+    },
+    {
+      "id": 14,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "Conductive, convective, and radiative heat transfer in an exhaust manifold",
+      "url": "https://ceae-server.colorado.edu/v2016/books/exa/ch05s01aex121.html",
+      "status_written": "partial",
+      "needs": [
+        22,
+        79,
+        80,
+        351
+      ],
+      "note": "The radiation-to-surroundings half shipped with #79; the tutorial's cavity radiation (surface-to-surface view factors) is a different feature with no issue in the #432 list."
+    },
+    {
+      "id": 15,
+      "vendor": "Abaqus / Dassault SIMULIA",
+      "title": "Geometrically nonlinear analysis of a cantilever beam",
+      "url": "https://ceae-server.colorado.edu/v2016/books/bmk/ch02s01ach139.html",
+      "status_written": "cannot",
+      "needs": [
+        59,
+        345
+      ]
+    },
+    {
+      "id": 16,
+      "vendor": "Siemens Simcenter Femap / Nastran",
+      "title": "Linear Contact Analysis",
+      "url": "https://www.appliedcax.com/resources/simcenter-femap-nastran/linear-contact-analysis/",
+      "status_written": "cannot",
+      "needs": [
+        62
+      ],
+      "note": "The doc counts this row under §2 item 1 (contact), whose remaining half is frictionless contact (#62); bonded contact (#61) landed but does not model the separating source/target pairs the tutorial teaches."
+    },
+    {
+      "id": 17,
+      "vendor": "Siemens Simcenter Femap / Nastran",
+      "title": "Principles of Vibration Analysis: Normal Modes to PSD to Direct Transient",
+      "url": "https://www.appliedcax.com/resources/simcenter-femap-nastran/principles-of-vibration-analysis-normal-modes-to-psd-to-direct-transient/",
+      "status_written": "partial",
+      "needs": [
+        71,
+        72,
+        73,
+        78,
+        346
+      ]
+    },
+    {
+      "id": 18,
+      "vendor": "Siemens Simcenter Femap / Nastran",
+      "title": "Linear and Nonlinear Buckling Workshop",
+      "url": "https://www.appliedcax.com/resources/simcenter-femap-nastran/simcenter-femap-workshop-linear-and-nonlinear-buckling/",
+      "status_written": "cannot",
+      "needs": [
+        58,
+        60,
+        344
+      ]
+    },
+    {
+      "id": 19,
+      "vendor": "Siemens Simcenter Femap / Nastran",
+      "title": "Thermal-Stress Analysis",
+      "url": "https://www.appliedcax.com/resources/simcenter-femap-nastran/thermal-stress-analysis/",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 20,
+      "vendor": "Siemens Simcenter Femap / Nastran",
+      "title": "FEA of Bolted Joints – User Guide Seminar",
+      "url": "https://www.appliedcax.com/resources/simcenter-femap-nastran/fea-of-bolted-joints-user-guide-seminar/",
+      "status_written": "cannot",
+      "needs": [
+        63,
+        65,
+        77
+      ]
+    },
+    {
+      "id": 21,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – Plate With a Hole",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/127118376/ANSYS+-+Plate+With+a+Hole",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 22,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – Pressure Vessel",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/216399972/ANSYS+-+Pressure+Vessel",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 23,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – Spacecraft Assembly",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/326381474/ANSYS+-+Spacecraft+Assembly",
+      "status_written": "cannot",
+      "needs": [
+        59,
+        62,
+        63,
+        70,
+        80,
+        351
+      ]
+    },
+    {
+      "id": 24,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "VM11 – Residual Stress Problem",
+      "url": "https://ansyshelp.ansys.com/public/Views/Secured/corp/v242/en/ans_vm/Hlp_V_VM11.html",
+      "status_written": "cannot",
+      "needs": [
+        60,
+        66,
+        78
+      ]
+    },
+    {
+      "id": 25,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "VM17 – Snap-Through Buckling of a Hinged Shell",
+      "url": "https://ansyshelp.ansys.com/public/Views/Secured/corp/v242/en/ans_vm/Hlp_V_VM17.html",
+      "status_written": "cannot",
+      "needs": [
+        59,
+        64,
+        75
+      ]
+    },
+    {
+      "id": 26,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – Linear Column Buckling",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/151193699/ANSYS+-+Linear+Column+Buckling",
+      "status_written": "cannot",
+      "needs": [
+        58
+      ]
+    },
+    {
+      "id": 27,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "Harmonic Response Analysis in Ansys Mechanical",
+      "url": "https://innovationspace.ansys.com/product/harmonic-response-analysis-in-ansys-mechanical/",
+      "status_written": "cannot",
+      "needs": [
+        71,
+        346
+      ]
+    },
+    {
+      "id": 28,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "VM19 – Random Vibration Analysis of a Deep Simply-Supported Beam",
+      "url": "https://ansyshelp.ansys.com/public/Views/Secured/corp/v242/en/ans_vm/Hlp_V_VM19.html",
+      "status_written": "cannot",
+      "needs": [
+        65,
+        73
+      ]
+    },
+    {
+      "id": 29,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "VM65 – Transient Response of a Ball Impacting a Flexible Surface",
+      "url": "https://ansyshelp.ansys.com/public/Views/Secured/corp/v242/en/ans_vm/Hlp_V_VM65.html",
+      "status_written": "cannot",
+      "needs": [
+        62,
+        72
+      ],
+      "note": "Also wants an initial-velocity condition, which has no issue of its own in the #432 list."
+    },
+    {
+      "id": 30,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "Understanding Topics in Ansys LS-DYNA Software – Part 1",
+      "url": "https://innovationspace.ansys.com/product/understanding-topics-in-ansys-ls-dyna-software-part-1/",
+      "status_written": "partial",
+      "needs": [
+        74
+      ]
+    },
+    {
+      "id": 31,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – 2D Steady Conduction",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/146918507/ANSYS+-+2D+Steady+Conduction",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 32,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – Transient Conduction",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/175474931/ANSYS+-+Transient+Conduction",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 33,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – Thermal Stresses in a Bar",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/160339849/ANSYS+-+Thermal+Stresses+in+a+Bar",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 34,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – Modal Analysis of a Composite Monocoque",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/213418755/ANSYS+-+Modal+Analysis+of+a+Composite+Monocoque",
+      "status_written": "cannot",
+      "needs": [
+        64,
+        68,
+        80,
+        347,
+        351
+      ],
+      "note": "Laminates: #68 (orthotropic solids) landed, #347 carries the layered lay-up, #64 the shells."
+    },
+    {
+      "id": 35,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – Cantilever Beam",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/125812724/ANSYS+-+Cantilever+Beam",
+      "status_written": "can-do",
+      "needs": [],
+      "note": "Doc verdict is \"can do\" as a 3D solid, so needs is empty; §2 item 5 still counts this row under beam elements (#65) for the beam-element form and the moment diagram."
+    },
+    {
+      "id": 36,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS – Large Telescope Truss",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/198119352/ANSYS+-+Large+Telescope+Truss",
+      "status_written": "cannot",
+      "needs": [
+        66
+      ]
+    },
+    {
+      "id": 37,
+      "vendor": "Ansys Mechanical (Cornell SimCafe, Ansys Innovation Space, APDL Verification Manual)",
+      "title": "ANSYS WB – Bike Crank",
+      "url": "https://confluence.cornell.edu/spaces/SIMULATION/pages/146907513/ANSYS+WB+-+Bike+Crank+-+All+Pages",
+      "status_written": "partial",
+      "needs": [
+        22,
+        80,
+        351
+      ]
+    },
+    {
+      "id": 38,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Bracket — Structural Mechanics Tutorials",
+      "url": "https://www.comsol.com/model/bracket-structural-mechanics-tutorials-10314",
+      "status_written": "partial",
+      "needs": [
+        58,
+        64,
+        67,
+        71,
+        72,
+        80,
+        344,
+        351
+      ]
+    },
+    {
+      "id": 39,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Elastoplastic Analysis of Holed Plate",
+      "url": "https://www.comsol.com/model/elastoplastic-analysis-of-holed-plate-244",
+      "status_written": "cannot",
+      "needs": [
+        60,
+        78
+      ]
+    },
+    {
+      "id": 40,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Hyperelastic Seal",
+      "url": "https://www.comsol.com/model/hyperelastic-seal-206",
+      "status_written": "cannot",
+      "needs": [
+        59,
+        62,
+        69
+      ]
+    },
+    {
+      "id": 41,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Postbuckling Analysis of a Hinged Cylindrical Shell",
+      "url": "https://www.comsol.com/model/postbuckling-analysis-of-a-hinged-cylindrical-shell-10257",
+      "status_written": "cannot",
+      "needs": [
+        58,
+        59,
+        64,
+        75
+      ]
+    },
+    {
+      "id": 42,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Random Vibration Analysis of a Deep Beam",
+      "url": "https://www.comsol.com/model/random-vibration-analysis-of-a-deep-beam-75611",
+      "status_written": "cannot",
+      "needs": [
+        65,
+        73
+      ]
+    },
+    {
+      "id": 43,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Thermal-Stress Analysis of a Turbine Stator Blade",
+      "url": "https://www.comsol.com/model/thermal-stress-analysis-of-a-turbine-stator-blade-10476",
+      "status_written": "partial",
+      "needs": [
+        22,
+        80,
+        351
+      ]
+    },
+    {
+      "id": 44,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Axisymmetric Transient Heat Transfer",
+      "url": "https://www.comsol.com/model/axisymmetric-transient-heat-transfer-267",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 45,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Convection Cooling of Circuit Boards",
+      "url": "https://www.comsol.com/model/convection-cooling-of-circuit-boards-449",
+      "status_written": "cannot",
+      "needs": [
+        431
+      ],
+      "note": "Conjugate heat transfer is out of scope; #431 is listed in #432 as \"Not planned\"."
+    },
+    {
+      "id": 46,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Fatigue Analysis of a Wheel Rim",
+      "url": "https://www.comsol.com/model/fatigue-analysis-of-a-wheel-rim-2038",
+      "status_written": "cannot",
+      "needs": [
+        22,
+        77,
+        78,
+        80,
+        351
+      ]
+    },
+    {
+      "id": 47,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Bending of a Simply Supported Composite Laminate",
+      "url": "https://www.comsol.com/model/bending-of-a-simply-supported-composite-laminate-67641",
+      "status_written": "cannot",
+      "needs": [
+        64,
+        68,
+        347
+      ],
+      "note": "Laminates: #68 (orthotropic solids) landed, #347 carries the layered lay-up, #64 the shells."
+    },
+    {
+      "id": 48,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Thermal Contact Resistance Between an Electronic Package and a Heat Sink",
+      "url": "https://www.comsol.com/model/thermal-contact-resistance-between-an-electronic-package-and-a-heat-sink-14659",
+      "status_written": "cannot",
+      "needs": [
+        62,
+        85
+      ]
+    },
+    {
+      "id": 49,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "In-Plane and Space Truss",
+      "url": "https://www.comsol.com/model/in-plane-truss-8526",
+      "status_written": "cannot",
+      "needs": [
+        66
+      ]
+    },
+    {
+      "id": 50,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Pratt Truss Bridge",
+      "url": "https://www.comsol.com/model/pratt-truss-bridge-8511",
+      "status_written": "cannot",
+      "needs": [
+        64,
+        65,
+        345
+      ]
+    },
+    {
+      "id": 51,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Necking of an Elastoplastic Metal Bar",
+      "url": "https://www.comsol.com/model/necking-of-an-elastoplastic-metal-bar-12607",
+      "status_written": "cannot",
+      "needs": [
+        59,
+        60
+      ]
+    },
+    {
+      "id": 52,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Pressurized Orthotropic Container",
+      "url": "https://www.comsol.com/model/pressurized-orthotropic-container-12669",
+      "status_written": "partial",
+      "needs": [
+        60,
+        64,
+        68
+      ],
+      "note": "§2 item 4 counts this thin-walled vessel under shells (#64); orthotropic elasticity shipped with #68 and the remaining physics is Hill orthotropic plasticity (#60). Not a laminate, so no #347."
+    },
+    {
+      "id": 53,
+      "vendor": "COMSOL Multiphysics Application Gallery",
+      "title": "Steady-State 2D Axisymmetric Heat Transfer with Conduction",
+      "url": "https://www.comsol.com/model/steady-state-2d-axisymmetric-heat-transfer-with-conduction-453",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 54,
+      "vendor": "NAFEMS benchmark collections",
+      "title": "Selected Benchmarks for Material Non-linearity, Volume 1 (R0026)",
+      "url": "https://www.nafems.org/publications/resource_center/r0026/",
+      "status_written": "cannot",
+      "needs": [
+        60
+      ]
+    },
+    {
+      "id": 55,
+      "vendor": "NAFEMS benchmark collections",
+      "title": "Benchmark Tests for Finite Element Modelling of Contact, Gapping and Sliding (R0081)",
+      "url": "https://www.nafems.org/publications/resource_center/r0081/",
+      "status_written": "cannot",
+      "needs": [
+        62
+      ]
+    },
+    {
+      "id": 56,
+      "vendor": "NAFEMS benchmark collections",
+      "title": "Benchmarks for Membrane and Bending Analysis of Laminated Shells, Part 1 (R0092)",
+      "url": "https://www.nafems.org/publications/resource_center/r0092/",
+      "status_written": "cannot",
+      "needs": [
+        64,
+        68,
+        347
+      ],
+      "note": "Laminates: #68 (orthotropic solids) landed, #347 carries the layered lay-up, #64 the shells."
+    },
+    {
+      "id": 57,
+      "vendor": "NAFEMS benchmark collections",
+      "title": "Selected Benchmarks for Forced Vibration (R0016)",
+      "url": "https://www.nafems.org/publications/resource_center/r0016/",
+      "status_written": "cannot",
+      "needs": [
+        71,
+        72,
+        73,
+        346
+      ]
+    },
+    {
+      "id": 58,
+      "vendor": "FreeCAD FEM workbench",
+      "title": "FEM tutorial",
+      "url": "https://wiki.freecad.org/FEM_tutorial",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 59,
+      "vendor": "FreeCAD FEM workbench",
+      "title": "FEM CalculiX Cantilever 3D",
+      "url": "https://wiki.freecad.org/FEM_CalculiX_Cantilever_3D",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 60,
+      "vendor": "FreeCAD FEM workbench",
+      "title": "FEM Shear of a Composite Block",
+      "url": "https://wiki.freecad.org/FEM_Shear_of_a_Composite_Block",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 61,
+      "vendor": "FreeCAD FEM workbench",
+      "title": "Transient FEM analysis",
+      "url": "https://wiki.freecad.org/Transient_FEM_analysis",
+      "status_written": "partial",
+      "needs": [
+        84
+      ]
+    },
+    {
+      "id": 62,
+      "vendor": "FreeCAD FEM workbench",
+      "title": "FEM Tutorial Python",
+      "url": "https://wiki.freecad.org/FEM_Tutorial_Python",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 63,
+      "vendor": "PrePoMax and CalculiX",
+      "title": "Elasto-plastic plate in tension (Example 7)",
+      "url": "https://prepomax.fs.um.si/wp-content/uploads/2021/09/2021.09.07-PrePoMax-v1.1.0-examples-manual.pdf",
+      "status_written": "cannot",
+      "needs": [
+        60
+      ]
+    },
+    {
+      "id": 64,
+      "vendor": "PrePoMax and CalculiX",
+      "title": "Hertz contact of two spheres (Example 8)",
+      "url": "https://prepomax.fs.um.si/wp-content/uploads/2021/09/2021.09.07-PrePoMax-v1.1.0-examples-manual.pdf",
+      "status_written": "cannot",
+      "needs": [
+        59,
+        62
+      ]
+    },
+    {
+      "id": 65,
+      "vendor": "PrePoMax and CalculiX",
+      "title": "Cylindrical shell buckling (hinged segment, point load)",
+      "url": "https://www.dhondt.de/examples.htm",
+      "status_written": "cannot",
+      "needs": [
+        58,
+        64,
+        75
+      ]
+    },
+    {
+      "id": 66,
+      "vendor": "PrePoMax and CalculiX",
+      "title": "Artificial wing (NACA profile) eigenmode analysis",
+      "url": "https://www.dhondt.de/examples.htm",
+      "status_written": "partial",
+      "needs": [
+        22,
+        80,
+        351
+      ]
+    },
+    {
+      "id": 67,
+      "vendor": "deal.II and FEniCSx",
+      "title": "step-8: The Elasticity Equations",
+      "url": "https://dealii.org/current/doxygen/deal.II/step_8.html",
+      "status_written": "partial",
+      "needs": [
+        83
+      ]
+    },
+    {
+      "id": 68,
+      "vendor": "deal.II and FEniCSx",
+      "title": "step-18: The quasistatic elasticity equations with large deformations",
+      "url": "https://dealii.org/current/doxygen/deal.II/step_18.html",
+      "status_written": "cannot",
+      "needs": [
+        59
+      ]
+    },
+    {
+      "id": 69,
+      "vendor": "deal.II and FEniCSx",
+      "title": "step-44: Nonlinear Solid Mechanics (three-field formulation)",
+      "url": "https://dealii.org/current/doxygen/deal.II/step_44.html",
+      "status_written": "cannot",
+      "needs": [
+        59,
+        69,
+        343
+      ]
+    },
+    {
+      "id": 70,
+      "vendor": "deal.II and FEniCSx",
+      "title": "step-26: The heat equation",
+      "url": "https://dealii.org/current/doxygen/deal.II/step_26.html",
+      "status_written": "partial",
+      "needs": [
+        83
+      ]
+    },
+    {
+      "id": 71,
+      "vendor": "deal.II and FEniCSx",
+      "title": "Elasticity using algebraic multigrid",
+      "url": "https://docs.fenicsproject.org/dolfinx/main/python/demos/demo_elasticity.html",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 72,
+      "vendor": "SimScale",
+      "title": "Validation Case: Thick Plate Under Pressure (NAFEMS LE10)",
+      "url": "https://www.simscale.com/docs/validation-cases/thick-plate-under-pressure/",
+      "status_written": "variant",
+      "needs": [],
+      "note": "The doc ships a whole-face-support variant (nafems-le10-plate). The original mid-plane-line-supported model is #183, which is not in the #432 list, so needs is empty."
+    },
+    {
+      "id": 73,
+      "vendor": "SimScale",
+      "title": "Validation Case: Design Analysis of a Spherical Pressure Vessel",
+      "url": "https://www.simscale.com/docs/validation-cases/design-analysis-of-spherical-pressure-vessel/",
+      "status_written": "partial",
+      "needs": [
+        22,
+        84
+      ],
+      "note": "The transient half of the chain is #84; the row also says a thin spherical wall stair-steps on the lattice mesher, which is #22 (free tet meshing) even though §2 item 30 does not list this row."
+    },
+    {
+      "id": 74,
+      "vendor": "SimScale",
+      "title": "Validation Case: Flange Under Bolt Preload",
+      "url": "https://www.simscale.com/docs/validation-cases/flange-under-bolt-preload/",
+      "status_written": "cannot",
+      "needs": [
+        62,
+        63
+      ],
+      "note": "bolt-flange ships the same part with a uniform preload pressure instead; the doc still records the row as cannot."
+    },
+    {
+      "id": 75,
+      "vendor": "SimScale",
+      "title": "Validation Case: Hertzian Contact Between Two Spheres",
+      "url": "https://www.simscale.com/docs/validation-cases/hertzian-contact-between-two-spheres/",
+      "status_written": "cannot",
+      "needs": [
+        62
+      ]
+    },
+    {
+      "id": 76,
+      "vendor": "SimScale",
+      "title": "Tutorial: Harmonic Analysis of an Airfoil (2/2)",
+      "url": "https://www.simscale.com/docs/tutorials/harmonic-analysis-airfoil/",
+      "status_written": "cannot",
+      "needs": [
+        71
+      ]
+    },
+    {
+      "id": 77,
+      "vendor": "SolidWorks Simulation",
+      "title": "Using Symmetry in SOLIDWORKS Simulation Studies",
+      "url": "https://www.goengineer.com/blog/using-symmetry-solidworks-simulation-studies",
+      "status_written": "partial",
+      "needs": [
+        81
+      ]
+    },
+    {
+      "id": 78,
+      "vendor": "SolidWorks Simulation",
+      "title": "SOLIDWORKS Is Discontinuing Adaptive Meshing – What Does This Mean?",
+      "url": "https://www.goengineer.com/blog/solidworks-discontinuing-adaptive-meshing",
+      "status_written": "partial",
+      "needs": [
+        83
+      ]
+    },
+    {
+      "id": 79,
+      "vendor": "SolidWorks Simulation",
+      "title": "How Do I Complete a Simulation Fatigue Analysis in SOLIDWORKS?",
+      "url": "https://www.cati.com/blog/how-do-i-complete-a-simulation-fatigue-analysis-in-solidworks/",
+      "status_written": "cannot",
+      "needs": [
+        77
+      ]
+    },
+    {
+      "id": 80,
+      "vendor": "Autodesk Fusion (Simulation)",
+      "title": "Tutorial: Static stress analysis",
+      "url": "https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-3E91212F-9158-4E7C-BB6A-662F22EF22C3.htm",
+      "status_written": "partial",
+      "needs": [
+        22,
+        59,
+        62,
+        80,
+        351
+      ]
+    },
+    {
+      "id": 81,
+      "vendor": "Autodesk Fusion (Simulation)",
+      "title": "Tutorial: Modal frequencies analysis",
+      "url": "https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-49EBF17A-7E55-4FB8-8431-D222718137D6.htm",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 82,
+      "vendor": "Autodesk Fusion (Simulation)",
+      "title": "Tutorial: Structural buckling analysis",
+      "url": "https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-36828110-C0F0-454C-A455-FACA75CCB717.htm",
+      "status_written": "cannot",
+      "needs": [
+        58
+      ]
+    },
+    {
+      "id": 83,
+      "vendor": "Autodesk Fusion (Simulation)",
+      "title": "Tutorial: Nonlinear static stress analysis",
+      "url": "https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-F60CF732-772C-496B-B480-290FB2EFA7BE.htm",
+      "status_written": "cannot",
+      "needs": [
+        60
+      ]
+    },
+    {
+      "id": 84,
+      "vendor": "Autodesk Fusion (Simulation)",
+      "title": "Tutorial: Thermal stress analysis",
+      "url": "https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-88BCA6F7-A333-41C8-AA35-703F6F99DE13.htm",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 85,
+      "vendor": "Autodesk Fusion (Simulation)",
+      "title": "Tutorial: Thermal analysis",
+      "url": "https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-4B1F8D61-6F33-4E6A-B08A-4E562026762C.htm",
+      "status_written": "can-do",
+      "needs": []
+    },
+    {
+      "id": 86,
+      "vendor": "Autodesk Fusion (Simulation)",
+      "title": "Tutorial: Stresses on a SnapFit connector",
+      "url": "https://help.autodesk.com/cloudhelp/ENU/Fusion-Simulate/files/GUID-43DF60AE-6205-4D6C-84DF-B2F5F2F87607.htm",
+      "status_written": "cannot",
+      "needs": [
+        22,
+        59,
+        60,
+        62,
+        72,
+        74,
+        80,
+        351
+      ],
+      "note": "Also wants an initial-velocity condition, which has no issue of its own in the #432 list."
+    }
+  ]
+}
