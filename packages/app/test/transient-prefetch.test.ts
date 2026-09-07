@@ -5,14 +5,14 @@ import { TransientPlayback, type PlaybackClock, type TransientState } from '../s
 
 function catalogue(step: string): FramesResult {
   return {
-    step, modelHash: 'unchanged-model', stale: false, field: 'temperature', nodeCount: 1,
+    resultId: `result-${step}`, step, modelHash: 'unchanged-model', stale: false, field: 'temperature', nodeCount: 1,
     components: 3, storedComponents: 1, retainedBytes: 64,
     frames: [0, 0.2, 0.7, 0.9].map((timeSi, index) => ({ index, timeSi, time: { value: timeSi, unit: 's' } })),
   };
 }
 function frame(series: FramesResult, index: number, initial: number): FrameResult {
   return {
-    sample: { step: series.step, modelHash: series.modelHash, frame: series.frames[index]! },
+    sample: { resultId: series.resultId, step: series.step, modelHash: series.modelHash, frame: series.frames[index]! },
     field: 'temperature', components: 3, nodeCount: 1, unit: 'K',
     values: [initial + series.frames[index]!.timeSi, 0, 0],
   };

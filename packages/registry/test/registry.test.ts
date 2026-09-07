@@ -4,7 +4,7 @@ import { FemError } from '../src/error';
 import { HOST_COMMANDS, HOST_QUERIES } from '../src/host-commands';
 import { Registry, type EngineSchema } from '../src/registry';
 import { EXPORT_FORMATS, extremesCsv, pathCsv, reactionsCsv } from '../src/host-commands';
-import { ACK, AUTOSAVES, FOLDER, MODEL_FILE, PATH, PROJECT, RESULT, fakeHost, fakeTransport } from './fakes';
+import { ACK, AUTOSAVES, FOLDER, MODEL_FILE, PATH, PROJECT, RESULT, TETRA_STL, fakeHost, fakeTransport } from './fakes';
 
 const engineSchema = schema as unknown as EngineSchema;
 const make = (folderOpen = false) => {
@@ -48,6 +48,7 @@ const SAMPLES: Record<string, Record<string, unknown>> = {
   'skill.invoke': { name: 'beam-theory-check', args: 'beam' },
   'clipboard.copy': { what: { kind: 'text', text: 'plain' } },
   'file.open': { json: JSON.stringify(MODEL_FILE) },
+  'geometry.importFile': { name: 'part' },
   'file.save': {},
   'file.export': { spec: { format: 'vtu' } },
   'file.cancelAnimationCapture': {},
@@ -165,7 +166,10 @@ describe('Registry', () => {
       expect(SAMPLES, `missing sample for ${h.name}`).toHaveProperty(h.name);
       await registry.dispatch({ cmd: h.name, ...SAMPLES[h.name] });
     }
-    expect(transport.dispatch).not.toHaveBeenCalled();
+    // `geometry.importFile` is the one host Command that composes an engine Command: it reads
+    // the file the host owns and hands it to `geometry.import`, which the engine journals.
+    expect(vi.mocked(transport.dispatch).mock.calls.map((c) => (c[0] as { cmd: string }).cmd)).toEqual(['geometry.import']);
+    vi.mocked(transport.dispatch).mockClear();
     for (const h of HOST_QUERIES) await registry.query({ query: h.name, ...SAMPLES[h.name] });
     expect(transport.dispatch).not.toHaveBeenCalled();
   });
@@ -239,7 +243,7 @@ describe('Registry', () => {
     expect(host.clipboard.writeText).toHaveBeenCalledTimes(4);
   });
 
-  it('file.open imports from json, folder path or picker; example.open fetches then imports', async () => {
+  it('file.open imports from json, folder path or picker; example.open delegates Journal replay to the host', async () => {
     const { registry, host, transport } = make(true);
     await registry.dispatch({ cmd: 'file.open', json: JSON.stringify(MODEL_FILE) });
     await registry.dispatch({ cmd: 'file.open', path: './models/beam.json' });
@@ -249,8 +253,34 @@ describe('Registry', () => {
     await registry.dispatch({ cmd: 'file.open', picker: true });
     expect(host.files.pick).toHaveBeenCalled();
     await registry.dispatch({ cmd: 'example.open', name: 'cantilever' });
-    expect(host.examples.fetch).toHaveBeenCalledWith('cantilever');
-    expect(transport.importFile).toHaveBeenCalledTimes(4);
+    expect(host.examples.open).toHaveBeenCalledWith('cantilever');
+    expect(transport.importFile).toHaveBeenCalledTimes(3);
+  });
+
+  it('geometry.importFile reads the file here and hands it to the engine inline', async () => {
+    const { registry, host, transport } = make(true);
+    await registry.dispatch({ cmd: 'geometry.importFile', name: 'part' });
+    expect(host.files.pickBytes).toHaveBeenCalledWith('.stl,model/stl');
+    const sent = vi.mocked(transport.dispatch).mock.calls[0]![0] as Record<string, unknown>;
+    expect(sent['cmd']).toBe('geometry.import');
+    expect(sent['name']).toBe('part');
+    expect(sent['format']).toBe('stl');
+    expect(sent['encoding']).toBe('base64');
+    expect(sent['unitLength']).toBe('1 mm');
+    // millimetres by default, and the payload really is the file
+    expect(atob(sent['data'] as string)).toBe(TETRA_STL);
+    expect(sent).not.toHaveProperty('featureAngle');
+    expect(sent).not.toHaveProperty('simplifyBelow');
+
+    await registry.dispatch({ cmd: 'geometry.importFile', name: 'part', path: './parts/bracket.stl', unitLength: '1 m', featureAngle: 45, simplifyBelow: '0.2 mm' });
+    expect(host.folder.readBytes).toHaveBeenCalledWith('parts/bracket.stl');
+    const second = vi.mocked(transport.dispatch).mock.calls[1]![0] as Record<string, unknown>;
+    expect(second['unitLength']).toBe('1 m');
+    expect(second['featureAngle']).toBe(45);
+    expect(second['simplifyBelow']).toBe('0.2 mm');
+
+    await expect(registry.dispatch({ cmd: 'geometry.importFile', name: 'part', path: '../secret.stl' })).rejects.toMatchObject({ code: 'file.scope' });
+    await expect(registry.dispatch({ cmd: 'geometry.importFile', name: 'part', path: 'huge.stl' })).rejects.toMatchObject({ code: 'schema', where: 'path' });
   });
 
   it('file.save and file.export deliver to the open folder when there is one, else download', async () => {

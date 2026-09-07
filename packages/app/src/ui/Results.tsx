@@ -5,11 +5,14 @@
 import type { CostEstimate, Extreme, MeshSummary, PathResult, ProbeResult, ResultSummary, Valued } from '@femlab/registry';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { FIELD_CHOICES, choiceOf, dimensionOf, formatNumber } from '../fields';
+import { benchmarkProvenance } from '../benchmark';
+import { lazy } from '../lazy';
 import { verificationState, type UiState } from '../store';
-
 import type { Query } from './SchemaForm';
 import { Cmd, type Dispatch } from './cmd';
 import { blockers } from './schema';
+
+const Theory = lazy(() => import('./Theory').then((module) => module.Theory));
 
 const num = (v: Valued | undefined): string => (v ? formatNumber(v.value) : '—');
 const at = (p: [Valued, Valued, Valued]): string => p.map((v) => formatNumber(v.value)).join(' ');
@@ -453,6 +456,7 @@ export function Results({ s, dispatch, query }: { s: UiState; dispatch: Dispatch
         <Sample s={s} query={query} />
       </div>
       <div class="rcol">
+        {s.benchmark ? <Theory benchmark={s.benchmark} result={s.result} study={s.study} current={benchmarkProvenance(s.model, s.journal, s.revision)} query={query} /> : null}
         <div class="section-label">Reactions</div>
         <Reactions s={s} />
         <History s={s} />

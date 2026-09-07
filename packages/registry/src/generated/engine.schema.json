@@ -252,6 +252,73 @@
         ]
       },
       {
+        "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Give `sha256` to have the engine verify the data is the file you meant.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "format": {
+            "$ref": "#/$defs/MeshFormat"
+          },
+          "data": {
+            "description": "The file itself. Text as it stands, or base64 with `encoding: \"base64\"`, which is\nwhat a binary STL needs.",
+            "type": "string"
+          },
+          "encoding": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DataEncoding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sha256": {
+            "description": "Hex sha256 of the decoded file, checked before it is read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unitLength": {
+            "description": "What one unit in the file means, since the format records no units.",
+            "$ref": "#/$defs/Q_length"
+          },
+          "featureAngle": {
+            "description": "Dihedral angle in degrees above which an edge splits two face patches.",
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "simplifyBelow": {
+            "description": "Collapse mesh features smaller than this before use.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Q_length"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cmd": {
+            "type": "string",
+            "const": "geometry.import"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "format",
+          "data",
+          "unitLength"
+        ]
+      },
+      {
         "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
         "type": "object",
         "properties": {
@@ -1884,6 +1951,31 @@
           }
         }
       },
+      "MeshFormat": {
+        "description": "The geometry file formats geometry.import reads.",
+        "oneOf": [
+          {
+            "description": "STL, ASCII or binary: a triangle soup with no units, no colours and no face names.",
+            "type": "string",
+            "const": "stl"
+          }
+        ]
+      },
+      "DataEncoding": {
+        "description": "How a Command's inline file payload is encoded.",
+        "oneOf": [
+          {
+            "description": "The file's own text, verbatim. The default.",
+            "type": "string",
+            "const": "utf8"
+          },
+          {
+            "description": "Standard base64, for a binary file.",
+            "type": "string",
+            "const": "base64"
+          }
+        ]
+      },
       "FacePredicate": {
         "description": "A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.",
         "oneOf": [
@@ -3034,6 +3126,13 @@
         "description": "Summary of a Step's Result: solver info, extremes of every field with their location,\nreactions per constraint, applied totals, solver-used omitted material assumptions, and\nwhether the Result is stale (the Model changed after it was solved). Check the reaction\nbalance and assumptions first.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -3051,9 +3150,60 @@
         "x-returns": "ResultSummary"
       },
       {
-        "description": "Catalogue of retained transient primary-field frames (default: last solved Step).\nIndex 0 is the initial state; indices count retained frames, not integration steps.\nMetadata remains available for stale Results. No nodal values are copied by this Query.",
+        "description": "Catalogue of the eight most recent successful solve instances, oldest first. Reads do\nnot extend retention. Evicted ids are unavailable; Model import/new clears records.",
         "type": "object",
         "properties": {
+          "query": {
+            "type": "string",
+            "const": "query.results"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "x-returns": "RetainedResults"
+      },
+      {
+        "description": "A final field in SI with explicit entity layout, selected by solve instance or the current per-Step default.\nField names include mode:k for one-based modal shapes. Explicit ids use solved metadata;\nomitted ids refuse stale Results. Retained samples use query.frame's existing protocol.",
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resultId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "const": "query.field"
+          }
+        },
+        "required": [
+          "query",
+          "field"
+        ],
+        "x-returns": "ResultField"
+      },
+      {
+        "description": "Catalogue of retained primary-field frames for heat-transient, explicit or amplitude-driven static Steps (default: last solved Step).\nIndex 0 is the initial state; indices count retained frames, not integration steps.\nMetadata remains available for stale Results. No nodal values are copied by this Query.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -3071,9 +3221,16 @@
         "x-returns": "FramesResult"
       },
       {
-        "description": "One retained transient primary field. Supply exactly one of zero-based retained index\nor sample (retained index / physical time with exact or nearest selection). Time\nselection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation\npolicy as sampled probe/path. Values are SI,\ncomponent-fastest, with three components per node, matching final FieldData: a 2D\ndisplacement has zero z; temperature occupies x with zero y/z. Defaults to the retained\nprimary field. Derived fields were not retained and are refused. Refuses result.stale.",
+        "description": "One retained primary field from a heat-transient, explicit or amplitude-driven static Step. Supply exactly one of zero-based retained index\nor sample (retained index / physical time with exact or nearest selection). Time\nselection uses the same roundoff tolerance, earlier-tie rule and no-extrapolation\npolicy as sampled probe/path. Values are SI,\ncomponent-fastest, with three components per node, matching final FieldData: a 2D\ndisplacement has zero z; temperature occupies x with zero y/z. Defaults to the retained\nprimary field. Derived fields were not retained and are refused. Omitted resultId refuses result.stale.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -3119,9 +3276,16 @@
         "x-returns": "FrameResult"
       },
       {
-        "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nRefuses `result.stale` if the Model changed after solving; re-run `solve.run` first.",
+        "description": "A field value interpolated at a point (default: the last solved Step). Component\nindices: displacement 0..3, stress Voigt 0..6 (xx, yy, zz, xy, xz, yz), principal 0..3.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -3171,9 +3335,16 @@
         "x-returns": "ProbeResult"
       },
       {
-        "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nRefuses `result.stale` if the Model changed after solving; re-run `solve.run` first.",
+        "description": "A field sampled at `n` points along the line from `from` to `to`, for a line plot.\nOptional sample selects a retained primary-field frame; omitted means the final field.\nOmitted resultId refuses `result.stale` after edits; an explicit id uses its solved Mesh.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Omit for the current per-Step selection; an explicit id uses its solved context.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "step": {
             "type": [
               "string",
@@ -3816,6 +3987,73 @@
               "name",
               "from",
               "shape"
+            ]
+          },
+          {
+            "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Give `sha256` to have the engine verify the data is the file you meant.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "format": {
+                "$ref": "#/$defs/MeshFormat"
+              },
+              "data": {
+                "description": "The file itself. Text as it stands, or base64 with `encoding: \"base64\"`, which is\nwhat a binary STL needs.",
+                "type": "string"
+              },
+              "encoding": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DataEncoding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sha256": {
+                "description": "Hex sha256 of the decoded file, checked before it is read.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "unitLength": {
+                "description": "What one unit in the file means, since the format records no units.",
+                "$ref": "#/$defs/Q_length"
+              },
+              "featureAngle": {
+                "description": "Dihedral angle in degrees above which an edge splits two face patches.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "simplifyBelow": {
+                "description": "Collapse mesh features smaller than this before use.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "geometry.import"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "format",
+              "data",
+              "unitLength"
             ]
           },
           {
@@ -5408,6 +5646,31 @@
           }
         }
       },
+      "MeshFormat": {
+        "description": "The geometry file formats geometry.import reads.",
+        "oneOf": [
+          {
+            "description": "STL, ASCII or binary: a triangle soup with no units, no colours and no face names.",
+            "type": "string",
+            "const": "stl"
+          }
+        ]
+      },
+      "DataEncoding": {
+        "description": "How a Command's inline file payload is encoded.",
+        "oneOf": [
+          {
+            "description": "The file's own text, verbatim. The default.",
+            "type": "string",
+            "const": "utf8"
+          },
+          {
+            "description": "Standard base64, for a binary file.",
+            "type": "string",
+            "const": "base64"
+          }
+        ]
+      },
       "FacePredicate": {
         "description": "A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.",
         "oneOf": [
@@ -6531,6 +6794,12 @@
       },
       {
         "$ref": "#/$defs/ResultSummary"
+      },
+      {
+        "$ref": "#/$defs/RetainedResults"
+      },
+      {
+        "$ref": "#/$defs/ResultField"
       },
       {
         "$ref": "#/$defs/FramesResult"
@@ -7733,6 +8002,73 @@
             ]
           },
           {
+            "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Give `sha256` to have the engine verify the data is the file you meant.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "format": {
+                "$ref": "#/$defs/MeshFormat"
+              },
+              "data": {
+                "description": "The file itself. Text as it stands, or base64 with `encoding: \"base64\"`, which is\nwhat a binary STL needs.",
+                "type": "string"
+              },
+              "encoding": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DataEncoding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sha256": {
+                "description": "Hex sha256 of the decoded file, checked before it is read.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "unitLength": {
+                "description": "What one unit in the file means, since the format records no units.",
+                "$ref": "#/$defs/Q_length"
+              },
+              "featureAngle": {
+                "description": "Dihedral angle in degrees above which an edge splits two face patches.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "simplifyBelow": {
+                "description": "Collapse mesh features smaller than this before use.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "geometry.import"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "format",
+              "data",
+              "unitLength"
+            ]
+          },
+          {
             "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
             "type": "object",
             "properties": {
@@ -9303,6 +9639,31 @@
             "maxItems": 3
           }
         }
+      },
+      "MeshFormat": {
+        "description": "The geometry file formats geometry.import reads.",
+        "oneOf": [
+          {
+            "description": "STL, ASCII or binary: a triangle soup with no units, no colours and no face names.",
+            "type": "string",
+            "const": "stl"
+          }
+        ]
+      },
+      "DataEncoding": {
+        "description": "How a Command's inline file payload is encoded.",
+        "oneOf": [
+          {
+            "description": "The file's own text, verbatim. The default.",
+            "type": "string",
+            "const": "utf8"
+          },
+          {
+            "description": "Standard base64, for a binary file.",
+            "type": "string",
+            "const": "base64"
+          }
+        ]
       },
       "FacePredicate": {
         "description": "A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.",
@@ -10534,6 +10895,10 @@
         "description": "`query.result` response.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
           "step": {
             "type": "string"
           },
@@ -10602,7 +10967,7 @@
             }
           },
           "history": {
-            "description": "One row per output time of a transient Step: when, and the range the field covered.",
+            "description": "One row per retained output time: when, and the range the field covered.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/HistoryRow"
@@ -10622,6 +10987,7 @@
           }
         },
         "required": [
+          "resultId",
           "step",
           "revision",
           "stale",
@@ -10757,7 +11123,7 @@
         ]
       },
       "HistoryRow": {
-        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
+        "description": "One retained output time in a Step's history: the extremes of the field at that instant.",
         "type": "object",
         "properties": {
           "time": {
@@ -10776,10 +11142,159 @@
           "max"
         ]
       },
+      "RetainedResults": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/RetainedResult"
+            }
+          }
+        },
+        "required": [
+          "limit",
+          "records"
+        ]
+      },
+      "RetainedResult": {
+        "description": "One immutable solve instance. Byte counts describe payloads, not allocator or peak memory.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "solvedRevision": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "modelName": {
+            "type": "string"
+          },
+          "modelHash": {
+            "type": "string"
+          },
+          "inputHash": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "nodes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "elements": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "fieldBytes": {
+            "description": "f64 arrays in final fields, modes, frequencies and retained History.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "meshBytes": {
+            "description": "Numeric coordinates, connectivity and resolved geometry Sets; excludes container overhead.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "modelJsonBytes": {
+            "description": "Serialized solved Model metadata size, not its in-memory allocation size.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "step",
+          "solvedRevision",
+          "modelName",
+          "modelHash",
+          "inputHash",
+          "stale",
+          "nodes",
+          "elements",
+          "fieldBytes",
+          "meshBytes",
+          "modelJsonBytes"
+        ]
+      },
+      "ResultField": {
+        "description": "Final scientific values are f64 SI in component-fastest entity order.",
+        "type": "object",
+        "properties": {
+          "resultId": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          },
+          "components": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "per": {
+            "type": "string"
+          },
+          "entityCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "nodeCount": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unit": {
+            "type": "string"
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "required": [
+          "resultId",
+          "step",
+          "field",
+          "components",
+          "per",
+          "entityCount",
+          "nodeCount",
+          "unit",
+          "values"
+        ]
+      },
       "FramesResult": {
         "description": "`query.frames` response; stored components describe the unpadded History storage.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
           "step": {
             "type": "string"
           },
@@ -10822,6 +11337,7 @@
           }
         },
         "required": [
+          "resultId",
           "step",
           "modelHash",
           "stale",
@@ -10901,6 +11417,10 @@
         "description": "Result identity and the actual resolved sample. The solved Model hash is not a solve-instance\ncounter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
           "step": {
             "type": "string"
           },
@@ -10912,6 +11432,7 @@
           }
         },
         "required": [
+          "resultId",
           "step",
           "modelHash",
           "frame"
@@ -11023,6 +11544,18 @@
             "format": "uint64",
             "minimum": 0
           },
+          "residentResultBytes": {
+            "description": "Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "resultMeshBytes": {
+            "description": "Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "retainedFrames": {
             "description": "Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.",
             "type": "integer",
@@ -11080,6 +11613,8 @@
           "nnzLower",
           "bytes",
           "assemblyBytes",
+          "residentResultBytes",
+          "resultMeshBytes",
           "retainedFrames",
           "retainedBytes",
           "transientWorkBytes",
@@ -11832,6 +12367,10 @@
         "description": "`query.result` response.",
         "type": "object",
         "properties": {
+          "resultId": {
+            "description": "Opaque identity scoped to the Engine instance that produced this solve.",
+            "type": "string"
+          },
           "step": {
             "type": "string"
           },
@@ -11900,7 +12439,7 @@
             }
           },
           "history": {
-            "description": "One row per output time of a transient Step: when, and the range the field covered.",
+            "description": "One row per retained output time: when, and the range the field covered.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/HistoryRow"
@@ -11920,6 +12459,7 @@
           }
         },
         "required": [
+          "resultId",
           "step",
           "revision",
           "stale",
@@ -12072,7 +12612,7 @@
         ]
       },
       "HistoryRow": {
-        "description": "One time of a transient Step's history: the extremes of the field at that instant.",
+        "description": "One retained output time in a Step's history: the extremes of the field at that instant.",
         "type": "object",
         "properties": {
           "time": {
@@ -12778,6 +13318,64 @@
               "kind",
               "name",
               "shape"
+            ]
+          },
+          {
+            "description": "A triangle mesh read from a file (`geometry.import`), welded into a solid by the\ngeometry kernel. Its faces are patches of triangles that meet more smoothly than\n`feature_angle`, tagged `face0`, `face1`, … largest area first.",
+            "type": "object",
+            "properties": {
+              "positions": {
+                "description": "Vertex positions in metres.",
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "format": "double"
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "triangles": {
+                "description": "Triangles as vertex indices, counter-clockwise seen from outside.",
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                }
+              },
+              "feature_angle": {
+                "description": "Dihedral angle in degrees above which an edge splits two face patches; 30 by default.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "simplify_below": {
+                "description": "Collapse mesh features smaller than this many metres before use.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "kind": {
+                "type": "string",
+                "const": "mesh"
+              }
+            },
+            "required": [
+              "kind",
+              "positions",
+              "triangles"
             ]
           }
         ]
@@ -14687,6 +15285,73 @@
             ]
           },
           {
+            "description": "Import a triangle-mesh geometry file as a Body: the file travels *inside* the Command\nas `data`, so a Journal replays with no external file, no network and no file system,\non any host. STL carries no units, so `unitLength` says what one file unit is (`1 mm`\nfor a part drawn in millimetres). The mesh is welded into a watertight solid, so\nvolume, mass, booleans and meshing all work on it; its faces are patches of triangles\nthat meet more smoothly than `featureAngle` (30 degrees by default), auto-named\n`<name>.face0`, `<name>.face1`, ... largest area first. Those numbers move when the\nfile changes, so for anything you will re-import, name the faces you need with\ngeometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every\nremesh and survive a re-import. `simplifyBelow` collapses features smaller than the\ngiven length, which is the honest half of defeaturing; there is no fillet, chamfer or\nshell. Give `sha256` to have the engine verify the data is the file you meant.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "format": {
+                "$ref": "#/$defs/MeshFormat"
+              },
+              "data": {
+                "description": "The file itself. Text as it stands, or base64 with `encoding: \"base64\"`, which is\nwhat a binary STL needs.",
+                "type": "string"
+              },
+              "encoding": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DataEncoding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sha256": {
+                "description": "Hex sha256 of the decoded file, checked before it is read.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "unitLength": {
+                "description": "What one unit in the file means, since the format records no units.",
+                "$ref": "#/$defs/Q_length"
+              },
+              "featureAngle": {
+                "description": "Dihedral angle in degrees above which an edge splits two face patches.",
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "simplifyBelow": {
+                "description": "Collapse mesh features smaller than this before use.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Q_length"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cmd": {
+                "type": "string",
+                "const": "geometry.import"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "format",
+              "data",
+              "unitLength"
+            ]
+          },
+          {
             "description": "Name a face Set of Body `of` by a geometric rule (plane, normal, box, cylinder, or any\nof those) so constraints and loads can target it. Rules are re-evaluated after every\nremesh, so the Set survives refinement. Body `of` may be explicit geometry or the\nimplicit Body defined by a mapped or swept mapped mesher. The rule selects only that\nBody's actual mesh boundary. Prefer the auto face names when one fits.",
             "type": "object",
             "properties": {
@@ -16257,6 +16922,31 @@
             "maxItems": 3
           }
         }
+      },
+      "MeshFormat": {
+        "description": "The geometry file formats geometry.import reads.",
+        "oneOf": [
+          {
+            "description": "STL, ASCII or binary: a triangle soup with no units, no colours and no face names.",
+            "type": "string",
+            "const": "stl"
+          }
+        ]
+      },
+      "DataEncoding": {
+        "description": "How a Command's inline file payload is encoded.",
+        "oneOf": [
+          {
+            "description": "The file's own text, verbatim. The default.",
+            "type": "string",
+            "const": "utf8"
+          },
+          {
+            "description": "Standard base64, for a binary file.",
+            "type": "string",
+            "const": "base64"
+          }
+        ]
       },
       "FacePredicate2": {
         "description": "A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.",
