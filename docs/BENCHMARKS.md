@@ -544,6 +544,7 @@ and named edge preservation and deterministic replay for Tri3/Tri6.
 | E5 | Forced transient slab, all four simplex kinds | mean T(t) = 1/12 − Σ(m odd) 8 exp(−m²π²t)/(mπ)⁴, at t=0.1 | finest mean error < 2e-4; monotone refinement, rate > 1.8 (linear), > 3.5 (quadratic) | capacity and transient mesh convergence | engine test |
 | E6 | Radiating slab, conduction into a grey-body face | T_L from bisecting `k(T0 − T_L)/L = σε(T_L⁴ − T∞⁴)`: 927.0039504520639 K at k = 55.6 W/(m K), L = 0.1 m, T0 = 1000 K, T∞ = 300 K, ε = 0.98 | 1e-9 relative at three mesh sizes, and heat in through the held face = power radiated to 1e-9 | radiation BC, its Newton iteration, and the discrete energy balance it closes | engine test + green |
 | E7 | Radiating block, analytic transient | `T(t) = T0 (1 + 3 c T0³ t)^(−1/3)`, `c = σεA/(ρ c_p V)`: 381.49284808810995 K at t = 1 s | Crank–Nicolson at dt = 5 ms within 1e-4 relative; observed temporal rate > 0.85 at θ = 1 and > 1.7 at θ = 0.5 under two halvings | the fourth-power law itself, and the θ-method's order on a nonlinear boundary | engine test + green |
+| E8 | Restrained strip, transient thermal stress (#84 transient field chaining) | `σxx = σyy = −Eα ΔT/(1 − ν)`, plane-stress biaxial restraint; ΔT(x,t) the E5 Fourier series generalised to a rise between two endpoints: 300 MPa scale at Eα(T1−T0)/(1−ν), T0 = 300 K, T1 = 400 K | per-frame min/max within 1 % of the 300 MPa scale at every one of 11 retained frames; final frame pointwise within 1e-6 relative | one static solve per retained frame of a heat-transient predecessor, with the reduced stiffness factorised once and reused | engine test + green |
 
 E1 runs the four element families on the same bar and checks every node, not just a probe: the
 profile is linear to 1e-10 for all of them, and the heat that enters at the hot end leaves at
@@ -580,6 +581,31 @@ heat entering through the held face equals `σε∫(T⁴ − T∞⁴)dS` off the
 fixes the transient answer against a closed form that a linearised film cannot reproduce by
 accident, and measures the θ-method's own order on it. Between them they would fail if the
 film, the iteration, the energy balance or the time integrator were wrong.
+
+**E8 chains a static Step to a heat-transient predecessor's retained History** (#84): a
+plane-stress strip restrained on every edge is stepped from `T0 = 300 K` to `T1 = 400 K` at
+both x-faces, and the static Step named `after` the heat one is solved once per retained
+frame, keeping the last as its Result and one von Mises frame per output time. `ΔT(x,t)` is
+the same Fourier sine series E5's cooled-slab transient already uses (`k/(ρ c_p) = 1 m²/s`,
+`L = 1 m`), generalised to a rise between two endpoints instead of a decay to zero; using 50
+terms, the tail for `n ≥ 101` decays as `exp(-101²π²t)`, which even at the earliest checked
+time (`t = 0.2 s`) is far below any float64 representable value. Because the held faces are
+Dirichlet from `t = 0` on, the edge `ΔT` is exactly `T1 − T0` at every retained frame, so the
+per-frame extremes gate against a fixed maximum and a Fourier-series minimum at the strip's
+centre, both at 1 % of the `Eα(T1−T0)/(1−ν) = 300 MPa` scale. By the final retained frame
+(`t = 2 s`, about twenty diffusion time constants) the field is spatially uniform to far below
+1e-6 relative, so that frame alone is gated pointwise, closing the final-field contract every
+chained Step keeps. **Correction from the plan**: the formula is the plane-*stress* biaxial
+restraint result (`σzz = 0`, free through the thickness); a plane-*strain* strip fully
+restrained in-plane also has zero strain through its (already zero) thickness direction, so all
+three normal strains vanish and the state is the classical *confined* thermal stress
+`σxx = σyy = σzz = −Eα ΔT/(1 − 2ν)` — hydrostatic, and hence exactly zero von Mises everywhere,
+which is not a benchmark. The reduced stiffness never depends on temperature, so it is
+assembled and factorised once per Step (not once per frame) and every frame's thermal load
+alone changes; the budget check (`add_transient_cost`/`enforce_transient_budget`, the same
+machinery a plain transient uses) runs before any per-frame History is allocated, and a chain
+too large to retain is refused naming the *heat* Step's `outputEvery`, not the static Step's,
+because that is the Command that actually controls how many frames there are to solve.
 
 **E2's tolerance is 2 %, not 1 %, and the reason is physics.** The published fin formula is
 one-dimensional; the model is the real two-dimensional slab, whose mid-plane has to conduct

@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use femlab_engine::command::Formulation;
 use femlab_engine::command::{CoupleKind, Field, SectionSpec, Solver, SweepSpacing};
 use femlab_engine::fem::assembly::{
-    assemble_stiffness, expand, pattern, pattern_coupled, reactions, reduce, resolve, Assembled, Csr, Pattern,
-    ResolvedConstraints,
+    assemble_stiffness, expand, pattern, pattern_coupled, reactions, reduce, resolve, thermal_load, Assembled, Csr,
+    Pattern, ResolvedConstraints,
 };
 use femlab_engine::fem::checks;
 use femlab_engine::fem::element::{
@@ -44,7 +44,7 @@ use femlab_engine::post::stress::{average_at_nodes, gp_to_nodes, principal, stre
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
 use femlab_engine::procedure::modal::assemble_mass;
 use femlab_engine::procedure::nonlinear::{self, Converge as NlConverge, Options as NlOptions};
-use femlab_engine::procedure::{self, heat, NonlinearControl, Step, StepResult};
+use femlab_engine::procedure::{self, heat, History, NonlinearControl, Step, StepResult};
 use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
 use femlab_engine::units::{Length, Q};
 use femlab_engine::{Error, ErrorCode, ResolvedSet, SetKind};
@@ -4574,6 +4574,302 @@ fn temperature_at(mesh: &Mesh, res: &StepResult, x: [f64; 3]) -> f64 {
 /// One `Body` name, as the Problem wants it.
 fn one_body() -> Vec<String> {
     vec!["bar".to_string()]
+}
+
+/// The Fourier sine series for a 1 m slab (diffusivity 1 m²/s) initially at `t0`, both faces
+/// stepped to `t1` at t = 0: the same series `retained_frames_cooling_slab_converges_to_the_
+/// fourier_solution` (registry.rs) uses to cool a slab to zero, generalised to a rise between
+/// two endpoints instead of a decay to one. Using 50 terms (n = 1, 3, …, 99), the tail for
+/// n ≥ 101 is bounded term-by-term by `(4Δ/(101π))·exp(-101²π²t)/(1 - exp(-404π²t))` (Δ =
+/// |t1 - t0|; each further term's exponent falls by at least `404π²t` because `(n+2)² - n² =
+/// 4n + 4 ≥ 404` at n ≥ 101), which at the smallest time checked below (t = 0.2 s) is below
+/// 1e-8700 — nowhere near either gate.
+fn stepped_slab_exact(x: f64, time: f64, t0: f64, t1: f64) -> f64 {
+    let pi = std::f64::consts::PI;
+    t1 - (t1 - t0)
+        * (1..100)
+            .step_by(2)
+            .map(|n| {
+                let k = n as f64 * pi;
+                (4.0 / k) * libm::sin(k * x) * libm::exp(-k * k * time)
+            })
+            .sum::<f64>()
+}
+
+/// Benchmark E8: transient field chaining (#84). A plane-stress strip is restrained on every
+/// edge and stepped from `t0` to `t1` at both ends by a heat-transient predecessor; the static
+/// Step named `after` it is solved once per retained frame, keeping the last as its Result and
+/// carrying a von Mises frame for every output time.
+///
+/// **Correction from the plan**: a plane-*strain* strip fully restrained in both in-plane
+/// directions also has zero strain through the (already zero) thickness direction, so all three
+/// normal strains vanish — the classical *confined* thermal stress
+/// `σxx = σyy = σzz = -Eα ΔT / (1 - 2ν)`, which is hydrostatic and carries **zero** von Mises
+/// everywhere: not a benchmark. `σxx = σyy = -Eα ΔT / (1 - ν)` is the plane-*stress* biaxial
+/// restraint result (`σzz = 0`, free through the thickness), which is what this case uses; its
+/// von Mises is `|σxx|`, non-zero and gateable.
+#[test]
+fn transient_field_chaining_gives_stress_at_every_retained_frame() {
+    let (t0, t1) = (300.0, 400.0);
+    let alpha = 1e-5;
+    let (k, rho, cp) = (6.0, 2.0, 3.0); // diffusivity k/(rho*cp) = 1 m^2/s, on a 1 m strip
+    let idealisation = Idealisation::PlaneStress { thickness: 0.2 };
+    let mesh = Structured { kind: ElementKind::Quad4, n: [24, 1, 1] }.box_([1.0, 0.2, 0.2]);
+    let sets = sets_of(&mesh);
+    let bodies = vec!["strip".to_string()];
+
+    let heat_material = Material {
+        law: builtin_law("linear-elastic").expect("built in"),
+        props: vec![YOUNG, POISSON],
+        rho,
+        alpha: [0.0; 3],
+        k: [k; 3],
+        cp,
+        axes: None,
+    };
+    let p_heat = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        idealisation.clone(),
+        heat_material,
+        vec![hold("xmin", "xmin", t1), hold("xmax", "xmax", t1)],
+        Vec::new(),
+    );
+    let transient = Step::HeatTransient {
+        dt: 0.001,
+        t_end: 2.0,
+        theta: 0.5,
+        initial: t0,
+        output_every: 200,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
+    };
+    let heat_result = run_step(&p_heat, &transient).expect("a well-posed transient heat solve");
+    let history = heat_result.history.expect("a heat-transient Step retains a History");
+    assert_eq!(history.field, Field::Temperature);
+    let frames = history.times.len();
+
+    let elastic_material = Material {
+        law: builtin_law("linear-elastic").expect("built in"),
+        props: vec![YOUNG, POISSON],
+        rho,
+        alpha: [alpha; 3],
+        k: [k; 3],
+        cp,
+        axes: None,
+    };
+    let mut p_static = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        idealisation,
+        Formulation::Full,
+        vec![
+            fix("xmin_f", "xmin", [true, true, false], 0.0),
+            fix("xmax_f", "xmax", [true, true, false], 0.0),
+            fix("ymin_f", "ymin", [true, true, false], 0.0),
+            fix("ymax_f", "ymax", [true, true, false], 0.0),
+        ],
+    );
+    p_static.materials = vec![elastic_material];
+
+    let mut compose = |values: &[f64]| Ok(Some((values.to_vec(), t0)));
+    let result = procedure::static_::run_history(&mut p_static, &history, &mut compose, &Pool::new(2), &mut nop)
+        .expect("the chained static solve");
+
+    // Frame count equals the predecessor's retained count, and the final history frame equals
+    // the final von Mises field exactly — the final-field contract every other Step keeps.
+    let stress_history = result.history.as_ref().expect("a chained static Step retains a History");
+    assert_eq!(stress_history.field, Field::VonMises);
+    assert_eq!(stress_history.times.len(), frames);
+    assert_eq!(stress_history.values.last().unwrap(), &result.fields[&Field::VonMises].data);
+
+    let scale = YOUNG * alpha * (t1 - t0) / (1.0 - POISSON);
+    let extremes = heat::history_extremes(stress_history);
+    assert_eq!(extremes.len(), frames);
+    for (i, (time, lo, hi)) in extremes.into_iter().enumerate() {
+        assert_eq!(time, history.times[i]);
+        let center = stepped_slab_exact(0.5, time, t0, t1);
+        let expected_lo = YOUNG * alpha * (center - t0).abs() / (1.0 - POISSON);
+        let expected_hi = scale; // the boundary is held at t1 from t = 0 on: dT there is always t1 - t0
+        assert!((lo - expected_lo).abs() <= 0.01 * scale, "frame {i} (t={time}) min: {lo} vs {expected_lo}");
+        assert!((hi - expected_hi).abs() <= 0.01 * scale, "frame {i} (t={time}) max: {hi} vs {expected_hi}");
+    }
+
+    // The final retained time is deep into the exponential decay (t = 2 s, ~20 diffusion time
+    // constants), so the field is uniform to far below 1e-6 relative and the pointwise closed
+    // form gates the whole Result, not just its extremes.
+    let want = [-scale, -scale, 0.0, 0.0, 0.0, 0.0];
+    let stress = &result.fields[&Field::Stress];
+    for node in 0..mesh.n_nodes() {
+        for (c, &w) in want.iter().enumerate() {
+            let got = stress.data[node * stress.comps + c];
+            let tol = 1e-6 * scale;
+            assert!((got - w).abs() <= tol.max(1e-6 * tol), "node {node} component {c}: {got} vs {w}");
+        }
+    }
+    let vm = &result.fields[&Field::VonMises];
+    for node in 0..mesh.n_nodes() {
+        assert!((vm.data[node] - scale).abs() <= 1e-6 * scale, "node {node}: {} vs {scale}", vm.data[node]);
+    }
+}
+
+/// A linear-elastic law that fails on its `fail_on`-th evaluation (never, at 0) and is exactly
+/// the built-in one before that: how a chained static Step's thermal-load integral is made to
+/// fail after the stiffness integral over the same elements has already accepted the material.
+struct FailOn {
+    calls: AtomicUsize,
+    fail_on: usize,
+}
+
+impl MaterialLaw for FailOn {
+    fn id(&self) -> &str {
+        "fail-on"
+    }
+    fn n_props(&self) -> usize {
+        2
+    }
+    fn n_state(&self) -> usize {
+        0
+    }
+    fn prop_names(&self) -> &[&str] {
+        &["E", "nu"]
+    }
+    fn evaluate(&self, b: MaterialBatch<'_>, out: MaterialOut<'_>) -> Result<(), Error> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.fail_on {
+            return Err(Error::new(ErrorCode::MaterialProps, "asked to fail").at("material.test"));
+        }
+        LinearElastic.evaluate(b, out)
+    }
+}
+
+/// A `Material` over a law the test owns; `Material::law` is `'static`, so the law is leaked.
+fn fail_on(n: usize) -> (&'static FailOn, Material) {
+    let law: &'static FailOn = Box::leak(Box::new(FailOn { calls: AtomicUsize::new(0), fail_on: n }));
+    (law, Material { law, ..steel() })
+}
+
+/// The strip of `transient_field_chaining_gives_stress_at_every_retained_frame`, coarser and
+/// warmed over a few increments: enough retained frames to cancel a chained Step mid-loop.
+fn warmed_strip() -> (Mesh, History) {
+    let mesh = Structured { kind: ElementKind::Quad4, n: [4, 1, 1] }.box_([1.0, 0.2, 0.2]);
+    let history = {
+        let sets = sets_of(&mesh);
+        let bodies = one_body();
+        let material = Material { rho: 2.0, alpha: [0.0; 3], k: [6.0; 3], cp: 3.0, ..steel() };
+        let p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::PlaneStress { thickness: 0.2 },
+            material,
+            vec![hold("xmin", "xmin", 400.0), hold("xmax", "xmax", 400.0)],
+            Vec::new(),
+        );
+        let transient = Step::HeatTransient {
+            dt: 0.1,
+            t_end: 0.3,
+            theta: 0.5,
+            initial: 300.0,
+            output_every: 1,
+            amplitude: None,
+            solver: SolveOptions::default(),
+            control: NonlinearControl::default(),
+        };
+        run_step(&p, &transient).expect("a well-posed transient heat solve").history.expect("retained")
+    };
+    (mesh, history)
+}
+
+/// One chained static solve over `history`, on a pool of two.
+fn run_chained(
+    p: &mut Problem<'_>,
+    history: &History,
+    compose: procedure::static_::ComposeTemperature<'_>,
+    progress: OnProgress<'_>,
+) -> Result<StepResult, Error> {
+    procedure::static_::run_history(p, history, compose, &Pool::new(2), progress)
+}
+
+/// A chained static Step reports every failure its once-factorised, per-frame loop can meet —
+/// the well-posedness checks, the stiffness integral, the thermal-load integral the stiffness
+/// has already accepted, the factorisation, a frame's solve and the temperature composition —
+/// and a host that says stop cancels it at every phase: the assembly, any frame, the recovery.
+#[test]
+fn a_chained_static_step_reports_every_failure_and_cancels_at_every_phase() {
+    let (mesh, history) = warmed_strip();
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let id = Idealisation::PlaneStress { thickness: 0.2 };
+    let held =
+        || vec![fix("xmin_f", "xmin", [true, true, false], 0.0), fix("xmax_f", "xmax", [true, true, false], 0.0)];
+    let frames = history.times.len();
+    assert!(frames > 2, "the fixture retains {frames} frames");
+    let mut compose = |values: &[f64]| Ok(Some((values.to_vec(), 300.0)));
+    // The well-posedness checks come first: nothing holds this strip.
+    let mut loose = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, Vec::new());
+    let e = run_chained(&mut loose, &history, &mut compose, &mut nop).expect_err("rigid modes");
+    assert_eq!(e.code, ErrorCode::ConstraintRigidModes);
+
+    // The stiffness integral is the first to call the law; the checks never look at the props.
+    let mut short = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, held());
+    short.materials[0].props = vec![YOUNG];
+    let e = run_chained(&mut short, &history, &mut compose, &mut nop).expect_err("one prop instead of two");
+    assert_eq!(e.code, ErrorCode::MaterialProps);
+
+    // The thermal-load integral calls it again, per element and frame, after the stiffness has
+    // accepted it: a failure there is reported by the element it happened on.
+    let (counting, material) = fail_on(0);
+    let mut counted = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, held());
+    counted.materials = vec![material];
+    let pat = pattern(&mesh, counted.dofs_per_node());
+    assemble_stiffness(&counted, &pat).expect("the stiffness integral over the whole strip");
+    let stiffness_calls = counting.calls.load(Ordering::SeqCst);
+    let (_, material) = fail_on(stiffness_calls + 1);
+    counted.materials = vec![material];
+    let e = run_chained(&mut counted, &history, &mut compose, &mut nop).expect_err("the thermal load's first call");
+    assert_eq!(e.code, ErrorCode::MaterialProps);
+    assert_eq!(e.where_.as_deref(), Some("element 0"));
+
+    // The factorisation: a negative modulus is a stiffness no Cholesky accepts.
+    let mut soft = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, held());
+    soft.materials[0].props = vec![-YOUNG, POISSON];
+    let e = run_chained(&mut soft, &history, &mut compose, &mut nop).expect_err("indefinite");
+    assert_eq!(e.code, ErrorCode::SolveNotPositiveDefinite);
+
+    // A frame's solve: every input is finite, but the displacement it asks for is not.
+    let mut huge = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, held());
+    huge.materials[0].props = vec![1e-200, POISSON];
+    huge.loads = vec![Load::NodalForce { nodes: "ymax".into(), f: [0.0, 1e300, 0.0] }];
+    let e = run_chained(&mut huge, &history, &mut compose, &mut nop).expect_err("an infinite displacement");
+    assert_eq!(e.code, ErrorCode::SolveStalled);
+
+    // A composition that fails is reported as it is.
+    let mut fine = problem(&mesh, &sets, &bodies, id, Formulation::Full, held());
+    let mut refuse = |_: &[f64]| Err(Error::new(ErrorCode::Schema, "asked to fail"));
+    let e = run_chained(&mut fine, &history, &mut refuse, &mut nop).expect_err("the composition failed");
+    assert_eq!(e.cause, "asked to fail");
+
+    // And a host that says stop: at the assembly, at the first and the last frame, and at the
+    // recovery, which is reported once after the last frame.
+    for at in [0, 1, frames, frames + 1] {
+        let mut stop = cancel_on(at);
+        let e = run_chained(&mut fine, &history, &mut compose, &mut stop).expect_err("cancelled");
+        assert_eq!(e.code, ErrorCode::Cancelled, "call {at}");
+    }
+    let mut go = cancel_on(99);
+    assert!(run_chained(&mut fine, &history, &mut compose, &mut go).is_ok());
+
+    // `assembly::thermal_load` on its own: a Body without a material is the same error the
+    // stiffness gives, before any element is integrated.
+    let mut bare =
+        problem(&mesh, &sets, &bodies, Idealisation::PlaneStress { thickness: 0.2 }, Formulation::Full, held());
+    bare.material_of_block = vec![None; mesh.blocks.len()];
+    bare.temperature = Some((vec![350.0; mesh.n_nodes()], 300.0));
+    let e = thermal_load(&bare).expect_err("no material");
+    assert_eq!(e.code, ErrorCode::ModelNoMaterial);
 }
 
 /// Benchmark E1: a bar between two fixed temperatures conducts a linear profile, exactly, for
