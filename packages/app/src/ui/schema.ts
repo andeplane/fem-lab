@@ -22,6 +22,8 @@ const DIMENSIONS: Record<string, { si: string; exp: [number, number, number, num
   heat_flux: { si: 'W/m^2', exp: [0, 1, -3, 0] },
   heat_source: { si: 'W/m^3', exp: [-1, 1, -3, 0] },
   frequency: { si: 'Hz', exp: [0, 0, -1, 0] },
+  area: { si: 'm^2', exp: [2, 0, 0, 0] },
+  second_moment: { si: 'm^4', exp: [4, 0, 0, 0] },
   dimensionless: { si: '', exp: [0, 0, 0, 0] },
 };
 
@@ -383,6 +385,7 @@ const WCODES: Record<string, { code: string; text: string; fix: string }> = {
   'model.empty': { code: 'W-1000', text: 'Nothing to analyse yet. Add the first body.', fix: 'geometry.addBox' },
   'model.ill-posed': { code: 'W-1002', text: 'A Body and the idealisation disagree on dimension.', fix: 'model.setIdealisation' },
   'model.no-material': { code: 'W-1101', text: 'A Body has no material — nothing carries stiffness.', fix: 'material.assign' },
+  'model.no-section': { code: 'W-1102', text: 'A Body of line members has no section — nothing says how much area carries the force.', fix: 'section.assign' },
   'model.unconstrained': { code: 'W-1300', text: 'Nothing holds the body — six rigid body modes.', fix: 'constraint.fix' },
   'model.unloaded': { code: 'W-1400', text: 'No load. A solve would return zeros.', fix: 'load.pressure' },
   'model.no-step': { code: 'W-1500', text: 'No Step. A Step says what to solve.', fix: 'step.add' },

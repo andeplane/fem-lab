@@ -14,7 +14,7 @@ import { buildSystem, buildTurn, downscaleImage, objectIndex, parseVerification,
 import { defaultProvider, maskKey, MODELS, resolveKey, storedModel } from './keys';
 import { Prose, toolDisplay } from './Prose';
 import { openaiProvider } from './openai';
-import { ProjectFolder, pickFolder, watchAgents, type DirHandle } from './project';
+import { ProjectFolder, pickFolder, rememberHandle, rememberedFolder, reopenRemembered, watchAgents, type DirHandle, type RememberedFolder } from './project';
 import type { ImageBlock, Message, Provider, ProviderId } from './provider';
 
 export interface AssistantPanelProps {
@@ -245,6 +245,8 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
   const [images, setImages] = useState<ImageBlock[]>([]);
   const [index, setIndex] = useState<IndexEntry[]>([]);
   const { folder, skills } = ui;
+  /** The folder a previous session remembered, by name only: reading its handle is a click (#247). */
+  const [remembered, setRemembered] = useState<RememberedFolder | null>(null);
   const [provider, setProvider] = useState<ProviderId>(() => defaultProvider());
   const [model, setModel] = useState(() => storedModel(defaultProvider()));
   const [keyDraft, setKeyDraft] = useState('');
@@ -283,6 +285,17 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
     if (store.state.folder === folder) store.setFolder(folder);
   }, undefined, undefined, (error) => store.log('warn', `project refresh failed: ${String(error)}`)) : undefined), [folder, store]);
 
+  // With no folder open, offer the one a previous session remembered. Only its name is read here:
+  // deserialising the handle is what ends the browser process on Chromium 153 (#247), so that waits
+  // for the click, where a failure has somewhere to be reported.
+  useEffect(() => {
+    if (folder) {
+      setRemembered(null);
+      return;
+    }
+    void rememberedFolder().then(setRemembered).catch(() => setRemembered(null));
+  }, [folder]);
+
   const openFolder = async () => {
     let handle: DirHandle;
     try {
@@ -293,6 +306,20 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
       handle = await pickFolder();
     }
     store.setFolder(await ProjectFolder.fromHandle(handle));
+    // Remembered after the folder opened, so a storage failure costs the reopen offer, not the folder.
+    await rememberHandle(handle).catch((error: unknown) => store.log('warn', `this folder will not be offered after a reload: ${String(error)}`));
+  };
+
+  /** Reopen the remembered folder, or say plainly that it is gone and go back to the picker. */
+  const reopenFolder = async () => {
+    try {
+      const restored = await reopenRemembered();
+      setRemembered(null);
+      if (restored) store.setFolder(restored);
+    } catch (error) {
+      setRemembered(null);
+      store.fail(error);
+    }
   };
 
   const insert = (ref: string) => {
@@ -524,6 +551,12 @@ export function AssistantPanel({ registry, store, hidden = false, panelWidth = 3
             <span class="file">{folder.agentsMd?.file ?? 'no AGENTS.md'}</span>
             <span class="count">{folder.agentsMd ? `${rules.length} project rules in force` : 'no project rules'}</span>
             <span class="paths">/{folder.name}</span>
+          </Cmd>
+        ) : remembered ? (
+          <Cmd cmd="folder.open" class="agents" title="Reopen the remembered folder" run={reopenFolder}>
+            <span class="mono">↻</span>
+            <span class="file">reopen ‘{remembered.name}’</span>
+            <span class="count">remembered from a previous session</span>
           </Cmd>
         ) : (
           <Cmd cmd="folder.open" class="agents" title="Open a folder on disk" run={openFolder}>

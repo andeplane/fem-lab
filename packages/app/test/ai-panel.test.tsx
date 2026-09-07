@@ -1,7 +1,7 @@
 // ADR 0003 for the drawer: every clickable in it names a Command the registry has. Plus the pieces
 // the design's cards are made of — the verification block the model writes, the mention popover,
 // the skill toggles and the settings row.
-import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
+import { FemError, HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import { render } from 'preact';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as anthropic from '../src/ai/anthropic';
@@ -458,6 +458,35 @@ describe('the assistant drawer', () => {
       expect(requests[0]!.messages[0]!.content).toEqual([{ type: 'text', text: `Skill ${builtin.name}:\n${builtin.body}\n\n` }]);
       expect(root.textContent).not.toContain('not-found');
     } finally { provider.mockRestore(); }
+  });
+
+  // Issue #247: start-up only ever learns the folder's *name*; the handle behind it is read on
+  // this click, where a browser that can no longer produce one has somewhere to say so.
+  it('offers a remembered folder by name, and reopens it or says plainly that it is gone', async () => {
+    const remembered = vi.spyOn(project, 'rememberedFolder').mockResolvedValue({ name: 'corbel', at: 1 });
+    const reopen = vi.spyOn(project, 'reopenRemembered');
+    try {
+      reopen.mockRejectedValue(new FemError('file.not-found', 'the remembered folder ‘corbel’ is no longer available in this browser', 'the remembered project folder', 'open a project folder again to pick it'));
+      const gone = await mount();
+      await vi.waitFor(() => expect(gone.root.textContent).toContain('reopen ‘corbel’'));
+      gone.root.querySelector<HTMLButtonElement>('[data-cmd="folder.open"]')!.click();
+      await vi.waitFor(() => expect(gone.store.state.lastError).toMatchObject({ code: 'file.not-found', suggestion: 'open a project folder again to pick it' }));
+      expect(gone.store.state.folder).toBeNull();
+      // …and the offer gives way to the picker rather than staying to fail again.
+      expect(gone.root.textContent).toContain('open a project folder');
+      expect(gone.root.textContent).not.toContain('reopen ‘corbel’');
+
+      reopen.mockResolvedValue(await project.ProjectFolder.fromHandle(fakeDir({ 'AGENTS.md': 'Use the project rules.' }, 'corbel')));
+      const back = await mount();
+      await vi.waitFor(() => expect(back.root.textContent).toContain('reopen ‘corbel’'));
+      back.root.querySelector<HTMLButtonElement>('[data-cmd="folder.open"]')!.click();
+      await vi.waitFor(() => expect(back.store.state.folder?.name).toBe('corbel'));
+      expect(back.root.textContent).toContain('/corbel');
+      expect(back.store.state.lastError).toBeNull();
+    } finally {
+      remembered.mockRestore();
+      reopen.mockRestore();
+    }
   });
 
   it('shares project overrides, refreshed content and close with the host and every skill menu', async () => {

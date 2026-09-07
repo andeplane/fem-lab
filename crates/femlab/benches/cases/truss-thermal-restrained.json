@@ -1,0 +1,201 @@
+{
+  "name": "truss-thermal-restrained",
+  "reference": "Benchmark B11: a bar held at both ends and heated by 100 K. It cannot expand, so the whole of the free thermal strain becomes mechanical strain and sigma = -E alpha dT exactly, whatever the length, the area or the subdivision. With E = 200 GPa and alpha = 1.2e-5 /K that is -240 MPa, and the reaction at each end is sigma A = -240 kN.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "truss-thermal-restrained"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "kN"
+      }
+    },
+    {
+      "cmd": "geometry.addLine",
+      "name": "bar",
+      "points": [
+        [
+          "0 m",
+          "0 m",
+          "0 m"
+        ],
+        [
+          "1 m",
+          "0 m",
+          "0 m"
+        ]
+      ],
+      "divisions": 2
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "200 GPa",
+      "nu": 0.3,
+      "alpha": "1.2e-5 1/K"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "bar"
+      ]
+    },
+    {
+      "cmd": "section.add",
+      "name": "rod",
+      "shape": {
+        "kind": "generic",
+        "a": "1000 mm^2",
+        "iY": "1 mm^4",
+        "iZ": "1 mm^4",
+        "j": "1 mm^4"
+      }
+    },
+    {
+      "cmd": "section.assign",
+      "section": "rod",
+      "bodies": [
+        "bar"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": "1 m"
+      }
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "everything",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "-10 mm",
+          "-10 mm",
+          "-10 mm"
+        ],
+        "max": [
+          "1010 mm",
+          "10 mm",
+          "10 mm"
+        ]
+      }
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "transverse",
+      "on": "everything",
+      "dofs": [
+        "uy",
+        "uz"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "left",
+      "on": "bar.p0"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "right",
+      "on": "bar.p1"
+    },
+    {
+      "cmd": "load.temperature",
+      "name": "heat",
+      "bodies": [
+        "bar"
+      ],
+      "value": "120 degC",
+      "reference": "20 degC"
+    },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": [
+        "transverse",
+        "left",
+        "right"
+      ],
+      "loads": [
+        "heat"
+      ],
+      "output": [
+        "displacement",
+        "stress"
+      ]
+    },
+    {
+      "cmd": "solve.run",
+      "step": "static"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "stress",
+        "component": 0,
+        "at": [
+          "250 mm",
+          "0 mm",
+          "0 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": -240.0,
+      "tol": 1e-12,
+      "rel": true,
+      "note": "sigma = -E alpha dT"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "at": [
+          "500 mm",
+          "0 mm",
+          "0 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 1e-12,
+      "note": "symmetry: the midpoint of a doubly held bar does not move"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/reactions/1/total/0/value",
+      "expect": 240.0,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "the held end pushes back with sigma A = 240 kN"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: a self-equilibrated thermal load leaves no net reaction"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

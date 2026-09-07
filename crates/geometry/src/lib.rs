@@ -15,9 +15,9 @@ pub mod sketch;
 pub mod solid;
 
 pub use imported::{MeshIndex, DEFAULT_FEATURE_ANGLE, MAX_TRIANGLES};
-pub use mesh::{Adjacency, ElementBlock, ElementKind, Face, FaceKind, Mesh, Surface};
+pub use mesh::{merge_coincident, Adjacency, ElementBlock, ElementKind, Face, FaceKind, Mesh, Surface};
 pub use mesher::{
-    annulus, elliptic_annulus, extrude, free, free_sheet, lattice, mapped, perturb_interior, revolve,
+    annulus, elliptic_annulus, extrude, free, free_sheet, lattice, line, mapped, perturb_interior, revolve,
     split_to_simplices, Curve, QuadBlock, RefineBox, Structured,
 };
 pub use predicate::{

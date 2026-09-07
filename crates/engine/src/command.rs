@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::units::{
-    Acceleration, Conductivity, Density, Force, HeatFlux, HeatSource, HeatTransfer, Length, SpecificHeat, Stress,
-    Temperature, ThermalExpansion, Time, UnitSet, Q,
+    Acceleration, Area, Conductivity, Density, Force, HeatFlux, HeatSource, HeatTransfer, Length, SecondMoment,
+    SpecificHeat, Stress, Temperature, ThermalExpansion, Time, UnitSet, Q,
 };
 
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
@@ -70,6 +70,7 @@ impl Axis {
 pub enum ObjectKind {
     Body,
     Material,
+    Section,
     Set,
     Constraint,
     Load,
@@ -81,6 +82,7 @@ impl ObjectKind {
         match self {
             ObjectKind::Body => "body",
             ObjectKind::Material => "material",
+            ObjectKind::Section => "section",
             ObjectKind::Set => "set",
             ObjectKind::Constraint => "constraint",
             ObjectKind::Load => "load",
@@ -95,6 +97,16 @@ impl ObjectKind {
 pub enum Procedure {
     /// Linear static equilibrium.
     Static,
+    /// Static equilibrium with geometric nonlinearity: large displacement and large rotation,
+    /// solved by Newton–Raphson over `increments` load increments. The strain measure is
+    /// Green–Lagrange and the stress the material law returns is second Piola–Kirchhoff, so
+    /// the linear elastic material becomes St Venant–Kirchhoff. The Result reports **Cauchy**
+    /// stress and Green–Lagrange strain, and probes and paths stay in *reference* coordinates.
+    /// Solid and plane-strain idealisations only. Incompatible modes are switched off, so
+    /// hex8 and quad4 lock in bending under this procedure — use `order: 2`. Loads do not
+    /// follow the deformation (a pressure keeps its reference direction and area) and a
+    /// temperature field is applied in full rather than ramped with the load factor.
+    StaticNonlinear,
     /// Natural frequencies and mode shapes; needs `rho` on every Material and `nModes`.
     Modal,
     /// Steady heat conduction with convection, flux and source boundaries; needs `k`.
@@ -177,6 +189,57 @@ pub enum IdealisationSpec {
     PlaneStrain,
     /// Axisymmetric 2D body: x is the radius (x ≥ 0), y the axis of revolution.
     Axisymmetric,
+}
+
+/// A cross-section for line members (trusses and frames). The library turns the shape into the
+/// area, the two second moments, the St Venant torsion constant, the shear correction factors
+/// and the extreme-fibre distances a line element integrates with.
+///
+/// Local axes: `y` is the section's width direction and `z` its height, both through the
+/// centroid. `iY` bends about local y (deflection along z, the strong axis of an I-section) and
+/// `iZ` about local z. The shear centre and warping torsion are not modelled, so an open
+/// section (`i`, `channel`) gets the thin-strip torsion constant only, which under-predicts the
+/// torsional stiffness of a channel and ignores the twist a load through the centroid causes.
+/// `kY`/`kZ` are the classical Timoshenko-Reissner shear factors (5/6 for a rectangle, 0.9 for
+/// a circle, 0.5 for a thin tube, area ratios for the I and the channel), not Cowper's
+/// nu-dependent values, which at nu = 0.3 are 0.850 and 0.886.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SectionSpec {
+    /// Solid rectangle, `width` along local y and `height` along local z.
+    Rectangle { width: Q<Length>, height: Q<Length> },
+    /// Solid circle.
+    Circle { radius: Q<Length> },
+    /// Circular tube of outer `radius` and wall `thickness` (which must be below the radius).
+    Tube { radius: Q<Length>, thickness: Q<Length> },
+    /// Doubly symmetric I-section: total `height` along local z, flange `width` along local y,
+    /// a web of `webThickness` and two flanges of `flangeThickness`.
+    #[serde(rename_all = "camelCase")]
+    I { height: Q<Length>, width: Q<Length>, web_thickness: Q<Length>, flange_thickness: Q<Length> },
+    /// Channel: a web of `height` and `webThickness` at local y = 0 with two flanges of
+    /// `width` and `flangeThickness` reaching out along +y. Its centroid is offset from the
+    /// web, which the properties account for; its shear centre is not modelled.
+    #[serde(rename_all = "camelCase")]
+    Channel { height: Q<Length>, width: Q<Length>, web_thickness: Q<Length>, flange_thickness: Q<Length> },
+    /// The properties given directly, which is how a published benchmark section is entered.
+    /// `kY`/`kZ` default to 5/6; `cY`/`cZ` default to zero, and a section without them reports
+    /// no bending stress rather than a wrong one.
+    Generic {
+        a: Q<Area>,
+        #[serde(rename = "iY")]
+        i_y: Q<SecondMoment>,
+        #[serde(rename = "iZ")]
+        i_z: Q<SecondMoment>,
+        j: Q<SecondMoment>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "kY")]
+        k_y: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "kZ")]
+        k_z: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "cY")]
+        c_y: Option<Q<Length>>,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "cZ")]
+        c_z: Option<Q<Length>>,
+    },
 }
 
 /// Where a lattice mesh gets its element size: one size, or counts per direction.
@@ -778,6 +841,25 @@ pub enum Command {
     #[serde(rename = "geometry.add", rename_all = "camelCase")]
     GeometryAdd { name: String, shape: ShapeSpec },
 
+    /// Add a Body made of straight line members: a truss. `points` are the joints, in order,
+    /// and `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.
+    /// Each member is cut into `divisions` elements of equal length (default 1). Joint `i`
+    /// becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,
+    /// and joints of different line Bodies that sit at the same point are welded into one node
+    /// when the Mesh is built. A member carries axial force only, so give the Body a Section
+    /// with section.assign as well as a Material, and hold enough joints that none of them can
+    /// drift sideways — an under-braced truss is singular and fails in the solver, not here.
+    /// Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
+    #[serde(rename = "geometry.addLine", rename_all = "camelCase")]
+    GeometryAddLine {
+        name: String,
+        points: Vec<[Q<Length>; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        members: Option<Vec<[u32; 2]>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        divisions: Option<u32>,
+    },
+
     /// Cut a shape out of the Body `from`. The cut's faces are auto-named `<name>.<tag>` (for a
     /// cylinder: `<name>.side`), which is how you load or fix the wall of a hole. The shape
     /// is positioned in world coordinates, so use its `at` or a transform to place it.
@@ -884,6 +966,26 @@ pub enum Command {
     /// that still use it; assign them another Material first with material.assign.
     #[serde(rename = "material.remove", rename_all = "camelCase")]
     MaterialRemove { name: String },
+
+    /// Define a cross-section for line Bodies (`geometry.addLine`): a rectangle, circle, tube,
+    /// I, channel, or the properties given directly. A line member has no cross-section
+    /// geometry of its own, so the Section is where its area, second moments, torsion constant,
+    /// shear factors and extreme-fibre distances come from. Re-issuing with an existing name
+    /// edits the section in place. Assign it to Bodies with section.assign.
+    #[serde(rename = "section.add", rename_all = "camelCase")]
+    SectionAdd { name: String, shape: SectionSpec },
+
+    /// Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
+    /// one without it is reported by query.model warnings and blocks solve.run with
+    /// model.no-section. A Section on a solid or sheet Body is carried but never used: those
+    /// Bodies get their cross-section from their geometry.
+    #[serde(rename = "section.assign", rename_all = "camelCase")]
+    SectionAssign { section: String, bodies: Vec<String> },
+
+    /// Remove a Section that is not assigned to any Body. Fails with in-use listing the Bodies
+    /// that still use it; assign them another Section first with section.assign.
+    #[serde(rename = "section.remove", rename_all = "camelCase")]
+    SectionRemove { name: String },
 
     /// Choose the Mesher and element settings; the Mesh is rebuilt lazily when needed. `order`
     /// 1 gives linear elements, 2 quadratic (more accurate in bending and at stress peaks).
@@ -1082,21 +1184,24 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
-    /// `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+    /// `dtFactor` and `outputEvery` to explicit, `amplitude`, `dt`, `tEnd` and
+    /// `outputEvery` to static as well, and `increments`, `maxCutbacks`, `tEnd` and
+    /// `amplitude` to static-nonlinear. An `amplitude` on a static Step ramps its Loads and
     /// prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
     /// defaulting to the whole of it, so a table written in step fraction works unchanged) and
     /// keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
     /// scaled, so its thermal strain is present in full at every increment. Without an
     /// `amplitude` a static Step is the single solve it has always been and retains nothing.
+    /// A static-nonlinear Step always steps, over `increments` equal pieces of the same
+    /// pseudo-time, and keeps every converged one.
     /// Heat-steady requires a finite positive material conductivity `k`; heat-transient also
     /// requires finite positive `rho` and `cp`, and its `theta` must lie in [0, 1].
     /// `nonlinearTolerance` and `nonlinearMaxIterations` govern any Step whose system depends
-    /// on its own answer — today a radiation load — and are ignored by a Step that is linear.
+    /// on its own answer — a radiation load, or geometric nonlinearity — and are ignored by a
+    /// Step that is linear.
     /// Heat Results report net applied power, positive removed heat and stored-energy rate;
     /// transient powers belong to the last θ-method integration stage (radiation uses weighted
     /// endpoint fluxes), while temperature fields belong to its endpoint.
-
     #[serde(rename = "step.add", rename_all = "camelCase")]
     StepAdd {
         name: String,
@@ -1130,12 +1235,26 @@ pub enum Command {
         amplitude: Option<AmplitudeSpec>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initial: Option<Q<Temperature>>,
-        /// Convergence tolerance for a Step that must iterate: the relative sup-norm change of
-        /// the solution between two passes. Default 1e-6.
+        /// Equal load increments a static-nonlinear Step takes over its pseudo-time `[0, tEnd]`
+        /// (default 10). More increments cost proportionally more but start each Newton solve
+        /// closer to equilibrium, which is what makes a stiffening or buckling model converge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        increments: Option<u32>,
+        /// Halvings a static-nonlinear Step may use when an increment does not converge
+        /// (default 5, at most 20). After the last one the Step fails with `newton.diverged`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_cutbacks: Option<u32>,
+        /// Convergence tolerance for a Step that must iterate, relative in both cases: the
+        /// sup-norm change of the solution between two passes for a radiating heat Step
+        /// (default 1e-6), and the residual force and the displacement correction of one Newton
+        /// increment for static-nonlinear (default 1e-8). It is never the *linear* solver's
+        /// tolerance, which is `solve.run`'s.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nonlinear_tolerance: Option<f64>,
-        /// Iteration budget for a Step that must iterate; exceeding it is `solve.diverged`.
-        /// Default 50.
+        /// Iteration budget for a Step that must iterate. Exceeding it is `solve.diverged` for a
+        /// heat Step (default 50); for static-nonlinear it is what makes an increment cut back
+        /// and try again at half the load (default 20, and full Newton reaches 1e-8 in four or
+        /// five iterations from a good starting point).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         nonlinear_max_iterations: Option<u32>,
     },
