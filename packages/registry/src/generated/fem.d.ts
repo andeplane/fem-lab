@@ -164,7 +164,8 @@ export interface Fem {
   load: {
     /**
      * Uniform pressure on a face Set, positive into the surface (a negative value pulls).
-     * The total force is the pressure times the face area and is reported by query.model.
+     * Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
+     * force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
      */
     pressure(args: Omit<Extract<Command, { cmd: 'load.pressure' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -273,6 +274,12 @@ export interface Fem {
      * check that reactions balance the applied loads before trusting a stress. A Step with
      * `after` requires its predecessor's Result to match the current Model state; after an edit,
      * solve the predecessor again before continuing the chain.
+     * Direct linear solves verify their residual too: nonfinite or excessive residuals return
+     * solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
+     * (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
+     * direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+     * On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
+     * assembly and triangular solves retain the engine thread count.
      */
     run(args: Omit<Extract<Command, { cmd: 'solve.run' }>, 'cmd'>): Promise<Ack>;
   };
@@ -334,8 +341,10 @@ export interface Fem {
      */
     mesh(): Promise<MeshSummary>;
     /**
-     * What a Set resolved to on the current Mesh: kind, count, bounding box, area or volume
-     * and centroid. Use it to verify a predicate selected what you meant.
+     * What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
+     * and centroid. Face Sets also report pressureArea from the load boundary quadrature,
+     * including thickness or radial weighting (plane strain: one metre of depth). Pressure
+     * times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
      */
     set(args: Omit<Extract<Query, { query: 'query.set' }>, 'query'>): Promise<SetInfo>;
     /**

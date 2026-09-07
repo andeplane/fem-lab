@@ -43,8 +43,10 @@ pub enum Query {
     #[schemars(extend("x-returns" = "MeshSummary"))]
     Mesh {},
 
-    /// What a Set resolved to on the current Mesh: kind, count, bounding box, area or volume
-    /// and centroid. Use it to verify a predicate selected what you meant.
+    /// What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
+    /// and centroid. Face Sets also report pressureArea from the load boundary quadrature,
+    /// including thickness or radial weighting (plane strain: one metre of depth). Pressure
+    /// times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
     #[serde(rename = "query.set", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "SetInfo"))]
     Set { name: String },
@@ -415,6 +417,10 @@ pub struct SetInfo {
     pub count: u32,
     pub bbox: [Valued; 6],
     pub measure: Valued,
+    /// Effective loaded area from the pressure/traction boundary quadrature, including plane
+    /// stress thickness or axisymmetric 2πr. Plane strain uses one metre of out-of-plane depth.
+    /// Null for non-face Sets. Pressure times this area is a scalar, not a net vector force.
+    pub pressure_area: Option<Valued>,
     pub centroid: [Valued; 3],
 }
 

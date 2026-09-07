@@ -882,7 +882,8 @@ pub enum Command {
     ConstraintRemove { name: String },
 
     /// Uniform pressure on a face Set, positive into the surface (a negative value pulls).
-    /// The total force is the pressure times the face area and is reported by query.model.
+    /// Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
+    /// force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
     #[serde(rename = "load.pressure", rename_all = "camelCase")]
     LoadPressure { name: String, on: SetRef, value: Q<Stress> },
 
@@ -1033,6 +1034,12 @@ pub enum Command {
     /// check that reactions balance the applied loads before trusting a stress. A Step with
     /// `after` requires its predecessor's Result to match the current Model state; after an edit,
     /// solve the predecessor again before continuing the chain.
+    /// Direct linear solves verify their residual too: nonfinite or excessive residuals return
+    /// solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
+    /// (default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
+    /// direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+    /// On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
+    /// assembly and triangular solves retain the engine thread count.
     #[serde(rename = "solve.run", rename_all = "camelCase")]
     SolveRun {
         step: String,
