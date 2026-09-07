@@ -6035,7 +6035,7 @@ fn harmonic_damping_is_validated_where_it_is_written() {
                 quantities.join(",")
             ),
         );
-        assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::Schema, Some(field)), "{field}");
+        assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::UnitDimension, Some(field)), "{field}");
     }
     // Zero is the boundary that must be accepted: no damping at all is a legal sweep.
     ok(
