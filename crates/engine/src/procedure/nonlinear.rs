@@ -498,6 +498,7 @@ pub async fn run(
         extremes: ex,
         reactions: per_constraint,
         frequencies: Vec::new(),
+        buckling_factors: Vec::new(),
         modes: Vec::new(),
         history: Some(history),
         sweep: None,
