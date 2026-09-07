@@ -1748,6 +1748,248 @@ proptest! {
     }
 }
 
+// ---- imported triangle-mesh geometry (#350) ---------------------------------------------------
+
+use femlab_geometry::{Affine3, MAX_TRIANGLES};
+
+/// The tagged boundary of an evaluated Solid, back as a raw soup: what an STL round trip gives.
+fn resample(shape: &Shape) -> Shape {
+    let s = Solid::evaluate(shape).unwrap();
+    let t = s.triangles();
+    Shape::Mesh {
+        positions: t.positions.clone(),
+        triangles: t.triangles.clone(),
+        feature_angle: None,
+        simplify_below: None,
+    }
+}
+
+/// The unit cube [0,1]^3 as a soup, wound counter-clockwise seen from outside.
+fn cube_soup() -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
+    let positions = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [0.0, 1.0, 1.0],
+    ];
+    let quads: [[u32; 4]; 6] = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]];
+    let triangles = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
+    (positions, triangles)
+}
+
+fn mesh_shape(positions: Vec<[f64; 3]>, triangles: Vec<[u32; 3]>) -> Shape {
+    Shape::Mesh { positions, triangles, feature_angle: None, simplify_below: None }
+}
+
+fn patch_areas(s: &Solid) -> BTreeMap<String, f64> {
+    let m = s.triangles();
+    let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    for (t, tri) in m.triangles.iter().enumerate() {
+        let (p, q, r) = (m.positions[tri[0] as usize], m.positions[tri[1] as usize], m.positions[tri[2] as usize]);
+        let n = cross(sub(q, p), sub(r, p));
+        *out.entry(m.tag_of(t).to_string()).or_default() += 0.5 * libm::sqrt(dot(n, n));
+    }
+    out
+}
+
+#[test]
+fn an_imported_cube_is_exact_with_six_named_patches() {
+    let (positions, triangles) = cube_soup();
+    let s = Solid::evaluate(&mesh_shape(positions, triangles)).unwrap();
+    assert_eq!(s.dim(), 3);
+    assert!((s.volume() - 1.0).abs() < 1e-12, "{}", s.volume());
+    assert!((s.area() - 6.0).abs() < 1e-12);
+    assert_eq!(s.bbox(), ([0.0; 3], [1.0; 3]));
+    assert_eq!(s.genus(), 0);
+    assert_eq!(s.tags(), ["face0", "face1", "face2", "face3", "face4", "face5"]);
+    for (_, a) in patch_areas(&s) {
+        assert!((a - 1.0).abs() < 1e-12);
+    }
+    assert!(s.contains([0.5, 0.5, 0.5]));
+    assert!(!s.contains([1.5, 0.5, 0.5]));
+    assert!(!s.contains([-0.5, 0.5, 0.5]));
+    assert!(s.contains([0.125, 0.125, 0.125]));
+    assert!(format!("{s:?}").contains("MeshIndex(12 triangles)"));
+}
+
+#[test]
+fn every_primitive_survives_a_round_trip_through_its_own_triangles() {
+    let cases: [(Shape, usize, f64); 4] = [
+        (Shape::Box { size: [1.0, 2.0, 3.0] }, 6, 6.0),
+        (Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(64) }, 3, 32.0 * libm::sin(2.0 * PI / 64.0) * 2.0),
+        (Shape::Sphere { radius: 1.0, segments: Some(32) }, 1, f64::NAN),
+        (
+            Shape::Revolve { sketch: Sketch::rect(1.0, 2.0), angle: 360.0, segments: Some(64) },
+            3,
+            32.0 * libm::sin(2.0 * PI / 64.0) * 2.0,
+        ),
+    ];
+    for (shape, patches, volume) in cases {
+        let direct = Solid::evaluate(&shape).unwrap();
+        let back = Solid::evaluate(&resample(&shape)).unwrap();
+        assert!((back.volume() - direct.volume()).abs() < 1e-9, "{shape:?}");
+        assert!((back.area() - direct.area()).abs() < 1e-9, "{shape:?}");
+        assert_eq!(back.bbox(), direct.bbox(), "{shape:?}");
+        assert_eq!(back.genus(), 0, "{shape:?}");
+        assert_eq!(back.tags().len(), patches, "{shape:?} gave {:?}", back.tags());
+        if volume.is_finite() {
+            assert!((back.volume() - volume).abs() < 1e-9, "{shape:?}");
+        }
+        let c = direct.centroid();
+        assert!(back.contains(c), "{shape:?}");
+        let (_, hi) = direct.bbox();
+        assert!(!back.contains([hi[0] + 1.0, hi[1] + 1.0, hi[2] + 1.0]), "{shape:?}");
+    }
+}
+
+#[test]
+fn a_torus_keeps_its_hole_and_a_bore_keeps_one_patch_per_wall() {
+    let ring = Sketch::circle([1.0, 0.0], 0.25, "tube");
+    let torus = Shape::Revolve { sketch: Sketch { outer: ring, holes: vec![] }, angle: 360.0, segments: Some(48) };
+    let direct = Solid::evaluate(&torus).unwrap();
+    assert_eq!(direct.genus(), 1);
+    let back = Solid::evaluate(&resample(&torus)).unwrap();
+    assert_eq!(back.genus(), 1, "an imported torus is still a torus");
+    assert!((back.volume() - direct.volume()).abs() < 1e-9);
+
+    let plate = Shape::Subtract {
+        from: Box::new(Shape::Box { size: [10.0, 10.0, 2.0] }),
+        cut: vec![Shape::Transform {
+            shape: Box::new(Shape::Cylinder { radius: 2.0, height: 10.0, segments: Some(64) }),
+            at: Affine3::translation([5.0, 5.0, -4.0]),
+        }],
+    };
+    let s = Solid::evaluate(&resample(&plate)).unwrap();
+    assert_eq!(s.genus(), 1);
+    assert_eq!(s.tags().len(), 7, "{:?}", s.tags());
+    // the bore wall is one smooth patch of its own; the two faces it pierces stay whole
+    let areas = patch_areas(&s);
+    let bore = 64.0 * 2.0 * libm::sin(PI / 64.0) * 2.0 * 2.0;
+    let pierced = 100.0 - 64.0 * 0.5 * 4.0 * libm::sin(2.0 * PI / 64.0);
+    assert_eq!(areas.values().filter(|a| (**a - bore).abs() < 1e-9).count(), 1, "{areas:?}");
+    assert_eq!(areas.values().filter(|a| (**a - pierced).abs() < 1e-9).count(), 2, "{areas:?}");
+    assert_eq!(areas.values().filter(|a| (**a - 20.0).abs() < 1e-9).count(), 4, "{areas:?}");
+}
+
+#[test]
+fn the_feature_angle_chooses_how_coarse_the_patches_are() {
+    let cyl = resample(&Shape::Cylinder { radius: 1.0, height: 2.0, segments: Some(8) });
+    let with = |angle: f64| {
+        let Shape::Mesh { positions, triangles, .. } = &cyl else { unreachable!() };
+        let shape = Shape::Mesh {
+            positions: positions.clone(),
+            triangles: triangles.clone(),
+            feature_angle: Some(angle),
+            simplify_below: None,
+        };
+        Solid::evaluate(&shape).unwrap().tags().len()
+    };
+    assert_eq!(with(30.0), 8 + 2);
+    assert_eq!(with(50.0), 3);
+    assert_eq!(with(91.0), 1);
+}
+
+#[test]
+fn simplify_below_removes_a_sliver_the_import_did_not_want() {
+    let shaved = Shape::Subtract {
+        from: Box::new(Shape::Box { size: [1.0; 3] }),
+        cut: vec![Shape::Transform {
+            shape: Box::new(Shape::Box { size: [1.0; 3] }),
+            at: Affine3::translation([0.9999999, 0.9999999, 0.9999999]),
+        }],
+    };
+    let Shape::Mesh { positions, triangles, .. } = resample(&shaved) else { unreachable!() };
+    let raw = Solid::evaluate(&mesh_shape(positions.clone(), triangles.clone())).unwrap();
+    let clean = Solid::evaluate(&Shape::Mesh { positions, triangles, feature_angle: None, simplify_below: Some(1e-3) })
+        .unwrap();
+    assert!(clean.triangles().triangles.len() < raw.triangles().triangles.len());
+    assert_eq!(clean.tags().len(), 6, "back to a plain box: {:?}", clean.tags());
+    assert!((clean.volume() - 1.0).abs() < 1e-6, "{}", clean.volume());
+}
+
+#[test]
+fn a_lattice_meshes_an_imported_cube_and_every_face_set_resolves() {
+    let (positions, triangles) = cube_soup();
+    let named = Shape::Named { name: "part".into(), shape: Box::new(mesh_shape(positions, triangles)) };
+    let s = Solid::evaluate(&named).unwrap();
+    assert_eq!(s.tags(), ["part.face0", "part.face1", "part.face2", "part.face3", "part.face4", "part.face5"]);
+    let m = lattice(&s, None, Some([4, 4, 4]), false).unwrap();
+    assert_eq!(m.n_elems(), 64);
+    assert!((measure(&m) - 1.0).abs() < 1e-12);
+    // every boundary face of a cube lies on a bounding-box plane, so the lattice names them
+    // `xmin … zmax` as it does for any body; the durable name for a patch is a predicate.
+    assert_eq!(m.face_sets.len(), 6);
+    for (tag, faces) in &m.face_sets {
+        assert_eq!(faces.len(), 16, "{tag}");
+    }
+    let top = resolve_face_set(&m, &FacePredicate::Plane { normal: [0.0, 0.0, 1.0], offset: 1.0, tol: None }, None);
+    assert_eq!(top.len(), 16);
+}
+
+#[test]
+fn imported_meshes_are_validated_before_they_reach_the_kernel() {
+    let (positions, triangles) = cube_soup();
+    let err = |s: Shape| Solid::evaluate(&s).unwrap_err().0;
+    assert!(err(mesh_shape(positions.clone(), triangles[..3].to_vec())).contains("at least 4 triangles"));
+    assert!(err(mesh_shape(positions.clone(), vec![[0, 1, 2]; MAX_TRIANGLES + 1])).contains("limited to 500000"));
+    let mut nan = positions.clone();
+    nan[2][1] = f64::NAN;
+    assert!(err(mesh_shape(nan, triangles.clone())).contains("vertex 2 has a non-finite coordinate"));
+    let mut oob = triangles.clone();
+    oob[5][2] = 99;
+    assert!(err(mesh_shape(positions.clone(), oob)).contains("triangle 5 refers to vertex 99"));
+    let mut flat = triangles.clone();
+    flat[7] = [1, 1, 2];
+    assert!(err(mesh_shape(positions.clone(), flat)).contains("triangle 7 has zero or non-finite area"));
+    let huge = vec![[0.0; 3], [1e300, 0.0, 0.0], [0.0, 1e300, 0.0], [0.0, 0.0, 1.0]];
+    let big = vec![[0, 1, 2], [0, 1, 3], [1, 2, 3], [0, 2, 3]];
+    assert!(err(mesh_shape(huge, big)).contains("triangle 0 has zero or non-finite area"));
+    let bad_angle = Shape::Mesh {
+        positions: positions.clone(),
+        triangles: triangles.clone(),
+        feature_angle: Some(180.0),
+        simplify_below: None,
+    };
+    assert!(err(bad_angle).contains("featureAngle must be in (0, 180)"));
+    let bad_simplify = Shape::Mesh {
+        positions: positions.clone(),
+        triangles: triangles.clone(),
+        feature_angle: None,
+        simplify_below: Some(-1.0),
+    };
+    assert!(err(bad_simplify).contains("simplifyBelow must be zero or positive"));
+    let open: Vec<[u32; 3]> = triangles.iter().copied().filter(|t| !t.contains(&6)).collect();
+    assert!(err(mesh_shape(positions.clone(), open)).contains("Not Closed"));
+    let gone = Shape::Mesh { positions, triangles, feature_angle: None, simplify_below: Some(100.0) };
+    assert!(err(gone).contains("simplifies away to nothing"));
+    let (positions, triangles) = cube_soup();
+    assert!(mesh_shape(positions, triangles).contains([0.5; 3]).unwrap_err().0.contains("evaluated Solid"));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+    /// A random triangle soup must be rejected or evaluated, never panic the kernel: the same
+    /// rule the free mesher's sketches live under (AGENTS.md, issue #5).
+    #[test]
+    fn a_random_triangle_soup_never_panics_the_kernel(
+        coords in prop::collection::vec(-2.0f64..2.0, 12..30),
+        indices in prop::collection::vec(0u32..12, 12..30),
+    ) {
+        let positions: Vec<[f64; 3]> = coords.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let triangles: Vec<[u32; 3]> = indices.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let shape = Shape::Mesh { positions, triangles, feature_angle: None, simplify_below: None };
+        // The property is that these return at all. Any `Err` is a pass.
+        if let Ok(s) = Solid::evaluate(&shape) {
+            let _ = s.contains([0.1, 0.2, 0.3]);
+            let _ = lattice(&s, None, Some([2, 2, 2]), false);
+        }
+    }
+}
+
 // ---- the free tet mesher (isosurface stuffing) ------------------------------------------------
 
 use femlab_geometry::tet;

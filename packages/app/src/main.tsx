@@ -13,6 +13,7 @@ import '@fontsource/ibm-plex-sans/latin-600.css';
 import { render } from 'preact';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { capabilityNotes, readHostCaps } from './capabilities';
+import { clearsBenchmark } from './benchmark';
 import { devApiKeys } from './dev-keys';
 import { appHostCommands, autosaveHistory, noteAutosave, primeAutosave, forkProject, makeHostContext, noteProject, primeProjects, type ViewerRef } from './host';
 import { ResultsView } from './results';
@@ -107,8 +108,10 @@ async function boot(): Promise<void> {
    * has to catch up. `file.open` replaces the whole Model through the
    * transport, so without this the tree, the Journal and the new project all lag a Command
    * behind; both example-open Commands refresh internally and need no row here.
+   * `geometry.importFile` reads a file the host owns and dispatches `geometry.import`, so the
+   * Model gains a Body the tree and the viewer have to see.
    */
-  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'project.new', 'project.open']);
+  const REFRESHES = new Set(['file.restore', 'file.export', 'file.open', 'project.new', 'project.open', 'geometry.importFile']);
 
   /** One entry point for the UI, the console and (later) the AI; every call is logged and re-reads the Model. */
   const dispatch: Registry['dispatch'] = async (cmd) => {
@@ -117,7 +120,7 @@ async function boot(): Promise<void> {
     // prevents that refresh from writing over the project being replaced.
     const opensExample = cmd.cmd === 'file.openExample' || cmd.cmd === 'example.open';
     if (opensExample) forkProject();
-    if (registry.describe(cmd.cmd).provider === 'engine' || ['file.open', 'file.restore', 'example.open', 'script.run'].includes(cmd.cmd)) results.invalidateTransient();
+    if (registry.describe(cmd.cmd).provider === 'engine' || ['file.open', 'file.restore', 'example.open', 'script.run', 'geometry.importFile'].includes(cmd.cmd)) results.invalidateTransient();
     // A long Command owns the Solve button and the solving card until it settles either way.
     const long = cmd.cmd === 'solve.run' || cmd.cmd === 'study.converge';
     if (long) store.set({ solving: String(cmd['step'] ?? ''), progress: { phase: 'starting', fraction: 0 } });
@@ -125,6 +128,7 @@ async function boot(): Promise<void> {
       const ack = await registry.dispatch(cmd);
       if (REPLACES_MODEL.has(cmd.cmd) && !opensExample) forkProject();
       store.log('command', cmd.cmd);
+      if (clearsBenchmark(cmd.cmd, ack)) store.set({ benchmark: null });
       // `file.export` is a host Command that runs the engine's `mesh.export`, which the engine
       // journals like any other, and `file.open` / `example.open` replace the engine Model and
       // Journal outright, so the store, viewer and Results have to catch up after those too.

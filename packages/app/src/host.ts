@@ -1,8 +1,9 @@
 // `HostContext` for the browser: the side effects every host Command in `@femlab/registry` is
 // allowed to have, bound to this app's store and viewer. Nothing here reaches into the engine
 // except through the transport, and nothing in the registry knows the DOM exists.
-import { MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
+import { MAX_GEOMETRY_FILE_BYTES, MAX_MODEL_FILE_BYTES, FemError, type AiProvider, type AutosaveState, type AutosaveVersion, type EngineTransport, type HostContext, type HostDef, type Registry, type JournalEntry, type ProjectMeta, type Selection } from '@femlab/registry';
 import { z } from 'zod';
+import { attachComparison, benchmarkProvenance, type ActiveBenchmark, type ExampleEntry } from './benchmark';
 import { storeKey } from './ai/key-storage';
 import { AnimationCapture, browserAnimationCaptureEnvironment, type AnimationCaptureEnvironment } from './animation-capture';
 import type { HostCaps } from './capabilities';
@@ -38,6 +39,16 @@ async function fetchExample(name: string): Promise<string> {
   const res = await fetch(`${import.meta.env.BASE_URL}examples/${name}.json`);
   if (!res.ok) throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
   return res.text();
+}
+
+async function fetchExampleMetadata(name: string): Promise<ActiveBenchmark> {
+  const res = await fetch(`${import.meta.env.BASE_URL}examples/index.json`);
+  if (!res.ok) throw new FemError('file.not-found', 'the bundled example index could not be read', name, 'reload the app and open Examples again');
+  const entry = ((await res.json()) as { examples?: ExampleEntry[] }).examples?.find((example) => example.name === name);
+  if (!entry || typeof entry.theory !== 'string' || typeof entry.expected?.reference !== 'string') {
+    throw new FemError('file.not-found', `no bundled example named '${name}'`, name, 'open the Examples panel for the list');
+  }
+  return attachComparison(entry);
 }
 
 /**
@@ -340,6 +351,19 @@ export function makeHostContext(
           };
           input.click();
         }),
+      pickBytes: (accept) =>
+        new Promise<Uint8Array>((resolve, reject) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = accept;
+          input.onchange = () => {
+            const file = input.files?.[0];
+            if (!file) return reject(new FemError('file.not-found', 'no file was chosen', 'picker'));
+            if (file.size > MAX_GEOMETRY_FILE_BYTES) return reject(new FemError('schema', 'the geometry file exceeds the 32 MiB import limit', 'picker', 'decimate the mesh in the tool that wrote it'));
+            file.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer)), reject);
+          };
+          input.click();
+        }),
       download: (name, mime, data) => {
         const url = URL.createObjectURL(new Blob([data as BlobPart], { type: mime }));
         const a = Object.assign(document.createElement('a'), { href: url, download: name });
@@ -414,6 +438,7 @@ export function makeHostContext(
 
       info: () => null,
       readText: soon('the folder on disk', 'use file.open for now'),
+      readBytes: soon('the folder on disk', 'use geometry.importFile with the picker for now'),
       writeText: soon('the folder on disk', 'use file.save for now'),
       writeBytes: soon('the folder on disk', 'use file.save for now'),
     },
@@ -433,15 +458,19 @@ export function makeHostContext(
 
 /** Replay bundled Journals through the engine and publish a baseline only after a complete open. */
 export async function openExample(name: string, store: Store, transport: EngineTransport, refresh: () => Promise<void>, results?: ResultsView) {
+  const benchmark = await fetchExampleMetadata(name);
   const entries = JSON.parse(await fetchExample(name)) as { cmd: Record<string, unknown> }[];
   // An example that ends on solve.run opens solved, and a solved Model is shown as one:
   // the last solve's Ack goes where the Solve button's would (results tab, contours).
+  store.set({ benchmark: null, study: null });
   let solved: unknown = null;
+  let study: unknown = null;
   let opened: Awaited<ReturnType<EngineTransport['exportFile']>>;
   try {
     for (const e of entries) {
       const ack = await transport.dispatch(e.cmd as never);
-      if (String(e.cmd.cmd).startsWith('solve.') || e.cmd.cmd === 'study.converge') solved = ack;
+      if (String(e.cmd.cmd).startsWith('solve.')) solved = ack;
+      if (e.cmd.cmd === 'study.converge') study = ack;
     }
     opened = await transport.exportFile();
   } finally {
@@ -451,7 +480,10 @@ export async function openExample(name: string, store: Store, transport: EngineT
   }
   // The gallery has done its job; leaving it up hides the Model it just opened.
   store.togglePanel('examples', false);
+  const provenance = benchmarkProvenance(store.state.model, store.state.journal, store.state.revision);
+  if (study) await results?.onAck(study);
   if (solved) await results?.onAck(solved);
+  store.set({ benchmark: { ...benchmark, ...provenance } });
   // An example is an explicit open. Use the normalized Journal captured from the engine
   // before UI hydration, and establish the baseline only after the whole open succeeded.
   store.markSaved(opened.journal);

@@ -625,6 +625,7 @@ mod tests {
         })).unwrap();
         let zero = Valued { value: 0.0, unit: "mm".into() };
         let result = ResultSummary {
+            result_id: "result-1".into(),
             reaction_quantity: crate::units::ReactionQuantity::Force,
             step: "static".into(),
             revision: 1,
