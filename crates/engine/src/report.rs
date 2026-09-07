@@ -129,7 +129,12 @@ fn assumptions(m: &ModelSummary) -> String {
         "- **Element formulation**: {}.\n",
         m.mesh_settings.as_ref().map(formulation).unwrap_or_else(|| "no mesh settings yet".into())
     );
-    s += "- **Isotropic materials**, material law `linear-elastic`; no plasticity, creep or damage.\n";
+    s += if m.materials.iter().any(|mat| mat.orthotropic.is_some()) {
+        "- **Orthotropic and isotropic materials**, material laws `orthotropic-elastic` and \
+         `linear-elastic`; no plasticity, creep or damage.\n"
+    } else {
+        "- **Isotropic materials**, material law `linear-elastic`; no plasticity, creep or damage.\n"
+    };
     s += "- **Static equilibrium** unless a Step names a dynamic procedure.\n\n";
     s += "$$\\boldsymbol{\\sigma} = \\mathbf{C}\\,\\boldsymbol{\\varepsilon}, \\qquad \
           \\boldsymbol{\\varepsilon} = \\tfrac{1}{2}\\left(\\nabla\\mathbf{u} + \
@@ -189,21 +194,48 @@ fn geometry(m: &ModelSummary) -> String {
 
 fn materials(m: &ModelSummary, model: &crate::model::Model) -> String {
     let mut s = String::from("## Materials\n\n");
+    // The axes column only appears when some material has them, so an isotropic Model's note is
+    // exactly the note it was before orientation existed.
+    let oriented = m.materials.iter().any(|mat| mat.orientation.is_some());
+    let mut header = vec!["Material", "E", "ν", "ρ"];
+    if oriented {
+        header.push("Axes");
+    }
+    header.extend(["Source", "Assigned to"]);
     s += &table(
-        &["Material", "E", "ν", "ρ", "Source", "Assigned to"],
+        &header,
         m.materials
             .iter()
             .map(|mat| {
                 let source =
                     model.material(&mat.name).and_then(|x| x.source.clone()).unwrap_or_else(|| "not stated".into());
-                vec![
+                // An orthotropic material has three of each, so the two stiffness columns list
+                // E1/E2/E3 and ν12/ν13/ν23 instead of the single isotropic pair.
+                let (stiffness, poisson) = match &mat.orthotropic {
+                    Some(o) => (
+                        format!("{} / {} / {}", q(&o.e1), q(&o.e2), q(&o.e3)),
+                        format!("{} / {} / {}", fmt_sig(o.nu12, 4), fmt_sig(o.nu13, 4), fmt_sig(o.nu23, 4)),
+                    ),
+                    // `material.add` guarantees one form or the other, so the isotropic pair is
+                    // present here; an empty cell is what a hand-edited Model with neither gets.
+                    None => {
+                        (mat.e.as_ref().map(q).unwrap_or_default(), mat.nu.map(|v| fmt_sig(v, 4)).unwrap_or_default())
+                    }
+                };
+                let mut row = vec![
                     format!("`{}`", mat.name),
-                    q(&mat.e),
-                    fmt_sig(mat.nu, 4),
+                    stiffness,
+                    poisson,
                     mat.rho.as_ref().map(q).unwrap_or_else(|| "—".into()),
-                    source,
-                    mat.assigned_to.join(", "),
-                ]
+                ];
+                if oriented {
+                    row.push(mat.orientation.as_ref().map_or_else(
+                        || "global".into(),
+                        |o| format!("{}° about [{}, {}, {}]", fmt_sig(o.degrees, 4), o.axis[0], o.axis[1], o.axis[2]),
+                    ));
+                }
+                row.extend([source, mat.assigned_to.join(", ")]);
+                row
             })
             .collect(),
         "The Model has no materials yet.",
@@ -464,7 +496,12 @@ fn hand_calc(model: &crate::model::Model, r: &ResultSummary) -> Option<String> {
         .max_by(|&i, &j| total[i].abs().total_cmp(&total[j].abs()))
         .expect("two transverse axes");
     let other = 3 - axis - bend;
-    let (l, e) = (size[axis], mat.e);
+    // An orthotropic or oriented material has no single `E` for beam theory to quote, so the
+    // hook stands down rather than publishing a hand check that is wrong by construction.
+    if mat.orientation.is_some() {
+        return None;
+    }
+    let (l, e) = (size[axis], mat.e?);
     let axial = total[axis].abs() >= total[bend].abs();
     let (component, delta, formula, given) = if axial {
         let area = size[bend] * size[other];
@@ -701,6 +738,14 @@ mod tests {
                 m.loads[0].kind = LoadKind::Force { on: "beam.xmax".into(), total: [1.0, 0.0, -1000.0] }
             }),
             ("no displacement output", |_, r| r.extremes.clear()),
+            // Beam theory needs one `E`: an oriented or an orthotropic material has none to quote.
+            ("oriented material", |m, _| {
+                m.materials[0].orientation = Some(crate::model::Orientation { axis: [0.0, 0.0, 1.0], angle: 0.5 })
+            }),
+            ("orthotropic material without E", |m, _| {
+                m.materials[0].e = None;
+                m.materials[0].nu = None;
+            }),
         ];
         for (reason, change) in inapplicable {
             let (mut m, mut r) = (model.clone(), result.clone());

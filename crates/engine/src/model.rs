@@ -94,19 +94,93 @@ pub struct NamedSet {
     pub source: SetSource,
 }
 
-/// An isotropic linear-elastic material, SI.
+/// Orthotropic stiffness in the material axes, SI, major Poisson convention.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Orthotropic {
+    #[serde(rename = "E1")]
+    pub e1: f64,
+    #[serde(rename = "E2")]
+    pub e2: f64,
+    #[serde(rename = "E3")]
+    pub e3: f64,
+    #[serde(rename = "G12")]
+    pub g12: f64,
+    #[serde(rename = "G13")]
+    pub g13: f64,
+    #[serde(rename = "G23")]
+    pub g23: f64,
+    pub nu12: f64,
+    pub nu13: f64,
+    pub nu23: f64,
+}
+
+impl Orthotropic {
+    /// The nine values in [`ORTHOTROPIC_PROPS`](crate::fem::material::ORTHOTROPIC_PROPS) order.
+    pub fn props(&self) -> Vec<f64> {
+        vec![self.e1, self.e2, self.e3, self.g12, self.g13, self.g23, self.nu12, self.nu13, self.nu23]
+    }
+}
+
+/// Where a Material's axes point: `angle` radians about the unit `axis`, SI.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Orientation {
+    pub axis: [f64; 3],
+    pub angle: f64,
+}
+
+impl Orientation {
+    /// The rotation whose rows are the material axes in global coordinates.
+    pub fn rows(&self) -> [[f64; 3]; 3] {
+        crate::fem::material::axis_angle_rotation(self.axis, self.angle)
+    }
+}
+
+/// A property given once (isotropic: every material axis the same) or once per material axis.
+/// It is stored as it was given, so an isotropic Material serialises the single number it always
+/// had and saved files, Journal hashes and the tree editor see no change from orthotropic support.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Axial {
+    Isotropic(f64),
+    Axes([f64; 3]),
+}
+
+impl Axial {
+    /// The value along each of the three material axes.
+    pub fn axes(self) -> [f64; 3] {
+        match self {
+            Axial::Isotropic(v) => [v; 3],
+            Axial::Axes(a) => a,
+        }
+    }
+}
+
+/// A material, SI: isotropic or orthotropic, with optional axes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Material {
     pub name: String,
-    pub e: f64,
-    pub nu: f64,
+    /// Isotropic stiffness; `None` exactly when `orthotropic` is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub e: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nu: Option<f64>,
+    /// Orthotropic stiffness in the material axes; `None` exactly when `e`/`nu` are given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orthotropic: Option<Orthotropic>,
+    /// Where the material axes point; `None` means they are the global axes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<Orientation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rho: Option<f64>,
+    /// Thermal expansion, one value or one per material axis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alpha: Option<f64>,
+    pub alpha: Option<Axial>,
+    /// Conductivity, one value or one per material axis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub k: Option<f64>,
+    pub k: Option<Axial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cp: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -668,8 +742,10 @@ mod tests {
         assert!(m.step("x").is_none());
         m.materials.push(Material {
             name: "s".into(),
-            e: 1.0,
-            nu: 0.3,
+            e: Some(1.0),
+            nu: Some(0.3),
+            orthotropic: None,
+            orientation: None,
             rho: None,
             alpha: None,
             k: None,

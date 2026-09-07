@@ -89,9 +89,11 @@ describe('calling a tool', () => {
   it('validates without engine access and refuses invalid scripts before worker execution', async () => {
     const engine = fakeEngine();
     const registry = createRegistry({ engine });
-    const validation = await callTool(registry, 'validate_script', { code: 'await fem.material.add({ name: "x", E: "1 Pa" });' }) as { ok: boolean; diagnostics: { cause: string }[] };
+    // `nu` is optional now that a material may be orthotropic instead, so the type-level error
+    // is the missing `name`, which no material form can do without.
+    const validation = await callTool(registry, 'validate_script', { code: 'await fem.material.add({ E: "1 Pa", nu: 0.3 });' }) as { ok: boolean; diagnostics: { cause: string }[] };
     expect(validation.ok).toBe(false);
-    expect(validation.diagnostics.some((item) => item.cause.includes('nu'))).toBe(true);
+    expect(validation.diagnostics.some((item) => item.cause.includes('name'))).toBe(true);
     expect(engine.seen).toEqual([]);
     const outcome = await callTool(registry, RUN_SCRIPT, { code: 'await fem.model.new({ name: "would mutate" });\nawait fem.geometry.notReal({});' }) as { error: string };
     expect(outcome.error).toContain('script.validation');
@@ -107,7 +109,7 @@ describe('calling a tool', () => {
     expect(out.result).toBe('beam');
     expect(out.console).toEqual(['size 2']);
     expect(engine.seen).toContainEqual({ cmd: 'geometry.addBox', name: 'b', size: ['1 m', '1 m', '1 m'] });
-    const bad = (await callTool(registry, RUN_SCRIPT, { code: 'await fem.material.add({ name: "x", E: "1 Pa" });' })) as { error: string };
+    const bad = (await callTool(registry, RUN_SCRIPT, { code: 'await fem.material.add({ E: "1 Pa", nu: 0.3 });' })) as { error: string };
     expect(bad.error).toContain('script.validation');
     expect(engine.seen).not.toContainEqual(expect.objectContaining({ cmd: 'material.add' }));
     const runtime = await callTool(registry, RUN_SCRIPT, { code: 'await fem.material.add({ name: "x", E: "1 Pa", nu: -0.1 });' }) as { error: string };
