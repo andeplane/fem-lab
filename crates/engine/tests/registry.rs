@@ -4188,7 +4188,10 @@ fn a_static_step_after_a_steady_predecessor_still_has_no_history() {
     assert!(result_of(&mut e, Some("stress")).history.is_empty());
 }
 
-fn solved_transient_chain() -> Engine {
+/// A heat-transient Step "warm" solved, with the static Step "stress" named `after` it added
+/// as `stress_step` before the solve: every Step is part of the Model the Result hash covers,
+/// so a Step added afterwards would stale "warm".
+fn transient_chain_with(stress_step: &str) -> Engine {
     let mut e = engine();
     heat_bar(&mut e);
     ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
@@ -4198,12 +4201,37 @@ fn solved_transient_chain() -> Engine {
         r#"{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["hot"],
             "loads":[],"dt":"0.5 s","tEnd":"2 s","initial":"0 degC","outputEvery":1}"#,
     );
-    ok(
-        &mut e,
-        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"warm","constraints":["left"],"loads":[]}"#,
-    );
+    ok(&mut e, stress_step);
     ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
     e
+}
+
+fn solved_transient_chain() -> Engine {
+    transient_chain_with(
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"warm","constraints":["left"],"loads":[]}"#,
+    )
+}
+
+/// A chained static Step that fails inside its per-frame loop reports the failure like any
+/// other Step, and one with an amplitude is not chained at all: its own schedule is the one it
+/// retains, so its History is the displacement ramp #78 gives it, not a von Mises frame per
+/// predecessor frame.
+#[test]
+fn a_chained_static_step_reports_its_failures_and_an_amplituded_one_keeps_its_own_schedule() {
+    let mut e = transient_chain_with(
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"warm","constraints":[],"loads":[]}"#,
+    );
+    let loose = err(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert_eq!(loose.code, ErrorCode::ConstraintRigidModes);
+
+    let mut e = transient_chain_with(
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"warm","constraints":["left"],"loads":[],
+            "amplitude":{"kind":"table","t":["0 s","1 s"],"value":[0.0,1.0]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    let summary = result_of(&mut e, Some("stress"));
+    assert_eq!(summary.history.iter().map(|r| r.time.value).collect::<Vec<_>>(), vec![0.0, 1.0]);
+    assert_eq!(frames_of(&mut e).field, Field::Displacement);
 }
 
 /// #84: the chained static Step retains one von Mises frame per frame its heat-transient

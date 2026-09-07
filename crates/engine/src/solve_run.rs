@@ -519,10 +519,11 @@ impl Engine {
             )?;
             // A static Step chained to a heat-transient Result solves once per retained frame
             // of that predecessor's temperature History instead of once at its final state
-            // (#84). Every other `after` combination — a steady predecessor, or any Step that
-            // is not static — keeps today's single end-state solve untouched.
+            // (#84). Every other `after` combination — a steady predecessor, any Step that is
+            // not static, or a static Step with an amplitude, whose own schedule is the one it
+            // retains — keeps today's single end-state solve untouched.
             let chained_history = match (&proc_step, prev.as_ref()) {
-                (procedure::Step::Static { .. }, Some(record)) => {
+                (procedure::Step::Static { amplitude: None, .. }, Some(record)) => {
                     record.result.history.as_ref().filter(|h| h.field == Field::Temperature)
                 }
                 _ => None,
@@ -535,7 +536,10 @@ impl Engine {
                 let frames = h.times.len();
                 let heat_step = step.after.as_deref().expect("chained_history only matches a Step with `after`");
                 let base = crate::solve::cost_estimate(p.mesh, p.mesh.dim, opts.solver);
-                let estimate = crate::solve::add_transient_cost(base, p.mesh.n_nodes(), 1, frames - 1, 1, 5)?;
+                // The predecessor retained exactly these frames of one value per node on this
+                // mesh, so the same count cannot overflow the accounting a second time.
+                let estimate = crate::solve::add_transient_cost(base, p.mesh.n_nodes(), 1, frames - 1, 1, 5)
+                    .expect("the predecessor's retention already budgeted these frames on this mesh");
                 PlannedCost { estimate, transient: Some((frames - 1, 1, "heat-transient")) }
                     .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                     .enforce(heat_step)?;
