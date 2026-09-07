@@ -27,7 +27,7 @@ pub use predicate::{
 pub use quality::{quality, Quality};
 pub use shape::{Affine3, Shape};
 pub use sketch::{Segment, Sketch, SketchError};
-pub use solid::{Solid, TriMesh};
+pub use solid::{FacePatch, Solid, TriMesh};
 
 /// A geometry failure with a one-line, user-readable cause.
 #[derive(Debug, Clone, PartialEq, Eq)]

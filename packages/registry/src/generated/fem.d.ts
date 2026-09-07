@@ -457,9 +457,10 @@ export interface Fem {
   };
   query: {
     /**
-     * Everything about the Model in one read: bodies with volumes and materials, materials,
-     * named Sets, constraints, loads with their totals, steps, mesh settings, and the
-     * well-posedness warnings that would block a solve. Read this before changing anything.
+     * Everything about the Model in one read: bodies with volumes and materials, imported
+     * face patches with paste-ready naming predicates, named Sets, constraints, loads with
+     * their totals, steps, mesh settings, and the well-posedness warnings that would block a
+     * solve. Read this before changing anything.
      */
     model(): Promise<ModelSummary>;
     /**
