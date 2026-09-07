@@ -6,7 +6,7 @@ import '@fontsource/ibm-plex-sans/latin-500.css';
 import '@fontsource/ibm-plex-sans/latin-600.css';
 import { HOST_COMMANDS, HOST_QUERIES, Registry, makeFemProxy, FemError, type Capabilities, type Command, type DocumentSnapshot, type EngineSchema, type Fem, type ProjectMeta, type JournalDiff } from '@femlab/registry';
 import { render } from 'preact';
-import schema from '../../registry/src/generated/engine.schema.json';
+import schema from '../../registry/src/generated/runtime-schema';
 import { migratePersistentKeys } from './ai/key-storage';
 import { browserScriptValidator } from './script-validation-host';
 import { capabilityNotes, readHostCaps } from './capabilities';

@@ -4,7 +4,7 @@
 // Playwright smoke can hold the DOM against `registry.list()`.
 import type { CommandDef, EngineSchema, JsonSchema, Registry } from '@femlab/registry';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import schema from '../../../registry/src/generated/engine.schema.json';
+import schema from '../../../registry/src/generated/runtime-schema';
 import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
