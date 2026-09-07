@@ -5635,6 +5635,18 @@ fn the_heat_and_mass_assemblies_report_what_the_checks_would_have_caught() {
     p.heat_loads = vec![HeatLoad::Convection { faces: "nowhere".into(), h: 10.0, t_inf: 300.0 }];
     assert_eq!(heat::assemble(&p, &pat, &none).expect_err("no such Set").code, ErrorCode::SetEmpty);
 
+    // The thermal-contact loop (#85) integrates the slave faces of the Coupling its `of` names,
+    // so it answers for the same two things: the slave Set, then the Body's material.
+    p.heat_loads = vec![HeatLoad::Contact { of: "weld".into(), h: 500.0 }];
+    p.couplings = vec![tie("weld", "xmin", "nowhere", 1e-9)];
+    assert_eq!(heat::assemble(&p, &pat, &none).expect_err("no slave Set").code, ErrorCode::SetEmpty);
+    p.couplings = vec![tie("weld", "xmin", "xmax", 1e-9)];
+    p.material_of_block = vec![None];
+    let no_material = heat::assemble(&p, &pat, &none).expect_err("no material on the slave faces");
+    assert_eq!((no_material.code, no_material.where_.as_deref()), (ErrorCode::ModelNoMaterial, Some("element 0")));
+    p.material_of_block = vec![Some(0)];
+    p.couplings = Vec::new();
+
     // The radiative face integral answers for the same three things, and it is the one the
     // procedures call with an `expect` on the strength of the checks having run first.
     let mut k = pat.csr.clone();

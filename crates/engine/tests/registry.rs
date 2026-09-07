@@ -7929,6 +7929,29 @@ fn contact_thermal_validates_of_and_tracks_the_contact_it_names() {
     ok(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"weld","conductance":"500 W/(m^2 K)"}"#);
     assert_eq!(e.model().loads.last().unwrap().name, "resist");
 
+    // The name and the conductance are validated like every other Load's, and each error says
+    // where it points.
+    let unnamed = err(&mut e, r#"{"cmd":"contact.thermal","name":"","of":"weld","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!((unnamed.code, unnamed.where_.as_deref()), (ErrorCode::Schema, Some("name")));
+    let wrong_dim = err(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"weld","conductance":"500 W"}"#);
+    assert_eq!((wrong_dim.code, wrong_dim.where_.as_deref()), (ErrorCode::UnitDimension, Some("conductance")));
+
+    // It lists among the loads with its own kind and a summary naming the contact, and its
+    // definition round-trips through the Command that made it.
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+    let row = m.loads.iter().find(|l| l.name == "resist").expect("listed");
+    assert_eq!(row.kind, "thermalContact");
+    assert_eq!(row.on, None, "a thermal contact names a Constraint, not a Set");
+    assert_eq!(row.summary, "h = 500 SI across 'weld'", "a derived dimension has no display unit of its own");
+    let before = e.model().clone();
+    let QueryResult::Definition(def) =
+        e.query(Query::Definition { kind: ObjectKind::Load, name: "resist".into() }).unwrap()
+    else {
+        panic!("definition")
+    };
+    ok(&mut e, &serde_json::to_string(&def.command).unwrap());
+    assert_eq!(e.model(), &before, "replaying the definition changes nothing");
+
     // Renaming a Body or a Set leaves a thermal contact alone: it names a Constraint, not either
     // of those, so it takes the same no-op arm Gravity and the Body-targeted loads do.
     ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"a","to":"aa"}"#);
