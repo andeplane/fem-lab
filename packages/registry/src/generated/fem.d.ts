@@ -48,7 +48,9 @@ export interface Fem {
     /**
      * Add an axis-aligned box Body with its minimum corner at `at` (default the origin). Its
      * six faces are auto-named `<name>.xmin`, `<name>.xmax`, … `<name>.zmax` and can be used
-     * directly in constraints and loads. Re-issuing with an existing name replaces the body.
+     * directly in constraints and loads. Re-issuing with an existing name replaces the Body
+     * while preserving its material, section and cuts; incompatible or consuming cuts reject
+     * the replacement without changing the Model.
      */
     addBox(args: Omit<Extract<Command, { cmd: 'geometry.addBox' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -62,6 +64,8 @@ export interface Fem {
      * Add a Body from any shape: box, cylinder, sphere, an extruded or revolved sketch, a
      * 2D sheet, or booleans of those. Faces are auto-named `<name>.<tag>` from the shape
      * (`side`, `top`, sketch segment tags, …); list them with query.model. Lengths need units.
+     * Replacing an existing Body preserves its material, section and cuts, and validates the
+     * resulting shape before changing the Model.
      */
     add(args: Omit<Extract<Command, { cmd: 'geometry.add' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -74,6 +78,7 @@ export interface Fem {
      * with section.assign as well as a Material, and hold enough joints that none of them can
      * drift sideways — an under-braced truss is singular and fails in the solver, not here.
      * Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
+     * Replacing a Body that has cuts therefore fails without changing the Model.
      */
     addLine(args: Omit<Extract<Command, { cmd: 'geometry.addLine' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -95,7 +100,9 @@ export interface Fem {
      * geometry.nameFace predicates (a plane, a cylinder): those are re-resolved at every
      * remesh and survive a re-import. `simplifyBelow` collapses features smaller than the
      * given length, which is the honest half of defeaturing; there is no fillet, chamfer or
-     * shell. Give `sha256` to have the engine verify the data is the file you meant.
+     * shell. Re-import preserves the Body's material, section and cuts, and validates the
+     * resulting shape before changing the Model. Give `sha256` to have the engine verify the
+     * data is the file you meant.
      */
     import(args: Omit<Extract<Command, { cmd: 'geometry.import' }>, 'cmd'>): Promise<Ack>;
     /**

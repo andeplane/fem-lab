@@ -446,6 +446,44 @@ fn upsert_edits_in_place_and_reports_replaced() {
 }
 
 #[test]
+fn body_upsert_validates_existing_cuts_before_committing() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"transactional resize"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["2 m","1 m","1 m"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.subtractBox","name":"notch","from":"beam","size":["1.5 m","1 m","1 m"],"at":["0 m","0 m","0 m"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"0.5 m"}}"#);
+    let cached_surface = e.geometry_surface().unwrap();
+    let cached_mesh = e.mesh().unwrap().clone();
+    let before = e.export_file();
+    let model_query = e.query(Query::Model {}).unwrap();
+
+    let error = err(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","1 m","1 m"]}"#);
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert!(error.cause.contains("empty"), "{error:?}");
+    assert_eq!(e.export_file(), before);
+    assert_eq!(e.geometry_surface().unwrap(), cached_surface);
+    assert_eq!(e.mesh().unwrap(), &cached_mesh);
+    assert_eq!(e.query(Query::Model {}).unwrap(), model_query);
+
+    let error =
+        err(&mut e, r#"{"cmd":"geometry.addLine","name":"beam","points":[["0 m","0 m","0 m"],["2 m","0 m","0 m"]]}"#);
+    assert_eq!(error.code, ErrorCode::Schema);
+    assert!(error.cause.contains("cannot combine 1D line members"), "{error:?}");
+    assert_eq!(e.export_file(), before);
+    assert_eq!(e.geometry_surface().unwrap(), cached_surface);
+    assert_eq!(e.mesh().unwrap(), &cached_mesh);
+
+    let ack = ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["3 m","1 m","1 m"]}"#);
+    assert_eq!(ack.output, Output::Replaced { kind: ObjectKind::Body, name: "beam".into() });
+    assert_eq!(e.revision(), before.journal.entries.len() as u32 + 1);
+    let QueryResult::Model(resized) = e.query(Query::Model {}).unwrap() else { panic!("query.model") };
+    assert!((resized.bodies[0].measure.value - 1.5).abs() < 1e-12);
+}
+
+#[test]
 fn undo_redo_and_journal_boundaries() {
     let mut e = engine();
     cantilever(&mut e);
