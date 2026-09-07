@@ -22,6 +22,7 @@ use crate::error::ErrorCode;
 use crate::fem::assembly::{expand, pattern, reduce, resolve, Csr, Pattern, ResolvedConstraints};
 use crate::fem::checks;
 use crate::fem::heat::{capacity, conductivity, face_film, face_integrals, radiative_film, source, HeatLoad};
+use crate::fem::mpc::{self, Mpc};
 use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, Per};
@@ -300,17 +301,22 @@ fn steady_radiating(
     pat: &Pattern,
     base: &HeatSystem,
     rc: &ResolvedConstraints,
+    mpc: &Mpc,
     control: &NonlinearControl,
 ) -> Result<(HeatSystem, Vec<f64>, SolveInfo, usize), Error> {
     let mut t = vec![radiation_start(p); p.mesh.n_nodes()];
     let (solver, passes) = iterate(control, &mut t, "heat-steady", &mut |current, next| {
         let mut s = base.clone();
         add_radiation(p, pat, current, &mut s.k, &mut s.f).expect("the checks accepted this mesh");
-        let red = reduce(&s.k, &s.f, rc);
+        let (kt, ft) = mpc::transform(&s.k, &s.f, mpc);
+        let red = reduce(&kt, &ft, rc, &mpc.slaves);
         let mut factored = Direct::factor(&red.k_ff)?;
         let mut t_f = vec![0.0; red.free.len()];
         let info = factored.solve(&red.f_f, &mut t_f)?;
         *next = expand(&red, &t_f);
+        // A tied node has to carry its recovered temperature into the next pass, because the
+        // radiative film is built from the field itself.
+        mpc::recover(mpc, next);
         Ok(info)
     })?;
     let mut converged = base.clone();
@@ -338,26 +344,30 @@ pub async fn steady(
     // never calls a material law.
     let sys = pool.install(|| assemble(p, &pat)).expect("the checks accepted this mesh");
     let rc = resolve(p).expect("the checks resolved the constraints");
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
     let (sys, t, solver, passes) = match radiates(p) {
         true => {
-            let (sys, t, mut solver, passes) = pool.install(|| steady_radiating(p, &pat, &sys, &rc, control))?;
+            let (sys, t, mut solver, passes) = pool.install(|| steady_radiating(p, &pat, &sys, &rc, &mpc, control))?;
             // The passes are what the Step actually did; the factorised solves inside them each
             // report zero, which would be a misleading iteration count for a host to show.
             solver.iterations = passes;
             (sys, t, solver, Some(passes))
         }
         false => {
-            let red = reduce(&sys.k, &sys.f, &rc);
+            let (kt, ft) = pool.install(|| mpc::transform(&sys.k, &sys.f, &mpc));
+            let red = reduce(&kt, &ft, &rc, &mpc.slaves);
             let (t_f, solver) = solve(&red.k_ff, &red.f_f, opts, pool, gpu, &mut progress).await?;
-            let t = expand(&red, &t_f);
+            let mut t = expand(&red, &t_f);
+            mpc::recover(&mpc, &mut t);
             (sys, t, solver, None)
         }
     };
     report(&mut progress, "post", 0.9, "recovering the temperature field")?;
-    let mut res = finish(p, &sys, &rc, &t, &t, &vec![0.0; t.len()], solver);
+    let mut res = finish(p, &sys, &rc, &mpc, &t, &t, &vec![0.0; t.len()], solver);
     if let Some(passes) = passes {
         res.scalars.insert("nonlinear_iterations".to_string(), passes as f64);
     }
+    res.warnings = mpc.warnings;
     Ok(res)
 }
 
@@ -365,22 +375,31 @@ pub async fn steady(
 /// the balance scalars a summary reports. `evaluated` is the steady temperature or the last
 /// transient θ-stage temperature; `capacity_rate` is C(Tnew−Told)/dt (zero in steady state).
 /// Positive reactions remove heat. Net applied power minus removal equals stored energy rate.
+#[allow(clippy::too_many_arguments)]
 fn finish(
     p: &Problem<'_>,
     sys: &HeatSystem,
     rc: &ResolvedConstraints,
+    mpc: &Mpc,
     t: &[f64],
     evaluated: &[f64],
     capacity_rate: &[f64],
     solver: SolveInfo,
 ) -> StepResult {
-    // f − K T − C dT/dt on a held DOF is the power removed by its temperature constraint.
-    let mut kt = vec![0.0; sys.k.n];
-    sys.k.spmv(evaluated, &mut kt);
+    // Start on the original numbering, including storage BEFORE transferring a slave's
+    // residual to a held master. Internal interface flux is not a support reaction.
+    let mut residual = vec![0.0; sys.k.n];
+    sys.k.spmv(evaluated, &mut residual);
+    for (i, r) in residual.iter_mut().enumerate() {
+        *r += capacity_rate[i] - sys.f[i];
+    }
+    let tied = mpc::transpose_load(mpc, &residual);
+    drop(residual);
     let mut flow = vec![0.0; sys.k.n];
     for &(dof, _) in &rc.fixed {
-        flow[dof as usize] = sys.f[dof as usize] - kt[dof as usize] - capacity_rate[dof as usize];
+        flow[dof as usize] = -tied[dof as usize];
     }
+    drop(tied);
     let mut res = blank(solver);
     res.reaction_quantity = crate::units::ReactionQuantity::Power;
     res.fields.insert(Field::Temperature, vector_field(t, 1));
@@ -421,6 +440,7 @@ fn radiating_increment(
     pat: &Pattern,
     sys: &HeatSystem,
     rc: &ResolvedConstraints,
+    mpc: &Mpc,
     a_linear: &Csr,
     zeros: &[f64],
     rhs_full: &[f64],
@@ -449,20 +469,28 @@ fn radiating_increment(
         for (v, h) in a.vals.iter_mut().zip(&hk.vals) {
             *v += theta * h;
         }
-        let mut red = reduce(&a, zeros, rc);
-        let mut factored = Direct::factor(&red.k_ff)?;
-        // The reduced RHS initially contains the prescribed-temperature correction. Fold the
-        // loads into that same buffer instead of retaining a second free-DOF RHS during Newton.
-        for (i, &dof) in red.free.iter().enumerate() {
-            let dof = dof as usize;
-            red.f_f[i] = rhs_full[dof] + sys.f[dof] + theta * hf[dof] - (1.0 - theta) * r_n[dof] + scale * red.f_f[i];
+        let (at, _) = mpc::transform(&a, zeros, mpc);
+        // Reuse the film RHS for the complete original load, then transfer it once. Drop
+        // each scratch before the next phase so contact does not add a retained nodal vector.
+        for (dof, f) in hf.iter_mut().enumerate() {
+            *f = rhs_full[dof] + sys.f[dof] + theta * *f - (1.0 - theta) * r_n[dof];
         }
+        let load = mpc::transpose_load(mpc, &hf);
+        drop(hf);
+        let mut red = reduce(&at, zeros, rc, &mpc.slaves);
+        drop(at);
+        let mut factored = Direct::factor(&red.k_ff)?;
+        for (i, &dof) in red.free.iter().enumerate() {
+            red.f_f[i] = load[dof as usize] + scale * red.f_f[i];
+        }
+        drop(load);
         let mut x = vec![0.0; red.free.len()];
         let info = factored.solve(&red.f_f, &mut x)?;
         *next = expand(&red, &x);
         for (i, &dof) in red.fixed.iter().enumerate() {
             next[dof as usize] = red.u_fixed[i] * scale;
         }
+        mpc::recover(mpc, next);
         Ok(info)
     })
 }
@@ -516,7 +544,13 @@ pub fn transient(
     // Reducing `a` against a zero right-hand side leaves exactly `−A_fc u_c` at the base
     // prescribed values, which the amplitude scales linearly.
     let zeros = vec![0.0; a.n];
-    let red = reduce(&a, &zeros, &rc);
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    // Only `a` is transformed. The recurrence needs `TᵀB T v`, and `T v` is the temperature
+    // field itself, so `b` stays on the original numbering and `Tᵀ` is applied to `B T` once
+    // per increment — one transform instead of two, and no reduced state to carry.
+    let (at, _) = pool.install(|| mpc::transform(&a, &zeros, &mpc));
+    let red = reduce(&at, &zeros, &rc, &mpc.slaves);
+    drop(at);
     // Positive transport properties and theta make this positive definite for ordinary heat
     // boundaries. A malformed extension or unsupported boundary must still be an Error rather
     // than taking down the host Worker.
@@ -531,6 +565,8 @@ pub fn transient(
     for (i, &dof) in red.fixed.iter().enumerate() {
         t[dof as usize] = red.u_fixed[i] * g(0.0);
     }
+    // The first history/radiation state must satisfy the same tie as every later state.
+    mpc::recover(&mpc, &mut t);
     let every = output_every.max(1);
     let frames = retained_frame_count(n_steps, every).expect("time_grid bounds the retained-frame count");
     let mut history = History::with_initial(Field::Temperature, t.clone(), frames);
@@ -547,16 +583,23 @@ pub fn transient(
         previous.clone_from(&t);
         match &mut factored {
             Some(factored) => {
-                for (i, &dof) in red.free.iter().enumerate() {
-                    rhs_f[i] = rhs_full[dof as usize] + sys.f[dof as usize] + scale * red.f_f[i];
+                for (f, applied) in rhs_full.iter_mut().zip(&sys.f) {
+                    *f += applied;
                 }
+                let load = mpc::transpose_load(&mpc, &rhs_full);
+                for (i, &dof) in red.free.iter().enumerate() {
+                    rhs_f[i] = load[dof as usize] + scale * red.f_f[i];
+                }
+                drop(load);
                 // Reject a bad direct result without retaining an invalid temperature history.
                 solver = factored.solve(&rhs_f, &mut t_f)?;
                 t = expand(&red, &t_f);
             }
             None => {
                 let (info, used) = pool.install(|| {
-                    radiating_increment(p, &pat, &sys, &rc, &a, &zeros, &rhs_full, theta, scale, control, step, &mut t)
+                    radiating_increment(
+                        p, &pat, &sys, &rc, &mpc, &a, &zeros, &rhs_full, theta, scale, control, step, &mut t,
+                    )
                 })?;
                 solver = info;
                 passes = passes.max(used);
@@ -567,6 +610,7 @@ pub fn transient(
         for (i, &dof) in red.fixed.iter().enumerate() {
             t[dof as usize] = red.u_fixed[i] * scale;
         }
+        mpc::recover(&mpc, &mut t);
         if step % every == 0 || step == n_steps {
             history.times.push(time);
             history.values.push(t.clone());
@@ -598,7 +642,7 @@ pub fn transient(
     let mut capacity_rate = vec![0.0; cap.n];
     cap.spmv(&rate, &mut capacity_rate);
     drop(rate);
-    let mut res = finish(p, &sys, &rc, &t, &evaluated, &capacity_rate, solver);
+    let mut res = finish(p, &sys, &rc, &mpc, &t, &evaluated, &capacity_rate, solver);
     if radiating {
         res.scalars.insert("nonlinear_iterations".to_string(), passes as f64);
     }
@@ -606,6 +650,7 @@ pub fn transient(
     res.scalars.insert("dt".to_string(), dt);
     res.scalars.insert("steps".to_string(), n_steps as f64);
     res.history = Some(history);
+    res.warnings = mpc.warnings;
     Ok(res)
 }
 

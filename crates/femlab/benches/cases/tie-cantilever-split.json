@@ -1,0 +1,56 @@
+{
+  "name": "tie-cantilever-split",
+  "reference": "Benchmark F4's equivalence half: the cantilever of Benchmark B1 cut in two at mid-span and welded back together with contact.add. The oracle is not a published number but the single-Body model beside it: case cantilever-hex8-im is the same 1 m x 100 mm x 100 mm steel beam at the same 25 mm lattice with the same incompatible-modes element, and it measures a tip deflection of -0.19011253665073974 mm (0.96 % from the Timoshenko value -0.1919619 mm it is gated against). Splitting the Body puts a tie of 25 node pairs at x = 500 mm where the single model had one set of nodes; the elimination is exact for a matched pairing, so the tied model reproduces the single one to 1e-10 relative -- only the summation order differs -- and the root still carries the whole 1 kN.",
+  "journal": [
+    { "cmd": "model.new", "name": "tie-cantilever" },
+    { "cmd": "model.setUnits", "units": { "length": "mm", "stress": "MPa", "force": "kN" } },
+    { "cmd": "geometry.addBox", "name": "root", "size": ["500 mm", "100 mm", "100 mm"] },
+    {
+      "cmd": "geometry.addBox",
+      "name": "tip",
+      "size": ["500 mm", "100 mm", "100 mm"],
+      "at": ["500 mm", "0 mm", "0 mm"]
+    },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["root", "tip"] },
+    { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "25 mm" }, "order": 1 },
+    { "cmd": "constraint.fix", "name": "clamp", "on": "root.xmin" },
+    { "cmd": "contact.add", "name": "weld", "master": "root.xmax", "slave": "tip.xmin", "kind": "bonded" },
+    { "cmd": "load.traction", "name": "load", "on": "tip.xmax", "total": ["0 N", "0 N", "-1 kN"] },
+    {
+      "cmd": "step.add",
+      "name": "static",
+      "procedure": "static",
+      "constraints": ["clamp", "weld"],
+      "loads": ["load"]
+    },
+    { "cmd": "solve.run", "step": "static" }
+  ],
+  "checks": [
+    {
+      "query": { "query": "query.probe", "field": "displacement", "component": 2, "at": ["1 m", "50 mm", "50 mm"] },
+      "path": "/value/value",
+      "expect": -0.19011253665073974,
+      "tol": 1e-10,
+      "rel": true,
+      "note": "the tip deflection cantilever-hex8-im measures on the single Body, in mm, to every digit it has: welding the beam back together changes nothing but the summation order"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the clamp carries the load; the tie's internal force is not a reaction"
+    },
+    {
+      "query": { "query": "query.result" },
+      "path": "/reactions/0/total/2/value",
+      "expect": 1.0,
+      "tol": 1e-08,
+      "rel": true,
+      "note": "the clamp carries the whole 1 kN"
+    },
+    { "query": { "query": "query.result" }, "path": "/stale", "expect": false },
+    { "query": { "query": "query.result" }, "path": "/solver", "expect": "cpu-direct" }
+  ]
+}

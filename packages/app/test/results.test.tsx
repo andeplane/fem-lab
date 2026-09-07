@@ -34,6 +34,7 @@ const MODEL: ModelSummary = {
   materials: [],
   sets: [],
   constraints: [],
+  connections: [],
   loads: [],
   steps: [],
   meshSettings: null,

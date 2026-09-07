@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use femlab_engine::command::Formulation;
 use femlab_engine::command::{Field, Solver};
 use femlab_engine::fem::assembly::{
-    assemble_stiffness, expand, pattern, reactions, reduce, resolve, Assembled, Csr, Pattern, ResolvedConstraints,
+    assemble_stiffness, expand, pattern, pattern_coupled, reactions, reduce, resolve, Assembled, Csr, Pattern,
+    ResolvedConstraints,
 };
 use femlab_engine::fem::checks;
 use femlab_engine::fem::element::{element_for, min_det_j, Element, ElementCtx, FaceLoad, Iso, Material};
@@ -20,7 +21,8 @@ use femlab_engine::fem::material::{
     builtin_law, check_batch, isotropic_d, plane_stress_condense, LinearElastic, MaterialBatch, MaterialLaw,
     MaterialOut, VOIGT,
 };
-use femlab_engine::fem::problem::{Constraint, Problem};
+use femlab_engine::fem::mpc::{self, Mpc, Row};
+use femlab_engine::fem::problem::{Constraint, Coupling, Problem};
 use femlab_engine::fem::quadrature::{
     gauss_legendre, Rule, HEX_2X2X2, HEX_3X3X3, QUAD_2X2, QUAD_3X3, TET_1, TET_4, TRI_1, TRI_3,
 };
@@ -2191,6 +2193,7 @@ fn problem<'a>(
         idealisation: id,
         formulation: form,
         constraints,
+        couplings: Vec::new(),
         loads: Vec::new(),
         temperature: None,
         heat: false,
@@ -2329,7 +2332,7 @@ fn reduce_expand_and_reactions_recover_the_uniaxial_bar() {
     let rc = resolve(&p).expect("no conflict");
     assert_eq!(rc.fixed.len(), rc.owner.len());
     let f = vec![0.0; a.k.n];
-    let red = reduce(&a.k, &f, &rc);
+    let red = reduce(&a.k, &f, &rc, &[]);
     assert_eq!(red.free.len() + red.fixed.len(), a.k.n);
     assert_eq!(red.k_ff.n, red.free.len());
     assert!(red.f_f.iter().any(|x| *x != 0.0), "the prescribed end loads the free rows");
@@ -2350,7 +2353,7 @@ fn reduce_expand_and_reactions_recover_the_uniaxial_bar() {
             assert!((u[3 * node + c] - want[c]).abs() <= 1e-9 * delta, "node {node} component {c}");
         }
     }
-    let r = reactions(&a.k, &u, &f, &red);
+    let r = reactions(&a.k, &u, &f, &red.fixed, &Mpc::none());
     let total: f64 = red.fixed.iter().map(|&d| if d % 3 == 0 { r[d as usize] } else { 0.0 }).sum();
     assert!(total.abs() <= 1e-9 * (YOUNG * delta * 0.01), "reactions cancel: {total}");
     let root: f64 = sets["xmin"].nodes.iter().map(|&n| r[3 * n as usize]).sum();
@@ -2594,7 +2597,7 @@ fn the_patch_test_passes_for_every_kind_and_every_constant_strain_mode() {
                 let a = assemble_stiffness(&p, &pat).expect("a patch mesh assembles");
                 let exact = patch_mesh_field(&mesh, &id, &e);
                 let rc = boundary_constraints(&mesh, &exact);
-                let red = reduce(&a.k, &vec![0.0; a.k.n], &rc);
+                let red = reduce(&a.k, &vec![0.0; a.k.n], &rc, &[]);
                 let (u_f, info) = pollster::block_on(solve(
                     &red.k_ff,
                     &red.f_f,
@@ -2924,7 +2927,7 @@ fn reduced_system(p: &Problem<'_>) -> (Csr, Vec<f64>) {
     let mut f = a.f_thermal.clone();
     assemble_loads(p, &mut f).expect("the loads of these cases assemble");
     let rc = resolve(p).expect("no conflict");
-    let red = reduce(&a.k, &f, &rc);
+    let red = reduce(&a.k, &f, &rc, &[]);
     (red.k_ff, red.f_f)
 }
 
@@ -3074,12 +3077,14 @@ fn the_cost_estimate_counts_small_patterns_and_their_mandatory_storage() {
         }
         assert!(cost_estimate(&mesh, 3, Solver::Auto).note.starts_with("cpu-direct"));
     }
-    // Adjacent cells deduplicate shared couplings; unused nodes have empty rows.
+    // Adjacent cells deduplicate shared couplings; a node no element touches still owns the
+    // diagonal `pattern` seeds for it, and nothing else.
     let mut mesh = Structured { kind: ElementKind::Hex8, n: [2, 2, 2] }.box_([1.0, 1.0, 1.0]);
     mesh.coords.extend([0.0; 3]);
     assert_eq!(cost_estimate(&mesh, 3, Solver::Auto).nnz, pattern(&mesh, 3).csr.nnz() as u64);
+    let nodes = mesh.n_nodes() as u64;
     mesh.blocks.clear();
-    assert_eq!(cost_estimate(&mesh, 3, Solver::Auto).nnz, 0);
+    assert_eq!(cost_estimate(&mesh, 3, Solver::Auto).nnz, nodes * 9);
 }
 
 #[test]
@@ -3990,6 +3995,7 @@ fn heat_problem<'a>(
         idealisation: id,
         formulation: Formulation::Full,
         constraints,
+        couplings: Vec::new(),
         loads: Vec::new(),
         temperature: None,
         heat: true,
@@ -4751,6 +4757,7 @@ fn explicit_rejects_a_free_massless_body_in_a_mixed_model_and_recovers() {
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::Full,
         constraints: Vec::new(),
+        couplings: Vec::new(),
         loads: Vec::new(),
         temperature: None,
         heat: false,
@@ -4808,6 +4815,7 @@ fn explicit_rejects_massless_stiffness_even_when_shared_nodes_have_mass() {
         idealisation: Idealisation::Solid3d,
         formulation: Formulation::Full,
         constraints: Vec::new(),
+        couplings: Vec::new(),
         loads: Vec::new(),
         temperature: None,
         heat: false,
@@ -5421,6 +5429,706 @@ fn consistent_quadratic_gravity_distribution_remains_unchanged() {
         assert_eq!(f[2 * i], 0.0);
     }
 }
+// ---------------------------------------------------------------- multipoint constraints
+
+/// Two meshes as one, `b` translated by `shift` and sharing no node with `a`: the two-part
+/// assembly only a tie holds together. `a`'s Sets take the prefix `a.` and `b`'s the prefix
+/// `b.`, so `a.xmax` faces `b.xmin`.
+fn join(a: &Mesh, b: &Mesh, shift: [f64; 3]) -> Mesh {
+    let node_offset = a.n_nodes() as u32;
+    let elem_offset = a.n_elems() as u32;
+    let mut coords = a.coords.clone();
+    for (i, x) in b.coords.iter().enumerate() {
+        coords.push(x + shift[i % 3]);
+    }
+    let mut blocks = a.blocks.clone();
+    for blk in &b.blocks {
+        blocks.push(ElementBlock {
+            kind: blk.kind,
+            conn: blk.conn.iter().map(|n| n + node_offset).collect(),
+            first_elem: blk.first_elem + elem_offset,
+        });
+    }
+    let mut face_sets = BTreeMap::new();
+    for (name, faces) in &a.face_sets {
+        face_sets.insert(format!("a.{name}"), faces.clone());
+    }
+    for (name, faces) in &b.face_sets {
+        let shifted = faces.iter().map(|f| Face { elem: f.elem + elem_offset, local: f.local }).collect();
+        face_sets.insert(format!("b.{name}"), shifted);
+    }
+    Mesh { dim: a.dim, coords, blocks, node_sets: BTreeMap::new(), elem_sets: BTreeMap::new(), face_sets }
+}
+
+/// Two boxes of `size` meeting at `x = size[0] + gap`, meshed `na` and `nb` independently.
+fn two_blocks(kind: ElementKind, na: [usize; 3], nb: [usize; 3], size: [f64; 3], gap: f64) -> Mesh {
+    let a = Structured { kind, n: na }.box_(size);
+    let b = Structured { kind, n: nb }.box_(size);
+    join(&a, &b, [size[0] + gap, 0.0, 0.0])
+}
+
+fn two_bodies() -> Vec<String> {
+    vec!["a".to_string(), "b".to_string()]
+}
+
+/// A bonded contact between two Sets.
+fn tie(name: &str, master: &str, slave: &str, tol: f64) -> Coupling {
+    Coupling::Bonded { name: name.into(), master: master.into(), slave: slave.into(), tol }
+}
+
+/// The bonded contact `a.xmax` → `b.xmin`, pairing within `tol`.
+fn bond(tol: f64) -> Coupling {
+    tie("weld", "a.xmax", "b.xmin", tol)
+}
+
+/// The index of the node at `x`, which the pairing assertions name by position.
+fn node_at(mesh: &Mesh, x: [f64; 3]) -> u32 {
+    (0..mesh.n_nodes() as u32)
+        .find(|&n| {
+            let p = mesh.node(n);
+            (0..3).all(|k| (p[k] - x[k]).abs() < 1e-9)
+        })
+        .expect("the mesh has a node there")
+}
+
+/// A dense symmetric matrix as a `Csr` with every entry stored: the structure the dense oracle
+/// multiplies, so the comparison is against the definition and not a sparse copy of it.
+fn dense_csr(n: usize, a: &[f64]) -> Csr {
+    Csr {
+        n,
+        row_ptr: (0..=n).map(|r| (r * n) as u32).collect(),
+        col_idx: (0..n * n).map(|i| (i % n) as u32).collect(),
+        vals: a.to_vec(),
+    }
+}
+
+fn to_dense(k: &Csr) -> Vec<f64> {
+    let mut out = vec![0.0; k.n * k.n];
+    for r in 0..k.n {
+        for e in k.row_ptr[r] as usize..k.row_ptr[r + 1] as usize {
+            out[r * k.n + k.col_idx[e] as usize] = k.vals[e];
+        }
+    }
+    out
+}
+
+/// `A B` for row-major `n × n` matrices.
+fn mat_mul(a: &[f64], b: &[f64], n: usize) -> Vec<f64> {
+    let mut out = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            out[i * n + j] = (0..n).map(|k| a[i * n + k] * b[k * n + j]).sum();
+        }
+    }
+    out
+}
+
+/// `Aᵀ B` for row-major `n × n` matrices.
+fn mat_mul_t(a: &[f64], b: &[f64], n: usize) -> Vec<f64> {
+    let mut out = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            out[i * n + j] = (0..n).map(|k| a[k * n + i] * b[k * n + j]).sum();
+        }
+    }
+    out
+}
+
+/// One `Mpc` built by hand, without a Mesh: the rows are the whole definition of `T`.
+fn hand_mpc(rows: Vec<Row>) -> Mpc {
+    let slaves = rows.iter().map(|r| r.slave).collect();
+    Mpc { rows, slaves, warnings: Vec::new() }
+}
+
+/// The dense `T` of an `Mpc`: identity on the retained DOFs, the row's coefficients on a slave
+/// row, and a zero column at every slave.
+fn dense_t(mpc: &Mpc, n: usize) -> Vec<f64> {
+    let mut t = vec![0.0; n * n];
+    for (d, item) in t.iter_mut().step_by(n + 1).enumerate() {
+        *item = if mpc.slaves.contains(&(d as u32)) { 0.0 } else { 1.0 };
+    }
+    for row in &mpc.rows {
+        for &(m, a) in &row.masters {
+            t[row.slave as usize * n + m as usize] = a;
+        }
+    }
+    t
+}
+
+/// `transform` is `TᵀKT` and `Tᵀf`, checked against the dense definition on a hand-written
+/// four-DOF system with two masters and a fractional split.
+#[test]
+fn transform_is_the_dense_t_transpose_k_t() {
+    let n = 4;
+    #[rustfmt::skip]
+    let k = vec![
+        4.0, -1.0,  0.5, -0.5,
+       -1.0,  5.0, -2.0,  1.0,
+        0.5, -2.0,  6.0, -1.5,
+       -0.5,  1.0, -1.5,  7.0,
+    ];
+    let f = vec![1.0, -2.0, 3.0, 5.0];
+    let mpc = hand_mpc(vec![Row { slave: 3, masters: vec![(0, 0.25), (1, 0.75)], owner: 0 }]);
+    let t = dense_t(&mpc, n);
+    let want = mat_mul_t(&t, &mat_mul(&k, &t, n), n);
+    let (kt, ft) = mpc::transform(&dense_csr(n, &k), &f, &mpc);
+    for (i, (g, w)) in to_dense(&kt).iter().zip(&want).enumerate() {
+        assert!((g - w).abs() <= 1e-12, "entry {i}: got {g}, want {w}");
+    }
+    let want_f: Vec<f64> = (0..n).map(|r| (0..n).map(|i| t[i * n + r] * f[i]).sum()).collect();
+    for (g, w) in ft.iter().zip(&want_f) {
+        assert!((g - w).abs() <= 1e-12, "got {g}, want {w}");
+    }
+    assert_eq!(kt.row_ptr[3], kt.row_ptr[4], "the slave row is empty");
+    assert_eq!(ft[3], 0.0);
+    // Recovery is the same T: u = T v.
+    let mut u = vec![2.0, -6.0, 1.0, 0.0];
+    mpc::recover(&mpc, &mut u);
+    assert!((u[3] - (0.25 * 2.0 + 0.75 * -6.0)).abs() <= 1e-15);
+    // And the tie force a master carries is the slave residual times its coefficient.
+    let mut tie_force = vec![0.0; n];
+    mpc::master_forces(&mpc, &[0.0, 0.0, 0.0, 8.0], &mut tie_force);
+    assert_eq!(tie_force, vec![2.0, 6.0, 0.0, 0.0]);
+}
+
+/// An empty `Mpc` is the identity: `transform` hands back the operator and the load unchanged,
+/// which is what every model without a contact pays for the machinery.
+#[test]
+fn an_empty_mpc_transforms_nothing() {
+    let none = Mpc::none();
+    assert!(none.is_empty());
+    assert!(none.pairs(3).is_empty());
+    let k = dense_csr(2, &[2.0, -1.0, -1.0, 2.0]);
+    let (kt, ft) = mpc::transform(&k, &[1.0, 2.0], &none);
+    assert_eq!(kt, k);
+    assert_eq!(ft, vec![1.0, 2.0]);
+    let mut u = vec![7.0, 8.0];
+    mpc::recover(&none, &mut u);
+    assert_eq!(u, vec![7.0, 8.0]);
+    // Node 0 tied to nodes 1 and 2 couples those node pairs, whatever the component.
+    let mpc = hand_mpc(vec![
+        Row { slave: 0, masters: vec![(3, 0.5), (6, 0.5)], owner: 0 },
+        Row { slave: 1, masters: vec![(4, 0.5), (7, 0.5)], owner: 0 },
+    ]);
+    assert_eq!(mpc.pairs(3), vec![[0, 1], [0, 2]]);
+}
+
+proptest::proptest! {
+    /// The transformed operator stays symmetric and positive semi-definite for any admissible
+    /// rows, which is what keeps the Cholesky and the CG applicable (plan B §0).
+    #[test]
+    fn t_transpose_k_t_is_symmetric_and_psd(seed in 1u64..512u64) {
+        let n = 6;
+        let mut r = Lcg(seed.wrapping_mul(2_654_435_761));
+        // K = LᵀL + I is symmetric positive definite for any L.
+        let l: Vec<f64> = (0..n * n).map(|_| 2.0 * r.unit() - 1.0).collect();
+        let mut k = mat_mul_t(&l, &l, n);
+        for d in 0..n {
+            k[d * n + d] += 1.0;
+        }
+        // Two slaves, each leaning on masters that are neither slaves nor each other.
+        let (a0, a1) = (r.unit(), r.unit());
+        let mpc = hand_mpc(vec![
+            Row { slave: 4, masters: vec![(0, a0), (1, 1.0 - a0)], owner: 0 },
+            Row { slave: 5, masters: vec![(2, a1), (3, 1.0 - a1)], owner: 0 },
+        ]);
+        let (kt, _) = mpc::transform(&dense_csr(n, &k), &vec![0.0; n], &mpc);
+        let d = to_dense(&kt);
+        for i in 0..n {
+            for j in 0..n {
+                let (x, y) = (d[i * n + j], d[j * n + i]);
+                proptest::prop_assert!((x - y).abs() <= 1e-9 * (1.0 + x.abs()), "({i}, {j}): {x} vs {y}");
+            }
+        }
+        for _ in 0..8 {
+            let v: Vec<f64> = (0..n).map(|_| 2.0 * r.unit() - 1.0).collect();
+            let q: f64 = (0..n).map(|i| v[i] * (0..n).map(|j| d[i * n + j] * v[j]).sum::<f64>()).sum();
+            proptest::prop_assert!(q >= -1e-9, "vᵀTᵀKTv = {q}");
+        }
+    }
+}
+
+/// Every node seeds its own diagonal, so a node no element touches still owns one, and
+/// `pattern_coupled` makes room for entries no element creates.
+#[test]
+fn the_pattern_seeds_its_own_diagonal_and_takes_extra_pairs() {
+    let mut mesh = Structured { kind: ElementKind::Hex8, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let lonely = mesh.n_nodes() as u32;
+    mesh.coords.extend_from_slice(&[5.0, 5.0, 5.0]);
+    let pat = pattern(&mesh, 3);
+    assert_eq!(pat.csr.diag().len(), mesh.n_nodes() * 3);
+    for d in 0..3u32 {
+        let row = (3 * lonely + d) as usize;
+        let cols = &pat.csr.col_idx[pat.csr.row_ptr[row] as usize..pat.csr.row_ptr[row + 1] as usize];
+        assert_eq!(cols, &[3 * lonely, 3 * lonely + 1, 3 * lonely + 2][..], "the lonely node owns a 3×3 block");
+    }
+    // Without the pair the lonely node couples to nothing; with it, both triangles appear.
+    let coupled = pattern_coupled(&mesh, 3, &[[0, lonely]]);
+    let row = &coupled.csr.col_idx[coupled.csr.row_ptr[0] as usize..coupled.csr.row_ptr[1] as usize];
+    assert!(row.contains(&(3 * lonely)), "node 0 now reaches the lonely node");
+    let lo = coupled.csr.row_ptr[3 * lonely as usize] as usize;
+    let hi = coupled.csr.row_ptr[3 * lonely as usize + 1] as usize;
+    assert!(coupled.csr.col_idx[lo..hi].contains(&0), "and the lonely node reaches back");
+    assert!(coupled.csr.nnz() > pat.csr.nnz(), "the extra pair adds entries");
+}
+
+/// F4: the two-block tie patch test on matched meshes. A tied assembly under uniform tension
+/// carries the same constant stress as one Body: the displacement is exactly the linear field
+/// and the reactions balance the applied load.
+#[test]
+fn f4_a_matched_tie_passes_the_uniform_tension_patch_test() {
+    patch_test_across_a_tie([2, 2, 2], [2, 2, 2]);
+}
+
+/// F4b: the same patch test with the slave block meshed at half the master's size, so every
+/// pairing is a projection into the interior of a master face rather than a node match.
+#[test]
+fn f4b_a_refined_slave_passes_the_same_patch_test() {
+    patch_test_across_a_tie([2, 2, 2], [4, 4, 4]);
+}
+
+/// The uniform-tension patch test over two tied blocks meshed `na` and `nb`.
+fn patch_test_across_a_tie(na: [usize; 3], nb: [usize; 3]) {
+    let sigma = 1.0e6;
+    let mesh = two_blocks(ElementKind::Hex8, na, nb, [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let constraints = vec![
+        fix("root", "a.xmin", [true, false, false], 0.0),
+        fix("symy", "a.ymin", [false, true, false], 0.0),
+        fix("symz", "a.zmin", [false, false, true], 0.0),
+    ];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+    p.couplings = vec![bond(1e-9)];
+    p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [sigma, 0.0, 0.0] }];
+    assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
+    let res = run_step(&p, &static_step(SolveOptions::default())).expect("a tied static solve");
+    assert!(res.warnings.is_empty(), "{:?}", res.warnings);
+
+    let u = &res.fields[&Field::Displacement];
+    let scale = sigma / YOUNG;
+    for node in 0..mesh.n_nodes() {
+        let x = mesh.node(node as u32);
+        let want = [scale * x[0], -POISSON * scale * x[1], -POISSON * scale * x[2]];
+        for (c, w) in want.iter().enumerate() {
+            let got = u.data[node * u.comps + c];
+            assert!((got - w).abs() <= 1e-8 * scale, "node {node} component {c}: got {got}, want {w}");
+        }
+    }
+    for (node, got) in res.fields[&Field::VonMises].data.iter().enumerate() {
+        assert!((got - sigma).abs() <= 1e-7 * sigma, "node {node}: von Mises {got} is not the constant {sigma}");
+    }
+    let total: f64 = res.reactions.iter().map(|(_, r)| r[0]).sum();
+    assert!((total + sigma).abs() <= 1e-8 * sigma, "reactions sum to {total}, not {}", -sigma);
+    assert!((res.scalars["applied_total_x"] - sigma).abs() <= 1e-9 * sigma);
+}
+
+/// The tie is exact: a beam split in two and welded back together deflects exactly as the
+/// single-Body beam does, and it does so bit-for-bit at one thread and at four.
+#[test]
+fn a_split_cantilever_matches_the_whole_one_and_is_thread_independent() {
+    let whole = Structured { kind: ElementKind::Hex8, n: [8, 2, 2] }.box_([1.0, 0.1, 0.1]);
+    let whole_sets = sets_of(&whole);
+    let one = one_body();
+    let root = |on: &str| vec![fix("root", on, [true, true, true], 0.0)];
+    let mut wp = problem(&whole, &whole_sets, &one, Idealisation::Solid3d, Formulation::Full, root("xmin"));
+    wp.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let whole_res = run_step(&wp, &static_step(SolveOptions::default())).expect("the whole beam solves");
+
+    let half = Structured { kind: ElementKind::Hex8, n: [4, 2, 2] }.box_([0.5, 0.1, 0.1]);
+    let mesh = join(&half, &half, [0.5, 0.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root("a.xmin"));
+    p.couplings = vec![bond(1e-9)];
+    p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let one_thread = pollster::block_on(procedure::run(
+        &p,
+        &static_step(SolveOptions::default()),
+        &Pool::new(1),
+        None,
+        None,
+        &mut nop,
+    ))
+    .expect("the tied beam solves");
+    let four_threads = pollster::block_on(procedure::run(
+        &p,
+        &static_step(SolveOptions::default()),
+        &Pool::new(4),
+        None,
+        None,
+        &mut nop,
+    ))
+    .expect("the tied beam solves");
+
+    let at = [1.0, 0.05, 0.05];
+    let tip = |res: &StepResult, m: &Mesh| probe(m, &res.fields[&Field::Displacement], at).expect("inside").1[2];
+    let (w, s) = (tip(&whole_res, &whole), tip(&one_thread, &mesh));
+    assert!((s - w).abs() <= 1e-8 * w.abs(), "tied {s} against whole {w}");
+    let (a1, a4) = (&one_thread.fields[&Field::Displacement].data, &four_threads.fields[&Field::Displacement].data);
+    for (i, (x, y)) in a1.iter().zip(a4).enumerate() {
+        assert_eq!(x.to_bits(), y.to_bits(), "dof {i}: {x} against {y}");
+    }
+}
+
+/// A support that also masters a tie carries the tie's own force as well as its residual, so
+/// the reaction each Constraint reports is the same as in the single-Body model it stands for.
+/// Without that the global balance is wrong too, because the slave residual has nowhere to go.
+#[test]
+fn a_tie_into_a_held_face_reports_the_same_reactions_as_the_whole_body() {
+    let whole = Structured { kind: ElementKind::Hex8, n: [4, 2, 2] }.box_([2.0, 1.0, 1.0]);
+    let mut whole_sets = sets_of(&whole);
+    // The y = 0 face of the first half only, so it shares its far edge with the tie's master.
+    whole_sets.insert(
+        "side".into(),
+        ResolvedSet {
+            kind: SetKind::Node,
+            faces: Vec::new(),
+            nodes: (0..whole.n_nodes() as u32)
+                .filter(|&n| whole.node(n)[1] == 0.0 && whole.node(n)[0] <= 1.0)
+                .collect(),
+            elems: Vec::new(),
+        },
+    );
+    let one = one_body();
+    let held = |root: &str, side: &str| {
+        vec![fix("root", root, [true, true, true], 0.0), fix("side", side, [true, true, true], 0.0)]
+    };
+    let mut wp = problem(&whole, &whole_sets, &one, Idealisation::Solid3d, Formulation::Full, held("xmin", "side"));
+    wp.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let whole_res = run_step(&wp, &static_step(SolveOptions::default())).expect("the whole block solves");
+
+    let mesh = two_blocks(ElementKind::Hex8, [2, 2, 2], [2, 2, 2], [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, held("a.xmin", "a.ymin"));
+    p.couplings = vec![bond(1e-9)];
+    p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [0.0, 0.0, -1e5] }];
+    let tied = run_step(&p, &static_step(SolveOptions::default())).expect("the tied assembly solves");
+
+    let side = tied.reactions.iter().find(|(n, _)| n == "side").expect("the side support reports").1;
+    assert!(side[2].abs() > 1.0, "the side support carries something: {side:?}");
+    for ((wn, wr), (tn, tr)) in whole_res.reactions.iter().zip(&tied.reactions) {
+        assert_eq!(wn, tn);
+        for c in 0..3 {
+            let tol = 1e-8 * (1.0 + wr[c].abs());
+            assert!((wr[c] - tr[c]).abs() <= tol, "{tn} component {c}: tied {} against whole {}", tr[c], wr[c]);
+        }
+    }
+    let total: f64 = tied.reactions.iter().map(|(_, r)| r[2]).sum();
+    assert!((total - 1e5).abs() <= 1e-4, "the supports carry the applied 1e5 N, not {total}");
+}
+
+/// The tie carries temperature too: with one DOF per node the same rows are a perfect thermal
+/// contact, and a bar cut in two conducts the same linear profile as the whole one.
+#[test]
+fn a_tie_conducts_as_one_bar_steady_and_transient() {
+    let (t0, t1) = (300.0, 400.0);
+    let mesh = two_blocks(ElementKind::Hex8, [5, 1, 1], [5, 1, 1], [0.5, 0.1, 0.1], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = heat_problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        conductor(45.0, 7800.0, 460.0),
+        vec![hold("cold", "a.xmin", t0), hold("hot", "b.xmax", t1)],
+        Vec::new(),
+    );
+    p.couplings = vec![bond(1e-9)];
+    let res = run_step(&p, &steady()).expect("a tied conduction problem");
+    for (node, got) in temperature_of(&res).iter().enumerate() {
+        let want = t0 + (t1 - t0) * mesh.node(node as u32)[0];
+        assert!((got - want).abs() <= 1e-8, "node {node}: {got} against {want}");
+    }
+    // Conduction through 0.01 m² of k = 45 over 1 m under 100 K is 45 W, in at one end and out
+    // at the other; the tie carries the same flux but is not a support and reports nothing.
+    let flow: Vec<f64> = res.reactions.iter().map(|(_, r)| r[0]).collect();
+    assert!((flow[0] - 45.0).abs() <= 1e-8 * 45.0, "45 W crosses the tie, not {}", flow[0]);
+    assert!((flow[0] + flow[1]).abs() <= 1e-8 * 45.0, "the two ends are equal and opposite: {flow:?}");
+
+    let transient = Step::HeatTransient {
+        dt: 200.0,
+        t_end: 60_000.0,
+        theta: 1.0,
+        initial: t0,
+        output_every: 50,
+        amplitude: None,
+        solver: SolveOptions::default(),
+        control: NonlinearControl::default(),
+    };
+    let late = run_step(&p, &transient).expect("a tied transient");
+    for (node, got) in temperature_of(&late).iter().enumerate() {
+        let want = t0 + (t1 - t0) * mesh.node(node as u32)[0];
+        assert!((got - want).abs() <= 0.5, "node {node}: {got} against {want}");
+    }
+    let history = late.history.as_ref().expect("a transient keeps a history");
+    for v in &history.values[0] {
+        assert!((v - t0).abs() <= 1e-9 || (v - t1).abs() <= 1e-9, "the initial field is uniform apart from the end");
+    }
+}
+
+/// A tied assembly has the frequencies of the single Body it models, and its recovered mode
+/// shapes are continuous across the tie.
+#[test]
+fn a_tied_beam_has_the_frequencies_of_the_whole_one() {
+    let modal = Step::Modal { n_modes: 2, shift: None, solver: SolveOptions::default() };
+    let root = |on: &str| vec![fix("root", on, [true, true, true], 0.0)];
+    let whole = Structured { kind: ElementKind::Hex8, n: [8, 2, 2] }.box_([1.0, 0.1, 0.1]);
+    let whole_sets = sets_of(&whole);
+    let one = one_body();
+    let wp = problem(&whole, &whole_sets, &one, Idealisation::Solid3d, Formulation::Full, root("xmin"));
+    let whole_res = run_step(&wp, &modal).expect("the whole beam has modes");
+
+    let half = Structured { kind: ElementKind::Hex8, n: [4, 2, 2] }.box_([0.5, 0.1, 0.1]);
+    let mesh = join(&half, &half, [0.5, 0.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, root("a.xmin"));
+    p.couplings = vec![bond(1e-9)];
+    let tied = run_step(&p, &modal).expect("the tied beam has modes");
+    for (i, (w, t)) in whole_res.frequencies.iter().zip(&tied.frequencies).enumerate() {
+        assert!((w - t).abs() <= 1e-6 * w, "mode {i}: tied {t} against whole {w}");
+    }
+    let shape = &tied.modes[0];
+    let mut pairs = 0;
+    for s in 0..half.n_nodes() as u32 {
+        let x = half.node(s);
+        if x[0] != 0.5 {
+            continue;
+        }
+        // The coincident node of the second block: the same point, at its own local origin.
+        let slave = node_at(&half, [0.0, x[1], x[2]]) as usize + half.n_nodes();
+        pairs += 1;
+        for c in 0..3 {
+            let (m, sl) = (shape.data[s as usize * shape.comps + c], shape.data[slave * shape.comps + c]);
+            assert!((m - sl).abs() <= 1e-12 * (1.0 + m.abs()), "node {s} component {c}: {m} against {sl}");
+        }
+    }
+    assert_eq!(pairs, 9, "every node of the interface was checked");
+}
+
+/// The two pairing warnings reach the Result: a gap the tie bridges, and a slave side coarser
+/// than the master it projects onto.
+#[test]
+fn the_pairing_warnings_reach_the_result() {
+    let mesh = two_blocks(ElementKind::Hex8, [4, 4, 4], [2, 2, 2], [1.0, 1.0, 1.0], 1e-5);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "a.xmin", [true, true, true], 0.0)],
+    );
+    p.couplings = vec![bond(1e-3)];
+    p.loads = vec![Load::Traction { faces: "b.xmax".into(), t: [1e5, 0.0, 0.0] }];
+    let res = run_step(&p, &static_step(SolveOptions::default())).expect("a tied solve across a gap");
+    let codes: Vec<&str> = res.warnings.iter().map(|w| w.code.as_str()).collect();
+    assert_eq!(codes, vec!["contact.slave-coarser", "contact.gap"], "{:?}", res.warnings);
+    assert!(res.warnings[0].text.contains("9 nodes on the slave set"), "{}", res.warnings[0].text);
+    assert!(res.warnings[1].text.contains("0.00001"), "{}", res.warnings[1].text);
+    for w in &res.warnings {
+        assert_eq!(w.where_.as_deref(), Some("contact 'weld'"));
+    }
+}
+
+/// A gap the tie bridges is a rigid link, so it removes the rotation a single pinned node
+/// leaves free — which the rigid-mode check only sees because it tests the tie rows too.
+#[test]
+fn a_tie_across_a_gap_removes_a_rotation_the_supports_leave() {
+    let half = Structured { kind: ElementKind::Quad4, n: [2, 2, 1] }.box_([1.0, 1.0, 0.0]);
+    let mesh = join(&half, &half, [1.1, 0.0, 0.0]);
+    let mut sets = sets_of(&mesh);
+    sets.insert(
+        "pin".into(),
+        ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![0], elems: Vec::new() },
+    );
+    let bodies = two_bodies();
+    let id = Idealisation::PlaneStress { thickness: 0.1 };
+    let held = vec![fix("pin", "pin", [true, true, false], 0.0)];
+    let free = problem(&mesh, &sets, &bodies, id.clone(), Formulation::Full, held.clone());
+    let spin = checks::all(&free);
+    assert_eq!(spin.len(), 1);
+    assert_eq!(spin[0].code, ErrorCode::ConstraintRigidModes);
+    assert!(spin[0].cause.contains("rotation about z"), "{}", spin[0].cause);
+
+    let mut tied = problem(&mesh, &sets, &bodies, id, Formulation::Full, held);
+    tied.couplings = vec![bond(0.2)];
+    assert!(checks::all(&tied).is_empty(), "the tie holds the second block: {:?}", checks::all(&tied));
+}
+
+/// A node further from the master Set than the tolerance is `contact.unpaired`, naming the node,
+/// the distance and the nearest master face.
+#[test]
+fn a_node_beyond_the_tolerance_is_unpaired() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.05);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.couplings = vec![bond(0.01)];
+    let e = mpc::build(&p).expect_err("0.05 m is beyond a 0.01 m tolerance");
+    assert_eq!(e.code, ErrorCode::ContactUnpaired);
+    assert!(e.cause.contains("0.05"), "{}", e.cause);
+    assert!(e.cause.contains("centred at [1, 0.5, 0.5]"), "{}", e.cause);
+    assert_eq!(e.where_.as_deref(), Some("contact 'weld'"));
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("larger tol")));
+    // The checks report it, and a solve refuses on it rather than welding across the gap.
+    let all = checks::all(&p);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].code, ErrorCode::ContactUnpaired);
+    assert_eq!(
+        run_step(&p, &static_step(SolveOptions::default())).expect_err("refused").code,
+        ErrorCode::ContactUnpaired
+    );
+}
+
+/// A DOF two ties both eliminate, and one that is a slave here and a master there: either makes
+/// `T` rank-deficient, so both are refused before anything is assembled.
+#[test]
+fn a_dof_that_two_ties_claim_is_dependent() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.couplings = vec![bond(1e-9), tie("again", "a.xmax", "b.xmin", 1e-9)];
+    let twice = mpc::build(&p).expect_err("the same face cannot be tied twice");
+    assert_eq!(twice.code, ErrorCode::ConstraintDependent);
+    assert!(twice.cause.starts_with("ux of node"), "{}", twice.cause);
+    assert!(twice.cause.contains("is tied twice"), "{}", twice.cause);
+    assert!(twice.cause.contains("'weld' and 'again'"), "{}", twice.cause);
+    assert_eq!(twice.where_.as_deref(), Some("contact 'again'"));
+    assert!(twice.suggestion.as_deref().is_some_and(|s| s.contains("constraint.remove")));
+
+    // The second tie makes the first tie's slave face into a master face.
+    p.couplings = vec![bond(1e-9), tie("chain", "b.xmin", "a.xmin", 2.0)];
+    let chained = mpc::build(&p).expect_err("a slave may not also be a master");
+    assert_eq!(chained.code, ErrorCode::ConstraintDependent);
+    assert!(chained.cause.contains("is both a slave and a master"), "{}", chained.cause);
+    assert_eq!(chained.where_.as_deref(), Some("contact 'chain'"));
+}
+
+/// A Constraint and a tie cannot both own a DOF: the elimination would win silently, so the
+/// clash is a `constraint.conflict` naming both.
+#[test]
+fn a_prescribed_slave_dof_conflicts_with_its_tie() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let constraints = vec![fix("clamp", "b.xmin", [true, true, true], 0.0)];
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+    p.couplings = vec![bond(1e-9)];
+    let e = checks::all(&p).into_iter().find(|e| e.code == ErrorCode::ConstraintConflict).expect("a clash");
+    assert!(e.cause.contains("'clamp' prescribes ux of node"), "{}", e.cause);
+    assert!(e.cause.contains("contact 'weld' ties it"), "{}", e.cause);
+    assert_eq!(e.where_.as_deref(), Some("contact 'weld'"));
+}
+
+/// The Sets a tie names must exist, must not be the same Set, and the master must have faces:
+/// there is nothing to project onto otherwise.
+#[test]
+fn a_tie_needs_two_real_face_sets() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let mut sets = sets_of(&mesh);
+    let nodes = sets["a.xmax"].nodes.clone();
+    sets.insert("loose".into(), ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes, elems: Vec::new() });
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+
+    p.couplings = vec![tie("weld", "nope", "b.xmin", 1e-9)];
+    let missing = mpc::build(&p).expect_err("an unknown master Set");
+    assert_eq!(missing.code, ErrorCode::SetEmpty);
+    assert_eq!(missing.where_.as_deref(), Some("contact 'weld'"));
+
+    p.couplings = vec![tie("weld", "a.xmax", "nope", 1e-9)];
+    assert_eq!(mpc::build(&p).expect_err("an unknown slave Set").code, ErrorCode::SetEmpty);
+
+    p.couplings = vec![tie("weld", "loose", "b.xmin", 1e-9)];
+    let not_a_face = mpc::build(&p).expect_err("a node Set cannot be a master");
+    assert_eq!(not_a_face.code, ErrorCode::Schema);
+    assert!(not_a_face.cause.contains("which has no faces"), "{}", not_a_face.cause);
+
+    p.couplings = vec![tie("weld", "a.xmax", "a.xmax", 1e-9)];
+    let itself = mpc::build(&p).expect_err("a Set cannot be tied to itself");
+    assert_eq!(itself.code, ErrorCode::ModelIllPosed);
+    assert!(itself.cause.contains("to itself"), "{}", itself.cause);
+
+    // An empty Set is reported by the well-posedness checks before the pairing runs.
+    sets.insert(
+        "void".into(),
+        ResolvedSet { kind: SetKind::Face, faces: Vec::new(), nodes: Vec::new(), elems: Vec::new() },
+    );
+    let mut q = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    q.couplings = vec![tie("weld", "void", "b.xmin", 1e-9)];
+    assert_eq!(checks::all(&q)[0].code, ErrorCode::SetEmpty);
+}
+
+/// Central differences divide by a lumped mass, and `TᵀMT` of a diagonal is not diagonal, so an
+/// explicit Step with a tie is refused rather than quietly integrating the wrong equations.
+#[test]
+fn explicit_dynamics_refuses_a_tie() {
+    let mesh = two_blocks(ElementKind::Hex8, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.couplings = vec![bond(1e-9)];
+    let step = Step::Explicit { t_end: 1e-6, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
+    let e = run_step(&p, &step).expect_err("explicit dynamics cannot carry a tie");
+    assert_eq!(e.code, ErrorCode::Unsupported);
+    assert!(e.cause.contains("'weld' ties two parts"), "{}", e.cause);
+    assert_eq!(e.where_.as_deref(), Some("step.procedure"));
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("procedure 'static'")));
+}
+
+/// The projection is a real closest-point search: one parameter on a 2D element's edge, two on
+/// a triangle, and a node that falls off its master face clamps onto the nearest corner or edge
+/// instead of extrapolating the face.
+#[test]
+fn the_projection_clamps_a_node_that_falls_off_its_master_face() {
+    // 2D: `b` is twice as tall, so its top edge node is a metre past the end of `a`'s edge.
+    let left = Structured { kind: ElementKind::Quad4, n: [2, 2, 1] }.box_([1.0, 1.0, 0.0]);
+    let right = Structured { kind: ElementKind::Quad4, n: [2, 3, 1] }.box_([1.0, 2.0, 0.0]);
+    let mesh = join(&left, &right, [1.0, 0.0, 0.0]);
+    let sets = sets_of(&mesh);
+    let bodies = two_bodies();
+    let mut p =
+        problem(&mesh, &sets, &bodies, Idealisation::PlaneStress { thickness: 0.1 }, Formulation::Full, Vec::new());
+    p.couplings = vec![bond(1.1)];
+    let m = mpc::build(&p).expect("every node pairs within 1.1 m");
+    let clamped = node_at(&mesh, [1.0, 2.0, 0.0]);
+    let corner = node_at(&mesh, [1.0, 1.0, 0.0]);
+    let row = m.rows.iter().find(|r| r.slave == 2 * clamped).expect("the far node is tied");
+    assert_eq!(row.masters, vec![(2 * corner, 1.0)], "it clamps onto the corner, exactly");
+    let inside = m.rows.iter().find(|r| r.masters.len() == 2).expect("an interior projection has two masters");
+    assert!((inside.masters.iter().map(|&(_, a)| a).sum::<f64>() - 1.0).abs() < 1e-12);
+
+    // Triangles: matched tetrahedron faces pair exactly, node onto node.
+    let tets = two_blocks(ElementKind::Tet4, [1, 1, 1], [1, 1, 1], [1.0, 1.0, 1.0], 0.0);
+    let tet_sets = sets_of(&tets);
+    let mut tp = problem(&tets, &tet_sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    tp.couplings = vec![bond(1e-9)];
+    for row in &mpc::build(&tp).expect("matched tetrahedron faces pair").rows {
+        assert_eq!(row.masters.len(), 1, "a coincident node ties to one node");
+        assert_eq!(row.masters[0].1, 1.0, "with a weight of exactly one");
+    }
+    // Slid sideways, half of them fall off their triangle and clamp onto its edge.
+    let cube = Structured { kind: ElementKind::Tet4, n: [1, 1, 1] }.box_([1.0, 1.0, 1.0]);
+    let slid = join(&cube, &cube, [1.0, 0.8, 0.0]);
+    let slid_sets = sets_of(&slid);
+    let mut sp = problem(&slid, &slid_sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    sp.couplings = vec![bond(1.5)];
+    let sm = mpc::build(&sp).expect("a 0.8 m offset still pairs within 1.5 m");
+    for row in &sm.rows {
+        let sum: f64 = row.masters.iter().map(|&(_, a)| a).sum();
+        assert!((sum - 1.0).abs() < 1e-12, "clamped weights are still a partition of unity: {sum}");
+    }
+    let off = node_at(&slid, [1.0, 1.8, 0.0]);
+    let row = sm.rows.iter().find(|r| r.slave == 3 * off).expect("the far node is tied");
+    assert!(row.masters.len() <= 2, "a node past the triangle clamps onto an edge or a corner: {row:?}");
+}
 
 // ---------------------------------------------------------------------------------------------
 // Radiation (#79). The Stefan-Boltzmann constant is repeated here on purpose: a test that read
@@ -5908,4 +6616,140 @@ fn direct_factors_own_their_storage_and_never_change_process_parallelism() {
             direct_harmonic_profile([1, 4][index]);
         })
     });
+}
+
+/// Exact integral of a trilinear field over this test's axis-aligned Hex8 cells: each corner
+/// owns one eighth of its cell volume. This does not call capacity or any FE quadrature.
+fn box_temperature_integral(mesh: &Mesh, values: &[f64]) -> f64 {
+    (0..mesh.n_elems() as u32)
+        .map(|elem| {
+            let nodes = mesh.elem_nodes(elem);
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for &node in nodes {
+                let x = mesh.node(node);
+                for k in 0..3 {
+                    lo[k] = lo[k].min(x[k]);
+                    hi[k] = hi[k].max(x[k]);
+                }
+            }
+            let volume = (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2]);
+            nodes.iter().map(|&n| values[n as usize]).sum::<f64>() * volume / 8.0
+        })
+        .sum()
+}
+
+/// A tied, held interface must transfer the slave's capacity residual too. Uniform heating
+/// has T=300+2t, source rho*cp*2, and zero support power, independently of the split mesh.
+#[test]
+fn a_held_thermal_tie_transfers_storage_and_starts_with_an_admissible_history() {
+    let bodies = two_bodies();
+    for nx in [1, 2, 4] {
+        let mesh = two_blocks(ElementKind::Hex8, [nx, 1, 1], [nx, 1, 1], [0.5, 0.1, 0.1], 0.0);
+        let sets = sets_of(&mesh);
+        let mut p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(1.0, 10.0, 2.0),
+            vec![hold("interface", "a.xmax", 1.0)],
+            vec![HeatLoad::Source { bodies: bodies.clone(), q: 40.0 }],
+        );
+        p.couplings = vec![bond(1e-9)];
+        for theta in [0.5, 1.0] {
+            let mut step = Step::HeatTransient {
+                dt: 0.1,
+                t_end: 0.3,
+                theta,
+                initial: 300.0,
+                output_every: 1,
+                amplitude: Some(procedure::Amplitude::Table { t: vec![0.0, 0.3], value: vec![300.0, 300.6] }),
+                solver: SolveOptions::default(),
+                control: NonlinearControl::default(),
+            };
+            let res = run_step(&p, &step).unwrap();
+            for t in temperature_of(&res) {
+                assert!((t - 300.6).abs() < 1e-8, "nx={nx}, theta={theta}: {t}");
+            }
+            assert!((res.scalars["applied_total_x"] - 0.4).abs() < 1e-10);
+            assert!((res.scalars["storage_power"] - 0.4).abs() < 1e-9);
+            assert!(res.reactions[0].1[0].abs() < 1e-9, "the held interface supplies no heat to the uniform ramp");
+            // Deliberately give free nodes a different initial temperature. The held master
+            // and its slave must agree before the very first capacity/radiation evaluation.
+            let Step::HeatTransient { initial, .. } = &mut step else { panic!() };
+            *initial = 299.0;
+            let res = run_step(&p, &step).unwrap();
+            let h = res.history.as_ref().unwrap();
+            for &node in &sets["b.xmin"].nodes {
+                assert!((h.values[0][node as usize] - 300.0).abs() < 1e-10);
+            }
+            let last = h.values.len() - 1;
+            let storage = 20.0
+                * (box_temperature_integral(&mesh, &h.values[last])
+                    - box_temperature_integral(&mesh, &h.values[last - 1]))
+                / (h.times[last] - h.times[last - 1]);
+            assert!((res.scalars["storage_power"] - storage).abs() < 1e-9);
+            assert!((0.4 - res.reactions[0].1[0] - storage).abs() < 1e-8);
+        }
+    }
+}
+
+/// Radiation crosses a perfect contact with the same steady scalar flux law. During cooling,
+/// the weighted endpoint surface flux equals the full two-body stored-energy rate.
+#[test]
+fn a_thermal_tie_preserves_radiation_endpoint_power_and_whole_body_storage() {
+    let bodies = two_bodies();
+    let (length, area, k, rho_cp) = (0.1, 0.0004, 55.6, 10_000.0);
+    for nx in [1, 2, 4] {
+        let mesh = two_blocks(ElementKind::Hex8, [nx, 1, 1], [nx, 1, 1], [0.05, 0.02, 0.02], 0.0);
+        let sets = sets_of(&mesh);
+        let mut p = heat_problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            conductor(k, 100.0, 100.0),
+            vec![hold("hot", "a.xmin", 1000.0)],
+            vec![HeatLoad::Radiation { faces: "b.xmax".into(), emissivity: 1.0, t_inf: 0.0 }],
+        );
+        p.couplings = vec![bond(1e-9)];
+        let surface = radiating_slab_surface(k, length, 1000.0, 0.0, 1.0);
+        let outgoing = SIGMA * area * surface.powi(4);
+        let res = run_step(&p, &steady()).unwrap();
+        assert!((res.scalars["applied_total_x"] + outgoing).abs() < 1e-7 * outgoing);
+        assert!((res.reactions[0].1[0] + outgoing).abs() < 1e-7 * outgoing);
+        p.constraints.clear();
+        for theta in [0.5, 1.0] {
+            let step = Step::HeatTransient {
+                dt: 0.1,
+                t_end: 0.3,
+                theta,
+                initial: 1000.0,
+                output_every: 1,
+                amplitude: None,
+                solver: SolveOptions::default(),
+                control: NonlinearControl { tol: 1e-10, max_iterations: 100 },
+            };
+            let res = run_step(&p, &step).unwrap();
+            let h = res.history.as_ref().unwrap();
+            let last = h.values.len() - 1;
+            let mean_surface = |values: &[f64]| {
+                sets["b.xmax"].nodes.iter().map(|&n| values[n as usize]).sum::<f64>()
+                    / sets["b.xmax"].nodes.len() as f64
+            };
+            let applied = -SIGMA
+                * area
+                * ((1.0 - theta) * mean_surface(&h.values[last - 1]).powi(4)
+                    + theta * mean_surface(&h.values[last]).powi(4));
+            let storage = rho_cp
+                * (box_temperature_integral(&mesh, &h.values[last])
+                    - box_temperature_integral(&mesh, &h.values[last - 1]))
+                / (h.times[last] - h.times[last - 1]);
+            assert!((res.scalars["applied_total_x"] - applied).abs() < 1e-8 * applied.abs());
+            assert!((res.scalars["storage_power"] - storage).abs() < 1e-9 * storage.abs());
+            assert!((storage - applied).abs() < 1e-7 * applied.abs(), "nx={nx}, theta={theta}");
+            assert!(res.reactions.is_empty());
+        }
+    }
 }

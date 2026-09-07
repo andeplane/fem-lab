@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use femlab_geometry::{RegionPredicate, Shape, Solid};
 
-use crate::command::{Command, ExportFormat, IdealisationSpec, ObjectKind};
+use crate::command::{Command, ContactKind, ExportFormat, IdealisationSpec, ObjectKind};
 use crate::error::{Error, ErrorCode, Warning};
 use crate::hash::model_hash;
 use crate::journal::{Journal, JournalEntry, ModelFile, FILE_FORMAT};
@@ -52,6 +52,12 @@ pub struct GeometrySurface {
     pub outlines: Vec<femlab_geometry::sketch::Loop>,
 }
 
+/// Full solve identity stays name-sensitive; validity excludes only the display name (ADR 0017).
+pub(crate) struct ResultHashes {
+    pub model: String,
+    pub validity: String,
+}
+
 /// The engine.
 pub struct Engine {
     pub(crate) model: Model,
@@ -68,7 +74,7 @@ pub struct Engine {
     pub(crate) mesh: Option<crate::mesh::BuiltMesh>,
     /// One Result per Step with the Model hash and Journal line it was solved at. An edit does
     /// not throw a Result away — it makes it stale, and `query.result` says so (plan B §2.1).
-    pub(crate) results: BTreeMap<String, (String, u32, crate::procedure::StepResult)>,
+    pub(crate) results: BTreeMap<String, (ResultHashes, u32, crate::procedure::StepResult)>,
     /// The last `study.converge` report per Step, so `query.report` can append the table. Not
     /// part of the Model and never hashed: a study is a measurement, not a definition.
     pub(crate) studies: BTreeMap<String, crate::query::StudyReport>,
@@ -462,6 +468,13 @@ impl Engine {
                 self.invalidate_geometry();
                 Ok(Output::None)
             }
+            Command::ModelSetName { name } => {
+                if name.trim().is_empty() {
+                    return Err(Error::schema("Model name cannot be blank").at("name"));
+                }
+                self.model.name = name.clone();
+                Ok(Output::None)
+            }
             Command::ModelSetUnits { units } => {
                 units.validate()?;
                 self.model.units = units.clone();
@@ -654,6 +667,27 @@ impl Engine {
                 let v = value.si().map_err(|e| e.at("value"))?;
                 let c =
                     Constraint { name: name.clone(), on: on.clone(), kind: ConstraintKind::Temperature { value: v } };
+                Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
+            }
+            Command::ContactAdd { name, master, slave, kind, tol } => {
+                check_name(name)?;
+                self.check_set(master).map_err(|e| e.at("master"))?;
+                self.check_set(slave).map_err(|e| e.at("slave"))?;
+                if master == slave {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!("contact '{name}' ties set '{master}' to itself"),
+                    )
+                    .at("slave")
+                    .suggest("contact.add with the facing Sets of two different Bodies"));
+                }
+                let t = tol.as_ref().map(|q| q.si().map_err(|e| e.at("tol"))).transpose()?;
+                let ContactKind::Bonded = kind;
+                let c = Constraint {
+                    name: name.clone(),
+                    on: slave.clone(),
+                    kind: ConstraintKind::Bonded { master: master.clone(), tol: t },
+                };
                 Ok(upsert(&mut self.model.constraints, c, |c| &c.name, ObjectKind::Constraint))
             }
             Command::ConstraintRemove { name } => {
@@ -985,7 +1019,7 @@ impl Engine {
         let m = &self.model;
         let mut users: Vec<String> = Vec::new();
         for c in &m.constraints {
-            if set_refers_to(&c.on, name) {
+            if c.sets().iter().any(|s| set_refers_to(s, name)) {
                 users.push(format!("constraint '{}'", c.name));
             }
         }
@@ -1031,7 +1065,7 @@ impl Engine {
             let users: Vec<String> = m
                 .constraints
                 .iter()
-                .filter(|c| set_refers_to(&c.on, name))
+                .filter(|c| c.sets().iter().any(|s| set_refers_to(s, name)))
                 .map(|c| format!("constraint '{}'", c.name))
                 .chain(
                     m.loads
@@ -1052,7 +1086,7 @@ impl Engine {
             let users: Vec<String> = m
                 .constraints
                 .iter()
-                .filter(|c| c.on == name)
+                .filter(|c| c.sets().contains(&name))
                 .map(|c| format!("constraint '{}'", c.name))
                 .chain(m.loads.iter().filter(|l| l.kind.set() == Some(name)).map(|l| format!("load '{}'", l.name)))
                 .collect();
@@ -1133,7 +1167,9 @@ impl Engine {
                     }
                 }
                 for c in &mut m.constraints {
-                    c.on = rename_set_ref(&c.on, name, to);
+                    for set in c.sets_mut() {
+                        *set = rename_set_ref(set, name, to);
+                    }
                 }
                 for l in &mut m.loads {
                     match &mut l.kind {
@@ -1192,8 +1228,10 @@ impl Engine {
                     }
                 }
                 for c in &mut m.constraints {
-                    if c.on == name {
-                        c.on = to.into();
+                    for set in c.sets_mut() {
+                        if set == name {
+                            *set = to.into();
+                        }
                     }
                 }
                 for l in &mut m.loads {

@@ -42,20 +42,21 @@ test.describe('@cpu global editing shortcuts', () => {
 
     await page.getByRole('tab', { name: /script/ }).click();
     await page.getByRole('button', { name: 'edit this script' }).click();
-    const textarea = page.locator('textarea.script-edit');
-    await expect(textarea).toBeVisible();
-    const textareaOriginal = await textarea.inputValue();
-    await textarea.focus();
+    const editor = page.getByRole('textbox', { name: 'TypeScript editor' });
+    await expect(editor).toBeVisible();
+    const editorOriginal = await page.evaluate(async () => (await window.fem.query.script()).text);
+    await editor.focus();
     await page.keyboard.press('End');
     await page.keyboard.type('x');
     await press('Z');
-    expect(await textarea.inputValue()).toBe(textareaOriginal);
-    await textarea.selectText();
+    // CodeMirror owns its document selection; rendered innerText adds layout newlines.
+    // Native select-all/copy must recover the exact Journal source, including its final newline.
+    await press('A');
     await press('C');
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(textareaOriginal);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(editorOriginal);
     expect(await journalState(page)).toEqual(beforeText);
 
-    const editor = await page.evaluate(() => {
+    const contenteditableId = await page.evaluate(() => {
       const node = document.createElement('div');
       node.id = 'shortcut-contenteditable';
       node.contentEditable = 'true';
@@ -63,7 +64,7 @@ test.describe('@cpu global editing shortcuts', () => {
       document.querySelector('.workspace')!.append(node);
       return node.id;
     });
-    const contenteditable = page.locator(`#${editor}`);
+    const contenteditable = page.locator(`#${contenteditableId}`);
     await contenteditable.click();
     await page.keyboard.type('x');
     await press('Z');

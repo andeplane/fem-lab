@@ -79,6 +79,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
+| tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
+| tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
 
 <!-- bench:end -->
 
@@ -413,6 +415,10 @@ The retained-frame registry checks (#243) read every uniform-heating value throu
 strides, integral and nonintegral endpoint ratios, and initial/final-only output. The values
 must equal `T=t` K within `1e-10 K`; SI arrays remain labelled K when Model display units
 are Celsius. The final frame is exactly the final primary FieldData, including zero padding.
+The document-name regression (#123) repeats both orders and 2/4 axial cells: rename,
+undo/redo and full replay preserve the original solved Model hash, frame catalogue and
+`T(0.4 s)=0.4 K` values, while sampled probes/paths stay unchanged. A subsequent heat-source
+edit remains stale even after another rename, and sampled access rejects it.
 
 An independent cooled-slab Fourier series checks every retained node at 0.05, 0.10 and 0.15 s:
 `T(x,t) = Σ_(odd n) 400/(nπ) sin(nπx) exp(−n²π²t)` K for a 1 m slab initially at 100 K,
@@ -454,7 +460,40 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F2 | Critical time step | 0.9 Δt_crit stable for 5000 steps, 1.25 Δt_crit is `explicit.unstable` | as stated | Δt estimator really is critical | engine test |
 | F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
 | F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) | |
-| F4 | Two-block tie / bonded contact patch test | continuous stress across the tie | 1e-8 | constraints between bodies (phase 6) | |
+| F4 | Two-block tie / bonded contact patch test, matched meshes | uniform tension: σ constant across the tie, u exactly the linear field, Σ reactions = applied | 1e-8 | bonded contact between Bodies (#61) | green |
+| F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
+| F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
+| F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+
+The bonded contact of #61 is a multipoint constraint applied by elimination — `K' = TᵀKT` with
+the slave DOFs dropped from the free set — so the tie is exact rather than approximate, and F4
+and F4c gate at roundoff rather than at an engineering tolerance. F4c's reference is the value
+`cantilever-hex8-im` measures on the single Body beside it, not a published number: it is an
+equivalence, and the published Timoshenko value is the one that case is gated against.
+
+**F4b is an engine test, not an installed case, because the Command API cannot yet build it.**
+`mesh.set` takes one element size for the whole Model, and the lattice mesher divides each Body's
+bounding box by it, so two prismatic Bodies that share a face are always meshed compatibly
+across it: a non-conforming interface cannot be expressed from a Journal today. The engine test
+(`crates/engine/tests/fem.rs`) builds one directly, with the slave block meshed at half the
+master's size, and runs the same three assertions. It is deliberately a *nested* refinement:
+node-to-face ties reproduce a constant stress state exactly when the fine grid's cell edges
+include the coarse grid's, and only approximately when they do not — which is what mortar
+methods exist for and what no tutorial in TUTORIAL-COVERAGE needs. Per-Body mesh sizes would
+make F4b an installed case: #359.
+
+F4d covers a trap the elimination hides. The solved system enforces equilibrium of the retained
+combination, `Tᵀ(Ku − f) = 0`, so at a DOF that is both held by a Constraint and a master of a
+tie, `Ku − f` is the support force *plus* the force the tie pushes into it. `assembly::reactions`
+adds the tie term back (`mpc::master_forces`), which is what makes both the per-constraint
+reaction and the global `balance` right when a tie reaches a support. Without it the global sum
+is wrong too, so F4's `balance` check alone would not have caught it — F4d compares the
+per-constraint reactions of a tied assembly against the single Body it stands for.
+
+**NAFEMS R0081 CGS-1** is not claimed here. TUTORIAL-COVERAGE row 55 lists CGS-1…CGS-10 under
+contact, gapping and sliding; nobody on this change has read the publication, and a benchmark
+whose reference value has not been read from its source is not a benchmark. It belongs to
+frictionless contact (#62) if it turns out to be the frictionless patch test.
 
 F2b's endpoint regression adds `u(t) = v₀t + gt²/2` on two mesh sizes at end times of 0.25,
 1.6 and 2.25 nominal stable steps. The final history time is exactly the requested endpoint,
@@ -637,6 +676,17 @@ list, report the indexed argument and preserve the previous Model and Journal.
 - Cook's membrane: Cook (1974); converged values in arXiv 1806.07500.
 - deal.II step-7 for the manufactured-solution methodology.
 
+### Loaded boundary area (Properties pressure preview)
+
+`query.set.pressureArea` uses the same boundary quadrature as pressure and traction, without
+requiring a Material or appending a Command. Registry tests check both mesh orders against
+independent exact areas: a 350 mm × 300 mm solid face is 0.105 m²; a 2 m edge with 30 mm
+plane-stress thickness is 0.06 m²; plane strain uses 2 m² per metre of out-of-plane depth;
+an axisymmetric edge at r = 3 m and length 2 m sweeps 12π m². Remeshing preserves these
+areas. Multiplying by pressure yields the scalar pressure-area integral, not the net vector
+force on a curved boundary. Chromium checks the draft conversion (2.4 MPa × 0.105 m² =
+252 kN), edits and geometry changes without a load Command until Apply.
+
 ### Transformed Sheet free meshing (#230)
 
 A 2×2 m square with a centered 1×1 m square hole, scaled (2,3), rotated 90°
@@ -802,9 +852,13 @@ buffers at its capacity-multiplication peak: film weights, θ-stage temperature,
 temperature reused in place as its rate, and capacity times that rate. The rate is dropped before
 final field recovery. These nine vectors extend the existing counted allowance, not the
 excluded assembly/solver allocations or final derived fields. Radiating heat uses `13 × nodes × 8`
-bytes: its Newton peak has seven outer vectors (film weights, zero RHS, temperature, previous
-temperature, full RHS, free RHS and free solution), the old radiation residual, the next iterate,
-and four pass-local vectors (film RHS, reduced RHS, reduced solution and the expanded replacement).
+bytes as a conservative allowance. With contact, the seven outer vectors are film weights,
+zero RHS, temperature, previous temperature, full RHS, free RHS and free solution. The old
+radiation residual and next iterate add two. The film RHS becomes the full original load;
+its transposed replacement is dropped before solving. Reduced RHS, solution and expanded
+replacement add three at expansion (twelve total, within thirteen). The temporary zero RHS
+from the contact operator transform does not overlap those three. Linear heat drops its
+transposed load before expansion and adds no persistent contact work vector.
 The old radiation tangent/RHS are released before Newton; iteration scratch is released before
 balance recovery. The two endpoint radiation systems are assembled sequentially, never retained
 together. Reduction metadata and tangent/factor matrices remain within the stated exclusions.
@@ -829,3 +883,22 @@ without changing the Journal. Restoring the original Step makes that Result curr
 solve succeeds.
 An explicit regression independently checks that the pre-solve count equals the history rows
 produced by its element-frequency-derived integration schedule.
+
+### Thermal balance across bonded contact (#208 × #61)
+
+Two Hex8 blocks use one, two and four cells per half with both θ=1/2 and θ=1.
+A source of 40 W/m³ in a 0.01 m³ assembly with ρc_p=20 J/(m³ K) gives the
+independent uniform ramp T=300+2t K. Its held, tied interface supplies zero power,
+while net input and storage both equal 0.4 W. This checks that slave capacity
+residuals transfer to held masters along with conductivity and applied loads.
+A deliberately different free-node initial temperature also checks that the first
+History frame already recovers tied slave temperatures from the held master;
+subsequent stored energy is integrated as cell volume times the eight-corner mean.
+
+A 0.1 m radiating slab split into two blocks uses the same three refinements.
+Steady input and support reaction both equal minus the outgoing surface power from
+the independent scalar conduction/radiation bisection. With no held temperature,
+transient net input equals minus the θ-weighted endpoint fourth-power radiation,
+and equals the change in the two bodies' integrated thermal energy divided by the
+last increment. Interface flux is internal and never appears as a support reaction.
+These are integration oracles; they must pass before this combined change is accepted.
