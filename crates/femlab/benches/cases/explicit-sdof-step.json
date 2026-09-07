@@ -1,0 +1,202 @@
+{
+  "name": "explicit-sdof-step",
+  "reference": "Benchmark F3 (SDOF, explicit): one hex8 cube of side a = 100 mm with every DOF held except ux of the corner at (a, a, a), so the model is a single degree of freedom whose stiffness and mass are closed forms. With nu = 0 the corner's diagonal stiffness is k = 2Ea/9 = 5e9 N/m (E = 225 GPa; 2x2x2 Gauss integrates it exactly, so formulation: full, since the default incompatible modes soften the element by 9 % and the closed form is for the textbook element) and its HRZ lumped mass is m = rho a^3/8 = 1 kg (rho = 8000 kg/m^3), so omega = sqrt(k/m) = 70710.678 rad/s and T = 88.8577 us. A step force F = 5 kN applied at t = 0 gives u(t) = (F/k)(1 - cos omega t): F/k = 1 um at T/4, 2F/k = 2 um at T/2, 0 at T. The gate is 1 % at the phase-sensitive quarter period, which a 1 % error in omega fails; dtFactor is small so that the nearest retained frame is within 0.2 % of the requested phase.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "explicit-sdof-step"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "time": "s"
+      }
+    },
+    {
+      "cmd": "geometry.addBox",
+      "name": "cube",
+      "size": [
+        "100 mm",
+        "100 mm",
+        "100 mm"
+      ]
+    },
+    {
+      "cmd": "geometry.nameRegion",
+      "name": "corner",
+      "where": {
+        "kind": "bbox",
+        "min": [
+          "99 mm",
+          "99 mm",
+          "99 mm"
+        ],
+        "max": [
+          "101 mm",
+          "101 mm",
+          "101 mm"
+        ]
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "rod",
+      "E": "225 GPa",
+      "nu": 0.0,
+      "rho": "8000 kg/m^3"
+    },
+    {
+      "cmd": "material.assign",
+      "material": "rod",
+      "bodies": [
+        "cube"
+      ]
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "lattice",
+        "size": {
+          "nx": 1,
+          "ny": 1,
+          "nz": 1
+        }
+      },
+      "formulation": "full"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "x0",
+      "on": "cube.xmin"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "y0",
+      "on": "cube.ymin"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "z0",
+      "on": "cube.zmin"
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "axial",
+      "on": "cube.xmax",
+      "dofs": [
+        "uy",
+        "uz"
+      ]
+    },
+    {
+      "cmd": "load.force",
+      "name": "push",
+      "on": "corner",
+      "total": [
+        "5 kN",
+        "0 N",
+        "0 N"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "ring",
+      "procedure": "explicit",
+      "constraints": [
+        "x0",
+        "y0",
+        "z0",
+        "axial"
+      ],
+      "loads": [
+        "push"
+      ],
+      "output": [
+        "displacement"
+      ],
+      "tEnd": "1e-4 s",
+      "dtFactor": 0.005,
+      "outputEvery": 1
+    },
+    {
+      "cmd": "solve.run",
+      "step": "ring"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "2.2214415e-5 s",
+          "sampling": "nearest"
+        },
+        "at": [
+          "100 mm",
+          "100 mm",
+          "100 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.001,
+      "tol": 0.01,
+      "rel": true,
+      "note": "u(T/4) = F/k = 1 um, in mm: the phase-sensitive point"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "4.442883e-5 s",
+          "sampling": "nearest"
+        },
+        "at": [
+          "100 mm",
+          "100 mm",
+          "100 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.002,
+      "tol": 0.01,
+      "rel": true,
+      "note": "u(T/2) = 2F/k: the overshoot of an undamped step response"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "field": "displacement",
+        "component": 0,
+        "sample": {
+          "kind": "time",
+          "time": "8.885766e-5 s",
+          "sampling": "nearest"
+        },
+        "at": [
+          "100 mm",
+          "100 mm",
+          "100 mm"
+        ]
+      },
+      "path": "/value/value",
+      "expect": 0.0,
+      "tol": 2e-05,
+      "rel": false,
+      "note": "u(T) = 0: back at rest after one period, within 1 % of the amplitude"
+    },
+    {
+      "query": {
+        "query": "query.result"
+      },
+      "path": "/solver",
+      "expect": "cpu-explicit"
+    }
+  ]
+}

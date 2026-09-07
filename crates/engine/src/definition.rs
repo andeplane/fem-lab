@@ -249,6 +249,8 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                         AmplitudeSpec::Table { t: t.iter().map(|v| Q::new(*v, "s")).collect(), value: value.clone() }
                     }
                 }),
+                increments: x.increments,
+                max_cutbacks: x.max_cutbacks,
             }
         }
     })

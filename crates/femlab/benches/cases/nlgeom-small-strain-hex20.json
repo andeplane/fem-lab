@@ -1,0 +1,69 @@
+{
+  "name": "nlgeom-small-strain-hex20",
+  "reference": "Benchmark K3. Benchmark B1's cantilever at a thousandth of its load, solved with `static-nonlinear` instead of `static`. The reference is the linear answer itself: at a tip deflection of 0.19 micrometres on a 1 m beam the geometric terms are of order 2e-7 relative, so the two procedures must agree to well inside that. The gate is the same 0.1904070 mm hex20 answer of B1 scaled by 1/1000, to 1e-5 relative. It is the cheapest possible check that the finite-strain kernel degenerates to the linear one - a wrong B_L, a missing geometric stiffness or the wrong strain measure would all still pass a large-deflection case within its 2 % gate, and none of them passes this.",
+  "journal": [
+    { "cmd": "model.new", "name": "nlgeom-small-strain" },
+    { "cmd": "model.setUnits", "units": { "length": "um", "stress": "MPa", "force": "N" } },
+    { "cmd": "geometry.addBox", "name": "beam", "size": ["1 m", "100 mm", "100 mm"] },
+    { "cmd": "material.add", "name": "steel", "E": "210 GPa", "nu": 0.3, "rho": "7850 kg/m^3", "source": "EN 10025" },
+    { "cmd": "material.assign", "material": "steel", "bodies": ["beam"] },
+    { "cmd": "mesh.set", "mesher": { "kind": "lattice", "size": "25 mm" }, "order": 2 },
+    { "cmd": "constraint.fix", "name": "root", "on": "beam.xmin" },
+    { "cmd": "load.traction", "name": "tip", "on": "beam.xmax", "total": ["0 N", "0 N", "-1 N"] },
+    {
+      "cmd": "step.add",
+      "name": "linear",
+      "procedure": "static",
+      "constraints": ["root"],
+      "loads": ["tip"]
+    },
+    {
+      "cmd": "step.add",
+      "name": "nlgeom",
+      "procedure": "static-nonlinear",
+      "constraints": ["root"],
+      "loads": ["tip"],
+      "increments": 1
+    },
+    { "cmd": "solve.run", "step": "linear" },
+    { "cmd": "solve.run", "step": "nlgeom" }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.probe",
+        "step": "nlgeom",
+        "field": "displacement",
+        "component": 2,
+        "at": ["1 m", "50 mm", "50 mm"]
+      },
+      "path": "/value/value",
+      "expect": -0.1904070,
+      "tol": 1e-05,
+      "rel": true,
+      "note": "tip deflection in micrometres: B1's hex20 answer, a thousandth of the load"
+    },
+    {
+      "query": {
+        "query": "query.probe",
+        "step": "linear",
+        "field": "displacement",
+        "component": 2,
+        "at": ["1 m", "50 mm", "50 mm"]
+      },
+      "path": "/value/value",
+      "expect": -0.1904070,
+      "tol": 1e-05,
+      "rel": true,
+      "note": "and the linear Step this is compared against, on the same mesh and the same load"
+    },
+    {
+      "query": { "query": "query.result", "step": "nlgeom" },
+      "path": "/balance",
+      "expect": 0.0,
+      "tol": 1e-09,
+      "note": "A7: the reactions balance the applied load"
+    },
+    { "query": { "query": "query.result", "step": "nlgeom" }, "path": "/stale", "expect": false }
+  ]
+}

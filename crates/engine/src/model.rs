@@ -311,6 +311,10 @@ pub struct Step {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub increments: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cutbacks: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonlinear_tolerance: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonlinear_max_iterations: Option<u32>,
@@ -633,6 +637,8 @@ mod tests {
             dt_factor: None,
             amplitude: None,
             initial: None,
+            increments: None,
+            max_cutbacks: None,
             nonlinear_tolerance: None,
             nonlinear_max_iterations: None,
         });

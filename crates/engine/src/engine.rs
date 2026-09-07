@@ -942,6 +942,8 @@ impl Engine {
                 dt_factor,
                 amplitude,
                 initial,
+                increments,
+                max_cutbacks,
                 nonlinear_tolerance,
                 nonlinear_max_iterations,
             } => {
@@ -995,6 +997,8 @@ impl Engine {
                     dt_factor: *dt_factor,
                     amplitude: amplitude.as_ref().map(to_amplitude).transpose()?,
                     initial: opt_si(initial, "initial")?,
+                    increments: *increments,
+                    max_cutbacks: *max_cutbacks,
                     nonlinear_tolerance: *nonlinear_tolerance,
                     nonlinear_max_iterations: *nonlinear_max_iterations,
                 };
