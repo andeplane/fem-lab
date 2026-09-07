@@ -23,7 +23,7 @@ use crate::fem::assembly::{expand, pattern_coupled, reduce, resolve, Csr, Patter
 use crate::fem::checks;
 use crate::fem::heat::{capacity, conductivity, face_film, face_integrals, radiative_film, source, HeatLoad};
 use crate::fem::mpc::{self, Mpc};
-use crate::fem::problem::{Coupling, Problem};
+use crate::fem::problem::Problem;
 use crate::par::Pool;
 use crate::post::{extremes, reactions_per_constraint, Per};
 use crate::procedure::{
@@ -146,12 +146,15 @@ pub fn assemble(p: &Problem<'_>, pat: &Pattern, mpc: &Mpc) -> Result<HeatSystem,
     // `film` fixed at 1 makes its `vec` output exactly `∫Nₙ dS`, unscaled.
     for load in &p.heat_loads {
         let HeatLoad::Contact { of, h } = load else { continue };
-        let owner = p
+        let (owner, coupling) = p
             .couplings
             .iter()
-            .position(|c| c.name() == of)
+            .enumerate()
+            .find(|(_, c)| c.name() == of)
             .expect("checks::all matched every contact.thermal to a Coupling in this Step");
-        let Coupling::Bonded { slave, .. } = &p.couplings[owner];
+        // `contact.thermal` only ever names a bonded contact (the Command checks), whose
+        // second Set is the slave.
+        let slave = coupling.sets()[1];
         let mut area = vec![0.0; p.mesh.n_nodes()];
         for &face in &p.set(slave)?.faces {
             let kind = p.mesh.kind_of(face.elem);

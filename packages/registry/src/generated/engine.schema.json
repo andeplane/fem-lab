@@ -435,6 +435,36 @@
         ]
       },
       {
+        "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "at": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Q_length"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "mass": {
+            "$ref": "#/$defs/Q_mass"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "geometry.addMass"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "at",
+          "mass"
+        ]
+      },
+      {
         "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
         "type": "object",
         "properties": {
@@ -829,6 +859,35 @@
           "name",
           "master",
           "slave",
+          "kind"
+        ]
+      },
+      {
+        "description": "Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a\nload introduction is idealised. `distributed` makes the point follow the face's weighted\nmean displacement and adds no stiffness at all, so a force at the point spreads over the\nface in exactly the weights a uniform traction would produce, and a mass at the point\nloads the face the same way; that is the one to reach for. `rigid` is the opposite:\nevery node of the face takes the point's displacement, so the face cannot deform and the\npart around it is stiffer than the real one. Nodes carry translations only, so **neither\nkind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling\ndoes not rotate its face — it translates it. It is a linear multipoint constraint inside\nthe same operator, needs no iteration, is listed in a Step's `constraints` like any\nother Constraint, and is removed with constraint.remove.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "point": {
+            "type": "string"
+          },
+          "on": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/CoupleKind"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "constraint.couple"
+          }
+        },
+        "required": [
+          "cmd",
+          "name",
+          "point",
+          "on",
           "kind"
         ]
       },
@@ -2329,6 +2388,11 @@
           }
         ]
       },
+      "Q_mass": {
+        "description": "A mass with unit, e.g. \"2 kg\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "mass"
+      },
       "Q_stress": {
         "description": "A stress with unit, e.g. \"210 GPa\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -2983,6 +3047,21 @@
             "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
             "type": "string",
             "const": "bonded"
+          }
+        ]
+      },
+      "CoupleKind": {
+        "description": "How a point mass is connected to a face Set. Nodes carry translations only, so neither kind\ntransmits a moment.",
+        "oneOf": [
+          {
+            "description": "The point follows the face's weighted mean displacement and adds no stiffness, so a\nforce or a mass at the point spreads over the face in exactly the weights a uniform\ntraction would produce. How a bearing or a load introduction is idealised.",
+            "type": "string",
+            "const": "distributed"
+          },
+          {
+            "description": "Every node of the face takes the point's displacement, so the face translates as one\nand cannot deform at all. Stiffer than the real part around a real attachment.",
+            "type": "string",
+            "const": "rigid"
           }
         ]
       },
@@ -4460,6 +4539,36 @@
             ]
           },
           {
+            "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "at": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "mass": {
+                "$ref": "#/$defs/Q_mass"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "geometry.addMass"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "at",
+              "mass"
+            ]
+          },
+          {
             "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
             "type": "object",
             "properties": {
@@ -4854,6 +4963,35 @@
               "name",
               "master",
               "slave",
+              "kind"
+            ]
+          },
+          {
+            "description": "Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a\nload introduction is idealised. `distributed` makes the point follow the face's weighted\nmean displacement and adds no stiffness at all, so a force at the point spreads over the\nface in exactly the weights a uniform traction would produce, and a mass at the point\nloads the face the same way; that is the one to reach for. `rigid` is the opposite:\nevery node of the face takes the point's displacement, so the face cannot deform and the\npart around it is stiffer than the real one. Nodes carry translations only, so **neither\nkind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling\ndoes not rotate its face — it translates it. It is a linear multipoint constraint inside\nthe same operator, needs no iteration, is listed in a Step's `constraints` like any\nother Constraint, and is removed with constraint.remove.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "point": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/CoupleKind"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "constraint.couple"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "point",
+              "on",
               "kind"
             ]
           },
@@ -6310,6 +6448,11 @@
           }
         ]
       },
+      "Q_mass": {
+        "description": "A mass with unit, e.g. \"2 kg\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "mass"
+      },
       "Q_stress": {
         "description": "A stress with unit, e.g. \"210 GPa\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -6967,6 +7110,21 @@
           }
         ]
       },
+      "CoupleKind": {
+        "description": "How a point mass is connected to a face Set. Nodes carry translations only, so neither kind\ntransmits a moment.",
+        "oneOf": [
+          {
+            "description": "The point follows the face's weighted mean displacement and adds no stiffness, so a\nforce or a mass at the point spreads over the face in exactly the weights a uniform\ntraction would produce. How a bearing or a load introduction is idealised.",
+            "type": "string",
+            "const": "distributed"
+          },
+          {
+            "description": "Every node of the face takes the point's displacement, so the face translates as one\nand cannot deform at all. Stiffer than the real part around a real attachment.",
+            "type": "string",
+            "const": "rigid"
+          }
+        ]
+      },
       "Q_force": {
         "description": "A force with unit, e.g. \"10 kN\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -7409,6 +7567,13 @@
               "$ref": "#/$defs/ConnectionRow"
             }
           },
+          "points": {
+            "description": "Lumped point masses; omitted when the Model has none.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PointRow"
+            }
+          },
           "loads": {
             "type": "array",
             "items": {
@@ -7693,6 +7858,39 @@
           "master",
           "slave",
           "summary"
+        ]
+      },
+      "PointRow": {
+        "description": "One lumped point mass: where it sits and how heavy it is. It is also a node Set of the same\nname, which is what constraint.couple, load.force and query.set target.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "at": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Valued"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "mass": {
+            "$ref": "#/$defs/Valued"
+          },
+          "coupledBy": {
+            "description": "The Constraints that attach it, empty when nothing does — which makes a Step ill-posed.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "at",
+          "mass",
+          "coupledBy"
         ]
       },
       "LoadRow": {
@@ -8600,6 +8798,36 @@
             ]
           },
           {
+            "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "at": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "mass": {
+                "$ref": "#/$defs/Q_mass"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "geometry.addMass"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "at",
+              "mass"
+            ]
+          },
+          {
             "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
             "type": "object",
             "properties": {
@@ -8994,6 +9222,35 @@
               "name",
               "master",
               "slave",
+              "kind"
+            ]
+          },
+          {
+            "description": "Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a\nload introduction is idealised. `distributed` makes the point follow the face's weighted\nmean displacement and adds no stiffness at all, so a force at the point spreads over the\nface in exactly the weights a uniform traction would produce, and a mass at the point\nloads the face the same way; that is the one to reach for. `rigid` is the opposite:\nevery node of the face takes the point's displacement, so the face cannot deform and the\npart around it is stiffer than the real one. Nodes carry translations only, so **neither\nkind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling\ndoes not rotate its face — it translates it. It is a linear multipoint constraint inside\nthe same operator, needs no iteration, is listed in a Step's `constraints` like any\nother Constraint, and is removed with constraint.remove.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "point": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/CoupleKind"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "constraint.couple"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "point",
+              "on",
               "kind"
             ]
           },
@@ -10433,6 +10690,11 @@
           }
         ]
       },
+      "Q_mass": {
+        "description": "A mass with unit, e.g. \"2 kg\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "mass"
+      },
       "Q_stress": {
         "description": "A stress with unit, e.g. \"210 GPa\". Any unit of the right dimension is accepted.",
         "$ref": "#/$defs/Quantity",
@@ -11072,6 +11334,21 @@
             "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
             "type": "string",
             "const": "bonded"
+          }
+        ]
+      },
+      "CoupleKind": {
+        "description": "How a point mass is connected to a face Set. Nodes carry translations only, so neither kind\ntransmits a moment.",
+        "oneOf": [
+          {
+            "description": "The point follows the face's weighted mean displacement and adds no stiffness, so a\nforce or a mass at the point spreads over the face in exactly the weights a uniform\ntraction would produce. How a bearing or a load introduction is idealised.",
+            "type": "string",
+            "const": "distributed"
+          },
+          {
+            "description": "Every node of the face takes the point's displacement, so the face translates as one\nand cannot deform at all. Stiffer than the real part around a real attachment.",
+            "type": "string",
+            "const": "rigid"
           }
         ]
       },
@@ -13654,6 +13931,13 @@
             },
             "default": []
           },
+          "points": {
+            "description": "Lumped point masses, each also a node Set of its own name. Omitted when empty, so a\nModel without one hashes exactly as it did before point masses existed.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PointMass"
+            }
+          },
           "sets": {
             "type": "array",
             "items": {
@@ -14408,6 +14692,33 @@
           "shape"
         ]
       },
+      "PointMass": {
+        "description": "A lumped mass at a point: a node of its own with no element around it, and a node Set of its\nown name so Constraints, Loads and Queries can target it by that name. `at` is in metres and\n`mass` in kilograms.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "at": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "mass": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "name",
+          "at",
+          "mass"
+        ]
+      },
       "NamedSet": {
         "description": "A named Set from a predicate (auto face Sets are not stored: they follow the shapes).",
         "type": "object",
@@ -14936,6 +15247,27 @@
               "kind",
               "master"
             ]
+          },
+          {
+            "description": "A point mass attached to the Constraint's own face Set: `distributed` makes the point\nfollow the face's weighted mean displacement, `rigid` makes every node of the face\nfollow the point. `point` names a [`PointMass`]; the field is not called `kind` because\nthat tag already names the Constraint kind itself.",
+            "type": "object",
+            "properties": {
+              "point": {
+                "type": "string"
+              },
+              "coupling": {
+                "$ref": "#/$defs/CoupleKind"
+              },
+              "kind": {
+                "type": "string",
+                "const": "couple"
+              }
+            },
+            "required": [
+              "kind",
+              "point",
+              "coupling"
+            ]
           }
         ]
       },
@@ -14955,6 +15287,21 @@
           "x",
           "y",
           "z"
+        ]
+      },
+      "CoupleKind": {
+        "description": "How a point mass is connected to a face Set. Nodes carry translations only, so neither kind\ntransmits a moment.",
+        "oneOf": [
+          {
+            "description": "The point follows the face's weighted mean displacement and adds no stiffness, so a\nforce or a mass at the point spreads over the face in exactly the weights a uniform\ntraction would produce. How a bearing or a load introduction is idealised.",
+            "type": "string",
+            "const": "distributed"
+          },
+          {
+            "description": "Every node of the face takes the point's displacement, so the face translates as one\nand cannot deform at all. Stiffer than the real part around a real attachment.",
+            "type": "string",
+            "const": "rigid"
+          }
         ]
       },
       "Load": {
@@ -16326,6 +16673,36 @@
             ]
           },
           {
+            "description": "Add a lumped point mass at a coordinate: one node of its own, carrying mass and nothing\nelse. It contributes to the mass matrix (so it changes modal frequencies) and to gravity\n(m·g at that point), and has no stiffness whatever, so it must be attached to the model\nwith constraint.couple: on its own it makes the Model ill-posed and solve.run refuses.\nThe point is also a node Set of the same name, so constraint.couple, constraint.fix,\nload.force and query.set target it by name. Re-issuing with an existing name replaces\nit; geometry.remove deletes it. It carries no rotary inertia — a node has no rotations —\nso it models a compact mass, not a flywheel.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "at": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Q_length"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "mass": {
+                "$ref": "#/$defs/Q_mass"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "geometry.addMass"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "at",
+              "mass"
+            ]
+          },
+          {
             "description": "Define an isotropic linear-elastic Material by Young's modulus `E` and Poisson's ratio\n`nu` (0 ≤ ν < 0.5). Density `rho` is needed for gravity and modal analysis, `alpha` for\nthermal loads, `k` and `cp` for heat transfer; `source` records where the numbers came\nfrom. Re-issuing with an existing name edits the material in place.",
             "type": "object",
             "properties": {
@@ -16720,6 +17097,35 @@
               "name",
               "master",
               "slave",
+              "kind"
+            ]
+          },
+          {
+            "description": "Connect a point mass (geometry.addMass) to a face Set, the way a bolt, a bearing or a\nload introduction is idealised. `distributed` makes the point follow the face's weighted\nmean displacement and adds no stiffness at all, so a force at the point spreads over the\nface in exactly the weights a uniform traction would produce, and a mass at the point\nloads the face the same way; that is the one to reach for. `rigid` is the opposite:\nevery node of the face takes the point's displacement, so the face cannot deform and the\npart around it is stiffer than the real one. Nodes carry translations only, so **neither\nkind transmits a moment**: a couple cannot be applied at the point, and a rigid coupling\ndoes not rotate its face — it translates it. It is a linear multipoint constraint inside\nthe same operator, needs no iteration, is listed in a Step's `constraints` like any\nother Constraint, and is removed with constraint.remove.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "point": {
+                "type": "string"
+              },
+              "on": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/CoupleKind"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "constraint.couple"
+              }
+            },
+            "required": [
+              "cmd",
+              "name",
+              "point",
+              "on",
               "kind"
             ]
           },
@@ -18158,6 +18564,11 @@
             ]
           }
         ]
+      },
+      "Q_mass": {
+        "description": "A mass with unit, e.g. \"2 kg\". Any unit of the right dimension is accepted.",
+        "$ref": "#/$defs/Quantity",
+        "x-dimension": "mass"
       },
       "Q_stress": {
         "description": "A stress with unit, e.g. \"210 GPa\". Any unit of the right dimension is accepted.",

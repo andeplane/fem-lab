@@ -27,6 +27,7 @@ pub fn all(p: &Problem<'_>) -> Vec<Error> {
     out.extend(missing_materials(p));
     out.extend(missing_sections(p));
     out.extend(empty_sets(p));
+    out.extend(uncoupled_points(p));
     out.extend(inverted(p.mesh));
     out.extend(resolve(p).err());
     out.extend(unknown_thermal_contacts(p));
@@ -119,6 +120,23 @@ fn unknown_thermal_contacts(p: &Problem<'_>) -> Vec<Error> {
             )
             .at(format!("contact '{of}'"))
             .suggest("step.add listing the contact.add Constraint that contact.thermal names")
+        })
+        .collect()
+}
+
+/// A point mass nothing attaches to the model. It carries mass and no stiffness at all, so its
+/// own rows of `K` are empty and the factorisation has nothing to work with there.
+fn uncoupled_points(p: &Problem<'_>) -> Vec<Error> {
+    p.points
+        .iter()
+        .filter(|pm| !p.couplings.iter().any(|c| c.point() == Some(pm.name.as_str())))
+        .map(|pm| {
+            Error::new(
+                ErrorCode::ModelIllPosed,
+                format!("point mass '{}' is attached to nothing: on its own it has no stiffness", pm.name),
+            )
+            .at(format!("point mass '{}'", pm.name))
+            .suggest("constraint.couple it to a face Set, and list that Constraint in the Step")
         })
         .collect()
 }
