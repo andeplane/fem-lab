@@ -384,6 +384,10 @@ impl Engine {
                             ),
                         )
                     }
+                    LoadKind::ThermalContact { of, h } => {
+                        let v = display(m, *h, HeatTransfer::DIM);
+                        ("thermalContact", format!("h = {} {} across '{of}'", units::fmt_sig(v.value, 4), v.unit))
+                    }
                 };
                 LoadRow { name: l.name.clone(), kind: kind.into(), on: l.kind.set().map(str::to_string), summary }
             })
