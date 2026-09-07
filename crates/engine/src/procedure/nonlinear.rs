@@ -46,6 +46,7 @@ use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::assembly::{self, Assembled, NlInput, Pattern, ResolvedConstraints};
 use crate::fem::checks;
 use crate::fem::loads::{self, LoadTotals};
+use crate::fem::mpc::{self, Mpc};
 use crate::fem::problem::Problem;
 use crate::fem::state::GpState;
 use crate::model::Idealisation;
@@ -261,6 +262,10 @@ struct Newton<'a> {
     /// True on the free DOFs. The residual and the force norms are measured there only,
     /// because a constrained DOF's out-of-balance is its reaction, not an error.
     free: Vec<bool>,
+    /// The multipoint constraints, eliminated the same way the linear Step eliminates them:
+    /// `TᵀK_T T` and `Tᵀr` per iteration, the slaves dropped from the free set, and the
+    /// correction recovered onto them afterwards.
+    mpc: &'a Mpc,
     f_ref: &'a [f64],
     /// `|f_ref|_inf`, which does not change between increments.
     f_ref_norm: f64,
@@ -286,6 +291,7 @@ impl Newton<'_> {
         for &(dof, value) in &self.rc.fixed {
             u[dof as usize] = lambda * value;
         }
+        mpc::recover(self.mpc, &mut u);
         // No correction has been taken yet, so the displacement criterion cannot be met on the
         // first pass: a nonlinear increment always costs at least one solve.
         let mut correction = f64::INFINITY;
@@ -313,7 +319,12 @@ impl Newton<'_> {
             }
             let external = lambda.abs() * self.f_ref_norm;
             let internal = norm_inf(&a.f_int);
-            residual = norm_inf(&r);
+            // The residual is measured on the *reduced* system: what a tie carries at a slave
+            // DOF is a constraint force, not an out-of-balance, exactly as a support reaction
+            // at a fixed DOF is not one.
+            let (kt, rt) = mpc::transform(&a.k, &r, self.mpc);
+            let red = assembly::reduce(&kt, &rt, self.rc_zero, &self.mpc.slaves);
+            residual = norm_inf(&red.f_f);
             *scale = scale.max(external).max(internal);
             let increment: Vec<f64> = u.iter().zip(u_conv).map(|(a, b)| a - b).collect();
             if converged(&o.converge, residual, *scale, correction, norm_inf(&increment)) {
@@ -331,10 +342,10 @@ impl Newton<'_> {
                 0.05 + 0.85 * ((number - 1) as f64 / o.increments as f64).min(1.0),
                 &format!("increment {number}, iteration {iteration}, relative residual {relative:.2e}"),
             )?;
-            let red = assembly::reduce(&a.k, &r, self.rc_zero);
             let inexact = SolveOptions { rel_tol: o.solver.rel_tol.max(CORRECTION_TOL), ..o.solver };
             let (du_f, solved) = solve(&red.k_ff, &red.f_f, &inexact, self.pool, self.gpu, progress).await?;
-            let du = assembly::expand(&red, &du_f);
+            let mut du = assembly::expand(&red, &du_f);
+            mpc::recover(self.mpc, &mut du);
             for (ui, d) in u.iter_mut().zip(&du) {
                 *ui += d;
             }
@@ -374,7 +385,10 @@ pub async fn run(
         free[dof as usize] = false;
     }
     let f_ref_norm = norm_inf(&f_ref);
-    let newton = Newton { p, pat: &pat, o, rc: &rc, rc_zero: &rc_zero, free, f_ref: &f_ref, f_ref_norm, pool, gpu };
+    // `checks::all` has already paired every contact.
+    let mpc = mpc::build(p).expect("the checks built the multipoint constraints");
+    let newton =
+        Newton { p, pat: &pat, o, rc: &rc, rc_zero: &rc_zero, free, mpc: &mpc, f_ref: &f_ref, f_ref_norm, pool, gpu };
 
     let mut u = vec![0.0; p.n_dofs()];
     let mut committed = GpState::new(p).expect("the checks found a material for every element");
@@ -423,10 +437,15 @@ pub async fn run(
     report(&mut progress, "post", 0.9, "recovering fields")?;
 
     // Reactions are the internal force the supports carry against the external one, which is
-    // the finite-strain reading of `K u − f`.
+    // the finite-strain reading of `K u − f`, plus the tie force a bonded contact hands to its
+    // masters — a tie's own internal force is never a support reaction.
+    let out_of_balance: Vec<f64> =
+        a.f_int.iter().zip(&f_ref).map(|(internal, external)| internal - lambda * external).collect();
+    let mut tie = vec![0.0; u.len()];
+    mpc::master_forces(&mpc, &out_of_balance, &mut tie);
     let mut reactions = vec![0.0; u.len()];
     for &(dof, _) in &rc.fixed {
-        reactions[dof as usize] = a.f_int[dof as usize] - lambda * f_ref[dof as usize];
+        reactions[dof as usize] = out_of_balance[dof as usize] + tie[dof as usize];
     }
     let unaveraged = stress::gp_to_nodes(p.mesh, &a.stress_gp);
     let nodal_stress = stress::average_at_nodes(p, &unaveraged);
@@ -455,7 +474,7 @@ pub async fn run(
         .flat_map(|(name, f)| extremes(f, p.mesh).into_iter().map(|e| (*name, e)))
         .collect();
     let per_constraint = reactions_per_constraint(p, &rc, &fields[&Field::Reaction]);
-    let mut warnings = Vec::new();
+    let mut warnings = mpc.warnings.clone();
     let locking = locking_kinds(p);
     if !locking.is_empty() {
         warnings.push(Warning {

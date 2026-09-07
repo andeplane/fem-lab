@@ -573,6 +573,27 @@
     }
   },
   {
+    "kind": "constraint",
+    "command": {
+      "cmd": "contact.add",
+      "name": "editable",
+      "master": "base.xmax",
+      "slave": "base.xmin",
+      "kind": "bonded"
+    }
+  },
+  {
+    "kind": "constraint",
+    "command": {
+      "cmd": "contact.add",
+      "name": "editable",
+      "master": "base.xmax",
+      "slave": "base.xmin",
+      "kind": "bonded",
+      "tol": "0.25 mm"
+    }
+  },
+  {
     "kind": "load",
     "command": {
       "cmd": "load.pressure",

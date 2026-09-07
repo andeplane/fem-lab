@@ -22,6 +22,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [constraint.remove](#commands-constraint-remove)
 - [constraint.symmetry](#commands-constraint-symmetry)
 - [constraint.temperature](#commands-constraint-temperature)
+- [contact.add](#commands-contact-add)
 - [geometry.add](#commands-geometry-add)
 - [geometry.addBox](#commands-geometry-addBox)
 - [geometry.nameFace](#commands-geometry-nameFace)
@@ -50,6 +51,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [model.new](#commands-model-new)
 - [model.rename](#commands-model-rename)
 - [model.setIdealisation](#commands-model-setIdealisation)
+- [model.setName](#commands-model-setName)
 - [model.setUnits](#commands-model-setUnits)
 - [plugin.load](#commands-plugin-load)
 - [solve.run](#commands-solve-run)
@@ -130,6 +132,30 @@ multiplied by the Step's `amplitude`, so "100 K" with a sine amplitude is a driv
 | on | yes | <code>{"type":"string"}</code> |  |
 | value | yes | <code>{"$ref":"#/$defs/Q_temperature"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"constraint.temperature"}</code> |  |
+
+<a id="commands-contact-add"></a>
+
+### contact.add
+
+Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the
+point it projects onto in `master`, in every displacement component. It is a linear
+constraint inside the same operator — no iteration, no gap opening, no sliding — so a
+bonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the
+slave side: a node-to-face tie passes the patch test that way round. `tol` is the largest
+gap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the
+master than that is `contact.unpaired`. In a heat Step the same tie carries temperature,
+so the two parts are in perfect thermal contact. A tie is listed in a Step's
+`constraints` like any other, and is removed with constraint.remove. Ties add stiffness
+between Bodies that share no element, which query.cost does not count.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| master | yes | <code>{"type":"string"}</code> |  |
+| slave | yes | <code>{"type":"string"}</code> |  |
+| kind | yes | <code>{"$ref":"#/$defs/ContactKind"}</code> |  |
+| tol | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"contact.add"}</code> |  |
 
 <a id="commands-geometry-add"></a>
 
@@ -346,7 +372,8 @@ for a plane-stress Sheet, the volume includes its specified thickness.
 ### load.pressure
 
 Uniform pressure on a face Set, positive into the surface (a negative value pulls).
-The total force is the pressure times the face area and is reported by query.model.
+Pressure times query.set.pressureArea is a scalar integral; it is not the net vector
+force on a curved Set. The loaded area includes thickness or axisymmetric weighting.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -568,6 +595,19 @@ solid bodies; mixing them makes the Model ill-posed.
 | --- | --- | --- | --- |
 | idealisation | yes | <code>{"$ref":"#/$defs/IdealisationSpec"}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"model.setIdealisation"}</code> |  |
+
+<a id="commands-model-setName"></a>
+
+### model.setName
+
+Change the Model's display name without resetting geometry, history or solved Results.
+A name-only edit is undoable and changes the full Model/Journal identity, but does not
+change the Result-validity fingerprint. Whitespace-only names are rejected.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"model.setName"}</code> |  |
 
 <a id="commands-model-setUnits"></a>
 
@@ -801,6 +841,24 @@ Expand a definition to inspect its complete schema. Definition names are local t
     "x",
     "y",
     "z"
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ContactKind</summary>
+
+```json
+{
+  "description": "How two faces interact where they meet.",
+  "oneOf": [
+    {
+      "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+      "type": "string",
+      "const": "bonded"
+    }
   ]
 }
 ```
@@ -2892,8 +2950,10 @@ Returns: `ScriptText`.
 
 ### query.set
 
-What a Set resolved to on the current Mesh: kind, count, bounding box, area or volume
-and centroid. Use it to verify a predicate selected what you meant.
+What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
+and centroid. Face Sets also report pressureArea from the load boundary quadrature,
+including thickness or radial weighting (plane strain: one metre of depth). Pressure
+times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
 
 Returns: `SetInfo`.
 
@@ -3031,6 +3091,23 @@ Expand a definition to inspect its complete schema. Definition names are local t
       "required": [
         "cmd",
         "units"
+      ]
+    },
+    {
+      "description": "Change the Model's display name without resetting geometry, history or solved Results.\nA name-only edit is undoable and changes the full Model/Journal identity, but does not\nchange the Result-validity fingerprint. Whitespace-only names are rejected.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "model.setName"
+        }
+      },
+      "required": [
+        "cmd",
+        "name"
       ]
     },
     {
@@ -3577,6 +3654,45 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
+      "description": "Tie two face Sets so the parts behave as one: every node of `slave` is constrained to the\npoint it projects onto in `master`, in every displacement component. It is a linear\nconstraint inside the same operator — no iteration, no gap opening, no sliding — so a\nbonded assembly costs a static solve, not a contact search. Put the *finer* mesh on the\nslave side: a node-to-face tie passes the patch test that way round. `tol` is the largest\ngap that still pairs, defaulting to 1e-4 of the Mesh diagonal; a node further from the\nmaster than that is `contact.unpaired`. In a heat Step the same tie carries temperature,\nso the two parts are in perfect thermal contact. A tie is listed in a Step's\n`constraints` like any other, and is removed with constraint.remove. Ties add stiffness\nbetween Bodies that share no element, which query.cost does not count.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "master": {
+          "type": "string"
+        },
+        "slave": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ContactKind"
+        },
+        "tol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Q_length"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cmd": {
+          "type": "string",
+          "const": "contact.add"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "master",
+        "slave",
+        "kind"
+      ]
+    },
+    {
       "description": "Remove a Constraint. Fails with in-use if a Step still lists it; re-issue step.add without\nit first. Removing a constraint makes existing Results of that Step stale.",
       "type": "object",
       "properties": {
@@ -3594,7 +3710,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nThe total force is the pressure times the face area and is reported by query.model.",
+      "description": "Uniform pressure on a face Set, positive into the surface (a negative value pulls).\nPressure times query.set.pressureArea is a scalar integral; it is not the net vector\nforce on a curved Set. The loaded area includes thickness or axisymmetric weighting.",
       "type": "object",
       "properties": {
         "name": {
@@ -4226,6 +4342,24 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "source"
       ],
       "x-status": "stub"
+    }
+  ]
+}
+```
+
+</details>
+
+<details>
+<summary>ContactKind</summary>
+
+```json
+{
+  "description": "How two faces interact where they meet.",
+  "oneOf": [
+    {
+      "description": "Glued: the two faces never separate and never slide, so the assembly behaves as one\npart. Linear, and the only kind there is today.",
+      "type": "string",
+      "const": "bonded"
     }
   ]
 }

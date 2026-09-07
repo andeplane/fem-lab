@@ -43,8 +43,10 @@ pub enum Query {
     #[schemars(extend("x-returns" = "MeshSummary"))]
     Mesh {},
 
-    /// What a Set resolved to on the current Mesh: kind, count, bounding box, area or volume
-    /// and centroid. Use it to verify a predicate selected what you meant.
+    /// What a Set resolved to on the current Mesh: kind, count, bounding box, geometric measure
+    /// and centroid. Face Sets also report pressureArea from the load boundary quadrature,
+    /// including thickness or radial weighting (plane strain: one metre of depth). Pressure
+    /// times pressureArea is a scalar integral, not a net vector force. Builds the Mesh if needed.
     #[serde(rename = "query.set", rename_all = "camelCase")]
     #[schemars(extend("x-returns" = "SetInfo"))]
     Set { name: String },
@@ -330,6 +332,19 @@ pub struct ConstraintRow {
     pub summary: String,
 }
 
+/// One connection between parts: a bonded contact, listed apart from the Constraints because
+/// it prescribes nothing and names two Sets. Pair counts and gaps are not here: they exist only
+/// on a built Mesh, and a Model summary must answer before there is one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionRow {
+    pub name: String,
+    pub kind: String,
+    pub master: String,
+    pub slave: String,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadRow {
@@ -363,6 +378,7 @@ pub struct ModelSummary {
     pub materials: Vec<MaterialRow>,
     pub sets: Vec<SetRow>,
     pub constraints: Vec<ConstraintRow>,
+    pub connections: Vec<ConnectionRow>,
     pub loads: Vec<LoadRow>,
     pub steps: Vec<StepRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -415,6 +431,10 @@ pub struct SetInfo {
     pub count: u32,
     pub bbox: [Valued; 6],
     pub measure: Valued,
+    /// Effective loaded area from the pressure/traction boundary quadrature, including plane
+    /// stress thickness or axisymmetric 2πr. Plane strain uses one metre of out-of-plane depth.
+    /// Null for non-face Sets. Pressure times this area is a scalar, not a net vector force.
+    pub pressure_area: Option<Valued>,
     pub centroid: [Valued; 3],
 }
 
@@ -484,15 +504,14 @@ pub struct ResultSummary {
     /// One row per output time of a transient Step: when, and the range the field covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryRow>,
-    /// Warnings the *procedure* raised about this Result: a formulation it had to switch off,
-    /// an element that will lock at the mesh it was given. Warnings about the Model itself —
-    /// a Body with no material, an unconstrained model — are `query.model`'s.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<crate::error::Warning>,
     /// |Σ reactions + Σ applied| over the largest reaction or applied quantity in either, so a Step driven
     /// by a prescribed displacement — where both totals are zero — still reports a meaningful
     /// number. Zero is perfect balance; anything above 1e-9 means the solve did not converge.
     pub balance: f64,
+    /// What the solve wanted the user to know but would not stop for: a bonded contact tied
+    /// across a gap, a slave face coarser than its master. Retained with the Result.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<Warning>,
 }
 
 /// One time of a transient Step's history: the extremes of the field at that instant.
@@ -773,9 +792,9 @@ pub enum Output {
         kind: ObjectKind,
         name: String,
     },
-    // Boxed: a Result summary is by far the largest thing an Ack can carry, and every other
-    // Command would otherwise pay for its size. The wire shape is unchanged, and a doc comment
-    // here would not be — it would put a description beside the $ref and split the type.
+    // Boxed, and not a doc comment because the reason is internal and would reach the schema:
+    // a Result summary is much larger than every other variant of an enum returned by value
+    // from every Command. `Box` changes neither the serde shape nor the JSON schema.
     Solve {
         summary: Box<ResultSummary>,
     },

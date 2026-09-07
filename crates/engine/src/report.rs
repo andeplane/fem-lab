@@ -639,8 +639,8 @@ mod tests {
             assumptions: vec![],
             frequencies: vec![],
             history: vec![],
-            warnings: vec![],
             balance: 0.0,
+            warnings: vec![],
         };
         assert!(hand_calc(&model, &result).unwrap().contains("| Hand calculation | 0.19048 mm |"));
         let mut reversed = model.clone();
