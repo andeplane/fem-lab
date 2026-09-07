@@ -200,11 +200,14 @@ describe('the history and the frequencies', () => {
 
   it('lists a buckling Step\'s load factors and mode Commands', () => {
     const root = document.createElement('div');
-    render(<BucklingFactors s={state({ result: buckling, fieldKey: 'mode:1' })} dispatch={async () => undefined} />, root);
+    const dispatch = vi.fn(async () => undefined);
+    render(<BucklingFactors s={state({ result: buckling, fieldKey: 'mode:1' })} dispatch={dispatch} />, root);
     expect(root.textContent).toContain('Buckling factors');
     const cells = [...root.querySelectorAll('tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent!.trim()));
     expect(cells).toEqual([['1', 'λ 17.4', 'show'], ['2', 'λ 17.4', 'show']]);
     expect(root.querySelector('tr.peak')!.textContent).toContain('λ 17.4');
+    root.querySelector<HTMLButtonElement>('tbody [data-cmd="view.showField"]')!.click();
+    expect(dispatch).toHaveBeenCalledWith({ cmd: 'view.showField', field: 'mode:1' });
   });
 
   it('shows nothing for a Step that found no frequencies', () => {
@@ -269,6 +272,12 @@ describe('the deformation bar', () => {
     const bar = root.querySelector('.deform-bar')!;
     expect(bar.querySelector('[data-cmd="view.animate"]')!.textContent).toBe('▶');
     expect(bar.querySelector('input.phase')).toBeNull();
+  });
+
+  it('renders buckling mode labels in the legend and picker', () => {
+    const { root } = mount({ result: buckling, fieldKey: 'mode:1', legend: { min: 0, max: 1, unit: 'mm' } });
+    expect(root.querySelector('.legend-field')?.textContent).toBe('Mode 1 · λ 17.4');
+    expect([...root.querySelectorAll('.legend .field-chip')].map((chip) => chip.textContent?.trim())).toContain('Mode 2 · λ 17.4');
   });
 
   it('offers the scrub once the Result is a mode shape or has a history', () => {
