@@ -151,8 +151,11 @@ export interface Fem {
      * of the two. `orientation` turns the material axes (wood grain, fibre direction, rolling
      * direction) away from the global axes; without it they are the global axes. Density `rho`
      * is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
-     * heat transfer; `source` records where the numbers came from. Re-issuing with an existing
-     * name edits the material in place, so an omitted `orientation` clears the previous one.
+     * heat transfer; `source` records where the numbers came from. `yield` is the yield
+     * stress the safety factor and the `plasticity` block read; `plasticity` makes the
+     * material elastic–plastic (J2, isotropic hardening) in `static-nonlinear` Steps. Re-issuing
+     * with an existing name edits the material in place, so an omitted `orientation` or
+     * `plasticity` clears the previous one.
      */
     add(args: Omit<Extract<Command, { cmd: 'material.add' }>, 'cmd'>): Promise<Ack>;
     /**

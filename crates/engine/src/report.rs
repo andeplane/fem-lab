@@ -135,6 +135,11 @@ fn assumptions(m: &ModelSummary) -> String {
     } else {
         "- **Isotropic materials**, material law `linear-elastic`; no plasticity, creep or damage.\n"
     };
+    if m.materials.iter().any(|mat| mat.plasticity) {
+        s += "- **Elastic–plastic materials** (`j2-plasticity`: von Mises yield, isotropic hardening, \
+              small strain) are integrated by `static-nonlinear` Steps only; every other procedure \
+              uses their elastic part and warns `material.plasticityIgnored`.\n";
+    }
     s += "- **Static equilibrium** unless a Step names a dynamic procedure.\n\n";
     s += "$$\\boldsymbol{\\sigma} = \\mathbf{C}\\,\\boldsymbol{\\varepsilon}, \\qquad \
           \\boldsymbol{\\varepsilon} = \\tfrac{1}{2}\\left(\\nabla\\mathbf{u} + \
@@ -684,6 +689,7 @@ mod tests {
             result_id: "result-1".into(),
             reaction_quantity: crate::units::ReactionQuantity::Force,
             storage_power: None,
+            yielded_fraction: None,
             step: "static".into(),
             revision: 1,
             stale: false,

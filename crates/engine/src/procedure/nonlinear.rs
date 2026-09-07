@@ -19,11 +19,13 @@
 //! Step with an amplitude table, not two Steps with state carried between them, which is what
 //! keeps the Journal, the Model hash and staleness out of this entirely.
 //!
-//! **Robustness.** Full Newton with no line search. An increment that does not converge is
-//! halved and retried from the last converged state, up to `maxCutbacks` times, after which
-//! the Step fails with `newton.diverged` naming the increment, the load factor and the
-//! residual. Snap-through needs arc-length control, which is #75 and is why the increment
-//! control lives in [`next_increment`] with `λ` an explicit variable rather than inline.
+//! **Robustness.** Full Newton with no line search. An increment that does not converge — or
+//! folds an element, or reaches a tangent the direct solver finds indefinite, which is what a
+//! plastic collapse mechanism looks like under load control — is halved and retried from the
+//! last converged state, up to `maxCutbacks` times, after which the Step fails with
+//! `newton.diverged` naming the increment, the load factor and the residual. Snap-through
+//! needs arc-length control, which is #75 and is why the increment control lives in
+//! [`next_increment`] with `λ` an explicit variable rather than inline.
 //!
 //! **Why not [`iterate`](super::iterate).** The shared fixed-point loop advances a state
 //! vector and converges on its relative change, which is exactly right for a radiating heat
@@ -45,13 +47,15 @@ use crate::engine::OnProgress;
 use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::assembly::{self, Assembled, NlInput, Pattern, ResolvedConstraints};
 use crate::fem::checks;
+use crate::fem::element::element_for;
 use crate::fem::loads::{self, LoadTotals};
+use crate::fem::material::PEEQ;
 use crate::fem::mpc::{self, Mpc};
 use crate::fem::problem::Problem;
 use crate::fem::state::GpState;
 use crate::model::Idealisation;
 use crate::par::Pool;
-use crate::post::{extremes, reactions_per_constraint, stress, Per};
+use crate::post::{extremes, reactions_per_constraint, stress, FieldData, Per};
 use crate::procedure::{report, vector_field, Amplitude, History, StepResult};
 use crate::solve::{solve, SolveInfo, SolveOptions};
 
@@ -225,6 +229,34 @@ fn diverged(increment: usize, lambda: f64, residual: f64, o: &Options) -> Error 
     .suggest("step.add with more increments, a larger nonlinearMaxIterations, or a smaller final load")
 }
 
+/// The equivalent plastic strain at every Gauss point, elements in order: the state slot each
+/// element's law names [`PEEQ`], zero for a law without one. `None` when no material of the
+/// Problem has such a slot, so an elastic Model reports no plastic strain rather than a field
+/// of zeros.
+pub fn plastic_strain_gp(p: &Problem<'_>, state: &GpState) -> Option<FieldData> {
+    let plastic = p.materials.iter().any(|m| m.law.state_names().contains(&PEEQ));
+    if !plastic {
+        return None;
+    }
+    let mut data = Vec::new();
+    for elem in 0..p.mesh.n_elems() as u32 {
+        let law = p.material_of(elem).expect("the checks found a material for every element").law;
+        let n_gp = element_for(p.mesh.kind_of(elem)).n_gp();
+        let ns = law.n_state();
+        let slot = law.state_names().iter().position(|name| *name == PEEQ);
+        let st = state.of(elem);
+        data.extend((0..n_gp).map(|g| slot.map_or(0.0, |k| st[g * ns + k])));
+    }
+    Some(FieldData::new(Per::ElemGp, 1, data))
+}
+
+/// The fraction of the Gauss points that have yielded: those with a positive equivalent plastic
+/// strain. By point, not by volume, so it is a count and no element measure enters.
+pub fn yielded_fraction(peeq: &FieldData) -> f64 {
+    let yielded = peeq.data.iter().filter(|v| **v > 0.0).count();
+    yielded as f64 / peeq.data.len().max(1) as f64
+}
+
 /// Elements whose enhanced modes the finite-strain kernel switches off.
 fn locking_kinds(p: &Problem<'_>) -> Vec<&'static str> {
     let mut kinds: Vec<&'static str> = p
@@ -347,7 +379,18 @@ impl Newton<'_> {
                 &format!("increment {number}, iteration {iteration}, relative residual {relative:.2e}"),
             )?;
             let inexact = SolveOptions { rel_tol: o.solver.rel_tol.max(CORRECTION_TOL), ..o.solver };
-            let (du_f, solved) = solve(&red.k_ff, &red.f_f, &inexact, self.pool, self.gpu, progress).await?;
+            let (du_f, solved) = match solve(&red.k_ff, &red.f_f, &inexact, self.pool, self.gpu, progress).await {
+                Ok(s) => s,
+                // A tangent that has lost positive definiteness is a structure at or past a
+                // limit point — a plastic collapse mechanism under load control — and is the
+                // other signal, with a folded element, that this increment asked for too much.
+                // The cutback retries from the last equilibrium; when no increment can be
+                // carried the Step ends with `newton.diverged` naming the load factor reached.
+                Err(e) if e.code == ErrorCode::SolveNotPositiveDefinite => {
+                    return Ok(Attempt::CutBack(iteration, relative))
+                }
+                Err(e) => return Err(e),
+            };
             let mut du = assembly::expand(&red, &du_f);
             mpc::recover(self.mpc, &mut du);
             for (ui, d) in u.iter_mut().zip(&du) {
@@ -466,6 +509,10 @@ pub async fn run(
     fields.insert(Field::StressUnaveraged, unaveraged);
     fields.insert(Field::Strain, nodal_strain);
     let mut scalars = BTreeMap::new();
+    if let Some(peeq) = plastic_strain_gp(p, &a.state) {
+        scalars.insert("yielded_fraction".to_string(), yielded_fraction(&peeq));
+        fields.insert(Field::PlasticStrain, stress::average_at_nodes(p, &stress::gp_to_nodes(p.mesh, &peeq)));
+    }
     scalars.insert("min_det_j".to_string(), a.min_det_j);
     for (c, axis) in ["x", "y", "z"].iter().enumerate() {
         scalars.insert(format!("applied_total_{axis}"), lambda * applied.force[c]);

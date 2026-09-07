@@ -138,6 +138,35 @@ pub struct Orthotropic {
     pub k: Option<[Q<Conductivity>; 3]>,
 }
 
+/// Rate-independent von Mises (J2) plasticity with isotropic hardening, for an isotropic
+/// Material in a `static-nonlinear` Step. The initial yield stress is `yield` on `material.add`.
+/// Give exactly one of `H` and `table`: `H` is the plastic modulus `dσ_y/dε̄ᵖ` of linear
+/// hardening (the tangent modulus of a tension test is then `E_t = E H / (E + H)`; `"0 Pa"` is
+/// perfect plasticity), `table` is the tension curve as (equivalent plastic strain, yield
+/// stress) points, piecewise linear, starting at plastic strain 0 with `yield` and held flat
+/// beyond its last point. Every other procedure uses the elastic part and warns
+/// `material.plasticityIgnored`. Small strain: not a finite-strain plasticity model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Plasticity {
+    /// Linear hardening modulus, `σ_y = yield + H ε̄ᵖ`; zero is perfectly plastic.
+    #[serde(rename = "H", default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<Q<Stress>>,
+    /// Hardening curve, at least two points with plastic strain ascending from 0 and stress
+    /// not decreasing; the first stress is the initial yield.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<Vec<HardeningPoint>>,
+}
+
+/// One point of a hardening curve: the yield stress at an equivalent plastic strain.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HardeningPoint {
+    /// Equivalent plastic strain (dimensionless, so 0.02 is 2 %).
+    pub plastic_strain: f64,
+    pub stress: Q<Stress>,
+}
+
 /// Rotate the material axes by `angle` (e.g. `"30 deg"`) about `axis`, a global direction that
 /// is normalised for you and defaults to `[0, 0, 1]`. Material axis 1 is the one `E1`, `alpha`'s
 /// first component and `k`'s first component belong to, and a positive angle turns it towards
@@ -294,7 +323,9 @@ pub enum Solver {
 /// global axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in
 /// tension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the
 /// member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
-/// triple at each end of every beam and zeros on every other element.
+/// triple at each end of every beam and zeros on every other element. `plasticStrain` is the
+/// equivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with
+/// an elastic–plastic Material produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Field {
@@ -304,6 +335,7 @@ pub enum Field {
     VonMises,
     Principal,
     Strain,
+    PlasticStrain,
     Reaction,
     Temperature,
     Rotation,
@@ -1221,8 +1253,11 @@ pub enum Command {
     /// of the two. `orientation` turns the material axes (wood grain, fibre direction, rolling
     /// direction) away from the global axes; without it they are the global axes. Density `rho`
     /// is needed for gravity and modal analysis, `alpha` for thermal loads, `k` and `cp` for
-    /// heat transfer; `source` records where the numbers came from. Re-issuing with an existing
-    /// name edits the material in place, so an omitted `orientation` clears the previous one.
+    /// heat transfer; `source` records where the numbers came from. `yield` is the yield
+    /// stress the safety factor and the `plasticity` block read; `plasticity` makes the
+    /// material elastic–plastic (J2, isotropic hardening) in `static-nonlinear` Steps. Re-issuing
+    /// with an existing name edits the material in place, so an omitted `orientation` or
+    /// `plasticity` clears the previous one.
     #[serde(rename = "material.add", rename_all = "camelCase")]
     #[schemars(extend("x-execution" = "modelWrite"))]
     MaterialAdd {
@@ -1246,6 +1281,8 @@ pub enum Command {
         cp: Option<Q<SpecificHeat>>,
         #[serde(default, skip_serializing_if = "Option::is_none", rename = "yield")]
         yield_: Option<Q<Stress>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plasticity: Option<Plasticity>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },

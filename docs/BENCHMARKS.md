@@ -1212,6 +1212,47 @@ needs arc-length control (#75). Plane stress and axisymmetry: the finite-strain 
 #58's linear-buckling job; K7 measures the same critical load through the beam-column solution,
 whose end conditions a three-dimensional solid can reproduce without ambiguity.
 
+## L. J2 plasticity (phase 6)
+
+Von Mises plasticity with isotropic hardening (`material.add` with a `plasticity` block, issue
+#60): radial return with the Simo–Taylor consistent tangent, through the same `MaterialLaw`
+Extension Point the elastic laws use, integrated by `static-nonlinear` from the last converged
+Gauss-point state. Small strain: under the total Lagrangian procedure the law is evaluated on
+Green–Lagrange strain and answers with second Piola–Kirchhoff stress, so every row below states
+its oracle in those measures where the difference from the engineering ones is visible.
+
+| # | Case | Reference | Tolerance | Proves | Status |
+|---|---|---|---|---|---|
+| L1 | Uniaxial bar, bilinear hardening (`E` = 200 GPa, ν = 0, σ_y = 250 MPa, `H` = 20 GPa), pulled to ½, 3 and 6 ε_y, then unloaded from 3 ε_y to the residual strain | exact: `S = E E₁₁` to yield, `σ_y + E_t (E₁₁ − ε_y)` with `E_t = EH/(E+H)` beyond; `ε_p = E₁₁ − S/E`; reaction `λ S A₀`; Cauchy `λ S/(1 − ε_p)`; zero force at `E₁₁ = ε_p` after unloading | 1e-9 rel (measured 1e-14 on the force, 1e-16 on ε_p) | the return map, the hardening modulus, the state carried across increments, and elastic unloading with the plastic strain kept | engine test |
+| L2 | The same bar with a three-point hardening table (250, 300 at 0.2 %, 330 MPa at 0.5 %, flat beyond), pulled so that ε_p lands inside each segment and on the tail | exact: `E₁₁ = ε_p + σ_y(ε_p)/E` inverts the table; force 2.7565235 MN, 3.1140731 MN, 3.3284226 MN | 1e-9 rel (measured 6e-15 on the force, 5e-14 on ε_p) | the piecewise-linear curve is read at and *across* its breakpoints inside one increment | engine test |
+| L3 | Thick-walled cylinder, `b = 2a`, plane strain, elastic–perfectly plastic, ν = 0.499, quad8 16 × 12 | Hill §5.2 with `2k = 2σ_y/√3`: interface pressure `k(1 − c²/b² + 2 ln(c/a))`, two-zone stresses, `u(b) = 2(1−ν²)kc²/(Eb)`, limit `p_lim = 2k ln(b/a)` = 200.09 MPa | at `c = 1.5a`: `σ_θ − σ_r` within 2 % of 2k (measured 0.63 %), mean stress within 8 % (5.7 %: the fully integrated quad8's pressure noise at ν = 0.499, worst at the bore), `u(b)` 1 % (0.16 %); at 0.97 p_lim: converges with 71 % of the wall yielded (Hill 72 %); at 1.08 p_lim: `newton.diverged` with the last converged load factor between 0.95 and 1.01 p_lim | the plastic zone, the stresses in both zones, the elastic ring outside, and that a load past the collapse load is refused with the load factor reached rather than answered | engine test |
+| L4 | Rectangular section in pure bending, hex20, elastic–perfectly plastic, `u_x = −κXY` prescribed on both end faces | `M/M_y = κ/κ_y` (0.5 at ½ κ_y) and `1.5 − 0.5(κ_y/κ)²` (1.495 at 10 κ_y; `M_p = 1.5 M_y`) | 1e-3 elastic (measured 3e-11), 5e-3 at 10 κ_y (measured 1.4e-4) | the plastic hinge: the section's moment saturates at `1.5 M_y` | engine test |
+| L5 | L4 at 3 κ_y with 4, 8, 16 and 32 elements through the depth | `M/M_y = 1.5 − 1/18 = 1.44444` | 1 % at 8 elements (measured 0.09 %); errors 2.48e-3, 1.30e-3, 1.25e-4, 8.89e-5; observed rate 1.78 | convergence: the only error is the Gauss integration of the kinked stress profile, and it shrinks at second order with the depth resolution | engine test |
+| L6 | L5's section unloaded by the elastic curvature `M/(EI)`: springback | residual surface stress `σ_y (1 − M/M_y)` = ∓0.4444 σ_y, zero moment, plastic strain of the loading left in place (`2 ε_y` at the surface) | 2 % of σ_y (measured 0.13 %), `|M|` ≤ 0.5 % M_y (0.03 %), PEEQ 2 % (0.03 %) | the load–unload cycle with residual stress (Ansys VM11's flavour on a solid) | engine test |
+| L7 | Consistent tangent against the central difference of the returned stress, ν = 0.3, from an already-plastic state, linear hardening, perfect plasticity and a table crossing a breakpoint | `dσ/dε` by calculus (ADR 0007) | 1e-5 · E | the algorithmic tangent is the derivative of the return map, not the continuum one | engine test |
+| L8 | Newton's residual inside a plastic increment of L3 | the last three residuals above the direct solver's round-off floor: 0.16 → 0.0123 → 5.3e-7 (order 3.9); the previous increment 0.0905 → 7.9e-5 → 2.7e-10 (order 1.8) | estimated order ≥ 1.7 | quadratic convergence, which is what a consistent tangent buys and an elastic-predictor tangent would not | engine test |
+
+L3's oracle is exact at ν = ½, where `σ_z = (σ_r + σ_θ)/2` in both zones and the von Mises
+condition reduces to the Tresca form with `2k`; ν = 0.499 puts the model within `1 − 2ν` of
+it. Full 3 × 3 integration of a quad8 at that Poisson ratio pays for the exactness with a noisy
+mean stress near the loaded bore — the deviatoric stresses, the plastic zone and the
+displacement are unaffected — and would over-predict the collapse load if pushed to it, which is
+why the limit is checked as a bracket (converges at 0.97 p_lim, refuses 1.08 p_lim with the last
+equilibrium between 0.95 and 1.01 p_lim) rather than as a number. A reduced-integration or
+B-bar element (not in the engine yet) is the standard fix and would sharpen that bracket.
+
+The Newton loop treats a tangent the direct solver finds indefinite as a cutback, the same way
+it treats a folded element: under load control that is what a plastic collapse mechanism looks
+like, and after the allowed cutbacks the Step ends with `newton.diverged` naming the load
+factor reached — the collapse load, to within the last increment.
+
+**What is deliberately not here.** Kinematic hardening, rate dependence, damage, finite-strain
+plasticity (the additive split is evaluated on Green–Lagrange strain, exact for large rotations
+with small strains), plasticity in trusses and beams (a follow-up once #65 lands), and plane
+stress, which `static-nonlinear` refuses anyway. Every other procedure — `static`, modal,
+buckling, explicit, implicit, harmonic — uses the elastic part of an elastic–plastic Material
+and says so with `material.plasticityIgnored`.
+
 ## Substituted cases
 
 Two rows above are **substitutes**, marked as such, and this is what happened. C8 (NAFEMS T1

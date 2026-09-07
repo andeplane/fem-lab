@@ -10987,4 +10987,219 @@ fn a_symmetry_plane_guides_a_beam_end_and_an_orientation_along_it_is_refused() {
     let er = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
     assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("element 0")));
     assert!(er.cause.contains("orientation") && er.cause.contains("parallel"), "{er:?}");
+// ------------------------------------------------- J2 plasticity (#60)
+
+/// `material.add "steel"` with `E`, `nu` and whatever the case adds.
+fn steel_command(extra: serde_json::Value) -> String {
+    let mut cmd = serde_json::json!({ "cmd": "material.add", "name": "steel", "E": "200 GPa", "nu": 0.3 });
+    for (k, v) in extra.as_object().expect("an object").clone() {
+        cmd[k] = v;
+    }
+    cmd.to_string()
+}
+
+/// The plasticity block is validated by `material.add`: one hardening form, an isotropic
+/// material, the initial yield stated once, admissible numbers — every refusal located; and
+/// what is accepted reaches the Model, the Model query, the definition and the report.
+#[test]
+fn material_add_takes_a_plasticity_block_and_refuses_an_inconsistent_one() {
+    use femlab_engine::model::Hardening;
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"plastic"}"#);
+    let cases: Vec<(serde_json::Value, ErrorCode, &str, &str)> = vec![
+        (serde_json::json!({ "plasticity": {} }), ErrorCode::Schema, "plasticity", "exactly one of H"),
+        (
+            serde_json::json!({ "plasticity": { "H": "1 GPa", "table": [] } }),
+            ErrorCode::Schema,
+            "plasticity",
+            "exactly one of H",
+        ),
+        (serde_json::json!({ "plasticity": { "H": "1 GPa" } }), ErrorCode::Schema, "yield", "needs the initial yield"),
+        (
+            serde_json::json!({ "yield": "0 MPa", "plasticity": { "H": "1 GPa" } }),
+            ErrorCode::Schema,
+            "yield",
+            "finite and positive",
+        ),
+        (
+            serde_json::json!({ "yield": "250 MPa", "plasticity": { "H": "-1 GPa" } }),
+            ErrorCode::Schema,
+            "plasticity.H",
+            "not negative",
+        ),
+        (
+            serde_json::json!({ "yield": "250 MPa", "plasticity": { "H": "1 m" } }),
+            ErrorCode::UnitDimension,
+            "plasticity.H",
+            "",
+        ),
+        (
+            serde_json::json!({ "plasticity": { "table": [{ "plasticStrain": 0, "stress": "250 MPa" }] } }),
+            ErrorCode::Schema,
+            "plasticity.table",
+            "at least two points",
+        ),
+        (
+            serde_json::json!({ "plasticity": { "table": [
+                { "plasticStrain": 0.001, "stress": "250 MPa" }, { "plasticStrain": 0.002, "stress": "300 MPa" }] } }),
+            ErrorCode::Schema,
+            "plasticity.table[0].plasticStrain",
+            "start at 0",
+        ),
+        (
+            serde_json::json!({ "plasticity": { "table": [
+                { "plasticStrain": 0, "stress": "250 MPa" }, { "plasticStrain": 0.002, "stress": "300 MPa" },
+                { "plasticStrain": 0.002, "stress": "320 MPa" }] } }),
+            ErrorCode::Schema,
+            "plasticity.table[2].plasticStrain",
+            "ascend",
+        ),
+        (
+            serde_json::json!({ "plasticity": { "table": [
+                { "plasticStrain": 0, "stress": "250 MPa" }, { "plasticStrain": 0.002, "stress": "200 MPa" }] } }),
+            ErrorCode::Schema,
+            "plasticity.table[1].stress",
+            "not decrease",
+        ),
+        (
+            serde_json::json!({ "plasticity": { "table": [
+                { "plasticStrain": 0, "stress": "250 m" }, { "plasticStrain": 0.002, "stress": "300 MPa" }] } }),
+            ErrorCode::UnitDimension,
+            "plasticity.table[0].stress",
+            "",
+        ),
+        (
+            serde_json::json!({ "yield": "260 MPa", "plasticity": { "table": [
+                { "plasticStrain": 0, "stress": "250 MPa" }, { "plasticStrain": 0.002, "stress": "300 MPa" }] } }),
+            ErrorCode::Schema,
+            "yield",
+            "disagrees",
+        ),
+    ];
+    for (extra, code, at, cause) in cases {
+        let bad = err(&mut e, &steel_command(extra.clone()));
+        assert_eq!((bad.code, bad.where_.as_deref()), (code, Some(at)), "{extra}: {bad:?}");
+        assert!(bad.cause.contains(cause), "{extra}: {}", bad.cause);
+        assert!(bad.suggestion.is_some(), "{extra}");
+    }
+    // J2 is isotropic.
+    let ortho = err(&mut e, &lamina_command(serde_json::json!({ "yield": "250 MPa", "plasticity": { "H": "0 Pa" } })));
+    assert_eq!((ortho.code, ortho.where_.as_deref()), (ErrorCode::Schema, Some("plasticity")));
+    assert!(ortho.cause.contains("isotropic"), "{}", ortho.cause);
+    assert!(e.model().materials.is_empty(), "nothing refused reached the Model");
+
+    // Linear hardening: the yield stays the Material's yield, the modulus is in SI.
+    ok(&mut e, &steel_command(serde_json::json!({ "yield": "250 MPa", "plasticity": { "H": "2 GPa" } })));
+    let m = e.model().material("steel").expect("steel").clone();
+    assert_eq!(m.plasticity, Some(Hardening::Linear { yield_: 250e6, h: 2e9 }));
+    assert_eq!(m.yield_, Some(250e6));
+    // A table: the first row is the yield, `yield` may repeat it.
+    let table = serde_json::json!([
+        { "plasticStrain": 0, "stress": "250 MPa" }, { "plasticStrain": 0.002, "stress": "300 MPa" }]);
+    ok(&mut e, &steel_command(serde_json::json!({ "plasticity": { "table": table } })));
+    let m = e.model().material("steel").expect("steel").clone();
+    assert_eq!(m.plasticity, Some(Hardening::Table { plastic_strain: vec![0.0, 0.002], stress: vec![250e6, 300e6] }));
+    assert_eq!(m.yield_, Some(250e6), "the table's first stress is the yield");
+    ok(&mut e, &steel_command(serde_json::json!({ "yield": "0.25 GPa", "plasticity": { "table": table } })));
+    assert_eq!(e.model().material("steel").expect("steel").yield_, Some(250e6));
+    // The props the law is handed, and the Model query's flag.
+    assert_eq!(Hardening::Linear { yield_: 250e6, h: 2e9 }.props(), vec![2e9, 1.0, 0.0, 250e6]);
+    assert_eq!(
+        Hardening::Table { plastic_strain: vec![0.0, 0.002], stress: vec![250e6, 300e6] }.props(),
+        vec![0.0, 2.0, 0.0, 250e6, 0.002, 300e6]
+    );
+    let row = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert_eq!(row["materials"][0]["plasticity"], serde_json::json!(true));
+    // The definition round-trips both forms exactly.
+    for extra in [
+        serde_json::json!({ "yield": "250 MPa", "plasticity": { "H": "2 GPa" } }),
+        serde_json::json!({ "plasticity": { "table": table } }),
+    ] {
+        ok(&mut e, &steel_command(extra));
+        let before = e.model().material("steel").expect("steel").clone();
+        let QueryResult::Definition(def) =
+            e.query(Query::Definition { kind: ObjectKind::Material, name: "steel".into() }).unwrap()
+        else {
+            panic!("definition")
+        };
+        let Command::MaterialAdd { plasticity, .. } = &def.command else { panic!("a material.add") };
+        assert!(plasticity.is_some());
+        ok(&mut e, &serde_json::to_string(&def.command).unwrap());
+        assert_eq!(e.model().material("steel").expect("steel"), &before);
+    }
+    // The report says what an elastic–plastic material means while one is there, and
+    // re-issuing without the block clears it, as the doc string promises.
+    let report = ok(&mut e, r#"{"cmd":"mesh.export","format":"report"}"#).output;
+    let text = serde_json::to_string(&report).unwrap();
+    assert!(text.contains("Elastic–plastic materials"), "{text}");
+    ok(&mut e, &steel_command(serde_json::json!({})));
+    assert!(e.model().material("steel").expect("steel").plasticity.is_none());
+    let row = serde_json::to_value(e.query(Query::Model {}).unwrap()).unwrap();
+    assert!(row["materials"][0].get("plasticity").is_none());
+    let report = ok(&mut e, r#"{"cmd":"mesh.export","format":"report"}"#).output;
+    assert!(!serde_json::to_string(&report).unwrap().contains("Elastic–plastic materials"));
+}
+
+/// A bar of elastic–plastic steel pulled past yield through the registry. The `static` Step
+/// (and a convergence study on it) uses the elastic part and says so; the `static-nonlinear`
+/// Step integrates the plasticity, reports the plastic strain as a field an AI can read back,
+/// and the fraction of the bar that yielded.
+#[test]
+fn a_linear_step_ignores_plasticity_with_a_warning_and_a_nonlinear_step_reports_plastic_strain() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"bar"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","100 mm","100 mm"]}"#);
+    ok(&mut e, &steel_command(serde_json::json!({ "nu": 0.0, "yield": "250 MPa", "plasticity": { "H": "20 GPa" } })));
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["bar"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":2,"ny":1,"nz":1}},"order":1}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"bar.xmin","dofs":["ux"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"sy","on":"bar.ymin","dofs":["uy"]}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"sz","on":"bar.zmin","dofs":["uz"]}"#);
+    // 3 ε_y in engineering strain; the Green–Lagrange strain is a shade more.
+    ok(&mut e, r#"{"cmd":"constraint.prescribe","name":"pull","on":"bar.xmax","dof":"ux","value":"3.75 mm"}"#);
+    let held = r#""constraints":["root","sy","sz","pull"],"loads":[]"#;
+    ok(&mut e, &format!(r#"{{"cmd":"step.add","name":"linear","procedure":"static",{held}}}"#));
+    ok(
+        &mut e,
+        &format!(r#"{{"cmd":"step.add","name":"plastic","procedure":"static-nonlinear",{held},"increments":3}}"#),
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"linear"}"#);
+    let r = result_of(&mut e, Some("linear"));
+    let w = r.warnings.iter().find(|w| w.code == "material.plasticityIgnored").expect("the linear Step warns");
+    assert!(
+        w.text.contains("'steel'") && w.text.contains("static-nonlinear") && w.text.contains("the static procedure"),
+        "{}",
+        w.text
+    );
+    assert_eq!(w.where_.as_deref(), Some("material"));
+    assert!(!r.extremes.iter().any(|x| x.field == "plasticStrain"), "an elastic answer has no plastic strain");
+    assert!(r.yielded_fraction.is_none());
+    // The elastic reaction: E ε A with the finite-strain shade, far above what the yielded bar
+    // carries below.
+    let elastic = r.reactions.iter().find(|x| x.constraint == "pull").expect("pull").total[0].value;
+    assert!(elastic > 7.4e6 && elastic < 7.6e6, "E·3ε_y·A = 7.5 MN: {elastic}");
+    ok(
+        &mut e,
+        r#"{"cmd":"study.converge","step":"linear","sizes":["500 mm","250 mm"],"quantity":{"kind":"max","field":"vonMises"},"restore":false}"#,
+    );
+    let r = result_of(&mut e, Some("linear"));
+    assert!(r.warnings.iter().any(|w| w.code == "material.plasticityIgnored"), "the study's Result warns too");
+
+    ok(&mut e, r#"{"cmd":"solve.run","step":"plastic"}"#);
+    let r = result_of(&mut e, Some("plastic"));
+    assert!(r.warnings.iter().all(|w| w.code != "material.plasticityIgnored"), "{:?}", r.warnings);
+    let force = r.reactions.iter().find(|x| x.constraint == "pull").expect("pull").total[0].value;
+    // σ_y + E_t (ε − ε_y) with E_t = E H/(E + H): 250 + 18.18·2.5e-3·1e3 MPa ≈ 295.5 MPa on 0.01 m².
+    assert!(force > 2.9e6 && force < 3.0e6, "the yielded bar carries about 2.95 MN: {force}");
+    let peeq = r.extremes.iter().find(|x| x.field == "plasticStrain").expect("PEEQ is reported");
+    assert!(peeq.max.value > 2.2e-3 && peeq.max.value < 2.4e-3, "ε_p ≈ 2.27e-3: {:?}", peeq);
+    assert_eq!(peeq.max.unit, "SI", "dimensionless, as the strain field is reported");
+    let QueryResult::Field(f) =
+        e.query(Query::Field { step: Some("plastic".into()), result_id: None, field: "plasticStrain".into() }).unwrap()
+    else {
+        panic!("field")
+    };
+    assert_eq!(f.components, 1);
+    assert!(f.values.iter().all(|v| (v - peeq.max.value).abs() < 1e-9), "homogeneous: {:?}", f.values);
+    assert_eq!(r.yielded_fraction, Some(1.0));
 }
