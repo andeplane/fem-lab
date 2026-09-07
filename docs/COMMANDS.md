@@ -761,8 +761,9 @@ Step names it in `after`; re-issue that dependent Step without the reference fir
 
 ### step.reorder
 
-Set the run order of Steps; `order` must list every Step name exactly once. Steps run in
-this order and a later Step may inherit state (a temperature field) from an earlier one.
+Set the run order of Steps; `order` must list every Step name exactly once and keep each
+Step after the prerequisite named by its `after` field. Steps run in this order and a
+later Step may inherit state (a temperature field) from an earlier one.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -4346,7 +4347,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Set the run order of Steps; `order` must list every Step name exactly once. Steps run in\nthis order and a later Step may inherit state (a temperature field) from an earlier one.",
+      "description": "Set the run order of Steps; `order` must list every Step name exactly once and keep each\nStep after the prerequisite named by its `after` field. Steps run in this order and a\nlater Step may inherit state (a temperature field) from an earlier one.",
       "type": "object",
       "properties": {
         "order": {
