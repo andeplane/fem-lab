@@ -6829,6 +6829,22 @@ fn truss_model(e: &mut Engine) {
 }
 
 #[test]
+fn a_line_body_under_the_default_3d_idealisation_is_not_ill_posed() {
+    // geometry.addLine's doc string requires the 3D idealisation for a line Body; Model::new
+    // defaults to it, so the dim() mismatch check must not fire (#443).
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"truss"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addLine","name":"truss","points":[["0 m","0 m","0 m"],["1 m","0 m","0 m"]]}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+    assert_eq!(m.idealisation, "solid3d");
+    assert!(m.warnings.iter().all(|w| w.code != "model.ill-posed"), "{:?}", m.warnings);
+    // a line Body under a 2D idealisation is still a genuine mismatch
+    ok(&mut e, r#"{"cmd":"model.setIdealisation","idealisation":{"kind":"planeStrain"}}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+    assert!(m.warnings.iter().any(|w| w.code == "model.ill-posed"), "{:?}", m.warnings);
+}
+
+#[test]
 fn a_line_body_meshes_into_members_with_a_node_set_per_joint() {
     let mut e = engine();
     truss_model(&mut e);
