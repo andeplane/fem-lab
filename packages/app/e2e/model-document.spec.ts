@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test';
 test('@cpu editable Model name and explicit save baseline survive rename, undo and open', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1800, height: 1000 });
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(async () => {
     await window.fem.model.new({ name: 'original' });
     await window.fem.geometry.addBox({ name: 'beam', size: ['1 m', '100 mm', '100 mm'] });

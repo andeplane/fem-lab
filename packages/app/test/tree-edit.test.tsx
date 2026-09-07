@@ -1,3 +1,4 @@
+import { batchModule } from '../../../tools/checked-batch.mjs';
 // The real tree -> host Command -> engine Query -> Properties -> Apply path. The independent
 // fixture lists public input variants; exact saved Model equality catches omitted/rounded data.
 import { createRequire } from 'node:module';
@@ -14,11 +15,11 @@ import { Store } from '../src/store';
 import { ModelTree } from '../src/ui/Tree';
 import { SchemaForm } from '../src/ui/SchemaForm';
 import type { Defs } from '../src/ui/schema';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import { waitFor } from './wait-for';
 
 const rootPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const wasm = createRequire(import.meta.url)(path.join(rootPath, 'tools/wasm-node/femlab_engine_wasm.js')) as {
+const wasm = batchModule(createRequire(import.meta.url)(path.join(rootPath, 'tools/wasm-node/femlab_engine_wasm.js'))) as {
   Engine: new (threads: number) => { dispatch(c: string): Promise<string>; query(q: string): string; export_file(): string; free(): void };
 };
 const doc = schema as unknown as EngineSchema;

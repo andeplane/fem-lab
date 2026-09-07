@@ -4,7 +4,7 @@ test('@cpu script validation uses a lazy worker and rejects invalid code before 
   const validationRequests: string[] = [];
   page.on('request', (request) => { if (request.url().includes('script-validation.worker')) validationRequests.push(request.url()); });
   await page.goto('./');
-  await page.waitForFunction(async () => typeof window.fem !== 'undefined' && Boolean(await window.fem.query.capabilities()));
+  await page.waitForFunction(() => typeof window.fem !== 'undefined');
   await page.evaluate(() => window.fem.model.new({ name: 'validation seed' }));
   expect(validationRequests).toEqual([]);
   const result = await page.evaluate(async () => {

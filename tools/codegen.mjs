@@ -26,6 +26,11 @@ const TOP = {
   readRequest: 'ReadRequest',
   stamp: 'Stamp',
   executionPolicy: 'ExecutionPolicy',
+  writeReply: 'WriteReply',
+  readReply: 'ReadReply',
+  runLease: 'RunLease',
+  documentSnapshot: 'DocumentSnapshot',
+  replacementTicket: 'ReplacementTicket',
 };
 
 /** Rewrite every `#/$defs/<old>` to `#/$defs/<new>` per `rename`. */
@@ -57,9 +62,19 @@ export function mergeSchema(doc) {
     // eslint-disable-next-line no-unused-vars
     const { $schema, title, $defs = {}, ...body } = doc[key];
     const rename = {};
-    for (const [k, v] of Object.entries($defs)) {
-      if (defs[k] && JSON.stringify(defs[k]) !== JSON.stringify(v)) rename[k] = `${name}_${k}`;
-    }
+    // Renaming a dependency also changes its parents. Reach a fixed point before inserting
+    // anything: a later envelope must never overwrite an earlier schema's Journal/Command
+    // with references belonging to the later table.
+    let changed;
+    do {
+      changed = false;
+      for (const [k, v] of Object.entries($defs)) {
+        if (!rename[k] && defs[k] && JSON.stringify(defs[k]) !== JSON.stringify(retarget(v, rename))) {
+          rename[k] = `${name}_${k}`;
+          changed = true;
+        }
+      }
+    } while (changed);
     const fixed = retarget({ ...body, $defs }, rename);
     for (const [k, v] of Object.entries(fixed.$defs)) defs[rename[k] ?? k] = v;
     delete fixed.$defs;

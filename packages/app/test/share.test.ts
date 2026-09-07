@@ -8,7 +8,8 @@ import { HOST_COMMANDS, Registry, type EngineSchema } from '@femlab/registry';
 import schema from '../../registry/src/generated/engine.schema.json';
 import { appHostCommands, makeHostContext } from '../src/host';
 import { Store } from '../src/store';
-import type { WorkerTransport } from '../src/worker-transport';
+import { fakeHost } from '../../registry/test/fakes';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 import {
   MAX_FRAGMENT,
   MAX_JOURNAL_BYTES,
@@ -44,8 +45,12 @@ const hostCommands = [
 ];
 function autosaveRegistry(save: ReturnType<typeof makeAutosave>) {
   const transport = { dispatch: vi.fn(async () => ({ seq: 0, revision: 1, hash: 'h', warnings: [], output: { type: 'none' } })) } as unknown as WorkerTransport;
-  const host = makeHostContext(new Store(), transport, { current: null }, {} as never, undefined, undefined, save);
-  return { registry: new Registry({ schema: schema as unknown as EngineSchema, host }), transport };
+  const replay = vi.fn(async (_commands: ShareCommand[]) => undefined);
+  const host = makeHostContext(new Store(), transport, { current: null }, {} as never, undefined, undefined, save,
+    undefined, undefined, undefined, { active: async () => undefined, replay,
+      projects: { ...fakeHost().projects, prime: async () => [], list: () => [], current: () => null,
+        setEnabled: () => undefined, enabled: () => true, flush: async () => undefined } });
+  return { registry: new Registry({ schema: schema as unknown as EngineSchema, host }), replay };
 }
 const journals = path.resolve(import.meta.dirname, '../../../crates/engine/benches/journals');
 const fixtures = readdirSync(journals).filter((name) => name.endsWith('.json') && !name.endsWith('.meta.json'));
@@ -430,14 +435,14 @@ describe('autosave', () => {
     const store = memoryStore();
     const timers = fakeTimers();
     const a = makeAutosave({ store, ...timers, now: () => 100 });
-    const { registry, transport } = autosaveRegistry(a);
+    const { registry, replay } = autosaveRegistry(a);
     a.note('beam', journal(1));
     await a.flush();
     a.note('beam', journal(1));
     const shown = (await registry.query({ query: 'query.autosaveHistory' }) as { revisions: { id: string }[] }).revisions[0]!;
     await a.flush();
     await expect(registry.dispatch({ cmd: 'file.restore', id: shown.id })).resolves.toMatchObject({ name: 'beam' });
-    expect(transport.dispatch).toHaveBeenCalled();
+    expect(replay).toHaveBeenCalledWith(journal(1).map(entry => entry.cmd));
   });
 
   it('restores an older Journal when undo returns to its content', async () => {

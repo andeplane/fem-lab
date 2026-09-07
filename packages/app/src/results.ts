@@ -8,8 +8,8 @@
 import { FemError, type FrameResult, type FramesResult, type ResultSummary, type StudyReport, type Warning } from '@femlab/registry';
 import { FIELD_CHOICES, choiceOf, type FieldChoice, displayUnitOf, fieldChoices, siUnitOf } from './fields';
 import type { ViewerRef } from './host';
-import type { Store } from './store';
-import type { WorkerTransport } from './worker-transport';
+import type { Store, ViewMode } from './store';
+import type { EngineTransport } from '@femlab/registry';
 import { TransientPlayback, type PlaybackClock, type TransientInput } from './transient';
 
 /** `view.setDeformScale`'s argument. */
@@ -70,7 +70,7 @@ export class ResultsView {
 
   constructor(
     private readonly store: Store,
-    private readonly transport: WorkerTransport,
+    private readonly transport: EngineTransport,
     private readonly viewer: ViewerRef,
     clock?: PlaybackClock,
   ) {
@@ -154,13 +154,16 @@ export class ResultsView {
    * the contours. Called after every engine Command, so it has to be cheap when nothing moved.
    */
   async refresh(force = false): Promise<void> {
-    const epoch = this.displayEpoch;
+    let epoch = this.displayEpoch;
     const result = await this.readResult();
     if (epoch !== this.displayEpoch) return;
     this.store.set({ result });
     const transient = this.store.state.transient;
     if (transient) {
-      if (!result || result.stale || result.step !== transient.catalogue.step) this.invalidateTransient();
+      if (!result || result.stale || result.step !== transient.catalogue.step) {
+        this.invalidateTransient();
+        epoch = this.displayEpoch;
+      }
       else {
         if (force) await this.playTransient({ step: result.step, playing: transient.playing, speed: transient.speed });
         return;
@@ -173,9 +176,9 @@ export class ResultsView {
       this.viewer.current?.setField(null, [0, 1]);
       this.viewer.current?.setDeformed(null, 0);
       this.store.set({ legend: null, yieldStress: null });
+      await this.showModelSurface(epoch);
       return;
     }
-    this.viewer.current?.setDim(result.stale);
     // A modal Step computes no stress and a heat Step no displacement, so the field the last
     // Result was contoured by may not exist in this one. Choosing before loading is what keeps
     // a solve from failing on `step 'modes' has no vonMises field`.
@@ -183,10 +186,36 @@ export class ResultsView {
     if (epoch !== this.displayEpoch) return;
     const fieldKey = available(this.store.state.fieldKey, result, yieldStress !== null);
     this.store.set({ yieldStress, ...(fieldKey === this.store.state.fieldKey ? {} : { fieldKey }) });
-    const key = `${result.step}|${fieldKey}|${String(this.store.state.clamp)}|${this.store.state.journal?.revision ?? 0}`;
+    if (this.store.state.viewMode !== 'results') {
+      this.loadedFor = '';
+      await this.showModelSurface(epoch);
+      return;
+    }
+    this.viewer.current?.setDim(result.stale);
+    const key = `${result.resultId}|${result.step}|${fieldKey}|${String(this.store.state.clamp)}|${this.store.state.journal?.revision ?? 0}`;
     if (!force && key === this.loadedFor) return;
     this.loadedFor = key;
     await this.load(result);
+  }
+
+  /** Geometry and Mesh views always draw the current model, without retained result arrays. */
+  private async showModelSurface(epoch: number): Promise<void> {
+    const surface = await this.transport.surface();
+    if (epoch !== this.displayEpoch) return;
+    this.displacement = null;
+    const v = this.viewer.current;
+    v?.setField(null, [0, 1]);
+    v?.setDeformed(null, 0);
+    v?.setDim(false);
+    v?.setSurface({ ...surface, source: 'source' in surface && surface.source === 'geometry' ? 'geometry' : 'mesh' });
+    v?.setMode(this.store.state.viewMode);
+  }
+
+  async setMode(mode: ViewMode): Promise<void> {
+    this.invalidateTransient();
+    this.store.set({ viewMode: mode });
+    this.viewer.current?.setMode(mode);
+    await this.refresh(true);
   }
 
   private async readResult(): Promise<ResultSummary | null> {
@@ -203,25 +232,26 @@ export class ResultsView {
   private async load(result: ResultSummary): Promise<void> {
     const epoch = this.displayEpoch;
     const v = this.viewer.current;
-    // No Viewer yet (its chunk is still arriving), or one that has not been handed a surface:
-    // its bounding box is still the placeholder, so an `"auto"` computed here would exaggerate
-    // against the wrong model size — the ×1311 of the report. Forget the key either way, so the
-    // refresh that follows the surface push loads the arrays instead of finding them "loaded".
-    if (!v?.hasSurface) {
+    // The selected surface establishes the bounds before automatic deformation scaling.
+    if (!v) {
       this.loadedFor = '';
       return;
     }
     const choice = choiceOf(this.store.state.fieldKey);
-    const scalar = await this.transport.field(result.step, choice.field as never, choice.component ?? undefined);
+    const surface = await this.transport.surface(result.resultId);
+    const scalar = await this.transport.field(result.step, choice.field as never, choice.component ?? undefined, result.resultId);
     const { values, range, unit } = await this.contour(choice, scalar.values);
 
     // A mode shape is its own deformation; every other field rides on the Step's displacement,
     // which a heat Step does not have — there the mesh simply stays where it is.
     const moves = choice.mode !== undefined || result.extremes.some((e) => e.field === 'displacement');
-    const displacement = !moves ? null : choice.mode === undefined ? (await this.transport.field(result.step, 'displacement')).values : scalar.values;
+    const displacement = !moves ? null : choice.mode === undefined ? (await this.transport.field(result.step, 'displacement', undefined, result.resultId)).values : scalar.values;
     const lengthFactor = (await this.conversion('displacement')).scale;
     if (epoch !== this.displayEpoch) return;
     this.displacement = displacement;
+    v.setMode('results');
+    v.setSurface({ ...surface, source: 'mesh' });
+    v.setDim(result.stale);
     v.setField(values, range);
     this.store.set({ legend: { min: range[0], max: range[1], unit }, lengthFactor });
     // A mode's amplitude is arbitrary, so it opens at a visible one rather than at ×1.
@@ -249,10 +279,7 @@ export class ResultsView {
   /** `view.showField`: `{ field: null }` turns contours off, anything else picks a scalar. */
   async showField(f: { field: string | null; component?: number | null }): Promise<void> {
     if (f.field === null) {
-      this.invalidateTransient();
-      this.store.set({ viewMode: 'geometry' });
-      this.viewer.current?.setMode('geometry');
-      this.viewer.current?.setField(null, [0, 1]);
+      await this.setMode('geometry');
       return;
     }
     const key = fieldKeyOf(f.field, f.component ?? null);
@@ -263,6 +290,7 @@ export class ResultsView {
     if (!result || !choices.some((c) => c.key === key)) throw unavailableField(f.field, f.component ?? null);
     if (this.store.state.transient && choiceOf(key).field !== this.store.state.transient.catalogue.field)
       throw new FemError('unsupported', `retained frames contain only ${this.store.state.transient.catalogue.field}`, 'view.showField', 'query.frames for available historical fields');
+    this.displayEpoch++;
     this.store.set({ fieldKey: key, viewMode: 'results' });
     this.viewer.current?.setMode('results');
     await this.refresh(true);

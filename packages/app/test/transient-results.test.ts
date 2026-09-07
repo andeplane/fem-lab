@@ -4,7 +4,7 @@ import type { FieldData, FrameResult, FramesResult, Query, QueryResult, ResultSu
 import { ResultsView } from '../src/results';
 import { Store } from '../src/store';
 import type { Viewer } from '../src/viewer/viewer';
-import type { WorkerTransport } from '../src/worker-transport';
+import type { EngineTransport as WorkerTransport } from '@femlab/registry';
 
 const metres = (value: number): Valued => ({ value, unit: 'm' });
 const origin: [Valued, Valued, Valued] = [metres(0), metres(0), metres(0)];
@@ -29,10 +29,11 @@ function setup() {
   store.set({ fieldKey: 'umag', result: summary });
   const drawing = {
     hasSurface: true,
+    setSurface: vi.fn<Viewer['setSurface']>(),
     setField: vi.fn<Viewer['setField']>(), setDeformed: vi.fn<Viewer['setDeformed']>(),
     setMode: vi.fn<Viewer['setMode']>(), setDim: vi.fn<Viewer['setDim']>(),
     animate: vi.fn<Viewer['animate']>(), autoScale: vi.fn<Viewer['autoScale']>(() => 1),
-  } satisfies Pick<Viewer, 'hasSurface' | 'setField' | 'setDeformed' | 'setMode' | 'setDim' | 'animate' | 'autoScale'>;
+  } satisfies Pick<Viewer, 'hasSurface' | 'setSurface' | 'setField' | 'setDeformed' | 'setMode' | 'setDim' | 'animate' | 'autoScale'>;
   const query = vi.fn(async (q: Query): Promise<QueryResult> => {
     if (q.query === 'query.frames') return catalogue;
     if (q.query === 'query.frame') return frameOf(q.index ?? (q.sample?.kind === 'frame' ? q.sample.index : 1));
@@ -40,7 +41,7 @@ function setup() {
     throw new Error(`unexpected Query ${q.query}`);
   });
   const field = vi.fn(async (): Promise<FieldData> => ({ values: new Float32Array([0, 10, 0]), min: 0, max: 10, unit: 'm' }));
-  const transport = { query, field } satisfies Pick<WorkerTransport, 'query' | 'field'>;
+  const transport = { query, field, surface: vi.fn(async () => ({ positions: new Float32Array(), indices: new Uint32Array(), triBody: new Uint32Array(), triFace: new Uint32Array(), faceNames: [], bodyNames: [] })) } satisfies Pick<WorkerTransport, 'query' | 'field' | 'surface'>;
   const results = new ResultsView(store, transport as unknown as WorkerTransport, { current: drawing as unknown as Viewer });
   return { store, drawing, query, field, results };
 }

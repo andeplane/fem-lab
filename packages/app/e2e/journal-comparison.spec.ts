@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test';
 import type { EngineTransport } from '@femlab/registry';
+import type { SessionTransport } from '../src/session-transport';
 
 async function ready(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('./');
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 test('@cpu Journal comparison keeps the explicit baseline and does not import the comparison file', async ({ page }) => {
@@ -63,7 +63,7 @@ async function installReplyGate(page: import('@playwright/test').Page): Promise<
     gate.release = () => { for (const deliver of deliveries.splice(0)) deliver(); gate.held = 0; };
     Object.assign(window, { comparisonGate: gate });
     // Inject scheduling at the typed host boundary; every value still comes from the real engine.
-    const transport = (window.fem.registry as unknown as { transport: EngineTransport }).transport;
+    const transport = Object.getPrototypeOf((window.fem.registry as unknown as { transport: SessionTransport }).transport) as SessionTransport;
     const delay = async <T>(op: string, action: () => Promise<T>): Promise<T> => {
       const hold = gate.op === op;
       if (hold) gate.op = null;
@@ -72,10 +72,12 @@ async function installReplyGate(page: import('@playwright/test').Page): Promise<
       gate.held++;
       return new Promise<T>(resolve => deliveries.push(() => resolve(value)));
     };
-    const exportFile = transport.exportFile.bind(transport);
-    const query = transport.query.bind(transport);
-    transport.exportFile = () => delay('exportFile', exportFile);
-    transport.query = input => delay(input.query, () => query(input));
+    const exportFile = transport.exportFile;
+    const query = transport.query;
+    const snapshot = transport.snapshot;
+    transport.snapshot = function () { return delay('snapshot', () => snapshot.call(this)); };
+    transport.exportFile = function () { return delay('exportFile', () => exportFile.call(this)); };
+    transport.query = function (input) { return delay(input.query, () => query.call(this, input)); };
   });
 }
 
@@ -141,7 +143,7 @@ test('@cpu a live-engine comparison waits for the displayed Journal to hydrate',
   await page.evaluate(() => window.fem.dispatch({ cmd: 'file.save' })); await download;
   await page.evaluate(() => {
     const gate = (window as unknown as { comparisonGate: ReplyGate }).comparisonGate;
-    gate.op = 'query.model'; gate.pending = window.fem.model.setName({ name: 'ahead of hydration' });
+    gate.op = 'snapshot'; gate.pending = window.fem.model.setName({ name: 'ahead of hydration' });
   });
   await page.waitForFunction(() => (window as unknown as { comparisonGate: ReplyGate }).comparisonGate.held === 1);
   // The real Worker has recorded the edit, while the app's model/Journal refresh is held.

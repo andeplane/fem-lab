@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { LineSegments, Mesh, WebGLRenderer } from 'three';
-import type { AppSurface } from '../src/worker-transport';
+import type { AppSurface } from '../src/surface';
 import { Viewer } from '../src/viewer/viewer';
 
 vi.unmock('../src/viewer/viewer');

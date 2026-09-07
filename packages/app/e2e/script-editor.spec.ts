@@ -5,7 +5,6 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.fem !== 'undefined', undefined, { timeout: 60_000 });
-  await page.waitForFunction(async () => Boolean(await window.fem.query.capabilities()), undefined, { timeout: 60_000 });
 }
 
 async function replace(editor: Locator, page: Page, text: string): Promise<void> {

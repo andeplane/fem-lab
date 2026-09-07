@@ -711,6 +711,7 @@ impl Engine {
     /// One Result field by its wire name, which is what a host passes through: a `Field`
     /// spelling (`displacement`, `vonMises`, …) or `mode:k` for the k-th mode shape of a modal
     /// Step, counting from 1.
+    #[cfg(feature = "test-internals")]
     pub fn field_named(&self, step: Option<&str>, name: &str) -> Result<&crate::post::FieldData, Error> {
         if let Some(k) = name.strip_prefix("mode:") {
             let (step_name, _, _, res) = self.stored(step)?;
@@ -729,6 +730,7 @@ impl Engine {
     }
 
     /// One Result field, for a host that wants the raw array.
+    #[cfg(feature = "test-internals")]
     pub fn field(&self, step: Option<&str>, field: Field) -> Result<&crate::post::FieldData, Error> {
         let (name, _, _, res) = self.stored(step)?;
         res.fields.get(&field).ok_or_else(|| {
