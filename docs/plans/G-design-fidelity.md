@@ -47,6 +47,22 @@ control strip was clipped at its right edge with all panels open, so complete co
 reachability and the populated Result-state comparison still need explicit acceptance.
 No Assistant request or paid evaluation was submitted during this inspection.
 
+### Current source and scenario references
+
+These references were inspected at `3a3e1e4`; scenario existence is not a substitute for
+side-by-side visual acceptance.
+
+| Delivered PR | Source and committed scenario | Remaining visual comparison |
+| --- | --- | --- |
+| #237 Model saved state | `src/ui/ModelName.tsx`, `src/store.ts`, `src/host.ts`; `e2e/model-document.spec.ts` | Long names, focus/truncation and top-bar density with both dirty dot and autosave status. |
+| #221 Pressure preview | `src/ui/PressurePreview.tsx`, `src/ui/SchemaForm.tsx`; `e2e/pressure-preview.spec.ts` | The separate scalar pressure-times-area row versus the reference's compact quantity echo; wrapping and loading/error states at 308 px. |
+| #227 Script editor | `src/ui/ScriptEditor.tsx`, `src/ui/Bottom.tsx`; `e2e/script-editor.spec.ts` | Reference syntax palette, 252 px panel, 214 px rail, gutter and error/output composition. |
+| #356 Assistant surface | `src/ai/AssistantPanel.tsx`, `src/ai/assistant.css`, `src/ui/Results.tsx`; `e2e/assistant.spec.ts` | Populated drawer, card/composer density and suggestion wrapping; empty-drawer placement alone does not accept these. |
+| #223 Simplex selection | `src/ui/SchemaForm.tsx`, `src/ui/Tree.tsx`, engine `command.rs`; `e2e/mesh-warning.spec.ts` | Discoverability of family/order choices and warning layout. The shipped quadratic fix preserves simplex family; the reference's Hex20 wording is not literal acceptance for Tet10. Free 3D tetrahedral meshing remains #22. |
+
+App paths above are relative to `packages/app/`. Engine `command.rs` is
+`crates/engine/src/command.rs`.
+
 ## Evidence key
 
 - **Merged + rendered** — the implementation is in `09a1530`, and a committed Chromium scenario
