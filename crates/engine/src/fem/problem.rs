@@ -14,6 +14,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::element::{ElementCtx, Material};
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::Load;
+use crate::fem::section::Section;
 use crate::mesh::ResolvedSet;
 use crate::model::Idealisation;
 
@@ -71,6 +72,10 @@ pub struct Problem<'a> {
     /// Per block: index into `materials`, or `None` — which `checks::all` reports.
     pub material_of_block: Vec<Option<usize>>,
     pub materials: Vec<Material>,
+    /// Per block: index into `sections`, or `None`. A line block without one is reported by
+    /// `checks::missing_sections`; a solid block never needs one.
+    pub section_of_block: Vec<Option<usize>>,
+    pub sections: Vec<Section>,
     pub idealisation: Idealisation,
     pub formulation: Formulation,
     pub constraints: Vec<Constraint>,
@@ -129,6 +134,7 @@ impl Problem<'_> {
         Ok(ElementCtx {
             coords,
             material: self.material_of(elem)?,
+            section: self.section_of_block[self.mesh.block_of(elem).0].map(|i| &self.sections[i]),
             idealisation: self.idealisation.clone(),
             formulation: self.formulation,
             temperature: self.temperature.as_ref().map(|_| temperature),
@@ -159,6 +165,13 @@ pub fn no_material(body: &str) -> Error {
     Error::new(ErrorCode::ModelNoMaterial, format!("body '{body}' has no material"))
         .at(format!("body '{body}'"))
         .suggest("material.assign")
+}
+
+/// The `model.no-section` error for one Body of line members.
+pub fn no_section(body: &str) -> Error {
+    Error::new(ErrorCode::ModelNoSection, format!("body '{body}' is made of line members and has no section"))
+        .at(format!("body '{body}'"))
+        .suggest("section.add, then section.assign")
 }
 
 /// The `set.empty` error for a Set a Constraint or Load names.
