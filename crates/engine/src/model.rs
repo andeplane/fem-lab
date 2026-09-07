@@ -7,7 +7,7 @@ use femlab_geometry::{FacePredicate, QuadBlock, RefineBox, RegionPredicate, Shap
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::command::{Axis, Dof, Field, Formulation, ObjectKind, Procedure};
+use crate::command::{Axis, CoupleKind, Dof, Field, Formulation, ObjectKind, Procedure};
 use crate::fem::section::Section;
 use crate::units::UnitSet;
 
@@ -95,6 +95,17 @@ pub enum SetSource {
     },
 }
 
+/// A lumped mass at a point: a node of its own with no element around it, and a node Set of its
+/// own name so Constraints, Loads and Queries can target it by that name. `at` is in metres and
+/// `mass` in kilograms.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PointMass {
+    pub name: String,
+    pub at: [f64; 3],
+    pub mass: f64,
+}
+
 /// A named Set from a predicate (auto face Sets are not stored: they follow the shapes).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -149,6 +160,14 @@ pub enum ConstraintKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tol: Option<f64>,
     },
+    /// A point mass attached to the Constraint's own face Set: `distributed` makes the point
+    /// follow the face's weighted mean displacement, `rigid` makes every node of the face
+    /// follow the point. `point` names a [`PointMass`]; the field is not called `kind` because
+    /// that tag already names the Constraint kind itself.
+    Couple {
+        point: String,
+        coupling: CoupleKind,
+    },
 }
 
 /// A Constraint on a Set.
@@ -166,8 +185,13 @@ impl Constraint {
     /// accessor, so a rename or an in-use check can never miss the second one.
     pub fn sets(&self) -> Vec<&str> {
         let mut out = vec![self.on.as_str()];
-        if let ConstraintKind::Bonded { master, .. } = &self.kind {
-            out.push(master);
+        match &self.kind {
+            ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Couple { point, .. } => out.push(point),
+            ConstraintKind::Fix { .. }
+            | ConstraintKind::Prescribe { .. }
+            | ConstraintKind::Symmetry { .. }
+            | ConstraintKind::Temperature { .. } => {}
         }
         out
     }
@@ -175,8 +199,13 @@ impl Constraint {
     /// The same Sets, for a rename to rewrite in place.
     pub fn sets_mut(&mut self) -> Vec<&mut String> {
         let mut out = vec![&mut self.on];
-        if let ConstraintKind::Bonded { master, .. } = &mut self.kind {
-            out.push(master);
+        match &mut self.kind {
+            ConstraintKind::Bonded { master, .. } => out.push(master),
+            ConstraintKind::Couple { point, .. } => out.push(point),
+            ConstraintKind::Fix { .. }
+            | ConstraintKind::Prescribe { .. }
+            | ConstraintKind::Symmetry { .. }
+            | ConstraintKind::Temperature { .. } => {}
         }
         out
     }
@@ -422,6 +451,10 @@ pub struct Model {
     pub bodies: Vec<Body>,
     #[serde(default)]
     pub cuts: Vec<Cut>,
+    /// Lumped point masses, each also a node Set of its own name. Omitted when empty, so a
+    /// Model without one hashes exactly as it did before point masses existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<PointMass>,
     #[serde(default)]
     pub sets: Vec<NamedSet>,
     #[serde(default)]
@@ -456,6 +489,7 @@ impl Model {
             idealisation: Idealisation::Solid3d,
             bodies: vec![],
             cuts: vec![],
+            points: vec![],
             sets: vec![],
             materials: vec![],
             sections: vec![],
@@ -470,6 +504,9 @@ impl Model {
 
     pub fn body(&self, name: &str) -> Option<&Body> {
         self.bodies.iter().find(|b| b.name == name)
+    }
+    pub fn point(&self, name: &str) -> Option<&PointMass> {
+        self.points.iter().find(|p| p.name == name)
     }
     pub fn material(&self, name: &str) -> Option<&Material> {
         self.materials.iter().find(|m| m.name == name)
@@ -545,7 +582,7 @@ impl Model {
     /// Does a Set reference resolve to something the Model knows (a named Set, or an auto face
     /// `<body-or-cut>.<tag>`)? Tags are validated against the shape when meshing.
     pub fn knows_set(&self, set: &str) -> bool {
-        if self.sets.iter().any(|s| s.name == set) {
+        if self.sets.iter().any(|s| s.name == set) || self.points.iter().any(|p| p.name == set) {
             return true;
         }
         match set.rsplit_once('.') {

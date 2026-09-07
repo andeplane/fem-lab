@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use femlab_engine::command::Formulation;
-use femlab_engine::command::{Field, SectionSpec, Solver};
+use femlab_engine::command::{CoupleKind, Field, SectionSpec, Solver};
 use femlab_engine::fem::assembly::{
     assemble_stiffness, expand, pattern, pattern_coupled, reactions, reduce, resolve, Assembled, Csr, Pattern,
     ResolvedConstraints,
@@ -24,7 +24,7 @@ use femlab_engine::fem::material::{
     MaterialOut, VOIGT,
 };
 use femlab_engine::fem::mpc::{self, Mpc, Row};
-use femlab_engine::fem::problem::{Constraint, Coupling, Problem};
+use femlab_engine::fem::problem::{Constraint, Coupling, PointMass, Problem};
 use femlab_engine::fem::quadrature::{
     gauss_legendre, Rule, HEX_2X2X2, HEX_3X3X3, QUAD_2X2, QUAD_3X3, TET_1, TET_4, TRI_1, TRI_3,
 };
@@ -39,8 +39,9 @@ use femlab_engine::model::Idealisation;
 use femlab_engine::par::Pool;
 use femlab_engine::post::convergence::{observed_rate, richardson};
 use femlab_engine::post::probe::{path, probe, probe_checked};
-use femlab_engine::post::stress::{average_at_nodes, principal, stress_gp, von_mises};
+use femlab_engine::post::stress::{average_at_nodes, gp_to_nodes, principal, stress_gp, von_mises};
 use femlab_engine::post::{extremes, reactions_per_constraint, FieldData, Per};
+use femlab_engine::procedure::modal::assemble_mass;
 use femlab_engine::procedure::nonlinear::{self, Converge as NlConverge, Options as NlOptions};
 use femlab_engine::procedure::{self, heat, NonlinearControl, Step, StepResult};
 use femlab_engine::solve::{cost_estimate, resolve_solver, solve, solver_name, SolveOptions};
@@ -2540,6 +2541,7 @@ fn problem<'a>(
         formulation: form,
         constraints,
         couplings: Vec::new(),
+        points: Vec::new(),
         loads: Vec::new(),
         temperature: None,
         heat: false,
@@ -4421,6 +4423,7 @@ fn heat_problem<'a>(
         formulation: Formulation::Full,
         constraints,
         couplings: Vec::new(),
+        points: Vec::new(),
         loads: Vec::new(),
         temperature: None,
         heat: true,
@@ -5185,6 +5188,7 @@ fn explicit_rejects_a_free_massless_body_in_a_mixed_model_and_recovers() {
         formulation: Formulation::Full,
         constraints: Vec::new(),
         couplings: Vec::new(),
+        points: Vec::new(),
         loads: Vec::new(),
         temperature: None,
         heat: false,
@@ -5245,6 +5249,7 @@ fn explicit_rejects_massless_stiffness_even_when_shared_nodes_have_mass() {
         formulation: Formulation::Full,
         constraints: Vec::new(),
         couplings: Vec::new(),
+        points: Vec::new(),
         loads: Vec::new(),
         temperature: None,
         heat: false,
@@ -6970,6 +6975,7 @@ fn a_line_body_without_a_section_is_reported_by_the_well_posedness_checks() {
         heat: false,
         heat_loads: Vec::new(),
         couplings: Vec::new(),
+        points: Vec::new(),
     };
     let errors = checks::all(&p);
     let missing = errors.iter().find(|e| e.code == ErrorCode::ModelNoSection).expect("model.no-section");
@@ -7756,6 +7762,326 @@ fn the_projection_clamps_a_node_that_falls_off_its_master_face() {
     let off = node_at(&slid, [1.0, 1.8, 0.0]);
     let row = sm.rows.iter().find(|r| r.slave == 3 * off).expect("the far node is tied");
     assert!(row.masters.len() <= 2, "a node past the triangle clamps onto an edge or a corner: {row:?}");
+}
+
+// -------------------------------------------------------- point masses and couplings (#67)
+
+/// A `geometry.addMass` node appended to a Mesh: one more coordinate and no element, which is
+/// what `mesh::build` makes of a `Model.points` entry.
+fn lugged(n: [usize; 3], at: [f64; 3]) -> (Mesh, u32) {
+    let mut mesh = cantilever_mesh(n, ElementKind::Hex8);
+    let node = mesh.n_nodes() as u32;
+    mesh.coords.extend_from_slice(&at);
+    (mesh, node)
+}
+
+/// The resolved point-mass Set the Mesh builder inserts alongside it.
+fn point_set(node: u32) -> ResolvedSet {
+    ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: vec![node], elems: Vec::new() }
+}
+
+/// The Sets of a lugged cantilever, with the point's own node Set called `lug`.
+fn lug_sets(mesh: &Mesh, node: u32) -> BTreeMap<String, ResolvedSet> {
+    let mut sets = sets_of(mesh);
+    sets.insert("lug".into(), point_set(node));
+    sets
+}
+
+fn lug(node: u32, mass: f64) -> Vec<PointMass> {
+    vec![PointMass { name: "lug".into(), node, mass }]
+}
+
+fn couple(name: &str, node: u32, faces: &str, kind: CoupleKind) -> Coupling {
+    Coupling::Couple { name: name.into(), point: "lug".into(), node, faces: faces.into(), kind }
+}
+
+fn clamped() -> Vec<Constraint> {
+    vec![fix("root", "xmin", [true, true, true], 0.0)]
+}
+
+/// `Σ r × R` of a reaction field: the moment the supports carry about the origin, which for a
+/// cantilever clamped at `x = 0` is the moment about its fixed face.
+fn reaction_moment(mesh: &Mesh, res: &StepResult) -> [f64; 3] {
+    let r = &res.fields[&Field::Reaction];
+    let mut m = [0.0; 3];
+    for node in 0..mesh.n_nodes() {
+        let x = mesh.node(node as u32);
+        let f = [r.data[node * 3], r.data[node * 3 + 1], r.data[node * 3 + 2]];
+        m[0] += x[1] * f[2] - x[2] * f[1];
+        m[1] += x[2] * f[0] - x[0] * f[2];
+        m[2] += x[0] * f[1] - x[1] * f[0];
+    }
+    m
+}
+
+/// F12: a distributed coupling is a load introduction and nothing else. A force at a point that
+/// is nowhere near the face arrives on that face as the traction of the same total: the
+/// deflection is the traction model's to the last digit, the resultant reaches the supports,
+/// and the reaction moment is the moment of the *face centroid* rather than of the point —
+/// which is what "the coupling transmits no moment" means in numbers.
+#[test]
+fn f5_a_distributed_coupling_introduces_exactly_the_traction_it_replaces() {
+    let force = -1.0e3;
+    let bodies = one_body();
+
+    // The traction oracle: the same total spread over the same face by the face quadrature.
+    let plain = cantilever_mesh([8, 2, 2], ElementKind::Hex8);
+    let plain_sets = sets_of(&plain);
+    let mut tp = problem(&plain, &plain_sets, &bodies, Idealisation::Solid3d, Formulation::Full, clamped());
+    let area = face_set_area(&tp, "xmax").expect("the tip face has an area");
+    tp.loads = vec![Load::Traction { faces: "xmax".into(), t: [0.0, 0.0, force / area] }];
+    let traction = run_step(&tp, &static_step(SolveOptions::default())).expect("the traction model solves");
+
+    // The coupled model: one node well outside the beam, carrying the whole force.
+    let (mesh, node) = lugged([8, 2, 2], [1.5, 0.2, 0.05]);
+    let sets = lug_sets(&mesh, node);
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, clamped());
+    p.points = lug(node, 3.0);
+    p.couplings = vec![couple("intro", node, "xmax", CoupleKind::Distributed)];
+    p.loads = vec![Load::NodalForce { nodes: "lug".into(), f: [0.0, 0.0, force] }];
+    assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
+    let coupled = run_step(&p, &static_step(SolveOptions::default())).expect("the coupled model solves");
+
+    let at = [1.0, 0.05, 0.05];
+    let want = probe(&plain, &traction.fields[&Field::Displacement], at).expect("inside").1[2];
+    let got = probe(&mesh, &coupled.fields[&Field::Displacement], at).expect("inside").1[2];
+    assert!((got - want).abs() <= 1e-10 * want.abs(), "coupled tip {got} against traction {want}");
+
+    // The point itself rides the face's weighted mean, which on this tip face is its centre.
+    let mean = coupled.fields[&Field::Displacement].data[node as usize * 3 + 2];
+    assert!((mean - want).abs() <= 0.05 * want.abs(), "the point follows the face: {mean} against {want}");
+
+    let total: f64 = coupled.reactions.iter().map(|(_, r)| r[2]).sum();
+    assert!((total + force).abs() <= 1e-10 * force.abs(), "reactions sum to {total}, not {}", -force);
+    let m = reaction_moment(&mesh, &coupled);
+    // −(x̄ × F) for x̄ the tip face centroid (1, 0.05, 0.05) and F = (0, 0, force). A coupling
+    // that carried the offset as a moment would put the arm at the point's x = 1.5 m instead.
+    let want_m = [-0.05 * force, force, 0.0];
+    for c in 0..3 {
+        let tol = 1e-10 * force.abs();
+        assert!((m[c] - want_m[c]).abs() <= tol, "reaction moment {c}: {} against {}", m[c], want_m[c]);
+    }
+}
+
+/// A rigid coupling is the opposite: every node of the face takes the point's displacement, so
+/// the face translates as one and cannot deform, and the beam is stiffer than the distributed
+/// model. The applied force still reaches the supports in full.
+///
+/// It does not carry the applied *moment*, and cannot: the subspace `u = T v` it restricts the
+/// model to holds no rigid rotation, because a rotation moves the face's nodes differently and
+/// this coupling forbids that. The constraint holds the face flat and supplies whatever moment
+/// that takes; `constraint.couple`'s doc string says so. What a user may rely on is the
+/// resultant, which is what this pins.
+#[test]
+fn a_rigid_coupling_makes_its_whole_face_move_as_one() {
+    let force = -1.0e3;
+    let (mesh, node) = lugged([8, 2, 2], [1.5, 0.2, 0.05]);
+    let sets = lug_sets(&mesh, node);
+    let bodies = one_body();
+    let mut tip = Vec::new();
+    for kind in [CoupleKind::Distributed, CoupleKind::Rigid] {
+        let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, clamped());
+        p.points = lug(node, 1.0);
+        p.couplings = vec![couple("intro", node, "xmax", kind)];
+        p.loads = vec![Load::NodalForce { nodes: "lug".into(), f: [0.0, 0.0, force] }];
+        let res = run_step(&p, &static_step(SolveOptions::default())).expect("both couplings solve");
+        let total: f64 = res.reactions.iter().map(|(_, r)| r[2]).sum();
+        assert!((total + force).abs() <= 1e-9 * force.abs(), "reactions sum to {total}, not {}", -force);
+        tip.push(res.fields[&Field::Displacement].clone());
+    }
+    let u = &tip[1];
+    let want: Vec<f64> = (0..3).map(|c| u.data[node as usize * 3 + c]).collect();
+    for &n in &sets["xmax"].nodes {
+        for (c, w) in want.iter().enumerate() {
+            let got = u.data[n as usize * 3 + c];
+            assert!((got - w).abs() <= 1e-12 * (1.0 + w.abs()), "node {n} component {c}: {got} against {w}");
+        }
+    }
+    let soft = tip[0].data[node as usize * 3 + 2];
+    assert!(want[2].abs() < soft.abs(), "a face held flat is stiffer: {} against {soft}", want[2]);
+}
+
+/// A point mass is mass and nothing else: it lands on its own node's translational diagonal,
+/// gravity finds it there, and it creates no new entry in the operator.
+#[test]
+fn a_point_mass_adds_only_mass_and_weight() {
+    let (mesh, node) = lugged([2, 1, 1], [1.5, 0.2, 0.05]);
+    let sets = lug_sets(&mesh, node);
+    let bodies = one_body();
+    let g = [0.0, 0.0, -9.81];
+    let beam_mass = DENSITY * 1.0 * 0.1 * 0.1;
+    let lump = 25.0;
+
+    let bare = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    let pat = pattern(&mesh, 3);
+    let m0 = assemble_mass(&bare, &pat, false).expect("the beam has a density");
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.points = lug(node, lump);
+    p.couplings = vec![couple("intro", node, "xmax", CoupleKind::Distributed)];
+    let m1 = assemble_mass(&p, &pat, false).expect("the beam has a density");
+
+    let (d0, d1) = (m0.diag(), m1.diag());
+    for (dof, (a, b)) in d0.iter().zip(&d1).enumerate() {
+        let want = if dof / 3 == node as usize { lump } else { 0.0 };
+        assert!((b - a - want).abs() <= 1e-9 * (1.0 + want), "dof {dof}: {a} became {b}");
+    }
+    assert_eq!(m0.col_idx, m1.col_idx, "a point mass creates no new operator entry");
+    // The sum of a consistent mass matrix, divided by the components, is the total mass.
+    let total: f64 = m1.vals.iter().sum::<f64>() / 3.0;
+    assert!((total - beam_mass - lump).abs() <= 1e-9 * (beam_mass + lump), "total mass {total}");
+
+    p.loads = vec![Load::Gravity { g }];
+    let mut f = vec![0.0; p.n_dofs()];
+    let applied = assemble_loads(&p, &mut f).expect("gravity assembles");
+    let want = (beam_mass + lump) * g[2];
+    assert!((applied.force[2] - want).abs() <= 1e-9 * want.abs(), "weight {} against {want}", applied.force[2]);
+    let at_point = f[node as usize * 3 + 2];
+    assert!((at_point - lump * g[2]).abs() <= 1e-12 * (lump * g[2]).abs(), "m g at the point: {at_point}");
+}
+
+/// A point mass nothing couples has mass and no stiffness at all, which is a singular system
+/// however it is solved; the checks name it before the factorisation meets it.
+#[test]
+fn an_unattached_point_mass_is_ill_posed() {
+    let (mesh, node) = lugged([1, 1, 1], [1.5, 0.2, 0.05]);
+    let sets = lug_sets(&mesh, node);
+    let bodies = one_body();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, clamped());
+    p.points = lug(node, 1.0);
+    let e = &checks::all(&p)[0];
+    assert_eq!(e.code, ErrorCode::ModelIllPosed);
+    assert!(e.cause.contains("point mass 'lug' is attached to nothing"), "{}", e.cause);
+    assert_eq!(e.where_.as_deref(), Some("point mass 'lug'"));
+    assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("constraint.couple")));
+    // A bonded contact attaches Bodies, never a point: only a coupling names one.
+    p.couplings = vec![tie("weld", "xmax", "xmin", 1.0)];
+    assert!(checks::all(&p).iter().any(|e| e.code == ErrorCode::ModelIllPosed));
+    p.couplings = vec![couple("intro", node, "xmax", CoupleKind::Distributed)];
+    assert!(checks::all(&p).is_empty(), "{:?}", checks::all(&p));
+}
+
+/// A coupling needs a face to weight, and says so when it is handed a node Set or one that is
+/// not on the Mesh at all. Two couplings that eliminate the same DOF are `constraint.dependent`,
+/// and the error calls them couplings rather than contacts.
+#[test]
+fn a_coupling_refuses_a_set_that_is_not_a_face() {
+    let (mesh, node) = lugged([1, 1, 1], [1.5, 0.2, 0.05]);
+    let sets = lug_sets(&mesh, node);
+    let bodies = one_body();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.points = lug(node, 1.0);
+    for kind in [CoupleKind::Distributed, CoupleKind::Rigid] {
+        p.couplings = vec![couple("intro", node, "lug", kind)];
+        let e = mpc::build(&p).expect_err("a node Set has no faces to weight");
+        assert_eq!(e.code, ErrorCode::Schema);
+        assert!(e.cause.contains("which has no faces"), "{}", e.cause);
+        assert_eq!(e.where_.as_deref(), Some("coupling 'intro'"));
+        assert!(e.suggestion.as_deref().is_some_and(|s| s.contains("face Set")));
+
+        p.couplings = vec![couple("intro", node, "nope", kind)];
+        let missing = mpc::build(&p).expect_err("an unknown Set");
+        assert_eq!(missing.code, ErrorCode::SetEmpty);
+        assert_eq!(missing.where_.as_deref(), Some("coupling 'intro'"));
+    }
+    p.couplings = vec![couple("a", node, "xmax", CoupleKind::Rigid), couple("b", node, "xmax", CoupleKind::Rigid)];
+    let twice = mpc::build(&p).expect_err("one face cannot be rigid to two points");
+    assert_eq!(twice.code, ErrorCode::ConstraintDependent);
+    assert_eq!(twice.where_.as_deref(), Some("coupling 'b'"));
+}
+
+/// A distributed coupling integrates its face, so it needs that Body's material like any other
+/// integral, and reports the same `model.no-material` when it is missing. A rigid coupling reads
+/// only the node list, so it does not.
+#[test]
+fn a_distributed_coupling_needs_the_material_of_the_face_it_weights() {
+    let (mesh, node) = lugged([1, 1, 1], [1.5, 0.2, 0.05]);
+    let sets = lug_sets(&mesh, node);
+    let bodies = one_body();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.material_of_block = vec![None];
+    p.points = lug(node, 1.0);
+    p.couplings = vec![couple("intro", node, "xmax", CoupleKind::Distributed)];
+    let e = mpc::build(&p).expect_err("the face integral has no material to read");
+    assert_eq!(e.code, ErrorCode::ModelNoMaterial);
+    assert!(e.cause.contains("body 'bar'"), "{}", e.cause);
+    p.couplings = vec![couple("intro", node, "xmax", CoupleKind::Rigid)];
+    assert!(mpc::build(&p).is_ok(), "a rigid coupling reads node numbers, not the material");
+}
+
+/// The weights a distributed coupling uses are the face's own `∫ N dS`: a partition of unity,
+/// and on a flat linear face the quarter-cell areas each node owns.
+#[test]
+fn distributed_weights_are_the_faces_own_lumped_areas() {
+    let (mesh, node) = lugged([1, 2, 2], [2.0, 0.0, 0.0]);
+    let sets = lug_sets(&mesh, node);
+    let bodies = one_body();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    p.points = lug(node, 1.0);
+    p.couplings = vec![couple("intro", node, "xmax", CoupleKind::Distributed)];
+    let m = mpc::build(&p).expect("the tip face weights");
+    assert_eq!(m.rows.len(), 3, "one row per component of the point");
+    let corner = node_at(&mesh, [1.0, 0.0, 0.0]);
+    let centre = node_at(&mesh, [1.0, 0.05, 0.05]);
+    for (c, row) in m.rows.iter().enumerate() {
+        assert_eq!(row.slave, node * 3 + c as u32);
+        let sum: f64 = row.masters.iter().map(|&(_, a)| a).sum();
+        assert!((sum - 1.0).abs() < 1e-14, "a partition of unity: {sum}");
+        let weight = |n: u32| row.masters.iter().find(|&&(d, _)| d / 3 == n).expect("a face node").1;
+        // Four quad4 faces over a 0.1 m square: a corner owns one quarter of one cell, and the
+        // centre node one quarter of each of the four.
+        assert!((weight(corner) - 0.0625).abs() < 1e-14, "corner weight {}", weight(corner));
+        assert!((weight(centre) - 0.25).abs() < 1e-14, "centre weight {}", weight(centre));
+    }
+}
+
+/// A dominant lumped mass makes `M` nearly rank-one on the face it is coupled to, so without
+/// the iterated block being orthonormalised every subspace column collapses onto the same mode
+/// and `X̄ᵀMX̄` is singular — which used to abort the solve. Six modes on a tip mass six times
+/// the beam's own is that case. Benchmark F13 gates the frequency against Rayleigh's formula;
+/// what this pins is that the iteration survives at all, and that the mass is doing its work.
+#[test]
+fn a_dominant_tip_mass_does_not_collapse_the_subspace() {
+    let (mesh, node) = lugged([8, 2, 2], [1.0, 0.05, 0.05]);
+    let sets = lug_sets(&mesh, node);
+    let bodies = one_body();
+    let lump = 500.0;
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, clamped());
+    p.points = lug(node, lump);
+    p.couplings = vec![couple("attach", node, "xmax", CoupleKind::Distributed)];
+    let modal = Step::Modal { n_modes: 6, shift: None, solver: SolveOptions::default() };
+    let res = run_step(&p, &modal).expect("six modes of a tip-mass cantilever");
+    assert_eq!(res.frequencies.len(), 6);
+    assert!(res.frequencies.iter().all(|f| f.is_finite() && *f > 0.0), "{:?}", res.frequencies);
+    assert!(res.frequencies.windows(2).all(|w| w[0] <= w[1] + 1e-9), "ascending: {:?}", res.frequencies);
+    // The same model without the lump: six times the beam's own mass has to slow it right down.
+    let mut bare = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, clamped());
+    bare.points = lug(node, 0.0);
+    bare.couplings = vec![couple("attach", node, "xmax", CoupleKind::Distributed)];
+    let light = run_step(&bare, &modal).expect("the same beam without the mass");
+    assert!(
+        res.frequencies[0] * 4.0 < light.frequencies[0],
+        "{} against {} without the mass",
+        res.frequencies[0],
+        light.frequencies[0]
+    );
+}
+
+/// Stress is averaged over the elements meeting at a node, and a point mass has none: it takes
+/// zero rather than indexing an empty adjacency.
+#[test]
+fn stress_averaging_gives_a_point_mass_zero() {
+    let (mesh, node) = lugged([1, 1, 1], [1.5, 0.2, 0.05]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, Vec::new());
+    let u: Vec<f64> = (0..p.n_dofs()).map(|i| 1e-4 * ((i % 7) as f64 - 3.0)).collect();
+    let (gp, _) = stress_gp(&p, &u).expect("the block recovers");
+    let nodal = average_at_nodes(&p, &gp_to_nodes(&mesh, &gp));
+    assert_eq!(nodal.len(), mesh.n_nodes());
+    for c in 0..nodal.comps {
+        assert_eq!(nodal.data[node as usize * nodal.comps + c], 0.0, "no element, no stress");
+    }
+    assert!(nodal.data[..VOIGT].iter().any(|v| v.abs() > 0.0), "the block itself is stressed");
 }
 
 // ---------------------------------------------------------------------------------------------

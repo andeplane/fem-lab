@@ -13,7 +13,7 @@ use crate::error::{Error, ErrorCode};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::{face_set_area, face_set_polar_moment, Load};
-use crate::fem::problem::{Constraint, Coupling, Problem};
+use crate::fem::problem::{Constraint, Coupling, PointMass, Problem};
 use crate::mesh::{scale_mesher, BuiltMesh};
 use crate::model::{ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
@@ -93,6 +93,14 @@ fn build_problem_with_temperature<'a>(
     let (lo, hi) = built.mesh.bbox();
     let default_tol =
         DEFAULT_TOL * ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt();
+    // Every point mass of the Model is on every Mesh, in Model order, whatever the Step does
+    // with it; a Step that couples none of them is what `checks::uncoupled_points` refuses.
+    let points: Vec<PointMass> = model
+        .points
+        .iter()
+        .zip(&built.points)
+        .map(|(pm, &node)| PointMass { name: pm.name.clone(), node, mass: pm.mass })
+        .collect();
     let mut couplings = Vec::new();
     let mut constraints = Vec::with_capacity(step.constraints.len());
     for name in &step.constraints {
@@ -104,6 +112,17 @@ fn build_problem_with_temperature<'a>(
                     master: master.clone(),
                     slave: c.on.clone(),
                     tol: tol.unwrap_or(default_tol),
+                });
+                continue;
+            }
+            ConstraintKind::Couple { point, coupling } => {
+                let pm = points.iter().find(|pm| pm.name == *point).expect("constraint.couple validated the point");
+                couplings.push(Coupling::Couple {
+                    name: c.name.clone(),
+                    point: point.clone(),
+                    node: pm.node,
+                    faces: c.on.clone(),
+                    kind: *coupling,
                 });
                 continue;
             }
@@ -150,6 +169,7 @@ fn build_problem_with_temperature<'a>(
         formulation: model.mesh.as_ref().map_or_else(Default::default, |m| m.formulation),
         constraints,
         couplings,
+        points,
         loads: Vec::new(),
         temperature: None,
         heat,
