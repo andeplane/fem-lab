@@ -7649,8 +7649,10 @@ fn cyclic(axis: usize, angle: f64) -> Coupling {
 fn cyclic_rows_rotate_a_structural_dof_and_leave_a_heat_dof_alone() {
     let angle = 60.0_f64.to_radians();
     let (c, s) = (libm::cos(angle), libm::sin(angle));
+    // axis, from position, to position, the rotation about that axis
+    type Case = (usize, [f64; 3], [f64; 3], [[f64; 3]; 3]);
     #[rustfmt::skip]
-    let cases: [(usize, [f64; 3], [f64; 3], [[f64; 3]; 3]); 3] = [
+    let cases: [Case; 3] = [
         (0, [0.0, 1.0, 0.0], [0.0, c, s],  [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]]),
         (1, [1.0, 0.0, 0.0], [c, 0.0, -s], [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]]),
         (2, [1.0, 0.0, 0.0], [c, s, 0.0],  [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]]),
