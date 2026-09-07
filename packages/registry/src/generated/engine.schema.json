@@ -46,6 +46,23 @@
         ]
       },
       {
+        "description": "Change the Model's display name without resetting geometry, history or solved Results.\nA name-only edit is undoable and changes the full Model/Journal identity, but does not\nchange the Result-validity fingerprint. Whitespace-only names are rejected.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "cmd": {
+            "type": "string",
+            "const": "model.setName"
+          }
+        },
+        "required": [
+          "cmd",
+          "name"
+        ]
+      },
+      {
         "description": "Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,\nor axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs\nsolid bodies; mixing them makes the Model ill-posed.",
         "type": "object",
         "properties": {
@@ -3461,6 +3478,23 @@
             "required": [
               "cmd",
               "units"
+            ]
+          },
+          {
+            "description": "Change the Model's display name without resetting geometry, history or solved Results.\nA name-only edit is undoable and changes the full Model/Journal identity, but does not\nchange the Result-validity fingerprint. Whitespace-only names are rejected.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "model.setName"
+              }
+            },
+            "required": [
+              "cmd",
+              "name"
             ]
           },
           {
@@ -7125,6 +7159,23 @@
             "required": [
               "cmd",
               "units"
+            ]
+          },
+          {
+            "description": "Change the Model's display name without resetting geometry, history or solved Results.\nA name-only edit is undoable and changes the full Model/Journal identity, but does not\nchange the Result-validity fingerprint. Whitespace-only names are rejected.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "model.setName"
+              }
+            },
+            "required": [
+              "cmd",
+              "name"
             ]
           },
           {
@@ -13820,6 +13871,23 @@
             "required": [
               "cmd",
               "units"
+            ]
+          },
+          {
+            "description": "Change the Model's display name without resetting geometry, history or solved Results.\nA name-only edit is undoable and changes the full Model/Journal identity, but does not\nchange the Result-validity fingerprint. Whitespace-only names are rejected.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "cmd": {
+                "type": "string",
+                "const": "model.setName"
+              }
+            },
+            "required": [
+              "cmd",
+              "name"
             ]
           },
           {

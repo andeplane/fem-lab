@@ -9,7 +9,7 @@ import { engineChip } from '../capabilities';
 import { choiceOf, fieldChoices, formatNumber, legendTicks, showFieldArgs } from '../fields';
 import type { ViewerRef } from '../host';
 import { lazy } from '../lazy';
-import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, type ResizablePanel, type Store, type UiState } from '../store';
+import { clampPanelSize, PANEL_SIZE_LIMITS, solveLabel, stageOf, unsaved, type ResizablePanel, type Store, type UiState } from '../store';
 import { COLORMAPS, cssGradient } from '../viewer/colormap';
 import type { Viewer } from '../viewer/viewer';
 import { Bottom } from './Bottom';
@@ -18,6 +18,7 @@ import { ExportModal } from './Export';
 import { Examples, Palette, Projects, Start } from './Overlays';
 import { SchemaForm, type Query } from './SchemaForm';
 import { ModelTree } from './Tree';
+import { ModelName } from './ModelName';
 import { Cmd, useStore, type Dispatch } from './cmd';
 import { blockers, type Defs, shapeKinds } from './schema';
 
@@ -90,6 +91,7 @@ const MM = { length: 'mm', force: 'N', stress: 'MPa' };
 const SI = { length: 'm', force: 'N', stress: 'Pa' };
 
 function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
+  const dirty = useMemo(() => unsaved(s), [s.journal, s.savedJournal]);
   const list = blockers(s.model?.warnings ?? [], Boolean(s.model?.meshSettings), (s.model?.bodies.length ?? 0) > 0);
   const step = s.model?.steps[0]?.name ?? '';
   // Design state 7: while an error card stands, Solve is disabled and carries the same code.
@@ -103,7 +105,8 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
       <div class="logo">
         <i /> FEM Lab
       </div>
-      <ProjectName s={s} dispatch={dispatch} />
+      <ModelName name={s.model?.name ?? 'no model'} dirty={dirty} dispatch={dispatch} />
+      <ProjectSaved s={s} />
       <Cmd dispatch={dispatch} cmd="panel.toggle" class="palette-field" args={{ panel: 'palette', open: true }} title="Search commands (⌘K)">
         <span>Search commands or ask in plain words</span>
         <span class="key">⌘K</span>
@@ -164,41 +167,16 @@ function TopBar({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
   );
 }
 
-/**
- * The project name, editable in place (`project.rename` on blur or Enter), and the saved chip
- * next to it. There is no "unsaved" dot: the Journal is written into the open project after
- * every Command, so there is no unsaved state, and a dot that lies is worse than no dot.
- */
-function ProjectName({ s, dispatch }: { s: UiState; dispatch: Dispatch }) {
-  const [draft, setDraft] = useState<string | null>(null);
+/** Browser autosave status is separate from the document's explicit-save baseline. */
+function ProjectSaved({ s }: { s: UiState }) {
   const p = s.project;
-  const rename = (name: string): void => {
-    setDraft(null);
-    if (p && name.trim() && name.trim() !== p.name) void dispatch({ cmd: 'project.rename', name: name.trim() }).catch(() => undefined);
-  };
-  const chip = !p ? '' : p.autosave === false ? 'not saved — storage is off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  const tone = !p || p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
-  const name = draft ?? p?.name ?? s.model?.name ?? 'no model';
+  if (!p) return null;
+  const chip = p.autosave === false ? 'autosave off' : p.saving ? 'saving…' : `saved · ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const tone = p.autosave === false ? 'warn' : p.saving ? 'busy' : 'ok';
   return (
-    <span class="project-chip">
-      <input
-        class="mono model-name"
-        aria-label="project name"
-        data-cmd="project.rename"
-        disabled={p === null}
-        title={name}
-        value={name}
-        onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
-        onBlur={(e) => rename((e.target as HTMLInputElement).value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-          if (e.key === 'Escape') setDraft(null);
-        }}
-      />
-      <span class={`saved-chip ${tone}`} title={p ? `${chip} — ${p.commands} Commands in this browser` : 'no project yet'}>
-        <span class="dot" />
-        <span class="saved-text">{chip}</span>
-      </span>
+    <span class={`saved-chip ${tone}`} title={`${p.name}: ${chip} — ${p.commands} Commands in this browser`}>
+      <span class="dot" />
+      <span class="saved-text">{chip}</span>
     </span>
   );
 }

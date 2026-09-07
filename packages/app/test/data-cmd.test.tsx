@@ -598,15 +598,16 @@ describe('the shell', () => {
     ]);
   });
 
-  it('puts the project name and its saved state in the top bar, and Projects reopens the list', () => {
+  it('keeps the Model name distinct from browser-project autosave status', () => {
     const at = new Date('2026-09-06T12:04:00Z').getTime();
     const { root } = mount({ project: { id: 'a', name: 'corbel-ULS', at, createdAt: at, commands: 41, hash: 'h', thumbnail: null, saving: false, autosave: true } });
     const field = root.querySelector<HTMLInputElement>('input.model-name')!;
-    expect(field.value).toBe('corbel-ULS');
-    expect(field.getAttribute('data-cmd')).toBe('project.rename');
+    expect(field.value).toBe('demo');
+    expect(root.querySelector('.saved-chip')!.getAttribute('title')).toContain('corbel-ULS');
+    expect(field.getAttribute('data-cmd')).toBe('model.setName');
     expect(root.querySelector('.saved-chip')!.textContent).toContain('saved');
     const bar = [...root.querySelectorAll('.topbar [data-cmd]')].map((el) => el.getAttribute('data-cmd'));
-    expect(bar).toContain('project.rename');
+    expect(bar).toContain('model.setName');
     expect(bar).toContain('project.save');
     expect(bar).toContain('file.save');
   });
@@ -616,7 +617,7 @@ describe('the shell', () => {
     const meta = { id: 'a', name: 'x', at, createdAt: at, commands: 1, hash: null, thumbnail: null };
     expect(mount({ project: { ...meta, saving: true, autosave: true } }).root.querySelector('.saved-chip')!.textContent).toContain('saving…');
     await cleanupShells();
-    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('not saved — storage is off');
+    expect(mount({ project: { ...meta, saving: false, autosave: false } }).root.querySelector('.saved-chip')!.textContent).toContain('autosave off');
   });
 
   // Plan F · #43: the add chip is there with items in the group, and its menu is Commands.

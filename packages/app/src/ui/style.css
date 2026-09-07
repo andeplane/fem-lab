@@ -181,7 +181,7 @@ textarea:focus {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   padding: 0 12px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-panel);
@@ -338,10 +338,11 @@ textarea:focus {
 }
 
 /* Keep the complete desktop action set in the 46 px row. These tighter values preserve the
-   text labels while giving the flexible model and command fields the remaining room. */
-@media (min-width: 1180px) and (max-width: 1599px) {
+   text labels while giving the flexible model and command fields the remaining room.
+   Linux needs 1616 px at the wide settings; keep this allocation until 1700 px. */
+@media (min-width: 1180px) and (max-width: 1699px) {
   .topbar {
-    gap: 5px;
+    gap: 4px;
     padding-inline: 8px;
   }
   .logo {
@@ -353,8 +354,9 @@ textarea:focus {
     min-width: 48px;
     max-width: 140px;
   }
+  /* Leave room for the editable name, Save as file and Report without hiding actions. */
   .topbar > .tbutton {
-    padding-inline: 6px;
+    padding-inline: 4px;
   }
   .topbar > .chip {
     max-width: 164px;
@@ -375,7 +377,7 @@ textarea:focus {
    through 1299 px so the next breakpoint has space for every fixed-width action. */
 @media (min-width: 1180px) and (max-width: 1299px) {
   .topbar {
-    gap: 4px;
+    gap: 3px;
     padding-inline: 6px;
   }
   /* Two more actions than #137 measured (Projects, Save). The engine chip gives up their width
@@ -391,9 +393,6 @@ textarea:focus {
   }
   .palette-field {
     min-width: 80px;
-  }
-  .topbar > .tbutton {
-    padding-inline: 5px;
   }
   .topbar > .segmented button {
     padding-inline: 5px;
@@ -2402,6 +2401,17 @@ input.model-name:focus {
   }
 }
 
+/* The document name is an undoable engine edit; the dot tracks explicit saves, not autosave.
+   The wrapper is the top-bar flex item, so it, rather than only its input, has to give way. */
+.model-title { display: flex; flex: 0 1 196px; align-items: center; gap: 6px; min-width: 60px; max-width: 196px; overflow: hidden; }
+.topbar input.model-name { flex: 1 1 auto; width: auto; min-width: 0; max-width: 190px; padding: 3px 0; border: 0; background: transparent; color: var(--text-high); }
+.unsaved-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #d9a441; }
+@media (min-width: 1180px) and (max-width: 1699px) {
+  .model-title { flex-basis: 140px; max-width: 140px; }
+}
+@media (min-width: 1180px) and (max-width: 1299px) {
+  .model-title { flex-basis: 96px; max-width: 96px; }
+}
 .palette-intent { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-divider); }
 .palette-intent button { color: var(--accent); border: 1px solid var(--border-panel); padding: 4px 8px; border-radius: 3px; }
 .palette-intent .faint { font-size: 11px; }

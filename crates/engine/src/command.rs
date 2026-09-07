@@ -703,6 +703,12 @@ pub enum Command {
     #[serde(rename = "model.setUnits", rename_all = "camelCase")]
     ModelSetUnits { units: UnitSet },
 
+    /// Change the Model's display name without resetting geometry, history or solved Results.
+    /// A name-only edit is undoable and changes the full Model/Journal identity, but does not
+    /// change the Result-validity fingerprint. Whitespace-only names are rejected.
+    #[serde(rename = "model.setName", rename_all = "camelCase")]
+    ModelSetName { name: String },
+
     /// Set the idealisation: 3D solids (default), plane stress with a thickness, plane strain,
     /// or axisymmetric (x = radius, y = axis). 2D idealisations need Sheet bodies and 3D needs
     /// solid bodies; mixing them makes the Model ill-posed.
