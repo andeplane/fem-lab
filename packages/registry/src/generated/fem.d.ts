@@ -282,8 +282,19 @@ export interface Fem {
      * temperature field and turns it into thermal stress. The remaining fields belong to one
      * procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
      * `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-     * `dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
-     * `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+     * `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
+     * `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
+     * implicit, and `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well. An
+     * implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
+     * (default 0, Newmark average acceleration: second order, unconditionally stable and
+     * energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
+     * Rayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal
+     * damping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).
+     * Its `amplitude` scales the Loads only and is refused with a non-zero prescribed
+     * displacement; its initial acceleration is solved from the loads at t = 0, so a suddenly
+     * applied load is exactly that. Its reactions include the inertia and damping forces and
+     * its applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the
+     * scalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and
      * prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
      * defaulting to the whole of it, so a table written in step fraction works unchanged) and
      * keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never

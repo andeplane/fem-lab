@@ -146,6 +146,7 @@ dims! {
     Stress, "stress", "210 GPa", [-1,1,-2,0];
     Density, "density", "7850 kg/m^3", [-3,1,0,0];
     Acceleration, "acceleration", "9.81 m/s^2", [1,0,-2,0];
+    Velocity, "velocity", "1 m/s", [1,0,-1,0];
     ThermalExpansion, "thermal_expansion", "1.2e-5 1/K", [0,0,0,-1];
     Conductivity, "conductivity", "50 W/(m K)", [1,1,-3,-1];
     SpecificHeat, "specific_heat", "460 J/(kg K)", [2,0,-2,-1];

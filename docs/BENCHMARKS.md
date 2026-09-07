@@ -82,6 +82,10 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 | tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
 | tie-two-block-patch | green | 7/7 | 0.009524 | 0.009524 | 0.00 % |
+| truss-axial-patch | green | 8/8 | 1 | 1 | 0.00 % |
+| truss-space-determinate | green | 5/5 | -0.390625 | -0.390625 | 0.00 % |
+| truss-thermal-restrained | green | 5/5 | -240 | -240 | 0.00 % |
+| truss-two-bar-planar | green | 5/5 | -0.1 | -0.1 | 0.00 % |
 
 <!-- bench:end -->
 
@@ -493,7 +497,10 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F1 | Linear momentum conservation, free body, 2000 explicit steps | Δp = 0, energy drift = 0 | 1e-6 | explicit integrator symmetry (Blast Wall's test) | engine test |
 | F2 | Critical time step | 0.9 Δt_crit stable for 5000 steps, 1.25 Δt_crit is `explicit.unstable` | as stated | Δt estimator really is critical | engine test |
 | F2b | Free fall under gravity, Command form | u = g t²/2 exactly (leapfrog is exact for a constant acceleration) | 0.5 % | the whole explicit path from a Journal | green |
-| F3 | SDOF and cantilever transient under step load | closed form | 1 % | Newmark/HHT (phase 6) | |
+| F2c | Free fall thrown with an initial velocity, through the explicit and the implicit procedure (#348) | u = v₀t + gt²/2, exact for both integrators under a constant acceleration | 1e-6 rel | `initialVelocity` reaches both integrators; the implicit a₀ solve gives g at every node | green + engine test |
+| F3 | Single degree of freedom under a step load, undamped and at ζ = 0.05: one hex8, `xmin` clamped, `xmax` held flat, so the four free DOFs move as one and k* = MA/L, m* = ρAL/3 are closed form (#72) | (a) u(t) = (f/k)[1 − e^{−ζωt}(cos ω_d t + (ζω/ω_d) sin ω_d t)]; (b) Newmark's three-term displacement recurrence and the scalar HHT acceleration form, hand-written; (c) ½vᵀMv + ½uᵀKu conserved at α = 0, dissipated every period at α = −0.05; (d) the root reaction −kx + (m/2)a + (αR m/2 − βR k)v, inertia included | (a) 1 %; (b) 1e-12; (c) 1e-12; (d) 1e-9 | Newmark/HHT-α: coefficients, predictor, corrector, a₀, Rayleigh damping, dynamic reactions and balance | green + engine test |
+| F3b | Benchmark B4's cantilever under a step tip load, α = 0 and −0.05 | first-mode period from B4's 41.91 Hz; peak tip deflection twice B1's static value; E − fᵀu conserved at α = 0 | 3 % period, 5 % peak; HHT within 1 % of the Newmark period, dissipating ≥ 15 % of the residual mesh-mode energy | multi-DOF Newmark/HHT, numerical damping of the high modes | green + engine test |
+| F3c | Fixed–free bar suddenly loaded at its end, ν = 0, three (mesh, Δt) refinements | u_tip(t) = (PL/EA)[1 − (8/π²)Σ_{n odd} n⁻² cos(nπct/2L)], c = √(E/ρ), an independent Fourier series; plus the observed Δt convergence rate on one mesh against a 64× finer reference | 2 % at every refinement, errors decreasing; rate > 1.9 | wave propagation through the consistent mass, second order in time | green + engine test |
 | F4 | Two-block tie / bonded contact patch test, matched meshes | uniform tension: σ constant across the tie, u exactly the linear field, Σ reactions = applied | 1e-8 | bonded contact between Bodies (#61) | green |
 | F4b | The same patch test with the slave block meshed at half the master's size | as F4, but every pairing is a node-to-face projection with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | engine test |
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |

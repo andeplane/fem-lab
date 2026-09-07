@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::units::{
-    Acceleration, Conductivity, Density, Force, HeatFlux, HeatSource, HeatTransfer, Length, SpecificHeat, Stress,
-    Temperature, ThermalExpansion, Time, UnitSet, Q,
+    Acceleration, Conductivity, Density, Force, Frequency, HeatFlux, HeatSource, HeatTransfer, Length, SpecificHeat,
+    Stress, Temperature, ThermalExpansion, Time, UnitSet, Velocity, Q,
 };
 
 /// A named Set: an auto face name (`beam.xmin`), a `geometry.nameFace` or `geometry.nameRegion` name.
@@ -103,6 +103,20 @@ pub enum Procedure {
     HeatTransient,
     /// Explicit dynamics by central differences; needs `rho`, `tEnd` and a `dtFactor` below 1.
     Explicit,
+    /// Implicit dynamics by the HHT-α method (Newmark average acceleration at `alpha: 0`) on
+    /// the consistent mass; needs `rho`, `dt` and `tEnd`, and reads `alpha`, `rayleighAlpha`,
+    /// `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery`.
+    Implicit,
+}
+
+/// A uniform initial velocity on one Set of nodes, for a dynamic Step that does not start
+/// from rest. Constrained components are held at zero whatever this says; two entries that
+/// give one node different velocities are `model.ill-posed`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialVelocitySpec {
+    pub on: SetRef,
+    pub value: [Q<Velocity>; 3],
 }
 
 /// A scalar `g(t)` that scales the driven part of a Step over time: every prescribed
@@ -1058,8 +1072,19 @@ pub enum Command {
     /// temperature field and turns it into thermal stress. The remaining fields belong to one
     /// procedure each and are ignored by the others: `nModes` and `shift` to modal, `dt`,
     /// `tEnd`, `theta`, `initial`, `amplitude` and `outputEvery` to heat-transient, `tEnd`,
-    /// `dtFactor` and `outputEvery` to explicit, and `amplitude`, `dt`, `tEnd` and
-    /// `outputEvery` to static as well. An `amplitude` on a static Step ramps its Loads and
+    /// `dtFactor`, `initialVelocity` and `outputEvery` to explicit, `dt`, `tEnd`, `alpha`,
+    /// `rayleighAlpha`, `rayleighBeta`, `initialVelocity`, `amplitude` and `outputEvery` to
+    /// implicit, and `amplitude`, `dt`, `tEnd` and `outputEvery` to static as well. An
+    /// implicit Step integrates `M a + C v + K u = f` by HHT-α with `alpha` in [-1/3, 0]
+    /// (default 0, Newmark average acceleration: second order, unconditionally stable and
+    /// energy-conserving; -0.05 adds numerical damping of the mesh-frequency ringing) and
+    /// Rayleigh damping `C = rayleighAlpha·M + rayleighBeta·K` (both default 0; a modal
+    /// damping ratio ζ at circular frequency ω is `rayleighAlpha/(2ω) + rayleighBeta·ω/2`).
+    /// Its `amplitude` scales the Loads only and is refused with a non-zero prescribed
+    /// displacement; its initial acceleration is solved from the loads at t = 0, so a suddenly
+    /// applied load is exactly that. Its reactions include the inertia and damping forces and
+    /// its applied totals are the d'Alembert force `f - M a - C v`, so the balance closes; the
+    /// scalars `load_total_*` keep the plain load. An `amplitude` on a static Step ramps its Loads and
     /// prescribed displacements over increments from 0 to `tEnd` (default "1 s", with `dt`
     /// defaulting to the whole of it, so a table written in step fraction works unchanged) and
     /// keeps every `outputEvery`-th increment as a retained frame; a temperature Load is never
@@ -1106,6 +1131,23 @@ pub enum Command {
         amplitude: Option<AmplitudeSpec>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initial: Option<Q<Temperature>>,
+        /// HHT-α numerical damping of an implicit Step, in [-1/3, 0]. Default 0 (Newmark
+        /// average acceleration, no numerical damping); -0.05 is the usual choice when the
+        /// mesh-frequency ringing of a sudden load should die out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alpha: Option<f64>,
+        /// Mass-proportional Rayleigh damping coefficient of an implicit Step, `C = a·M + b·K`.
+        /// Default "0 Hz"; must be non-negative.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rayleigh_alpha: Option<Q<Frequency>>,
+        /// Stiffness-proportional Rayleigh damping coefficient of an implicit Step. Default
+        /// "0 s"; must be non-negative.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rayleigh_beta: Option<Q<Time>>,
+        /// Initial velocities of an explicit or implicit Step, one uniform vector per Set of
+        /// nodes; nodes in no entry start from rest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_velocity: Option<Vec<InitialVelocitySpec>>,
         /// Convergence tolerance for a Step that must iterate: the relative sup-norm change of
         /// the solution between two passes. Default 1e-6.
         #[serde(default, skip_serializing_if = "Option::is_none")]
