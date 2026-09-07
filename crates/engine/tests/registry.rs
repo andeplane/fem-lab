@@ -7513,7 +7513,8 @@ fn assert_implicit_source(e: &mut Engine, n: u32, order: u32, swept: bool) -> f6
     // uses the prescribed volume (2*1*0.25 or 2*1*3), not the mesher's measured volume.
     let problem = femlab_engine::solve_run::build_problem(&model, built, model.step("conduct").unwrap()).unwrap();
     let pattern = femlab_engine::fem::assembly::pattern(&built.mesh, 1);
-    let system = femlab_engine::procedure::heat::assemble(&problem, &pattern).unwrap();
+    let system =
+        femlab_engine::procedure::heat::assemble(&problem, &pattern, &femlab_engine::fem::mpc::Mpc::none()).unwrap();
     let watts = if swept { 600.0 } else { 50.0 };
     assert!((system.applied - watts).abs() < 1e-9);
     let x = 1.0 / n as f64;
@@ -8133,6 +8134,119 @@ fn a_step_that_lists_a_tie_solves_the_assembly_as_one_part() {
     assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
     assert_eq!(r.warnings[0].code, "contact.gap");
     assert_eq!(r.warnings[0].where_.as_deref(), Some("contact 'weld'"));
+}
+
+/// Two steel bars of different conductivity, meeting at x = 400 mm, tied by `contact.add` and
+/// held at 300 K / 400 K: the fixture `contact.thermal` overrides in the tests below.
+fn two_bars_heat(e: &mut Engine) {
+    ok(e, r#"{"cmd":"model.new","name":"thermal-contact"}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"a","size":["400 mm","100 mm","100 mm"]}"#);
+    ok(e, r#"{"cmd":"geometry.addBox","name":"b","size":["600 mm","100 mm","100 mm"],"at":["400 mm","0 mm","0 mm"]}"#);
+    ok(e, r#"{"cmd":"material.add","name":"metalA","E":"210 GPa","nu":0.3,"k":"10 W/(m K)"}"#);
+    ok(e, r#"{"cmd":"material.add","name":"metalB","E":"210 GPa","nu":0.3,"k":"20 W/(m K)"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"metalA","bodies":["a"]}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"metalB","bodies":["b"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"100 mm"},"order":1}"#);
+    ok(e, r#"{"cmd":"contact.add","name":"weld","master":"a.xmax","slave":"b.xmin","kind":"bonded"}"#);
+    ok(e, r#"{"cmd":"constraint.temperature","name":"cold","on":"a.xmin","value":"300 K"}"#);
+    ok(e, r#"{"cmd":"constraint.temperature","name":"hot","on":"b.xmax","value":"400 K"}"#);
+}
+
+/// `contact.thermal` validates `of` at dispatch (an unknown Constraint is `not-found`, a real one
+/// that is not bonded is `model.ill-posed`), is a Load like any other — removed by `load.remove`,
+/// held in use against `constraint.remove`, and following `model.rename` of the Constraint it
+/// names — and, named by a Step that also lists its contact, replaces the perfect thermal tie
+/// with the finite conductance F4e gates in `crates/engine/tests/fem.rs`.
+#[test]
+fn contact_thermal_validates_of_and_tracks_the_contact_it_names() {
+    let mut e = engine();
+    two_bars_heat(&mut e);
+
+    let missing = err(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"nope","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!(missing.code, ErrorCode::NotFound);
+
+    let not_bonded =
+        err(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"cold","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!(not_bonded.code, ErrorCode::ModelIllPosed);
+    assert_eq!(not_bonded.where_.as_deref(), Some("of"));
+
+    ok(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"weld","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!(e.model().loads.last().unwrap().name, "resist");
+
+    // The name and the conductance are validated like every other Load's, and each error says
+    // where it points.
+    let unnamed = err(&mut e, r#"{"cmd":"contact.thermal","name":"","of":"weld","conductance":"500 W/(m^2 K)"}"#);
+    assert_eq!((unnamed.code, unnamed.where_.as_deref()), (ErrorCode::Schema, Some("name")));
+    let wrong_dim = err(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"weld","conductance":"500 W"}"#);
+    assert_eq!((wrong_dim.code, wrong_dim.where_.as_deref()), (ErrorCode::UnitDimension, Some("conductance")));
+
+    // It lists among the loads with its own kind and a summary naming the contact, and its
+    // definition round-trips through the Command that made it.
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+    let row = m.loads.iter().find(|l| l.name == "resist").expect("listed");
+    assert_eq!(row.kind, "thermalContact");
+    assert_eq!(row.on, None, "a thermal contact names a Constraint, not a Set");
+    assert_eq!(row.summary, "h = 500 SI across 'weld'", "a derived dimension has no display unit of its own");
+    let before = e.model().clone();
+    let QueryResult::Definition(def) =
+        e.query(Query::Definition { kind: ObjectKind::Load, name: "resist".into() }).unwrap()
+    else {
+        panic!("definition")
+    };
+    ok(&mut e, &serde_json::to_string(&def.command).unwrap());
+    assert_eq!(e.model(), &before, "replaying the definition changes nothing");
+
+    // Renaming a Body or a Set leaves a thermal contact alone: it names a Constraint, not either
+    // of those, so it takes the same no-op arm Gravity and the Body-targeted loads do.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"a","to":"aa"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.nameFace","name":"dummy","of":"aa","where":{"kind":"normal","normal":[0,0,1]}}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"dummy","to":"dummy2"}"#);
+    assert_eq!(
+        e.model().loads.iter().find(|l| l.name == "resist").unwrap().kind,
+        femlab_engine::model::LoadKind::ThermalContact { of: "weld".into(), h: 500.0 }
+    );
+
+    // The Load is in use against the Constraint it names, exactly like a Step listing it.
+    let held = err(&mut e, r#"{"cmd":"constraint.remove","name":"weld"}"#);
+    assert_eq!(held.code, ErrorCode::InUse);
+    assert!(held.cause.contains("load 'resist'"), "{}", held.cause);
+    ok(&mut e, r#"{"cmd":"load.remove","name":"resist"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.remove","name":"weld"}"#);
+    ok(&mut e, r#"{"cmd":"contact.add","name":"weld","master":"aa.xmax","slave":"b.xmin","kind":"bonded"}"#);
+    ok(&mut e, r#"{"cmd":"contact.thermal","name":"resist","of":"weld","conductance":"500 W/(m^2 K)"}"#);
+
+    // A rename of the Constraint follows into the Load's `of`.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"constraint","name":"weld","to":"welded"}"#);
+    let still_held = err(&mut e, r#"{"cmd":"constraint.remove","name":"welded"}"#);
+    assert_eq!(still_held.code, ErrorCode::InUse);
+    // Renaming a Constraint the Load does not name leaves its `of` alone.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"constraint","name":"cold","to":"chill"}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"constraint","name":"chill","to":"cold"}"#);
+    assert_eq!(
+        e.model().loads.iter().find(|l| l.name == "resist").unwrap().kind,
+        femlab_engine::model::LoadKind::ThermalContact { of: "welded".into(), h: 500.0 }
+    );
+
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"conduct","procedure":"heat-steady","constraints":["cold","hot","welded"],"loads":["resist"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"conduct"}"#);
+    let r = result_of(&mut e, Some("conduct"));
+    assert!(r.balance.abs() < 1e-9, "the reactions balance: {}", r.balance);
+    assert!(r.warnings.is_empty(), "a matched, closed interface warns about nothing: {:?}", r.warnings);
+    // The cold end removes q * A = 13.888888888888888 W (see F4e); positive reactions remove
+    // heat, and the interface is not itself a support.
+    assert!((r.reactions[0].total[0].value - 13.888888888888888).abs() < 1e-6);
+    assert!(r.reactions.iter().all(|row| row.constraint != "resist" && row.constraint != "welded"));
+
+    // Naming a contact this Step does not list is `model.ill-posed`, not a panic.
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"bad","procedure":"heat-steady","constraints":["cold","hot"],"loads":["resist"]}"#,
+    );
+    let ill_posed = err(&mut e, r#"{"cmd":"solve.run","step":"bad"}"#);
+    assert_eq!(ill_posed.code, ErrorCode::ModelIllPosed);
 }
 
 /// One steel cantilever, meshed, with a point mass at its tip: the Model every point-mass test

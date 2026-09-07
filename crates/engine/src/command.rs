@@ -1223,6 +1223,14 @@ pub enum Command {
     #[serde(rename = "load.heatSource", rename_all = "camelCase")]
     LoadHeatSource { name: String, bodies: Vec<String>, q: Q<HeatSource> },
 
+    /// A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the
+    /// interface per unit area, so the two sides are no longer at the same temperature.
+    /// Assembled into the heat operator exactly as load.convection is, except that it couples
+    /// two temperature fields instead of one field to tInf. Naming a contact here replaces its
+    /// perfect thermal tie; the mechanical tie is unaffected.
+    #[serde(rename = "contact.thermal", rename_all = "camelCase")]
+    ContactThermal { name: String, of: String, conductance: Q<HeatTransfer> },
+
     /// Remove a Load. Fails with in-use if a Step still lists it; re-issue step.add without it
     /// first. Removing a load makes existing Results of that Step stale.
     #[serde(rename = "load.remove", rename_all = "camelCase")]

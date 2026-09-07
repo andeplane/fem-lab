@@ -24,6 +24,7 @@ The field schemas below preserve enums, bounds, alternatives and defaults. `$ref
 - [constraint.symmetry](#commands-constraint-symmetry)
 - [constraint.temperature](#commands-constraint-temperature)
 - [contact.add](#commands-contact-add)
+- [contact.thermal](#commands-contact-thermal)
 - [geometry.add](#commands-geometry-add)
 - [geometry.addBox](#commands-geometry-addBox)
 - [geometry.addLine](#commands-geometry-addLine)
@@ -187,6 +188,23 @@ between Bodies that share no element, which query.cost does not count.
 | kind | yes | <code>{"$ref":"#/$defs/ContactKind"}</code> |  |
 | tol | no | <code>{"anyOf":[{"$ref":"#/$defs/Q_length"},{"type":"null"}]}</code> |  |
 | cmd | yes | <code>{"type":"string","const":"contact.add"}</code> |  |
+
+<a id="commands-contact-thermal"></a>
+
+### contact.thermal
+
+A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the
+interface per unit area, so the two sides are no longer at the same temperature.
+Assembled into the heat operator exactly as load.convection is, except that it couples
+two temperature fields instead of one field to tInf. Naming a contact here replaces its
+perfect thermal tie; the mechanical tie is unaffected.
+
+| Argument | Required | Schema | Description |
+| --- | --- | --- | --- |
+| name | yes | <code>{"type":"string"}</code> |  |
+| of | yes | <code>{"type":"string"}</code> |  |
+| conductance | yes | <code>{"$ref":"#/$defs/Q_heat_transfer_coefficient"}</code> |  |
+| cmd | yes | <code>{"type":"string","const":"contact.thermal"}</code> |  |
 
 <a id="commands-geometry-add"></a>
 
@@ -4812,6 +4830,31 @@ Expand a definition to inspect its complete schema. Definition names are local t
         "name",
         "bodies",
         "q"
+      ]
+    },
+    {
+      "description": "A finite conductance across a bonded pair: heat h_c·(T_slave − T_master) crosses the\ninterface per unit area, so the two sides are no longer at the same temperature.\nAssembled into the heat operator exactly as load.convection is, except that it couples\ntwo temperature fields instead of one field to tInf. Naming a contact here replaces its\nperfect thermal tie; the mechanical tie is unaffected.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "of": {
+          "type": "string"
+        },
+        "conductance": {
+          "$ref": "#/$defs/Q_heat_transfer_coefficient"
+        },
+        "cmd": {
+          "type": "string",
+          "const": "contact.thermal"
+        }
+      },
+      "required": [
+        "cmd",
+        "name",
+        "of",
+        "conductance"
       ]
     },
     {

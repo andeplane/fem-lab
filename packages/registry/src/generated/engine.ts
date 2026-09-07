@@ -664,6 +664,20 @@ export type Command =
     }
   | {
       name: string;
+      of: string;
+      /**
+       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       */
+      conductance:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "contact.thermal";
+    }
+  | {
+      name: string;
       cmd: "load.remove";
     }
   | {
@@ -2802,6 +2816,20 @@ export type ModelFile_Command =
     }
   | {
       name: string;
+      of: string;
+      /**
+       * A heat transfer coefficient with unit, e.g. "25 W/(m^2 K)". Any unit of the right dimension is accepted.
+       */
+      conductance:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      cmd: "contact.thermal";
+    }
+  | {
+      name: string;
       cmd: "load.remove";
     }
   | {
@@ -3673,6 +3701,11 @@ export type Load1 =
       bodies: string[];
       q: number;
       kind: "heatSource";
+    }
+  | {
+      of: string;
+      h: number;
+      kind: "thermalContact";
     };
 /**
  * A time function scaling the prescribed temperatures of a transient Step, SI.

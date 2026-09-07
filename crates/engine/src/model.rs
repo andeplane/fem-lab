@@ -195,15 +195,49 @@ impl Constraint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum LoadKind {
-    Pressure { on: String, value: f64 },
-    Traction { on: String, total: [f64; 3] },
-    Force { on: String, total: [f64; 3] },
-    Gravity { g: [f64; 3] },
-    Temperature { bodies: Vec<String>, value: f64, reference: f64 },
-    Convection { on: String, h: f64, t_inf: f64 },
-    Radiation { on: String, emissivity: f64, t_inf: f64 },
-    HeatFlux { on: String, q: f64 },
-    HeatSource { bodies: Vec<String>, q: f64 },
+    Pressure {
+        on: String,
+        value: f64,
+    },
+    Traction {
+        on: String,
+        total: [f64; 3],
+    },
+    Force {
+        on: String,
+        total: [f64; 3],
+    },
+    Gravity {
+        g: [f64; 3],
+    },
+    Temperature {
+        bodies: Vec<String>,
+        value: f64,
+        reference: f64,
+    },
+    Convection {
+        on: String,
+        h: f64,
+        t_inf: f64,
+    },
+    Radiation {
+        on: String,
+        emissivity: f64,
+        t_inf: f64,
+    },
+    HeatFlux {
+        on: String,
+        q: f64,
+    },
+    HeatSource {
+        bodies: Vec<String>,
+        q: f64,
+    },
+    /// A finite conductance across the bonded contact `of`, replacing its perfect thermal tie.
+    ThermalContact {
+        of: String,
+        h: f64,
+    },
 }
 
 /// A Load.
@@ -226,11 +260,13 @@ impl LoadKind {
             | LoadKind::Gravity { .. }
             | LoadKind::Convection { .. }
             | LoadKind::Radiation { .. }
-            | LoadKind::HeatFlux { .. } => &[],
+            | LoadKind::HeatFlux { .. }
+            | LoadKind::ThermalContact { .. } => &[],
         }
     }
 
-    /// The Set this load acts on, if any.
+    /// The Set this load acts on, if any. A thermal contact names a Constraint instead — see
+    /// [`LoadKind::constraint`] — so it answers `None` here like Gravity or a Body-targeted load.
     pub fn set(&self) -> Option<&str> {
         match self {
             LoadKind::Pressure { on, .. }
@@ -239,7 +275,28 @@ impl LoadKind {
             | LoadKind::Convection { on, .. }
             | LoadKind::Radiation { on, .. }
             | LoadKind::HeatFlux { on, .. } => Some(on),
-            LoadKind::Gravity { .. } | LoadKind::Temperature { .. } | LoadKind::HeatSource { .. } => None,
+            LoadKind::Gravity { .. }
+            | LoadKind::Temperature { .. }
+            | LoadKind::HeatSource { .. }
+            | LoadKind::ThermalContact { .. } => None,
+        }
+    }
+
+    /// The Constraint a thermal contact overrides, for `model.rename` and the in-use check
+    /// `constraint.remove` runs — the one reference a Load makes to a Constraint rather than a
+    /// Set or a Body.
+    pub fn constraint(&self) -> Option<&str> {
+        match self {
+            LoadKind::ThermalContact { of, .. } => Some(of),
+            LoadKind::Pressure { .. }
+            | LoadKind::Traction { .. }
+            | LoadKind::Force { .. }
+            | LoadKind::Gravity { .. }
+            | LoadKind::Temperature { .. }
+            | LoadKind::Convection { .. }
+            | LoadKind::Radiation { .. }
+            | LoadKind::HeatFlux { .. }
+            | LoadKind::HeatSource { .. } => None,
         }
     }
 }
@@ -671,6 +728,7 @@ mod tests {
             LoadKind::Convection { on: "a".into(), h: 1.0, t_inf: 300.0 },
             LoadKind::Radiation { on: "a".into(), emissivity: 0.8, t_inf: 300.0 },
             LoadKind::HeatFlux { on: "a".into(), q: 1.0 },
+            LoadKind::ThermalContact { of: "weld".into(), h: 500.0 },
         ] {
             assert!(kind.bodies().is_empty());
         }
@@ -679,6 +737,24 @@ mod tests {
             LoadKind::HeatSource { bodies: vec!["beam".into(), "plain".into()], q: 1.0 },
         ] {
             assert_eq!(kind.bodies(), &["beam", "plain"]);
+        }
+        // A thermal contact names a Constraint, not a Set or a Body: the odd one out among the
+        // three cross-reference accessors.
+        let contact = LoadKind::ThermalContact { of: "weld".into(), h: 500.0 };
+        assert_eq!(contact.set(), None);
+        assert_eq!(contact.constraint(), Some("weld"));
+        for kind in [
+            LoadKind::Pressure { on: "a".into(), value: 1.0 },
+            LoadKind::Traction { on: "a".into(), total: [0.0; 3] },
+            LoadKind::Force { on: "a".into(), total: [0.0; 3] },
+            LoadKind::Gravity { g: [0.0; 3] },
+            LoadKind::Temperature { bodies: vec![], value: 300.0, reference: 293.15 },
+            LoadKind::Convection { on: "a".into(), h: 1.0, t_inf: 300.0 },
+            LoadKind::Radiation { on: "a".into(), emissivity: 0.8, t_inf: 300.0 },
+            LoadKind::HeatFlux { on: "a".into(), q: 1.0 },
+            LoadKind::HeatSource { bodies: vec![], q: 1.0 },
+        ] {
+            assert_eq!(kind.constraint(), None);
         }
         assert!(m.knows_set("top"));
         assert!(m.knows_set("beam.xmin"));

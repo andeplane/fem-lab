@@ -571,6 +571,7 @@ hydration replies cannot overwrite a newer selection; modal phase controls remai
 | F4b | The same patch test with master/slave sizes 500/250 mm and 250/125 mm | as F4, including node-to-face projections with fractional weights | 1e-8 | non-conforming interfaces are projected, not matched | green + engine test |
 | F4c | The B1 cantilever cut at mid-span and welded with `contact.add` | the single-Body model beside it: `cantilever-hex8-im` measures -0.19011253665073974 mm | 1e-10 rel | the elimination is exact, not an approximation | green |
 | F4d | A tie whose master face shares nodes with a clamped face | per-constraint reactions equal the single-Body model's | 1e-8 rel | a support that masters a tie reports what it carries | engine test |
+| F4e | `contact.thermal` on a bonded pair: two conductors in series with a finite interface resistance | `q = ΔT / (L1/k1 + 1/hc + L2/k2)`, interface jump `q/hc` | 1e-9 rel | thermal contact resistance (#85) | green |
 | F5 | The integrator's own period error, predicted exactly: SDOF free vibration over 100 cycles at ωΔt = 0.25, 0.5, 1 | period = `2π / ((2/Δt) asin(ωΔt/2))` at each step; the coefficient of `(ωΔt)²` in ΔT/T fitted from the three is **−1/24** (central differences *shorten* the period; the trapezoidal rule lengthens it by 1/12) | 1e-4 on each period, 1 % on the coefficient | a start-up kick of the wrong half-step, a lagging velocity update or a wrongly scaled mass all keep a clean sinusoid and fail this | engine test |
 | F6 | Discrete energy `½ v_{n+½}ᵀ M v_{n+½} + ½ u_nᵀ K u_{n+1}`, SDOF at ωΔt = 1 for 100 cycles and the F2 cantilever with a random initial velocity for 500 steps | exactly constant: `½ m v₀²` for the SDOF, its own initial value for the beam | 1e-12 (SDOF), 1e-10 (beam) relative wander | central differences conserve a modified energy exactly for linear systems; the `½vᵀMv + ½uᵀKu` monitor only bounds it | engine test |
 | F7 | The stability boundary is sharp: SDOF at ωΔt = 1.96 and 2.04 for 1000 steps | below: bounded, sampled amplitude = `v₀ / (ω √(1 − (ωΔt/2)²))`; above: `explicit.unstable` | 1 % on the amplitude, the error code above | the boundary is at 2, not merely somewhere near it | engine test |
@@ -615,6 +616,17 @@ adds the tie term back (`mpc::master_forces`), which is what makes both the per-
 reaction and the global `balance` right when a tie reaches a support. Without it the global sum
 is wrong too, so F4's `balance` check alone would not have caught it — F4d compares the
 per-constraint reactions of a tied assembly against the single Body it stands for.
+
+F4e (#85) is a different Coupling role from F4-F4d: `contact.thermal` names the same bonded
+contact and replaces its perfect thermal tie with a finite conductance `h_c`, assembled into the
+heat operator exactly as `load.convection` is rather than eliminated by `mpc::transform`.
+`mpc::build` skips the tie rows of a contact a `contact.thermal` names — the tie and the
+resistance are never both applied — and the mechanical tie of the same Coupling is untouched, so
+a Model can bond two parts structurally while giving them a Biot-number interface thermally. Two
+Bodies of different conductivity, joined by `contact.add` and overridden by `contact.thermal`,
+reproduce `q = ΔT / (L1/k1 + 1/hc + L2/k2)` to roundoff at every node on both sides, with the
+temperature dropping by exactly `q/hc` at the interface — an oracle from series thermal
+resistance, not a comparison against the engine's own perfect-tie or convection paths.
 
 F12 and F13 are the point mass and the coupling of #67. A `distributed` coupling weights its face
 by the lumped areas `a_i = ∫ N_i dS` the heat kernel's face integral already produces, and
