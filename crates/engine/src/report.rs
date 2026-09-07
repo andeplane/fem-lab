@@ -709,6 +709,7 @@ mod tests {
             applied_total: [zero.clone(), zero.clone(), zero],
             assumptions: vec![],
             frequencies: vec![],
+            prestress_from: None,
             buckling_factors: vec![],
             history: vec![],
             sweep: vec![],

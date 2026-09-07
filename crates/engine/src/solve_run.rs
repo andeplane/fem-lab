@@ -468,9 +468,14 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
             amplitude: step.amplitude.as_ref().map(amplitude),
             solver: opts,
         }),
-        Procedure::Modal => {
-            procedure::Step::Modal { n_modes: step.n_modes.unwrap_or(6) as usize, shift: step.shift, solver: opts }
-        }
+        // `prestress` is filled in by [`with_prestress`] once the Problem and the predecessor's
+        // Result exist, the way `initial_velocity` is: this stays a pure Model-to-SI mapping.
+        Procedure::Modal => procedure::Step::Modal {
+            n_modes: step.n_modes.unwrap_or(6) as usize,
+            shift: step.shift,
+            solver: opts,
+            prestress: None,
+        },
         // One factor by default: the smallest is the one that decides whether the structure
         // stands, and asking for more costs a wider subspace.
         Procedure::Buckling => procedure::Step::Buckling { n_modes: step.n_modes.unwrap_or(1) as usize, solver: opts },
@@ -548,6 +553,24 @@ fn initial_velocity_of(p: &Problem<'_>, step: &Step) -> Result<Option<Vec<f64>>,
         }
     }
     Ok(Some(v))
+}
+
+/// The preload a prestressed modal Step stiffens with: the displacement of the static Step it
+/// continues, one value per DOF, together with that Step's name.
+///
+/// **Only a static predecessor is a preload.** A linear or nonlinear static Step leaves behind a
+/// displacement whose stress state is exactly what `K_sigma` integrates. A heat Step hands over
+/// a temperature field instead, which has already composed into the Problem before this point.
+/// A modal or buckling predecessor has an *eigenvector* in its displacement slot — a shape with
+/// arbitrary amplitude and therefore no stress state at all — so continuing one stiffens
+/// nothing, which is what it did before #344 and still does.
+fn preload_of(model: &Model, step: &Step, dpn: usize, prev: &StepResult) -> Option<(String, Vec<f64>)> {
+    let name = step.after.as_deref().expect("a Result to continue means the Step named one");
+    let stressed =
+        model.step(name).expect("`after` names a Step that step.remove refuses to remove while it is named").procedure;
+    let is_static = matches!(stressed, Procedure::Static | Procedure::StaticNonlinear);
+    let u = prev.fields.get(&Field::Displacement).filter(|_| is_static)?;
+    Some((name.to_string(), procedure::harmonic::dof_vector(u, dpn)))
 }
 
 /// Give a dynamic Step its resolved initial velocity; every other Step is left alone.
@@ -778,7 +801,18 @@ impl Engine {
                         .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                         .enforce(&step.name)?;
                 }
-                let proc_step = with_initial_velocity(proc_step, &p, &step)?;
+                let mut proc_step = with_initial_velocity(proc_step, &p, &step)?;
+                // A modal Step that continues a static one is a *prestressed* modal analysis:
+                // the predecessor's stress stiffening is added to K before the eigenproblem
+                // (#344). Resolved here, where the Model says which procedure the predecessor
+                // ran; every other pairing leaves the Step exactly as it was.
+                let mut preload = None;
+                if let (procedure::Step::Modal { prestress, .. }, Some(record)) = (&mut proc_step, prev.as_ref()) {
+                    if let Some((name, u)) = preload_of(&self.model, &step, p.dofs_per_node(), &record.result) {
+                        *prestress = Some(u);
+                        preload = Some(name);
+                    }
+                }
                 let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
                 let mut result = procedure::run(
                     &p,
@@ -791,6 +825,7 @@ impl Engine {
                 .await?;
                 result.assumptions = assumptions;
                 result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
+                result.prestress_from = preload;
                 result
             }
         };
@@ -1080,6 +1115,7 @@ impl Engine {
             applied_total: vec3(m, applied, field_dimension(Field::Reaction, res.reaction_quantity)),
             assumptions: res.assumptions.clone(),
             frequencies: res.frequencies.iter().map(|f| display(m, *f, Frequency::DIM)).collect(),
+            prestress_from: res.prestress_from.clone(),
             // Dimensionless, so no display conversion: a load factor is a load factor in any unit
             // system the Model is written in.
             buckling_factors: res.buckling_factors.clone(),

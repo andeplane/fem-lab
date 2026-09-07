@@ -94,8 +94,9 @@ fn needs_modes(step_has_after: bool) -> Error {
 }
 
 /// A mode shape comes back as three components per node; the load vector is `dofs_per_node`
-/// per node. This is the inverse of [`crate::procedure::vector_field`].
-fn dof_vector(shape: &crate::post::FieldData, dpn: usize) -> Vec<f64> {
+/// per node. This is the inverse of [`crate::procedure::vector_field`]. A prestressed modal
+/// Step reads its preload displacement back out of the predecessor's Result the same way.
+pub(crate) fn dof_vector(shape: &crate::post::FieldData, dpn: usize) -> Vec<f64> {
     let nodes = shape.data.len() / 3;
     let mut out = vec![0.0; nodes * dpn];
     for node in 0..nodes {

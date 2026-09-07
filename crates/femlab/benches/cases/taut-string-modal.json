@@ -1,0 +1,175 @@
+{
+  "name": "taut-string-modal",
+  "reference": "Benchmark B17: a taut string. The same pinned-pinned half model as B16 at 20 x 2000 mm (half: 20 x 1000 mm, quad8, 2 x 40), 10 mm thick, pulled to T = 10 P_cr,1 = 34543.6 N, i.e. 172.718018 MPa on the 20 x 10 mm end. The oracle is the vibrating-string formula with its bending correction, f_n = (n / 2L) sqrt(T / rho A) sqrt(1 + n^2 pi^2 EI / (T L^2)), which is the musical-string answer a structural engineer recognises rather than a beam formula: sqrt(T / rho A) = 148.331 m/s is the wave speed along the member and n^2 pi^2 EI / (T L^2) = 0.1 n^2 is how much its own bending stiffness adds. That gives f_1 = 38.8929 Hz and f_3 = 153.3459 Hz, gated at 1 %. Only the tensioned Step is solved: with no tension at all this member's f_1 is 11.7 Hz, so three quarters of the answer here is the prestress, which is the point.",
+  "journal": [
+    {
+      "cmd": "model.new",
+      "name": "taut-string-modal"
+    },
+    {
+      "cmd": "model.setUnits",
+      "units": {
+        "length": "mm",
+        "stress": "MPa",
+        "force": "N"
+      }
+    },
+    {
+      "cmd": "model.setIdealisation",
+      "idealisation": {
+        "kind": "planeStress",
+        "thickness": "10 mm"
+      }
+    },
+    {
+      "cmd": "material.add",
+      "name": "steel",
+      "E": "210 GPa",
+      "nu": 0.3,
+      "rho": "7850 kg/m^3",
+      "source": "EN 10025"
+    },
+    {
+      "cmd": "mesh.set",
+      "mesher": {
+        "kind": "mapped",
+        "body": "strip",
+        "blocks": [
+          {
+            "corners": [
+              [
+                "0 mm",
+                "0 mm"
+              ],
+              [
+                "20 mm",
+                "0 mm"
+              ],
+              [
+                "20 mm",
+                "1000 mm"
+              ],
+              [
+                "0 mm",
+                "1000 mm"
+              ]
+            ],
+            "n": [
+              2,
+              40
+            ],
+            "tags": [
+              "bottom",
+              "right",
+              "top",
+              "left"
+            ]
+          }
+        ]
+      },
+      "order": 2
+    },
+    {
+      "cmd": "material.assign",
+      "material": "steel",
+      "bodies": [
+        "strip"
+      ]
+    },
+    {
+      "cmd": "constraint.fix",
+      "name": "pin",
+      "on": "strip.bottom",
+      "dofs": [
+        "ux"
+      ]
+    },
+    {
+      "cmd": "constraint.symmetry",
+      "name": "midspan",
+      "on": "strip.top",
+      "normal": "y"
+    },
+    {
+      "cmd": "load.pressure",
+      "name": "tension",
+      "on": "strip.bottom",
+      "value": "-172.718077 MPa"
+    },
+    {
+      "cmd": "step.add",
+      "name": "tighten",
+      "procedure": "static",
+      "constraints": [
+        "pin",
+        "midspan"
+      ],
+      "loads": [
+        "tension"
+      ]
+    },
+    {
+      "cmd": "step.add",
+      "name": "note",
+      "procedure": "modal",
+      "after": "tighten",
+      "constraints": [
+        "pin",
+        "midspan"
+      ],
+      "loads": [],
+      "output": [
+        "displacement"
+      ],
+      "nModes": 2
+    },
+    {
+      "cmd": "solve.run",
+      "step": "tighten"
+    },
+    {
+      "cmd": "solve.run",
+      "step": "note"
+    }
+  ],
+  "checks": [
+    {
+      "query": {
+        "query": "query.result",
+        "step": "note"
+      },
+      "path": "/frequencies/0/value",
+      "expect": 38.8929,
+      "tol": 0.01,
+      "rel": true,
+      "note": "the fundamental of the string, bending correction included"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "note"
+      },
+      "path": "/frequencies/1/value",
+      "expect": 153.3459,
+      "tol": 0.01,
+      "rel": true,
+      "note": "its third harmonic; the correction is 38 % here"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "note"
+      },
+      "path": "/prestressFrom",
+      "expect": "tighten"
+    },
+    {
+      "query": {
+        "query": "query.result",
+        "step": "note"
+      },
+      "path": "/stale",
+      "expect": false
+    }
+  ]
+}

@@ -4073,6 +4073,90 @@ fn a_modal_step_reports_frequencies_and_hands_out_mode_shapes_by_name() {
     assert_eq!(bad.code, ErrorCode::Schema);
 }
 
+/// #344: a modal Step that continues a static one vibrates about that loaded state.
+///
+/// Tension stiffens: the same cantilever pulled at 10 MPa on its end face rings higher than the
+/// unloaded one, and by the amount `f(P) = f(0)·√(1 − P/P_cr)` predicts against the load factor
+/// the buckling procedure reports for this very mesh. The Result names the preload Step it was
+/// stiffened by, so a host reading the frequencies can say *at what load* they hold.
+#[test]
+fn a_modal_step_after_a_static_step_is_prestressed_and_names_its_preload() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"tension-rod"}"#);
+    ok(&mut e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","force":"N"}}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"rod","size":["1 m","20 mm","20 mm"]}"#);
+    ok(&mut e, r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3"}"#);
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["rod"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":12,"ny":1,"nz":1}},"order":2}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"rod.xmin"}"#);
+    // Negative pressure on the end face is tension along the rod.
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"pull","on":"rod.xmax","value":"-10 MPa"}"#);
+    ok(&mut e, r#"{"cmd":"load.pressure","name":"squeeze","on":"rod.xmax","value":"1 MPa"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"free","procedure":"modal","constraints":["root"],"loads":[],"nModes":1}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"preload","procedure":"static","constraints":["root"],"loads":["pull"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"stiffened","procedure":"modal","after":"preload",
+            "constraints":["root"],"loads":[],"output":["displacement"],"nModes":1}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"buckle","procedure":"buckling","constraints":["root"],"loads":["squeeze"]}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"free"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"preload"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stiffened"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"buckle","tolerance":1e-9}"#);
+
+    let free = result_of(&mut e, Some("free"));
+    let stiffened = result_of(&mut e, Some("stiffened"));
+    // The unprestressed Result says nothing about a preload; the prestressed one names it.
+    assert_eq!(free.prestress_from, None);
+    assert_eq!(stiffened.prestress_from.as_deref(), Some("preload"));
+    let (f0, f1) = (free.frequencies[0].value, stiffened.frequencies[0].value);
+    assert!(f1 > f0, "tension must raise the frequency: {f1} Hz against {f0} Hz");
+    // P_cr = lambda x the 1 MPa reference on the same face, so P/P_cr = -10/lambda.
+    let lambda = result_of(&mut e, Some("buckle")).buckling_factors[0];
+    let want = f0 * (1.0 + 10.0 / lambda).sqrt();
+    assert!((f1 / want - 1.0).abs() < 0.02, "{f1} Hz against the stress-stiffened {want} Hz");
+    // Everything a modal Result carries still works: the shape is `mode:k` as always.
+    assert!(e.field_named(Some("stiffened"), "mode:1").is_ok());
+}
+
+/// A modal Step that continues a *heat* Step is not prestressed: a temperature field is not a
+/// stress state, it composes into the Problem the way it always has, and the Result names no
+/// preload. This is what keeps #344 from turning every existing `after` into stress stiffening.
+#[test]
+fn a_modal_step_after_a_heat_step_is_not_prestressed() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"warm-beam"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"beam","size":["1 m","50 mm","50 mm"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7800 kg/m^3",
+            "k":"45 W/(m*K)","cp":"460 J/(kg*K)","alpha":"1.2e-5 1/K"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":8,"ny":1,"nz":1}},"order":2}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.xmin"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"cold","on":"beam.xmin","value":"300 K"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"beam.xmax","value":"400 K"}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"heat","procedure":"heat-steady","constraints":["cold","hot"],"loads":[]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"free","procedure":"modal","constraints":["root"],"loads":[],"nModes":1}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warm","procedure":"modal","after":"heat","constraints":["root"],
+            "loads":[],"nModes":1}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"free"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"heat"}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
+    let warm = result_of(&mut e, Some("warm"));
+    assert_eq!(warm.prestress_from, None, "a temperature field is not a preload");
+    // Nothing was added to K, so the frequencies are the unchained ones exactly.
+    assert_eq!(warm.frequencies[0].value, result_of(&mut e, Some("free")).frequencies[0].value);
+}
+
 /// A buckling Step reports its load factors, hands the shapes out as `mode:k` like any mode, and
 /// keeps the static state it was solved from — which is what makes its reaction balance mean
 /// something. `nModes` defaults to 1, so a Step that names none still answers the question.

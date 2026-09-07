@@ -6322,6 +6322,14 @@ export interface ResultSummary {
    */
   frequencies?: Valued[];
   /**
+   * The preload Step whose stress state stiffened these frequencies, present only on a
+   * prestressed modal Result: the Step named by `after`, solved statically, whose stress
+   * was added to the stiffness as `K_sigma` before the eigenproblem. Absent means the
+   * frequencies are those of the unloaded structure. Kept with the Result, so it still says
+   * which preload produced these numbers after the Model has moved on.
+   */
+  prestressFrom?: string | null;
+  /**
    * Buckling load factors, smallest magnitude first and dimensionless; empty unless the Step
    * was a buckling one. Multiply the Step's Loads by one to get its critical load; a negative
    * factor buckles under the reversed load. Factor `k`'s shape is the field named `mode:k`,
