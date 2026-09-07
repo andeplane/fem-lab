@@ -17,7 +17,7 @@ use crate::fem::problem::{Constraint, Coupling, PointMass, Problem};
 use crate::mesh::{scale_mesher, BuiltMesh};
 use crate::model::{Axial, ConstraintKind, LoadKind, MeshSettings, Model, Step};
 use crate::post::convergence::{observed_rate, richardson};
-use crate::post::{Extremum, FieldData};
+use crate::post::{Extremum, FieldData, Per};
 use crate::procedure::{self, report, StepResult};
 use crate::query::{
     AssumedMaterialProperty, Extreme, HistoryRow, Output, ReactionRow, ResultAssumption, ResultSummary, StudyReport,
@@ -641,37 +641,73 @@ impl Engine {
         let started = self.host.now_ms();
         let mut result = {
             let built = self.mesh.as_ref().expect("built above");
-            let p = build_problem_with_temperature(
+            let mut p = build_problem_with_temperature(
                 &self.model,
                 built,
                 &step,
                 prev.as_ref().and_then(|r| r.result.fields.get(&Field::Temperature)),
             )?;
-            if matches!(
-                &proc_step,
-                procedure::Step::HeatTransient { .. }
-                    | procedure::Step::Explicit { .. }
-                    | procedure::Step::Implicit { .. }
-                    | procedure::Step::Harmonic { .. }
-                    | procedure::Step::Static { amplitude: Some(_), .. }
-            ) {
-                planned_cost(p.mesh, p.dofs_per_node(), Some(&p), &proc_step)?
+            // A static Step chained to a heat-transient Result solves once per retained frame
+            // of that predecessor's temperature History instead of once at its final state
+            // (#84). Every other `after` combination — a steady predecessor, any Step that is
+            // not static, or a static Step with an amplitude, whose own schedule is the one it
+            // retains — keeps today's single end-state solve untouched.
+            let chained_history = match (&proc_step, prev.as_ref()) {
+                (procedure::Step::Static { amplitude: None, .. }, Some(record)) => {
+                    record.result.history.as_ref().filter(|h| h.field == Field::Temperature)
+                }
+                _ => None,
+            };
+            if let Some(h) = chained_history {
+                // Budget before the loop, not the History it would build: the retained field
+                // is one von Mises scalar per node per frame, so it is costed the same way any
+                // other transient output is, with a larger `outputEvery` on the heat Step as
+                // the suggested fix rather than a bigger mesh.
+                let frames = h.times.len();
+                let heat_step = step.after.as_deref().expect("chained_history only matches a Step with `after`");
+                let base = crate::solve::cost_estimate(p.mesh, p.dofs_per_node(), opts.solver);
+                // The predecessor retained exactly these frames of one value per node on this
+                // mesh, so the same count cannot overflow the accounting a second time.
+                let estimate = crate::solve::add_transient_cost(base, p.mesh.n_nodes(), 1, frames - 1, 1, 5)
+                    .expect("the predecessor's retention already budgeted these frames on this mesh");
+                PlannedCost { estimate, transient: Some((frames - 1, 1, "heat-transient")) }
                     .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
-                    .enforce(&step.name)?;
+                    .enforce(heat_step)?;
+                let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let (model, this_step) = (&self.model, &step);
+                let mut compose = |values: &[f64]| {
+                    thermal_field(model, built, this_step, Some(&FieldData::new(Per::Node, 1, values.to_vec())))
+                };
+                let mut result = procedure::static_::run_history(&mut p, h, &mut compose, &self.pool, on_progress)?;
+                result.assumptions = assumptions;
+                result
+            } else {
+                if matches!(
+                    &proc_step,
+                    procedure::Step::HeatTransient { .. }
+                        | procedure::Step::Explicit { .. }
+                        | procedure::Step::Implicit { .. }
+                        | procedure::Step::Harmonic { .. }
+                        | procedure::Step::Static { amplitude: Some(_), .. }
+                ) {
+                    planned_cost(p.mesh, p.dofs_per_node(), Some(&p), &proc_step)?
+                        .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
+                        .enforce(&step.name)?;
+                }
+                let proc_step = with_initial_velocity(proc_step, &p, &step)?;
+                let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let mut result = procedure::run(
+                    &p,
+                    &proc_step,
+                    &self.pool,
+                    self.gpu.as_ref(),
+                    prev.as_ref().map(|record| &record.result),
+                    on_progress,
+                )
+                .await?;
+                result.assumptions = assumptions;
+                result
             }
-            let proc_step = with_initial_velocity(proc_step, &p, &step)?;
-            let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
-            let mut result = procedure::run(
-                &p,
-                &proc_step,
-                &self.pool,
-                self.gpu.as_ref(),
-                prev.as_ref().map(|record| &record.result),
-                on_progress,
-            )
-            .await?;
-            result.assumptions = assumptions;
-            result
         };
         result.solver.time_ms = self.host.now_ms() - started;
         self.retain_result(step.name.clone(), result);

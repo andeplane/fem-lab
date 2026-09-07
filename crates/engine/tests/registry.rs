@@ -4341,6 +4341,164 @@ fn a_chained_step_refuses_a_stale_same_node_count_temperature_field() {
     assert_stale_predecessor(&mut e);
 }
 
+/// #84: a static Step chained to a heat-*transient* Result solves once per retained frame; a
+/// heat-*steady* predecessor has no History to chain from, so the un-chained end-state solve
+/// (D2, above) is untouched — no History on the Result either.
+#[test]
+fn a_static_step_after_a_steady_predecessor_still_has_no_history() {
+    let mut e = solved_thermal_chain();
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert!(result_of(&mut e, Some("stress")).history.is_empty());
+}
+
+/// A heat-transient Step "warm" solved, with the static Step "stress" named `after` it added
+/// as `stress_step` before the solve: every Step is part of the Model the Result hash covers,
+/// so a Step added afterwards would stale "warm".
+fn transient_chain_with(stress_step: &str) -> Engine {
+    let mut e = engine();
+    heat_bar(&mut e);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"left","on":"bar.xmin"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["hot"],
+            "loads":[],"dt":"0.5 s","tEnd":"2 s","initial":"0 degC","outputEvery":1}"#,
+    );
+    ok(&mut e, stress_step);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
+    e
+}
+
+fn solved_transient_chain() -> Engine {
+    transient_chain_with(
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"warm","constraints":["left"],"loads":[]}"#,
+    )
+}
+
+/// A chained static Step that fails inside its per-frame loop reports the failure like any
+/// other Step, and one with an amplitude is not chained at all: its own schedule is the one it
+/// retains, so its History is the displacement ramp #78 gives it, not a von Mises frame per
+/// predecessor frame.
+#[test]
+fn a_chained_static_step_reports_its_failures_and_an_amplituded_one_keeps_its_own_schedule() {
+    let mut e = transient_chain_with(
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"warm","constraints":[],"loads":[]}"#,
+    );
+    let loose = err(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert_eq!(loose.code, ErrorCode::ConstraintRigidModes);
+
+    let mut e = transient_chain_with(
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"warm","constraints":["left"],"loads":[],
+            "amplitude":{"kind":"table","t":["0 s","1 s"],"value":[0.0,1.0]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    let summary = result_of(&mut e, Some("stress"));
+    assert_eq!(summary.history.iter().map(|r| r.time.value).collect::<Vec<_>>(), vec![0.0, 1.0]);
+    assert_eq!(frames_of(&mut e).field, Field::Displacement);
+}
+
+/// #84: the chained static Step retains one von Mises frame per frame its heat-transient
+/// predecessor kept, and a Model edit that stales the predecessor still stales the chain —
+/// the existing hash check runs before the new branch, so it needs no change to keep working.
+#[test]
+fn a_chained_static_step_retains_one_von_mises_frame_per_predecessor_frame_and_still_stales() {
+    let mut e = solved_transient_chain();
+    let frames = result_of(&mut e, Some("warm")).history.len();
+    assert!(frames > 1, "the transient must retain more than its initial frame");
+    ok(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    let stress = result_of(&mut e, Some("stress"));
+    assert_eq!(stress.history.len(), frames);
+    assert_eq!(stress.history.last().unwrap().time, result_of(&mut e, Some("warm")).history.last().unwrap().time);
+
+    // Editing the material under the chain stales the heat-transient Result exactly as it
+    // already staled a heat-steady one (#84 adds no second staleness path).
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+            "alpha":"1.2e-5 1/K","k":"90 W/(m K)","cp":"460 J/(kg K)"}"#,
+    );
+    let stale = err(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert_eq!(stale.code, ErrorCode::ResultStale);
+    assert!(stale.cause.contains("step 'warm'"), "{}", stale.cause);
+}
+
+/// #84's budget check runs before any per-frame History is allocated, exactly like a plain
+/// transient's own retention (`an_over_budget_transient_preserves_the_prior_result_and_engine`)
+/// — it just costs the chained *static* Step's own (structural, 3-DOF-per-node) assembly rather
+/// than the heat Step's 1-DOF-per-node one, so a mesh large enough to make that difference
+/// matter rejects the chain while the heat Step it continues, on the very same retained frame
+/// count, stays comfortably inside its own budget.
+#[test]
+fn a_chained_static_step_is_budgeted_before_its_history_is_allocated() {
+    let mut e = engine();
+    ok(&mut e, r#"{"cmd":"model.new","name":"chain-budget"}"#);
+    ok(&mut e, r#"{"cmd":"geometry.addBox","name":"bar","size":["1 m","0.1 m","0.1 m"]}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"material.add","name":"steel","E":"210 GPa","nu":0.3,"rho":"7850 kg/m^3",
+            "alpha":"1.2e-5 1/K","k":"45 W/(m K)","cp":"460 J/(kg K)"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"material.assign","material":"steel","bodies":["bar"]}"#);
+    ok(&mut e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":{"nx":12500,"ny":1,"nz":1}}}"#);
+    ok(&mut e, r#"{"cmd":"constraint.temperature","name":"hot","on":"bar.xmax","value":"100 degC"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"left","on":"bar.xmin"}"#);
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["hot"],
+            "loads":[],"dt":"1 s","tEnd":"1 s","initial":"0 degC","outputEvery":1}"#,
+    );
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"stress","procedure":"static","after":"warm","constraints":["left"],"loads":[]}"#,
+    );
+
+    let QueryResult::Cost(heat) = e.query(Query::Cost { step: "warm".into() }).unwrap() else { panic!() };
+    let QueryResult::Cost(structural) = e.query(Query::Cost { step: "stress".into() }).unwrap() else { panic!() };
+    // `heat.bytes` is already the engine's own complete accounting (assembly, work vectors,
+    // retained frames, resident/mesh snapshot) at the placeholder one-step schedule above;
+    // `retained_bytes` is exactly linear in the frame count, so subtracting it out leaves the
+    // frame-count-independent fixed cost. A plain (non-transient) static Query::Cost has no
+    // retained-frame concept at all, so `structural.bytes` is its fixed cost (assembly plus its
+    // own future mesh snapshot) before the chained-static work allowance (#84's 5 vectors).
+    let nodes = heat.dofs; // heat is one DOF per node
+    let frame_bytes = heat.retained_bytes / heat.retained_frames;
+    let heat_fixed = heat.bytes.saturating_sub(heat.retained_bytes);
+    let static_fixed = structural.bytes + nodes * 5 * 8;
+    assert!(static_fixed > heat_fixed, "the chained static budget must cost more fixed bytes than the heat Step's own for this test to isolate it: {static_fixed} vs {heat_fixed}");
+    // Once "warm" is solved, its own retained History becomes a *resident* Result the chained
+    // static budget must also carry (`with_records`), on top of the static Step's own new
+    // History of the same frame count — so the chained check pays for two Histories' worth of
+    // bytes per frame where the heat Step's own check (nothing else resident yet) pays for one.
+    let frames = (heat.budget_bytes.saturating_sub(static_fixed)) / (2 * frame_bytes) + 2;
+    assert!(static_fixed + 2 * frames * frame_bytes > heat.budget_bytes);
+    assert!(
+        heat_fixed + frames * frame_bytes <= heat.budget_bytes,
+        "the heat Step's own retention must still fit at the same frame count: heat {heat_fixed} static {static_fixed} frames {frames} budget {}",
+        heat.budget_bytes
+    );
+
+    let steps = frames - 1;
+    ok(
+        &mut e,
+        &format!(
+            r#"{{"cmd":"step.add","name":"warm","procedure":"heat-transient","constraints":["hot"],
+                "loads":[],"dt":"{} s","tEnd":"1 s","initial":"0 degC","outputEvery":1}}"#,
+            1.0 / steps as f64
+        ),
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"warm"}"#);
+    assert_eq!(result_of(&mut e, Some("warm")).history.len() as u64, frames);
+
+    let before = e.journal().clone();
+    let rejected = err(&mut e, r#"{"cmd":"solve.run","step":"stress"}"#);
+    assert_eq!(rejected.code, ErrorCode::SolveTooLarge);
+    assert_eq!(rejected.where_.as_deref(), Some("step 'warm'.outputEvery"));
+    let suggestion = rejected.suggestion.as_deref().expect("a budget suggestion");
+    assert!(suggestion.contains("'warm'"), "{suggestion}");
+    assert!(suggestion.contains("outputEvery at least"), "{suggestion}");
+    assert_eq!(e.journal(), &before, "a rejected chained solve is not journaled");
+}
+
 /// An explicit Step falls under gravity by exactly `g t²/2`, which is what central differences
 /// give for a constant acceleration, and a Step that names no `tEnd` says so.
 #[test]
