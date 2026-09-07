@@ -737,6 +737,14 @@ mod tests {
                 m.loads[0].kind = LoadKind::Force { on: "beam.xmax".into(), total: [1.0, 0.0, -1000.0] }
             }),
             ("no displacement output", |_, r| r.extremes.clear()),
+            // Beam theory needs one `E`: an oriented or an orthotropic material has none to quote.
+            ("oriented material", |m, _| {
+                m.materials[0].orientation = Some(crate::model::Orientation { axis: [0.0, 0.0, 1.0], angle: 0.5 })
+            }),
+            ("orthotropic material without E", |m, _| {
+                m.materials[0].e = None;
+                m.materials[0].nu = None;
+            }),
         ];
         for (reason, change) in inapplicable {
             let (mut m, mut r) = (model.clone(), result.clone());
