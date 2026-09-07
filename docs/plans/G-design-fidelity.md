@@ -40,7 +40,13 @@ source tree before merge; the actual merge tree matched. The subsequent
 including thumbnail generation. Subsequent
 [main CI](https://github.com/andeplane/fem-lab/actions/runs/34095869938) completed
 successfully with all seven checks, including CPU, service-worker and WebGPU browser scenarios.
-Step dragging remains in #233, with all seven branch checks passed. Project-folder integration remains in #252. Full design acceptance remains open.
+Step dragging merged through #233 at main
+`6ed4922d119c17af34d2d27f9bcc0d68d7898112`. Its merged tree exactly matched
+the reviewed integration with #321; the Step feature changes were identical
+to head `85bca12`, which passed all seven CI checks. Its
+[deployment](https://github.com/andeplane/fem-lab/actions/runs/34098537954) passed;
+[post-merge CI](https://github.com/andeplane/fem-lab/actions/runs/34098537846)
+was still running at this update. Project-folder integration remains in #252. Full design acceptance remains open.
 
 A manual inspection of the deployed page on 7 September used a new empty audit project with
 Properties and Assistant open. At a 1600 × 1000 viewport, the order was Tree, Viewer/Bottom,
