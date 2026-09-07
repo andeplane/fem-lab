@@ -289,7 +289,7 @@ fn steady_radiating(
         let red = reduce(&s.k, &s.f, rc);
         let mut factored = Direct::factor(&red.k_ff)?;
         let mut t_f = vec![0.0; red.free.len()];
-        let info = factored.solve(&red.f_f, &mut t_f).expect("a factorised solve");
+        let info = factored.solve(&red.f_f, &mut t_f)?;
         *next = expand(&red, &t_f);
         Ok(info)
     })?;
@@ -425,7 +425,7 @@ fn radiating_increment(
             rhs[i] = rhs_full[dof] + sys.f[dof] + theta * hf[dof] - (1.0 - theta) * r_n[dof] + scale * red.f_f[i];
         }
         let mut x = vec![0.0; red.free.len()];
-        let info = factored.solve(&rhs, &mut x).expect("a factorised solve");
+        let info = factored.solve(&rhs, &mut x)?;
         *next = expand(&red, &x);
         for (i, &dof) in red.fixed.iter().enumerate() {
             next[dof as usize] = red.u_fixed[i] * scale;
@@ -515,9 +515,8 @@ pub fn transient(
                 for (i, &dof) in red.free.iter().enumerate() {
                     rhs_f[i] = rhs_full[dof as usize] + sys.f[dof as usize] + scale * red.f_f[i];
                 }
-                // A factorised direct solve cannot fail; `LinearSolve` returns a Result for the
-                // iterative solvers, which can run out of iterations.
-                solver = factored.solve(&rhs_f, &mut t_f).expect("a factorised solve");
+                // Reject a bad direct result without retaining an invalid temperature history.
+                solver = factored.solve(&rhs_f, &mut t_f)?;
                 t = expand(&red, &t_f);
             }
             None => {

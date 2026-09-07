@@ -623,6 +623,12 @@ omitted optional material property the successful solver actually read as zero; 
 check that reactions balance the applied loads before trusting a stress. A Step with
 `after` requires its predecessor's Result to match the current Model state; after an edit,
 solve the predecessor again before continuing the chain.
+Direct linear solves verify their residual too: nonfinite or excessive residuals return
+solve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`
+(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The
+direct tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.
+On Windows, direct numeric factorization is sequential to avoid a verified faer defect;
+assembly and triangular solves retain the engine thread count.
 
 | Argument | Required | Schema | Description |
 | --- | --- | --- | --- |
@@ -4106,7 +4112,7 @@ Expand a definition to inspect its complete schema. Definition names are local t
       ]
     },
     {
-      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.",
+      "description": "Run a Step. Checks well-posedness first (materials, constraints, rigid-body modes,\nelement quality) and refuses with a suggested fix. Returns extremes, reactions and every\nomitted optional material property the successful solver actually read as zero; always\ncheck that reactions balance the applied loads before trusting a stress. A Step with\n`after` requires its predecessor's Result to match the current Model state; after an edit,\nsolve the predecessor again before continuing the chain.\nDirect linear solves verify their residual too: nonfinite or excessive residuals return\nsolve.stalled instead of storing a Result. Static and non-radiating steady direct solves use `tolerance`\n(default 1e-10) with the same 100-fold f64 roundoff allowance as iterative refinement. The\ndirect tolerance must be positive and its 100-fold allowance finite, or a schema error is returned.\nOn Windows, direct numeric factorization is sequential to avoid a verified faer defect;\nassembly and triangular solves retain the engine thread count.",
       "type": "object",
       "properties": {
         "step": {
