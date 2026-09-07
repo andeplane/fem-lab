@@ -3,7 +3,7 @@
 Status: proposed architecture and migration plan, not implementation.
 Design work: [#378](https://github.com/andeplane/fem-lab/issues/378).
 Decision proposal: [ADR0020](../adr/0020-session-owned-execution.md).
-Inspected baseline: `6ad6adc`; containment reviewed at PR #377 commit `a77830d`.
+Inspected baseline: `6ad6adc`; containment reviewed at PR #377 commits `a77830d` and `aeb885f`.
 The initiating user report is #376. This document covers the design issue #378; implementation
 steps below must receive their own issues before work begins. Implementation proceeds through separately scoped issues after design review.
 
@@ -29,6 +29,21 @@ regression also covers deletion and selection/form reset. The exact timing in th
 and the original unclickable-tab symptom were not recovered. The other rows expose unguarded
 paths in source; they are not claims that all corresponding corruption scenarios have already
 been reproduced.
+
+A second deterministic Chromium probe against the corrected #377 build (`aeb885f`) confirmed
+an additional ownership failure even after serialization. It used a manually released Promise,
+not a timing sleep:
+
+1. Create A with Body `shared`; retain `const old = window.fem` and pause an async task using it.
+2. Create B with a different Body also named `shared`.
+3. Release the task and execute `old.geometry.remove({ name: 'shared' })`.
+4. Observe B with no Bodies and Journal Commands `model.new`, `geometry.addBox`, `geometry.remove`.
+
+The call succeeded. This proves that a retained facade has no lifetime-bound authority and that
+name reuse can turn a stale operation into silent mutation. The probe was a temporary experiment,
+not a committed test asserting that incorrect behavior should remain. Turn its schedule into an
+isolation regression (old call rejects, B unchanged) in implementation step 1. It does not establish
+that an Assistant was running in the user's original tab.
 
 The central mismatch is between *message serialization* and *ownership of work*. A mutex or
 queue can execute a stale Command perfectly serially against the wrong Model. The design must

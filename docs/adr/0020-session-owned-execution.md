@@ -15,7 +15,9 @@ is immediate containment for the interleaving reproduced in #376.
 An explicit Body name is not a complete execution target when asynchronous callers share an
 implicit current Engine. The Worker queues messages, but opening a project replays multiple
 messages. Another reset can run between them. A regression produced a new Journal containing
-an old project's add/remove Commands. The original unclickable-tab incident is still unconfirmed.
+an old project's add/remove Commands. A later deterministic probe against corrected #377 retained an old facade, switched to a new
+project with the same Body name, and successfully deleted the new Body using the old facade.
+The original unclickable-tab incident is still unconfirmed.
 
 A queue around whole operations reduces interleavings but cannot reject the *next* Command an
 old Script or Assistant turn sends after a project switch. It also does not make a failed replay
