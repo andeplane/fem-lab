@@ -171,6 +171,46 @@ export type Command =
     }
   | {
       name: string;
+      format: MeshFormat;
+      /**
+       * The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
+       * what a binary STL needs.
+       */
+      data: string;
+      encoding?: DataEncoding | null;
+      /**
+       * Hex sha256 of the decoded file, checked before it is read.
+       */
+      sha256?: string | null;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      unitLength:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * Dihedral angle in degrees above which an edge splits two face patches.
+       */
+      featureAngle?: number | null;
+      /**
+       * Collapse mesh features smaller than this before use.
+       */
+      simplifyBelow?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "geometry.import";
+    }
+  | {
+      name: string;
       of: string;
       where: FacePredicate;
       cmd: "geometry.nameFace";
@@ -952,6 +992,14 @@ export type SegmentSpec =
       kind: "arc";
     };
 /**
+ * The geometry file formats geometry.import reads.
+ */
+export type MeshFormat = "stl";
+/**
+ * How a Command's inline file payload is encoded.
+ */
+export type DataEncoding = "utf8" | "base64";
+/**
  * A face predicate with unit strings; converted to the geometry crate's SI form in `apply`.
  */
 export type FacePredicate =
@@ -1491,14 +1539,35 @@ export type Query =
       query: "query.set";
     }
   | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       query: "query.result";
     }
   | {
+      query: "query.results";
+    }
+  | {
+      step?: string | null;
+      resultId?: string | null;
+      field: string;
+      query: "query.field";
+    }
+  | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       query: "query.frames";
     }
   | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       index?: number | null;
       sample?: FrameSample | null;
@@ -1506,6 +1575,10 @@ export type Query =
       query: "query.frame";
     }
   | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       field: Field;
       component?: number | null;
@@ -1542,6 +1615,10 @@ export type Query =
       query: "query.probe";
     }
   | {
+      /**
+       * Omit for the current per-Step selection; an explicit id uses its solved context.
+       */
+      resultId?: string | null;
       step?: string | null;
       field: Field;
       component?: number | null;
@@ -1839,6 +1916,46 @@ export type ModelFile_Command =
       from: string;
       shape: ShapeSpec;
       cmd: "geometry.subtract";
+    }
+  | {
+      name: string;
+      format: MeshFormat;
+      /**
+       * The file itself. Text as it stands, or base64 with `encoding: "base64"`, which is
+       * what a binary STL needs.
+       */
+      data: string;
+      encoding?: DataEncoding | null;
+      /**
+       * Hex sha256 of the decoded file, checked before it is read.
+       */
+      sha256?: string | null;
+      /**
+       * A length with unit, e.g. "100 mm". Any unit of the right dimension is accepted.
+       */
+      unitLength:
+        | string
+        | {
+            value: number;
+            unit: string;
+          };
+      /**
+       * Dihedral angle in degrees above which an edge splits two face patches.
+       */
+      featureAngle?: number | null;
+      /**
+       * Collapse mesh features smaller than this before use.
+       */
+      simplifyBelow?:
+        | (
+            | string
+            | {
+                value: number;
+                unit: string;
+              }
+          )
+        | null;
+      cmd: "geometry.import";
     }
   | {
       name: string;
@@ -2565,6 +2682,8 @@ export type QueryResult =
   | MeshSummary
   | SetInfo
   | ResultSummary
+  | RetainedResults
+  | ResultField
   | FramesResult
   | FrameResult
   | ProbeResult
@@ -2769,6 +2888,25 @@ export type Shape =
       name: string;
       shape: Shape;
       kind: "named";
+    }
+  | {
+      /**
+       * Vertex positions in metres.
+       */
+      positions: [number, number, number][];
+      /**
+       * Triangles as vertex indices, counter-clockwise seen from outside.
+       */
+      triangles: [number, number, number][];
+      /**
+       * Dihedral angle in degrees above which an edge splits two face patches; 30 by default.
+       */
+      feature_angle?: number | null;
+      /**
+       * Collapse mesh features smaller than this many metres before use.
+       */
+      simplify_below?: number | null;
+      kind: "mesh";
     };
 /**
  * One edge of a loop. A loop is a closed sequence: segment k runs from the previous
@@ -3496,6 +3634,10 @@ export interface SetInfo {
  * `query.result` response.
  */
 export interface ResultSummary {
+  /**
+   * Opaque identity scoped to the Engine instance that produced this solve.
+   */
+  resultId: string;
   step: string;
   /**
    * The Journal revision after the Command that produced this Result. It stays fixed while
@@ -3531,7 +3673,7 @@ export interface ResultSummary {
    */
   frequencies?: Valued[];
   /**
-   * One row per output time of a transient Step: when, and the range the field covered.
+   * One row per retained output time: when, and the range the field covered.
    */
   history?: HistoryRow[];
   /**
@@ -3589,17 +3731,65 @@ export interface ResultAssumption {
   cause: string;
 }
 /**
- * One time of a transient Step's history: the extremes of the field at that instant.
+ * One retained output time in a Step's history: the extremes of the field at that instant.
  */
 export interface HistoryRow {
   time: Valued;
   min: Valued;
   max: Valued;
 }
+export interface RetainedResults {
+  limit: number;
+  records: RetainedResult[];
+}
+/**
+ * One immutable solve instance. Byte counts describe payloads, not allocator or peak memory.
+ */
+export interface RetainedResult {
+  id: string;
+  step: string;
+  solvedRevision: number;
+  modelName: string;
+  modelHash: string;
+  inputHash: string;
+  stale: boolean;
+  nodes: number;
+  elements: number;
+  /**
+   * f64 arrays in final fields, modes, frequencies and retained History.
+   */
+  fieldBytes: number;
+  /**
+   * Numeric coordinates, connectivity and resolved geometry Sets; excludes container overhead.
+   */
+  meshBytes: number;
+  /**
+   * Serialized solved Model metadata size, not its in-memory allocation size.
+   */
+  modelJsonBytes: number;
+}
+/**
+ * Final scientific values are f64 SI in component-fastest entity order.
+ */
+export interface ResultField {
+  resultId: string;
+  step: string;
+  field: string;
+  components: number;
+  per: string;
+  entityCount: number;
+  nodeCount: number;
+  unit: string;
+  values: number[];
+}
 /**
  * `query.frames` response; stored components describe the unpadded History storage.
  */
 export interface FramesResult {
+  /**
+   * Opaque identity scoped to the Engine instance that produced this solve.
+   */
+  resultId: string;
   step: string;
   modelHash: string;
   stale: boolean;
@@ -3644,6 +3834,10 @@ export interface FrameResult {
  * counter: hosts must invalidate frame caches on solve acknowledgements, even for the same Model.
  */
 export interface ResolvedFrame {
+  /**
+   * Opaque identity scoped to the Engine instance that produced this solve.
+   */
+  resultId: string;
   step: string;
   modelHash: string;
   frame: FrameStamp;
@@ -3690,6 +3884,14 @@ export interface CostEstimate {
    * Mandatory assembly storage before transient-specific values are added.
    */
   assemblyBytes: number;
+  /**
+   * Numeric fields and Mesh snapshots of every existing retained Result; none is evicted before success.
+   */
+  residentResultBytes: number;
+  /**
+   * Numeric Mesh snapshot created for the new Result; excludes Model and allocator overhead.
+   */
+  resultMeshBytes: number;
   /**
    * Initial state, requested stride and a unique final endpoint; zero for steady/modal Steps.
    */

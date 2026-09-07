@@ -20,7 +20,6 @@ const run = (file, args, threads = 1) => execFileSync(native, ['run', file, '--c
 try {
   for (const kind of ['heat', 'explicit-2d', 'explicit-3d']) for (const order of [1, 2]) for (const nx of [2, 4]) {
     const name = `${kind}-o${order}-n${nx}`;
-    const engine = new Engine(1);
     const file = recorded ? path.join(recorded, `${name}.json`) : path.join(scratch, `${name}.json`);
     if (!recorded) {
       const commands = JSON.parse(readFileSync(path.join(root, `tools/fixtures/transient-${kind}.json`)));
@@ -28,11 +27,19 @@ try {
       mesh.order = order;
       if (mesh.mesher.kind === 'mapped') mesh.mesher.blocks[0].n[0] = nx;
       else mesh.mesher.size.nx = nx;
-      for (const cmd of commands) await engine.dispatch(JSON.stringify(cmd));
-      writeFileSync(file, JSON.stringify(JSON.parse(engine.export_file()).journal.entries));
+      const recorder = new Engine(1);
+      try {
+        for (const cmd of commands) await recorder.dispatch(JSON.stringify(cmd));
+        writeFileSync(file, JSON.stringify(JSON.parse(recorder.export_file()).journal.entries));
+      } finally {
+        recorder.free();
+      }
     }
     const entries = JSON.parse(readFileSync(file));
     const beforeHashes = entries.map(e => e.hashAfter);
+    // Like the native CLI and replay-wasm tool, replay into a fresh engine. Recording has
+    // already solved once; retained IDs intentionally are not recycled on a reused engine.
+    const engine = new Engine(1);
     assert.deepEqual(JSON.parse(await engine.replay_hashes(JSON.stringify(entries), false, true)), beforeHashes);
     const journalBefore = query(engine, { query: 'query.journal' });
     const catalogue = query(engine, { query: 'query.frames' });

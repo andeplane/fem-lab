@@ -14,10 +14,24 @@ export const AUTOSAVES = [
   { id: 'older', name: 'beam', at: 1_699_999_000_000, commands: 7 },
 ];
 
+/**
+ * A unit tetrahedron as an ASCII STL: the smallest watertight solid `geometry.import`
+ * accepts, so the geometry picker's fakes hand back something real.
+ */
+export const TETRA_STL = [
+  'solid t',
+  'facet normal 0 0 -1\n outer loop\n  vertex 0 0 0\n  vertex 0 1 0\n  vertex 1 0 0\n endloop\nendfacet',
+  'facet normal -1 0 0\n outer loop\n  vertex 0 0 0\n  vertex 0 0 1\n  vertex 0 1 0\n endloop\nendfacet',
+  'facet normal 0 -1 0\n outer loop\n  vertex 0 0 0\n  vertex 1 0 0\n  vertex 0 0 1\n endloop\nendfacet',
+  'facet normal 1 1 1\n outer loop\n  vertex 1 0 0\n  vertex 0 1 0\n  vertex 0 0 1\n endloop\nendfacet',
+  'endsolid t',
+].join('\n');
+
 const kN = (value: number) => ({ value, unit: 'kN' });
 const mm = (value: number) => ({ value, unit: 'mm' });
 
 export const RESULT: ResultSummary = {
+  resultId: 'result-1',
   reactionQuantity: 'force',
   step: 'static',
   revision: 10,
@@ -93,6 +107,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
     clipboard: { writeText: vi.fn(async () => undefined) },
     files: {
       pick: vi.fn(async () => JSON.stringify(MODEL_FILE)),
+      pickBytes: vi.fn(async () => new TextEncoder().encode(TETRA_STL)),
       download: vi.fn(),
       beginSave: vi.fn(() => markSaved),
       markSaved,
@@ -133,6 +148,7 @@ export function fakeHost(transport = fakeTransport(), folderOpen = false): HostC
       refresh: vi.fn(async () => undefined),
       info: vi.fn(() => (folderOpen ? FOLDER : null)),
       readText: vi.fn(async (path: string) => (path === 'big.txt' ? 'x'.repeat(2 * 1024 * 1024 + 1) : path.endsWith('.json') ? JSON.stringify(MODEL_FILE) : `content of ${path}`)),
+      readBytes: vi.fn(async (path: string) => new TextEncoder().encode(path === 'huge.stl' ? 'x'.repeat(33 * 1024 * 1024) : TETRA_STL)),
       writeText: vi.fn(async () => undefined),
       writeBytes: vi.fn(async () => undefined),
     },

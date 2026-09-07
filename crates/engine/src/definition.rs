@@ -56,6 +56,13 @@ fn shape(s: &Shape) -> Result<ShapeSpec, Error> {
                 .at("shape")
                 .suggest("geometry.add with an explicit public shape definition"))
         }
+        // The Model keeps the welded triangles, not the file they came from, so the editable
+        // Command is the import itself rather than a shape definition.
+        Shape::Mesh { .. } => {
+            return Err(Error::new(ErrorCode::Unsupported, "an imported mesh Body has no editable shape definition")
+                .at("shape")
+                .suggest("geometry.import again with the file, a different unitLength or a different featureAngle"))
+        }
     })
 }
 

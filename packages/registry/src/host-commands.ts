@@ -6,7 +6,7 @@
 // `HostContext`. Nothing here touches the DOM: the app implements `HostContext`, tests fake it.
 import { z } from 'zod';
 import type { ScriptDiagnostic, ScriptValidation } from './script-validation-types';
-import type { JournalEntry, ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
+import type { Command, JournalEntry, ModelFile, ModelSummary, PathResult, ResultSummary } from './generated/engine';
 import { FemError } from './error';
 import { assertInside } from './project-paths';
 import type { HostDef } from './registry';
@@ -182,6 +182,8 @@ export interface HostContext {
   files: {
     /** Open a file picker and return the chosen file's text. */
     pick(): Promise<string>;
+    /** Open a file picker filtered to `accept` and return the chosen file's bytes. */
+    pickBytes(accept: string): Promise<Uint8Array>;
     download(name: string, mime: string, data: string | Uint8Array): void;
     /** Capture the current document before async I/O; completion affects only that document. */
     beginSave(): (journal: ModelFile['journal']) => void;
@@ -218,6 +220,8 @@ export interface HostContext {
     refresh(): Promise<void>;
     info(): FolderInfo | null;
     readText(path: string): Promise<string>;
+    /** Read a file from the open folder as bytes, for a format that is not text. */
+    readBytes(path: string): Promise<Uint8Array>;
     writeText(path: string, text: string): Promise<void>;
     writeBytes(path: string, bytes: Uint8Array): Promise<void>;
   };
@@ -248,6 +252,17 @@ async function deliver(ctx: HostContext, to: 'download' | 'folder' | undefined, 
 
 /** Browser imports are bounded before JSON parsing or transfer to the engine Worker. */
 export const MAX_MODEL_FILE_BYTES = 16 * 1024 * 1024;
+/** A geometry file large enough for the engine's 500 000 triangle ceiling in binary STL. */
+export const MAX_GEOMETRY_FILE_BYTES = 32 * 1024 * 1024;
+/** What the geometry picker offers. */
+const GEOMETRY_ACCEPT = '.stl,model/stl';
+
+/** Standard base64 of raw bytes, the encoding `geometry.import` reads. */
+function base64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
 
 async function importText(ctx: HostContext, text: string) {
   if (text.length > MAX_MODEL_FILE_BYTES || new TextEncoder().encode(text).byteLength > MAX_MODEL_FILE_BYTES) {
@@ -435,8 +450,29 @@ export const HOST_COMMANDS: HostDef[] = [
     if ('path' in how) return importText(ctx, await ctx.folder.readText(assertInside(how.path).join('/')));
     return importText(ctx, await ctx.files.pick());
   }),
+  def('geometry.importFile', 'Import a geometry file from disk as a Body: with the file picker, or from a `path` relative to the open project folder. The file is read here and handed to the engine\'s geometry.import, which carries it inline, so the Journal replays on any host without the file. STL only for now, ASCII or binary, up to 32 MiB. `unitLength` says what one unit in the file means and defaults to `1 mm`, which is what most CAD tools export; check the reported bounding box if you are not sure. `featureAngle` (degrees) and `simplifyBelow` (a length) are passed straight through. Name the faces you will reuse with geometry.nameFace predicates rather than the auto `face0` numbers, which move when the file does.', z.object({
+    name: z.string(),
+    path: z.string().optional(),
+    unitLength: z.string().optional(),
+    featureAngle: z.number().optional(),
+    simplifyBelow: z.string().optional(),
+  }), async ({ name, path, unitLength, featureAngle, simplifyBelow }, ctx) => {
+    const bytes = path === undefined ? await ctx.files.pickBytes(GEOMETRY_ACCEPT) : await ctx.folder.readBytes(assertInside(path).join('/'));
+    if (bytes.byteLength > MAX_GEOMETRY_FILE_BYTES) throw new FemError('schema', `the geometry file is ${bytes.byteLength} bytes, over the 32 MiB import limit`, 'path', 'decimate the mesh in the tool that wrote it, or import a smaller part');
+    return ctx.transport.dispatch({
+      cmd: 'geometry.import',
+      name,
+      format: 'stl',
+      encoding: 'base64',
+      data: base64(bytes),
+      unitLength: unitLength ?? '1 mm',
+      ...(featureAngle === undefined ? {} : { featureAngle }),
+      ...(simplifyBelow === undefined ? {} : { simplifyBelow }),
+    } as Command);
+  }),
   def('file.save', 'Save the Model and its Journal as a `femlab/1` JSON file, into the open project folder when there is one (or `to: "folder"`) or as a download. `name` defaults to `<model name>.femlab.json`. A late save completion never changes the saved baseline of a replacement Model.', z.object({ name: z.string().optional(), to: Destination }), async ({ name, to }, ctx) => {
     const completeSave = ctx.files.beginSave();
+
     const file = await ctx.transport.exportFile();
     const receipt = await deliver(ctx, to, name ?? `${file.model.name}.femlab.json`, 'application/json', JSON.stringify(file, null, 2));
     completeSave(file.journal);
