@@ -5701,7 +5701,11 @@ fn radiative_cooling_reports_endpoint_fluxes_and_the_exact_stored_energy_rate() 
                 output_every: 1,
                 amplitude: None,
                 solver: SolveOptions::default(),
-                control: tight(),
+                // Large conductivity keeps this block nearly isothermal but makes 1e-12
+                // state-change stopping sensitive to f64 solve roundoff (Linux reached
+                // 1.18e-12 after 100 passes). Stop at 1e-10 and check the actual power/energy
+                // accuracy independently below; none of those physical tolerances change.
+                control: NonlinearControl { tol: 1e-10, max_iterations: 100 },
             };
             let full = run_step(&p, &step).unwrap();
             let history = full.history.as_ref().unwrap();
