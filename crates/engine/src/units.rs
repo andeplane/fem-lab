@@ -717,6 +717,11 @@ impl ResolvedUnits {
             d if d == Acceleration::DIM => self.acceleration.as_str(),
             // Frequencies are quoted in Hz by everyone, so there is no display unit to choose.
             d if d == Frequency::DIM => return (value_si, "Hz".to_string()),
+            // A moment is the force unit times the length unit: "kN m" when those are kN and m.
+            d if d == Torque::DIM => {
+                let unit = format!("{} {}", self.force, self.length);
+                return (convert(value_si, &unit, None).unwrap_or(value_si), unit);
+            }
             Dimension([3, 0, 0, 0]) => {
                 return (value_si / powi(len_factor(&self.length), 3), format!("{}^3", self.length))
             }

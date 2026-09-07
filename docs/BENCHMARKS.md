@@ -47,6 +47,11 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 |---|---|---|---|---|---|
 | amplitude-ramped-cantilever | green | 9/9 | -0.190407 | -0.191962 | 0.81 % |
 | axisymmetric-thermal-stress | green | 4/4 | 1 | 1 | 0.00 % |
+| beam-cantilever-tip | green | 12/12 | -2.0156 | -2.0156 | 0.00 % |
+| beam-clamped-vs-pinned | green | 8/8 | -0.080949 | -0.080949 | 0.00 % |
+| beam-portal-frame-sway | green | 7/7 | 8.696404 | 8.693182 | 0.04 % |
+| beam-simply-supported-udl | green | 8/8 | -0.394949 | -0.394949 | 0.00 % |
+| beam-torsion-shaft | green | 7/7 | 0.001324 | 0.001324 | 0.00 % |
 | buckling-plate-uniaxial-hex20 | green | 3/3 | 74.486975 | 75.92 | 1.89 % |
 | cantilever-hex20 | green | 6/6 | -0.190407 | -0.191962 | 0.81 % |
 | cantilever-hex8-full | green | 6/6 | -0.18378 | -0.18378 | 0.00 % |
@@ -59,8 +64,8 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | cyclic-annulus-sector | green | 4/4 | 99.847585 | 100 | 0.15 % |
 | euler-column-fixed-free-hex20 | green | 4/4 | 17.399614 | 17.2718 | 0.74 % |
 | euler-column-pinned-quad8 | green | 3/3 | 68.798751 | 69.0872 | 0.42 % |
-| explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | explicit-free-fall-thrown | green | 4/4 | 0.3 | 0.3 | 0.00 % |
+| explicit-free-fall | green | 3/3 | -0.004905 | -0.004905 | 0.00 % |
 | explicit-sdof-step | green | 4/4 | 0.001002 | 0.001 | 0.20 % |
 | explicit-wave-bar | green | 4/4 | 1.001437 | 1 | 0.14 % |
 | harmonic-cantilever-sweep | green | 7/7 | 42 | 41.9107 | 0.21 % |
@@ -100,6 +105,7 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | orthotropic-lamina-off-axis | green | 7/7 | 10 | 10 | 0.00 % |
 | radiating-block-transient | green | 2/2 | 381.480133 | 381.492848 | 0.00 % |
 | radiating-slab | green | 3/3 | 927.00395 | 927.00395 | 0.00 % |
+| thermal-contact-series | green | 5/5 | 327.777778 | 327.777778 | 0.00 % |
 | thermal-stress-plate | green | 4/4 | 50 | 50 | 0.00 % |
 | tie-cantilever-split | green | 5/5 | -0.190113 | -0.190113 | 0.00 % |
 | tie-nonmatching-patch-refined | green | 9/9 | 16 | 16 | 0.00 % |
@@ -110,6 +116,9 @@ is. Timings are not here: they would churn the file, and `femlab bench --json` h
 | truss-space-determinate | green | 5/5 | -0.390625 | -0.390625 | 0.00 % |
 | truss-thermal-restrained | green | 5/5 | -240 | -240 | 0.00 % |
 | truss-two-bar-planar | green | 5/5 | -0.1 | -0.1 | 0.00 % |
+| twisted-shaft-hollow | green | 3/3 | 6.0853e-6 | 6.0853e-6 | 0.00 % |
+| twisted-shaft-solid-coarse | green | 3/3 | 5.2967e-6 | 5.2967e-6 | 0.00 % |
+| twisted-shaft-solid-fine | green | 3/3 | 5.2967e-6 | 5.2967e-6 | 0.00 % |
 
 <!-- bench:end -->
 
@@ -277,6 +286,13 @@ limits have no estimate; `study.converge` reports its existing unavailable field
 | B13 | Fixed–free bar's axial modes, 4/8/16 truss elements, consistent mass | f_n = (2n−1)/(4L)·√(E/ρ) | 1 % at 16 elements, observed rate > 1.9, every discrete frequency above the exact one | consistent mass and modal convergence of the line element | engine test |
 | B14 | Twisted axisymmetric shaft, solid, St Venant torsion | u_θ(a,L) = TLa/(GJ) = 5.296676506098277e-6 m, τ_θz(a) = Ta/J = 4074366.54315252 Pa, J = πa⁴/2 | 1e-9 (u_θ) and 1e-8 (τ) on two meshes | axisymmetric twist DOF, its two new Voigt rows, the rotation-about-the-axis rigid mode | engine test + green |
 | B15 | Twisted axisymmetric shaft, hollow | same closed form with J = π(a⁴−b⁴)/2: u_θ(a,L) = 6.085336059395998e-6 m, τ_θz(a) = 4681027.737996921 Pa | 1e-9 (u_θ), 1e-8 (τ) | the hollow-section case; superposition against a separate internal-pressure Step to 1e-10 | engine test + green |
+| B21 | Timoshenko cantilever, tip force, one element and four; strong and weak axis (`beam-cantilever-tip`) | δ = PL³/3EI + PL/κGA: 2.0156 mm (I_y) and 8.0156 mm (I_z) for a 100 × 200 mm rectangle, L = 2 m, P = 10 kN; root M = PL, V = P everywhere; tip θ = PL²/2EI | 1e-10 rel, identical at one and four elements | the shear-flexible `Beam2` is nodally exact; the local triad; `sectionForce`/`sectionMoment`; the extreme-fibre stress | green |
+| B22 | Simply supported beam under self-weight, eight elements (`beam-simply-supported-udl`) | δ = 5wL⁴/384EI + wL²/8κGA = 0.394949 mm, w = ρgA = 1570 N/m, L = 4 m; θ_end = wL³/24EI; M_mid = wL²/8; V_end = wL/2 | 1e-9 rel | `constraint.pin`, gravity through the fixed-end loads `qL/2, qL²/12`, the `rotation` field | green |
+| B23 | The same beam clamped and pinned, side by side (`beam-clamped-vs-pinned`) | clamped δ = wL⁴/384EI + wL²/8κGA = 0.0809492 mm against the pinned 0.394949 mm; clamped end M = wL²/12, midspan wL²/24 | 1e-9 rel | `constraint.fix` as a clamp against `constraint.pin`: the difference is exactly the rotational restraint | green |
+| B24 | Fixed-base portal frame, sway load (`beam-portal-frame-sway`) | Δ = H h³ (2 + 3k) / (12 EI (1 + 6k)), k = (EI/L)/(EI/h) = 0.75: 8.6932 mm for h = 3 m, L = 4 m, H = 100 kN; joint θ = 3Δ/(h(2 + 3k)); column moments (2EI/h)(θ − 3Δ/h) and (2EI/h)(2θ − 3Δ/h) | 1e-3 rel (measured 3.7e-4 in Δ, 3.4e-4 in θ, 8.7e-5 in M_AB) | a frame of columns and a beam, the vertical-member orientation rule, joint equilibrium | green |
+| B25 | Circular shaft, clamped, end torque by `load.moment` (`beam-torsion-shaft`) | φ = TL/GJ, J = πr⁴/2: 1.32417e-3 rad for r = 50 mm, L = 1 m, T = 1 kN·m; linear along the shaft; T uniform | 1e-10 rel | St Venant torsion `GJ/L`, `load.moment`, the `rotation` field | green |
+| B26 | Clamped–free beam bending modes, 1/2/4/8 elements; and a stubby beam | f_n = (β_nL)²/(2πL²) √(EI/ρA), β_nL = 1.8751, 4.6941 | mode 1 error 4.75e-3, 4.83e-4, 3.27e-5, 2.03e-6; observed rate 3.95; a beam with r_g/L = 0.1 comes out 5.2 % below Euler–Bernoulli | the Hermitian consistent mass, modal convergence at fourth order, shear softening | engine test |
+| B27 | A beam element's zero-energy modes | exactly six: `K v = 0` for three translations and three rotations (`u = ω × r, θ = ω`), and `K` plus their projector is positive definite | 1e-9 of ‖K‖ | no spurious mechanism, no missing rigid mode | engine test |
 | B20 | Section library: A, I_y, I_z, J of every `section.add` shape | closed forms (Roark for the rectangle's J), and the I-section against the IPE 200 datasheet A = 2850 mm², I_y = 19.43e6 mm⁴, I_z = 1.424e6 mm⁴ | exact against the closed forms (1e-12 rel); within 6 % *below* the datasheet | the section library a line member integrates with | engine test |
 
 B7 (`simplex_axial_modes_converge_to_the_closed_form_bar_frequency`) fixes transverse
@@ -342,6 +358,56 @@ element-level companion, `axisymmetric_twist_is_symmetric_psd_and_reproduces_pur
 in `tests/fem.rs`, checks the same exactness and the stiffness's symmetry, positive
 semi-definiteness and rigid-mode annihilation (`u_θ = r`, the rotation about the axis) directly
 against the element kernel, both formulations.
+
+B21 to B25 are Journals under `crates/femlab/benches/cases/`, replayed a second time by
+`the_beam_benchmark_journals_replay_and_meet_their_checks` in `tests/registry.rs`, so the beam,
+the six-DOF stride, `constraint.pin`, `load.moment`, `section.assign`'s orientation and the
+three new Result fields are gated on closed forms through the same Commands a person uses. Four
+things about them are worth knowing.
+
+**The element is nodally exact, and the benchmarks lean on it.** `Beam2` is the closed-form
+shear-flexible element (`Φ = 12EI/κGAL²`), whose stiffness is the exact flexibility relation of
+a prismatic Timoshenko member; with nodal loads, or with a uniform load applied as its fixed-end
+forces `qL/2, ±qL²/12` (which do not depend on `Φ`), the nodal displacements and rotations are
+the continuum's own. That is why B21 asks for the same number at one element and four, why B22
+and B23 gate a self-weight deflection at 1e-9 rather than at a mesh-convergence tolerance, and
+why the section forces come out as the statics of the member rather than as an approximation
+to them: a member reports `f = K_l u_l − f_gravity − f_thermal` at its ends, so B22's midspan
+carries `wL²/8` and B23's clamped ends `wL²/12` to round-off.
+
+**Section forces are signed as the resultant the far side of a cut exerts, right-handed about
+the local axes.** At end 1 that is minus the nodal force on the element, at end 2 the nodal
+force itself, so a member in uniform tension reports the same `N` at both ends and the shear of
+a cantilever the same `V` everywhere. With the load along −z a sagging span has *negative*
+`M_y` and a hogging clamp positive `M_y`; B24's column base carries slope-deflection's `M_AB`
+with its own sign and its top `−M_BA`. The Journals record the measured signs with the reason.
+
+**B24 is a 1e-3 gate on purpose.** The slope-deflection sway `Δ = H h³ (2 + 3k) / (12 EI (1 + 6k))`
+neglects axial and shear deformation. The frame uses a `generic` section with `A = 1 m²`,
+`I = 1e-4 m⁴` and `κ = 1`, which makes both a 1e-4 effect (`Φ ≈ 3.5e-4`, column axial stiffness
+1e4 times the bending one); the measured errors are 3.7e-4 in the sway, 3.4e-4 in the joint
+rotation and 8.7e-5 in the base moment, all of them the closed form's own idealisation.
+
+**A beam wants its twist held.** A simply supported beam pinned at both ends is free to rotate
+about its own axis: every joint lies on that axis, so `u = ω × r` vanishes on every held
+translation and `checks::rigid_modes` reports "rotation about x" — correctly. B22 and B23 hold
+`rx` at one pin. A clamp (`constraint.fix` without `dofs`, or with all three displacements and
+no rotation) holds the three rotations of a beam joint as well; `constraint.symmetry` holds the
+two rotations in its plane, which is what makes the guided-end check
+`a_symmetry_plane_guides_a_beam_end_and_an_orientation_along_it_is_refused` come out at
+`PL³/12EI + PL/κGA`.
+
+B26 (`cantilever_beam_modes_converge_to_euler_bernoulli_at_fourth_order_and_shear_softens_a_stubby_one`)
+is an engine test like B13, because the rate needs four meshes. The consistent mass is the
+Hermitian-cubic one without rotary inertia, so the reference is Euler–Bernoulli with a section
+slender enough (`r_g/L = 1e-4`) for the element's shear flexibility to be a 1e-8 effect: mode 1
+errors 4.75e-3, 4.83e-4, 3.27e-5 and 2.03e-6 at 1, 2, 4 and 8 elements, an observed rate of 3.95
+on the last three, mode 2 within 1e-3 at eight, and every discrete frequency above the exact one.
+The same test then solves a beam with `r_g/L = 0.1` and checks that its first frequency comes
+out *below* Euler–Bernoulli — at 0.948 of it — which is the shear flexibility showing. B27
+(`a_beam_element_has_exactly_six_zero_energy_modes`) is the rank test: `K v = 0` on the six
+rigid vectors, `K` alone singular, `K + Σ v vᵀ` positive definite by a Cholesky written in the
+test.
 
 B20 (`section_properties_match_their_closed_forms_and_a_datasheet`) checks every
 `SectionSpec` arm against an oracle written from the geometry rather than from the

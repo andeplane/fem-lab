@@ -297,10 +297,10 @@ fn energy(k: &crate::fem::assembly::Csr, mass: &[f64], u: &[f64], v: &[f64], ku:
     kinetic + strain
 }
 
-/// `Σ m v` per direction.
+/// `Σ m v` per direction; a beam joint's angular momentum is not a linear one and is left out.
 fn momentum(mass: &[f64], v: &[f64], dpn: usize) -> [f64; 3] {
     let mut p = [0.0; 3];
-    for (i, (m, vi)) in mass.iter().zip(v).enumerate() {
+    for (i, (m, vi)) in mass.iter().zip(v).enumerate().filter(|(i, _)| i % dpn < 3) {
         p[i % dpn] += m * vi;
     }
     p

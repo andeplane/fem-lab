@@ -16,8 +16,11 @@
 //! stays on the path; for the isotropic law they are `E` and `E/2(1+ν)`.
 //!
 //! The consistent mass is the Hermitian-cubic one without rotary inertia or shear terms, plus
-//! `ρ I_p L/6 [[2,1],[1,2]]` in torsion with `I_p = I_y + I_z`; the lumped mass is its HRZ
-//! diagonal (`ρAL/2` per translation, `ρAL³/78` per bending rotation, `ρ I_p L/2` per twist).
+//! `ρ I_p L/6 [[2,1],[1,2]]` in torsion with `I_p = I_y + I_z`. The lumped mass puts `ρAL/2`
+//! on every translation, as the truss does, and on the rotations the HRZ diagonal of the
+//! *global* consistent rotational block — its diagonal scaled by `420/312`, the transverse
+//! HRZ factor — so it is diagonal whatever the member's direction, with a rotational inertia
+//! per node whose trace is `(ρ I_p L/3 + 8 ρAL³/420) · 420/312`.
 //! A body force integrates to the fixed-end forces `qL/2, ±qL²/12`, which are the same for
 //! every `Φ`, and a temperature rise loads the axis exactly as the truss's does.
 //!
@@ -194,23 +197,14 @@ fn local_stiffness(p: &Props<'_>, k: &mut [f64]) {
     bending_block(k, [2, 4, 8, 10], p.e * s.i_y, phi_z, l, -1.0);
 }
 
-/// The consistent local mass, or its HRZ diagonal when `lumped`.
-fn local_mass(rho: f64, s: &Section, l: f64, lumped: bool, m: &mut [f64]) {
+/// The transverse HRZ factor: `ρAL` over the two `156/420` diagonal entries of one direction.
+const HRZ_SCALE: f64 = 420.0 / 312.0;
+
+/// The consistent local mass.
+fn local_mass(rho: f64, s: &Section, l: f64, m: &mut [f64]) {
     m.fill(0.0);
     let ral = rho * s.a * l;
     let ip = rho * (s.i_y + s.i_z) * l;
-    if lumped {
-        for node in 0..2 {
-            for i in 0..3 {
-                m[(6 * node + i) * N_DOF + 6 * node + i] = 0.5 * ral;
-            }
-            m[(6 * node + 3) * N_DOF + 6 * node + 3] = 0.5 * ip;
-            for i in 4..6 {
-                m[(6 * node + i) * N_DOF + 6 * node + i] = ral * l * l / 78.0;
-            }
-        }
-        return;
-    }
     for (a, b, v) in [(0, 0, 2.0), (0, 6, 1.0), (6, 0, 1.0), (6, 6, 2.0)] {
         m[a * N_DOF + b] = ral / 6.0 * v;
         m[(a + 3) * N_DOF + b + 3] = ip / 6.0 * v;
@@ -328,8 +322,20 @@ impl Element for Beam2 {
         let rho = density(c)?;
         let s = section_of(c)?;
         let mut local = [0.0; N_DOF * N_DOF];
-        local_mass(rho, s, 2.0 * fr.half, lumped, &mut local);
+        local_mass(rho, s, 2.0 * fr.half, &mut local);
         rotate_matrix(&fr.r, &local, m);
+        if lumped {
+            let half_mass = 0.5 * rho * s.a * 2.0 * fr.half;
+            for i in 0..N_DOF {
+                for j in 0..N_DOF {
+                    m[i * N_DOF + j] = match (i == j, i % 6 < 3) {
+                        (false, _) => 0.0,
+                        (true, true) => half_mass,
+                        (true, false) => HRZ_SCALE * m[i * N_DOF + i],
+                    };
+                }
+            }
+        }
         Ok(())
     }
 

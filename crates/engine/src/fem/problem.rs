@@ -155,10 +155,8 @@ impl Problem<'_> {
     pub fn dofs_per_node(&self) -> usize {
         if self.heat {
             1
-        } else if self.has_beams() {
-            NODE_DOFS_MAX
         } else {
-            self.idealisation.dofs_per_node()
+            mesh_dofs_per_node(self.mesh, &self.idealisation)
         }
     }
 
@@ -302,6 +300,17 @@ pub fn dof_labels(id: &Idealisation) -> [&'static str; NODE_DOFS_MAX] {
     match id {
         Idealisation::Axisymmetric { .. } => ["ur", "uz", "utheta", "rx", "ry", "rz"],
         _ => ["ux", "uy", "uz", "rx", "ry", "rz"],
+    }
+}
+
+/// The structural unknowns per node of a Mesh under an idealisation: six once it holds a beam
+/// block, else the idealisation's own count. [`Problem::dofs_per_node`] for a structural Step,
+/// and what `query.mesh` and `query.cost` count with before any Problem exists.
+pub fn mesh_dofs_per_node(mesh: &Mesh, id: &Idealisation) -> usize {
+    if mesh.blocks.iter().any(|b| b.kind == ElementKind::Beam2) {
+        NODE_DOFS_MAX
+    } else {
+        id.dofs_per_node()
     }
 }
 

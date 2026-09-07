@@ -333,7 +333,9 @@ pub fn run(
     let mut totals = [0.0; 3];
     for (i, fe) in f_eff.iter_mut().enumerate() {
         *fe = load_scale * f[i] - *fe + s.alpha * q[i];
-        totals[i % dpn] += *fe;
+        if i % dpn < 3 {
+            totals[i % dpn] += *fe;
+        }
     }
     drop(q);
     let r = assembly::reactions(&a.k, &st.u, &f_eff, &red_fixed(&rc), &Mpc::none());

@@ -10745,3 +10745,208 @@ fn initial_velocity_entries_are_checked_for_units_sets_and_agreement() {
     );
     assert_eq!((bad.code, bad.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("initialVelocity[1]")));
 }
+
+// ---------------------------------------------------------------- beams (#65)
+
+/// Every beam Benchmark Journal (B21–B25), replayed through the registry and held to its own
+/// checks: the same files `femlab bench` runs, so the Command surface a frame needs —
+/// `geometry.addLine` with `kind: beam`, `constraint.pin`, `constraint.fix` as a clamp,
+/// `load.moment`, the `rotation`, `sectionForce` and `sectionMoment` fields — is gated here too.
+#[test]
+fn the_beam_benchmark_journals_replay_and_meet_their_checks() {
+    let cases = [
+        include_str!("../../femlab/benches/cases/beam-cantilever-tip.json"),
+        include_str!("../../femlab/benches/cases/beam-simply-supported-udl.json"),
+        include_str!("../../femlab/benches/cases/beam-clamped-vs-pinned.json"),
+        include_str!("../../femlab/benches/cases/beam-portal-frame-sway.json"),
+        include_str!("../../femlab/benches/cases/beam-torsion-shaft.json"),
+    ];
+    for text in cases {
+        let case: serde_json::Value = serde_json::from_str(text).unwrap();
+        let name = case["name"].as_str().unwrap();
+        let mut e = engine();
+        for command in case["journal"].as_array().unwrap() {
+            ok(&mut e, &command.to_string());
+        }
+        for check in case["checks"].as_array().unwrap() {
+            let query: Query = serde_json::from_value(check["query"].clone()).unwrap();
+            let got = serde_json::to_value(e.query(query).unwrap()).unwrap();
+            let got = got.pointer(check["path"].as_str().unwrap()).cloned().unwrap_or(serde_json::Value::Null);
+            let expect = &check["expect"];
+            match (got.as_f64(), expect.as_f64()) {
+                (Some(g), Some(x)) => {
+                    let tol = check["tol"].as_f64().unwrap();
+                    let scale = if check["rel"].as_bool().unwrap_or(false) { x.abs() } else { 1.0 };
+                    assert!((g - x).abs() <= tol * scale, "{name} {}: got {g}, expected {x}", check["path"]);
+                }
+                _ => assert_eq!(&got, expect, "{name} {}", check["path"]),
+            }
+        }
+        let QueryResult::Mesh(m) = e.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
+        assert_eq!(m.element_kind, "beam2", "{name}");
+        assert_eq!(m.dofs, 6 * m.nodes, "{name}: six unknowns per node");
+    }
+}
+
+fn beam_model(e: &mut Engine, kind: &str) {
+    ok(e, r#"{"cmd":"model.new","name":"frame"}"#);
+    ok(e, r#"{"cmd":"model.setUnits","units":{"length":"mm","stress":"MPa","force":"kN"}}"#);
+    ok(
+        e,
+        &format!(
+            r#"{{"cmd":"geometry.addLine","name":"beam","points":[["0 m","0 m","0 m"],["2 m","0 m","0 m"]],"divisions":2,"kind":"{kind}"}}"#
+        ),
+    );
+    ok(e, r#"{"cmd":"material.add","name":"steel","E":"200 GPa","nu":0.3,"rho":"7850 kg/m^3"}"#);
+    ok(e, r#"{"cmd":"material.assign","material":"steel","bodies":["beam"]}"#);
+    ok(e, r#"{"cmd":"section.add","name":"rect","shape":{"kind":"rectangle","width":"100 mm","height":"200 mm"}}"#);
+    ok(e, r#"{"cmd":"section.assign","section":"rect","bodies":["beam"]}"#);
+    ok(e, r#"{"cmd":"mesh.set","mesher":{"kind":"lattice","size":"1 m"}}"#);
+}
+
+/// The Commands a frame needs validate what they are given, summarise themselves, survive a
+/// definition round trip and a rename, and refuse what has no rotation to act on.
+#[test]
+fn beam_commands_validate_summarise_and_round_trip() {
+    let mut e = engine();
+    beam_model(&mut e, "beam");
+    // A pin and a moment name a Set that must exist.
+    assert_eq!(err(&mut e, r#"{"cmd":"constraint.pin","name":"p","on":"nope"}"#).code, ErrorCode::NotFound);
+    assert_eq!(
+        err(&mut e, r#"{"cmd":"load.moment","name":"m","on":"nope","total":["1 kN m","0 kN m","0 kN m"]}"#).code,
+        ErrorCode::NotFound
+    );
+    // A rotation cannot be prescribed a length.
+    let er = err(&mut e, r#"{"cmd":"constraint.prescribe","name":"turn","on":"beam.p1","dof":"ry","value":"1 mm"}"#);
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::Unsupported, Some("dof")));
+    // An orientation has to be a direction.
+    let er = err(&mut e, r#"{"cmd":"section.assign","section":"rect","bodies":["beam"],"orientation":[0,0,0]}"#);
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::Schema, Some("orientation")));
+    ok(&mut e, r#"{"cmd":"section.assign","section":"rect","bodies":["beam"],"orientation":[0,1,0]}"#);
+    assert_eq!(e.model().body("beam").unwrap().orientation, Some([0.0, 1.0, 0.0]));
+
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.p0"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.pin","name":"tip","on":"beam.p1"}"#);
+    ok(&mut e, r#"{"cmd":"load.moment","name":"twist","on":"beam.p1","total":["1 kN m","0 kN m","0 kN m"]}"#);
+    let QueryResult::Model(m) = e.query(Query::Model {}).unwrap() else { panic!("model") };
+    assert_eq!(m.constraints.iter().find(|c| c.name == "tip").unwrap().summary, "pin");
+    let load = m.loads.iter().find(|l| l.name == "twist").unwrap();
+    assert_eq!(load.kind, "moment");
+    assert!(load.summary.starts_with("total "), "{}", load.summary);
+    // Definitions come back as the Commands that made them, and re-applying them changes nothing.
+    for (kind, name) in [(ObjectKind::Constraint, "tip"), (ObjectKind::Load, "twist"), (ObjectKind::Body, "beam")] {
+        let before = e.model().clone();
+        let QueryResult::Definition(def) = e.query(Query::Definition { kind, name: name.into() }).unwrap() else {
+            panic!("definition")
+        };
+        let text = serde_json::to_string(&def.command).unwrap();
+        assert!(text.contains(match kind {
+            ObjectKind::Constraint => "constraint.pin",
+            ObjectKind::Load => "load.moment",
+            _ => r#""kind":"beam""#,
+        }));
+        ok(&mut e, &text);
+        assert_eq!(e.model(), &before, "{name}");
+    }
+    // Renaming the Set or the Body a moment acts on follows it.
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"body","name":"beam","to":"girder"}"#);
+    assert_eq!(e.model().load("twist").unwrap().kind.set(), Some("girder.p1"));
+    ok(
+        &mut e,
+        r#"{"cmd":"geometry.nameRegion","name":"end","where":{"kind":"bbox","min":["1990 mm","-1 mm","-1 mm"],"max":["2010 mm","1 mm","1 mm"]}}"#,
+    );
+    ok(&mut e, r#"{"cmd":"load.moment","name":"m2","on":"end","total":["0 kN m","1 kN m","0 kN m"]}"#);
+    ok(&mut e, r#"{"cmd":"model.rename","kind":"set","name":"end","to":"far"}"#);
+    assert_eq!(e.model().load("m2").unwrap().kind.set(), Some("far"));
+
+    // The exports know a beam: Abaqus B31, Gmsh's line type, VTK_LINE.
+    let Output::Export { text, .. } = ok(&mut e, r#"{"cmd":"mesh.export","format":"inp"}"#).output else { panic!() };
+    assert!(text.contains("TYPE=B31"), "{text}");
+    let Output::Export { text, .. } = ok(&mut e, r#"{"cmd":"mesh.export","format":"msh"}"#).output else { panic!() };
+    assert!(text.contains("$Elements"), "{text}");
+    let Output::Export { text, .. } = ok(&mut e, r#"{"cmd":"mesh.export","format":"vtu"}"#).output else { panic!() };
+    assert!(text.contains(r#"NumberOfCells="2""#), "{text}");
+
+    // A moment on a Set with no rotation to turn is refused when the Step is built.
+    let mut t = engine();
+    beam_model(&mut t, "truss");
+    let QueryResult::Mesh(m) = t.query(Query::Mesh {}).unwrap() else { panic!("mesh") };
+    assert_eq!((m.element_kind.as_str(), m.dofs), ("truss2", 3 * m.nodes));
+    ok(&mut t, r#"{"cmd":"constraint.fix","name":"root","on":"beam.p0"}"#);
+    // A subdivided truss is a mechanism at its interior node (B9): brace every node across the axis.
+    ok(
+        &mut t,
+        r#"{"cmd":"geometry.nameRegion","name":"all","where":{"kind":"bbox","min":["-1 mm","-1 mm","-1 mm"],"max":["2001 mm","1 mm","1 mm"]}}"#,
+    );
+    ok(&mut t, r#"{"cmd":"constraint.fix","name":"brace","on":"all","dofs":["uy","uz"]}"#);
+    ok(&mut t, r#"{"cmd":"load.moment","name":"twist","on":"beam.p1","total":["1 kN m","0 kN m","0 kN m"]}"#);
+    ok(
+        &mut t,
+        r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root","brace"],"loads":["twist"]}"#,
+    );
+    let er = err(&mut t, r#"{"cmd":"solve.run","step":"s"}"#);
+    assert_eq!(er.code, ErrorCode::ModelIllPosed);
+    assert!(er.cause.contains("no rotation"), "{er:?}");
+    // And a Result without beams has no rotation field to ask for.
+    ok(&mut t, r#"{"cmd":"load.force","name":"pull","on":"beam.p1","total":["1 kN","0 kN","0 kN"]}"#);
+    ok(&mut t, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root","brace"],"loads":["pull"]}"#);
+    ok(&mut t, r#"{"cmd":"solve.run","step":"s"}"#);
+    assert_eq!(
+        t.query(Query::Field { step: None, result_id: None, field: "rotation".into() }).unwrap_err().code,
+        ErrorCode::NotFound
+    );
+}
+
+/// A symmetry plane on a beam joint holds the in-plane rotations as well as the normal
+/// displacement: a cantilever whose far end is guided by a plane normal to its axis deflects
+/// `PL³/12EI + PL/κGA` under a tip force, a quarter of the free tip's bending term. A section
+/// orientation along the member is refused where the frame is built, an implicit Step runs on
+/// the same beam, and a per-member field is not something a point probe can read.
+#[test]
+fn a_symmetry_plane_guides_a_beam_end_and_an_orientation_along_it_is_refused() {
+    let mut e = engine();
+    beam_model(&mut e, "beam");
+    ok(&mut e, r#"{"cmd":"constraint.fix","name":"root","on":"beam.p0"}"#);
+    ok(&mut e, r#"{"cmd":"constraint.symmetry","name":"guide","on":"beam.p1","normal":"x"}"#);
+    ok(&mut e, r#"{"cmd":"load.force","name":"tip","on":"beam.p1","total":["0 kN","0 kN","-10 kN"]}"#);
+    ok(&mut e, r#"{"cmd":"step.add","name":"s","procedure":"static","constraints":["root","guide"],"loads":["tip"]}"#);
+    ok(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    let (e_mod, g, a, i_y, kappa, l, p) = (200e9, 200e9 / 2.6, 0.02, 0.1 * 0.2f64.powi(3) / 12.0, 5.0 / 6.0, 2.0, 1e4);
+    let want = (p * l * l * l / (12.0 * e_mod * i_y) + p * l / (kappa * g * a)) * 1e3;
+    let got = probe_at(&mut e, "s", Field::Displacement, Some(2), ["2 m", "0 m", "0 m"]);
+    assert!((got + want).abs() < 1e-9 * want, "{got} vs {want} mm");
+    assert_eq!(probe_at(&mut e, "s", Field::Rotation, Some(1), ["2 m", "0 m", "0 m"]), 0.0, "the plane holds ry");
+    let er = e.query(Query::Probe {
+        step: None,
+        result_id: None,
+        field: Field::SectionMoment,
+        component: Some(1),
+        sample: None,
+        at: [Q::text("1 m"), Q::text("0 m"), Q::text("0 m")],
+    });
+    assert_eq!(er.unwrap_err().code, ErrorCode::Unsupported);
+    let QueryResult::Field(f) =
+        e.query(Query::Field { step: None, result_id: None, field: "sectionMoment".into() }).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!((f.per.as_str(), f.components, f.values.len(), f.unit.as_str()), ("elementNode", 3, 12, "N m"));
+    // The guided end carries half the root moment, with the opposite sign.
+    assert!((f.values[1] - p * l / 2.0).abs() < 1e-6 * p * l, "{:?}", f.values);
+    assert!((f.values[10] + p * l / 2.0).abs() < 1e-6 * p * l, "{:?}", f.values);
+
+    ok(
+        &mut e,
+        r#"{"cmd":"step.add","name":"d","procedure":"implicit","constraints":["root","guide"],"loads":["tip"],"tEnd":"1 ms","dt":"0.5 ms"}"#,
+    );
+    ok(&mut e, r#"{"cmd":"solve.run","step":"d"}"#);
+    let QueryResult::Result(r) = e.query(Query::Result { result_id: None, step: Some("d".into()) }).unwrap() else {
+        panic!()
+    };
+    assert!(!r.stale);
+
+    ok(&mut e, r#"{"cmd":"section.assign","section":"rect","bodies":["beam"],"orientation":[1,0,0]}"#);
+    let er = err(&mut e, r#"{"cmd":"solve.run","step":"s"}"#);
+    assert_eq!((er.code, er.where_.as_deref()), (ErrorCode::ModelIllPosed, Some("element 0")));
+    assert!(er.cause.contains("orientation") && er.cause.contains("parallel"), "{er:?}");
+}

@@ -69,16 +69,20 @@ export interface Fem {
      */
     add(args: Omit<Extract<Command, { cmd: 'geometry.add' }>, 'cmd'>): Promise<Ack>;
     /**
-     * Add a Body made of straight line members: a truss. `points` are the joints, in order,
-     * and `members` are index pairs into them; the default is a chain 0-1, 1-2, and so on.
-     * Each member is cut into `divisions` elements of equal length (default 1). Joint `i`
-     * becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force targets,
-     * and joints of different line Bodies that sit at the same point are welded into one node
-     * when the Mesh is built. A member carries axial force only, so give the Body a Section
-     * with section.assign as well as a Material, and hold enough joints that none of them can
-     * drift sideways — an under-braced truss is singular and fails in the solver, not here.
-     * Line Bodies need the 3D idealisation and are not cut, meshed or previewed as solids.
-     * Replacing a Body that has cuts therefore fails without changing the Model.
+     * Add a Body made of straight line members: a truss or a frame. `points` are the joints,
+     * in order, and `members` are index pairs into them; the default is a chain 0-1, 1-2, and
+     * so on. Each member is cut into `divisions` elements of equal length (default 1). Joint
+     * `i` becomes the node Set `<name>.p<i>`, which is what a constraint or a nodal force
+     * targets, and joints of different line Bodies that sit at the same point are welded into
+     * one node when the Mesh is built. `kind` is `truss` (the default: pin-jointed bars that
+     * carry axial force only, so hold enough joints that none can drift sideways — an
+     * under-braced truss is singular and fails in the solver, not here) or `beam` (Timoshenko
+     * beams carrying axial force, shear, bending and torsion; every joint then has three
+     * rotations rx, ry, rz as well as ux, uy, uz, so constraint.fix clamps it and
+     * constraint.pin pins it, and load.moment can act on it). Either way give the Body a
+     * Section with section.assign as well as a Material. Line Bodies need the 3D
+     * idealisation and are not cut, meshed or previewed as solids. Replacing a Body that has
+     * cuts therefore fails without changing the Model.
      */
     addLine(args: Omit<Extract<Command, { cmd: 'geometry.addLine' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -175,7 +179,14 @@ export interface Fem {
      * Assign a Section to one or more Bodies. Every line Body needs a Section before solving;
      * one without it is reported by query.model warnings and blocks solve.run with
      * model.no-section. A Section on a solid or sheet Body is carried but never used: those
-     * Bodies get their cross-section from their geometry.
+     * Bodies get their cross-section from their geometry. `orientation` sets the section's
+     * local z-axis (its `height` direction, the one `iY` resists bending along) for the beams
+     * of these Bodies: local z is the given vector made perpendicular to each member's axis,
+     * and local y completes the right-handed triad (y = z × x). It may not be parallel to a
+     * member. Without it the rule is: local z is global Z made perpendicular to the member,
+     * so a horizontal beam has its height vertical; a member within 1e-6 of vertical uses
+     * global X instead, so a column's local z points along +X. `iZ` then resists bending
+     * along local y. Trusses ignore it.
      */
     assign(args: Omit<Extract<Command, { cmd: 'section.assign' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -214,11 +225,22 @@ export interface Fem {
   };
   constraint: {
     /**
-     * Fix displacement components to zero on a Set (default: all components, a clamped
-     * support). For a roller give only the normal component. Fixing every node of a Body
-     * makes the solve trivial; fix faces, not bodies.
+     * Fix degrees of freedom to zero on a Set (default: all displacement components, a
+     * clamped support). A fix that holds all three displacements and names no rotation is a
+     * clamp: on a beam joint it holds the three rotations rx, ry, rz as well, so a beam's
+     * fixed end is what `constraint.fix` without `dofs` means. For a pinned beam support use
+     * constraint.pin; for a roller give only the normal component; name rx, ry or rz to hold
+     * a rotation on its own. Rotations are inert on every node that is not a beam joint.
+     * Fixing every node of a Body makes the solve trivial; fix faces, not bodies.
      */
     fix(args: Omit<Extract<Command, { cmd: 'constraint.fix' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * Pin a Set: fix its three displacements and leave every rotation free. On a beam joint
+     * this is the pinned support of a simply supported beam or a portal frame's base hinge;
+     * the only difference from constraint.fix is the rotational restraint. On a solid's
+     * nodes it is the same as constraint.fix, because those carry no rotation.
+     */
+    pin(args: Omit<Extract<Command, { cmd: 'constraint.pin' }>, 'cmd'>): Promise<Ack>;
     /**
      * Prescribe a non-zero displacement of one component on a Set, for example a settlement
      * of "2 mm" in uy. Reactions on prescribed Sets are reported like any other constraint.
@@ -226,8 +248,9 @@ export interface Fem {
     prescribe(args: Omit<Extract<Command, { cmd: 'constraint.prescribe' }>, 'cmd'>): Promise<Ack>;
     /**
      * Symmetry plane: fixes the displacement component along `normal` on the Set (the cut
-     * face of a half or quarter model). Model a half and say so in the report; loads on the
-     * symmetry plane itself must be halved by you.
+     * face of a half or quarter model), and on beam joints the two rotations about the axes
+     * in the plane. Model a half and say so in the report; loads on the symmetry plane
+     * itself must be halved by you.
      */
     symmetry(args: Omit<Extract<Command, { cmd: 'constraint.symmetry' }>, 'cmd'>): Promise<Ack>;
     /**
@@ -311,6 +334,14 @@ export interface Fem {
      * singular stresses near the node; prefer load.traction on a face unless you mean a point.
      */
     force(args: Omit<Extract<Command, { cmd: 'load.force' }>, 'cmd'>): Promise<Ack>;
+    /**
+     * A concentrated moment, as a total vector about the global axes, split equally over the
+     * nodes of a node Set. It acts on the rotational degrees of freedom, which only the
+     * joints of beam Bodies have: on any other node it has nothing to act on and the Step
+     * fails with model.ill-posed naming the Load. Right-handed about each axis, in the
+     * Model's torque unit ("5 kN m").
+     */
+    moment(args: Omit<Extract<Command, { cmd: 'load.moment' }>, 'cmd'>): Promise<Ack>;
     /**
      * Gravity (or any uniform acceleration) as a body force on every Body whose Material has
      * a density; Bodies without one are skipped and listed in the warnings. Explicit Steps
