@@ -263,6 +263,7 @@ fn rho_assumption_cause(procedure: Procedure, has_gravity: bool) -> Option<&'sta
         Procedure::Static if has_gravity => Some("gravity read the omitted density as zero"),
         Procedure::Modal => Some("modal mass assembly read the omitted density as zero"),
         Procedure::Explicit => Some("explicit mass assembly read the omitted density as zero"),
+        Procedure::Implicit => Some("implicit mass assembly read the omitted density as zero"),
         _ => None,
     }
 }
@@ -277,9 +278,10 @@ fn result_assumptions(
     p: &Problem<'_>,
 ) -> Vec<ResultAssumption> {
     let rho_cause = rho_assumption_cause(procedure, p.loads.iter().any(|load| matches!(load, Load::Gravity { .. })));
-    // Static and explicit assembly both form the thermal force. Modal forms stiffness too, but
-    // discards that load vector, so alpha is not solver-used there.
-    let reads_alpha = matches!(procedure, Procedure::Static | Procedure::Explicit) && p.temperature.is_some();
+    // Static, explicit and implicit assembly all form the thermal force. Modal forms stiffness
+    // too, but discards that load vector, so alpha is not solver-used there.
+    let reads_alpha =
+        matches!(procedure, Procedure::Static | Procedure::Explicit | Procedure::Implicit) && p.temperature.is_some();
     // A BuiltMesh block always has elements. Collecting by Body and material also collapses a
     // mapped Body made from several blocks into one assumption row per property.
     let assigned: std::collections::BTreeMap<(&str, usize), ()> = built
@@ -382,13 +384,72 @@ pub(crate) fn procedure_step(step: &Step, opts: SolveOptions) -> Result<procedur
             amplitude: step.amplitude.as_ref().map(amplitude),
             solver: opts,
         },
+        // The initial velocity needs the Mesh; `initial_velocity` fills it in once the Problem
+        // exists, so this stays a pure SI mapping.
         Procedure::Explicit => procedure::Step::Explicit {
             t_end: want(step.t_end, "tEnd")?,
             dt_factor: step.dt_factor.unwrap_or(0.9),
             initial_velocity: None,
             output_every: step.output_every.unwrap_or(1) as usize,
         },
+        Procedure::Implicit => procedure::Step::Implicit {
+            dt: want(step.dt, "dt")?,
+            t_end: want(step.t_end, "tEnd")?,
+            alpha: step.alpha.unwrap_or(0.0),
+            rayleigh_alpha: step.rayleigh_alpha.unwrap_or(0.0),
+            rayleigh_beta: step.rayleigh_beta.unwrap_or(0.0),
+            initial_velocity: None,
+            output_every: step.output_every.unwrap_or(1) as usize,
+            amplitude: step.amplitude.as_ref().map(amplitude),
+        },
     })
+}
+
+/// The Step's `initialVelocity` entries resolved on the Mesh to one velocity per DOF, or
+/// `None` when the Step starts from rest. Two entries that give one node different velocities
+/// are `model.ill-posed`; the same velocity twice is not. Held components are zeroed by the
+/// procedures themselves.
+fn initial_velocity_of(p: &Problem<'_>, step: &Step) -> Result<Option<Vec<f64>>, Error> {
+    let Some(list) = step.initial_velocity.as_deref().filter(|l| !l.is_empty()) else { return Ok(None) };
+    let dpn = p.dofs_per_node();
+    let mut v = vec![0.0; p.n_dofs()];
+    let mut given: Vec<Option<usize>> = vec![None; p.mesh.n_nodes()];
+    for (i, entry) in list.iter().enumerate() {
+        for &node in &p.set(&entry.on)?.nodes {
+            if let Some(first) = given[node as usize] {
+                if list[first].value != entry.value {
+                    return Err(Error::new(
+                        ErrorCode::ModelIllPosed,
+                        format!(
+                            "initialVelocity entries {first} ('{}') and {i} ('{}') give node {node} different velocities",
+                            list[first].on, entry.on
+                        ),
+                    )
+                    .at(format!("initialVelocity[{i}]"))
+                    .suggest("step.add with initialVelocity Sets that do not overlap, or the same value on both"));
+                }
+            }
+            given[node as usize] = Some(i);
+            for c in 0..dpn {
+                v[node as usize * dpn + c] = entry.value[c];
+            }
+        }
+    }
+    Ok(Some(v))
+}
+
+/// Give a dynamic Step its resolved initial velocity; every other Step is left alone.
+fn with_initial_velocity(
+    mut proc_step: procedure::Step,
+    p: &Problem<'_>,
+    step: &Step,
+) -> Result<procedure::Step, Error> {
+    if let procedure::Step::Explicit { initial_velocity, .. } | procedure::Step::Implicit { initial_velocity, .. } =
+        &mut proc_step
+    {
+        *initial_velocity = initial_velocity_of(p, step)?;
+    }
+    Ok(proc_step)
 }
 
 pub(crate) struct PlannedCost {
@@ -447,6 +508,14 @@ pub(crate) fn planned_cost(
             let base = crate::solve::cost_estimate(mesh, components, Solver::Auto);
             return crate::solve::add_transient_cost(base, mesh.n_nodes(), components, steps, *output_every, 6)
                 .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "explicit")) });
+        }
+        // The state and its predictors (u, v, a, ũ, ṽ, w), the two full-length scratch
+        // vectors, the load and the frame being built: ten, always factorised directly.
+        procedure::Step::Implicit { dt, t_end, output_every, .. } => {
+            let (steps, _) = procedure::time_grid(*dt, *t_end)?;
+            let base = crate::solve::cost_estimate(mesh, mesh.dim, Solver::CpuDirect);
+            return crate::solve::add_transient_cost(base, mesh.n_nodes(), mesh.dim, steps, *output_every, 10)
+                .map(|estimate| PlannedCost { estimate, transient: Some((steps, *output_every, "implicit")) });
         }
     };
     estimate.note.push_str(" Retained transient frames: none.");
@@ -541,12 +610,14 @@ impl Engine {
                 &proc_step,
                 procedure::Step::HeatTransient { .. }
                     | procedure::Step::Explicit { .. }
+                    | procedure::Step::Implicit { .. }
                     | procedure::Step::Static { amplitude: Some(_), .. }
             ) {
                 planned_cost(p.mesh, Some(&p), &proc_step)?
                     .with_records(self.resident_result_bytes(), crate::retained::mesh_bytes(built))
                     .enforce(&step.name)?;
             }
+            let proc_step = with_initial_velocity(proc_step, &p, &step)?;
             let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
             let mut result = procedure::run(
                 &p,
@@ -638,6 +709,7 @@ impl Engine {
                 let p = build_problem(&self.model, built, &step)?;
                 let dofs = p.n_dofs() as u64;
                 let assumptions = result_assumptions(&self.model, built, &step.name, step.procedure, &p);
+                let proc_step = with_initial_velocity(proc_step.clone(), &p, &step)?;
                 let mut result =
                     procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
                 result.assumptions = assumptions;
@@ -907,6 +979,10 @@ mod tests {
         assert_eq!(
             rho_assumption_cause(Procedure::Explicit, false),
             Some("explicit mass assembly read the omitted density as zero")
+        );
+        assert_eq!(
+            rho_assumption_cause(Procedure::Implicit, false),
+            Some("implicit mass assembly read the omitted density as zero")
         );
         for procedure in [Procedure::Static, Procedure::HeatSteady, Procedure::HeatTransient] {
             assert_eq!(rho_assumption_cause(procedure, false), None);
