@@ -27,6 +27,7 @@ export const FIELD_DIMENSION: Record<Field, keyof typeof SI_UNIT> = {
   vonMises: 'stress',
   principal: 'stress',
   strain: 'dimensionless',
+  plasticStrain: 'dimensionless',
   temperature: 'temperature',
   rotation: 'dimensionless',
   sectionForce: 'force',
@@ -84,6 +85,7 @@ export const FIELD_CHOICES: FieldChoice[] = [
   ...VEC.map((a, i) => ({ key: `u${a}`, label: `u${a}`, field: 'displacement', component: i })),
   ...VOIGT.map((a, i) => ({ key: `s${a}`, label: `σ${a}`, field: 'stress', component: i })),
   ...[0, 1, 2].map((i) => ({ key: `p${i + 1}`, label: `σ${i + 1}`, field: 'principal', component: i })),
+  { key: 'peeq', label: 'ε̄ᵖ', field: 'plasticStrain', component: 0 },
   { key: 'temperature', label: 'T', field: 'temperature', component: 0 },
 ];
 

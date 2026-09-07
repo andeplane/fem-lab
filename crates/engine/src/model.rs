@@ -181,6 +181,51 @@ impl Axial {
     }
 }
 
+/// The isotropic hardening curve of an elastic–plastic Material, SI: the yield stress as a
+/// function of equivalent plastic strain, either a line or a piecewise-linear table that is held
+/// flat beyond its last point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Hardening {
+    /// `σ_y = yield + h ε̄ᵖ`.
+    Linear {
+        #[serde(rename = "yield")]
+        yield_: f64,
+        h: f64,
+    },
+    /// `(plastic_strain[i], stress[i])` points, plastic strain ascending from zero.
+    Table {
+        #[serde(rename = "plasticStrain")]
+        plastic_strain: Vec<f64>,
+        stress: Vec<f64>,
+    },
+}
+
+impl Hardening {
+    /// The initial yield stress.
+    pub fn initial_yield(&self) -> f64 {
+        match self {
+            Hardening::Linear { yield_, .. } => *yield_,
+            Hardening::Table { stress, .. } => stress[0],
+        }
+    }
+
+    /// The tail of [`J2_PROPS`](crate::fem::material::J2_PROPS) after `E` and `nu`: `H`, the
+    /// point count, then the points.
+    pub fn props(&self) -> Vec<f64> {
+        match self {
+            Hardening::Linear { yield_, h } => vec![*h, 1.0, 0.0, *yield_],
+            Hardening::Table { plastic_strain, stress } => {
+                let mut v = vec![0.0, plastic_strain.len() as f64];
+                for (e, s) in plastic_strain.iter().zip(stress) {
+                    v.extend([*e, *s]);
+                }
+                v
+            }
+        }
+    }
+}
+
 /// A material, SI: isotropic or orthotropic, with optional axes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -209,6 +254,9 @@ pub struct Material {
     pub cp: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub yield_: Option<f64>,
+    /// J2 plasticity with this hardening; `None` is elastic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plasticity: Option<Hardening>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
@@ -825,6 +873,7 @@ mod tests {
             k: None,
             cp: None,
             yield_: None,
+            plasticity: None,
             source: None,
         });
         m.constraints.push(Constraint {

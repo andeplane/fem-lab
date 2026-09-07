@@ -21,8 +21,8 @@ use femlab_engine::fem::heat::HeatLoad;
 use femlab_engine::fem::loads::{assemble_loads, face_set_area, face_set_polar_moment, Load, LoadTotals};
 use femlab_engine::fem::material::{
     axes_are_planar, axis_angle_rotation, builtin_law, check_batch, isotropic_d, orthotropic_d, plane_stress_condense,
-    rotate_diagonal, transpose3, voigt_rotation, LinearElastic, MaterialBatch, MaterialLaw, MaterialOut, Rotated,
-    ORTHOTROPIC_PROPS, VOIGT,
+    plastic_multiplier, rotate_diagonal, transpose3, voigt_rotation, yield_curve, J2Plasticity, LinearElastic,
+    MaterialBatch, MaterialLaw, MaterialOut, Rotated, J2_PROPS, J2_STATE, ORTHOTROPIC_PROPS, PEEQ, VOIGT,
 };
 use femlab_engine::fem::mpc::{self, Mpc, Row};
 use femlab_engine::fem::problem::{Constraint, Coupling, PointMass, Problem};
@@ -14529,4 +14529,743 @@ fn a_solid_next_to_a_beam_keeps_its_own_answer_and_the_beam_keeps_its_own() {
     let step = Step::Explicit { t_end: 1e-6, dt_factor: 0.9, initial_velocity: None, output_every: 1 };
     let res = run_step(&dynamic, &step).expect("an explicit step over a mixed model");
     assert!(res.fields[&Field::Displacement].data.iter().all(|v| v.is_finite()));
+}
+
+// ------------------------------------------------- J2 plasticity (#60)
+//
+// Von Mises plasticity with isotropic hardening through the `MaterialLaw` Extension Point, inside
+// the Newton loop of `static-nonlinear`. Every oracle below is a closed form: the return map's own
+// scalar equation for one point, the bilinear tension curve of a bar, a hardening table read at
+// its breakpoints, Hill's thick-walled cylinder, the elastic–plastic moment–curvature curve of a
+// rectangular section, its elastic springback, and the derivative the tangent claims to be. The
+// catalogue rows are L1–L8 in `docs/BENCHMARKS.md`.
+
+/// Steel with a bilinear tension curve: `E`, `nu`, initial yield `sy` and plastic modulus `h`.
+fn j2_props(e: f64, nu: f64, sy: f64, h: f64) -> Vec<f64> {
+    vec![e, nu, h, 1.0, 0.0, sy]
+}
+
+/// `[E, nu, H, n, (plasticStrain, stress)…]` for a hardening table held flat past its end.
+fn j2_table(e: f64, nu: f64, table: &[(f64, f64)]) -> Vec<f64> {
+    let mut v = vec![e, nu, 0.0, table.len() as f64];
+    for &(eps, s) in table {
+        v.extend([eps, s]);
+    }
+    v
+}
+
+fn j2_material(props: Vec<f64>) -> Material {
+    Material { law: builtin_law("j2-plasticity").expect("built in"), props, ..steel() }
+}
+
+/// One evaluation of a law at `strain` from `state_in`: stress, tangent and the advanced state.
+fn eval_from(law: &dyn MaterialLaw, props: &[f64], strain: &[f64], state_in: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let n = strain.len() / VOIGT;
+    let zeros = vec![0.0; n * VOIGT];
+    let mut stress = vec![0.0; n * VOIGT];
+    let mut tangent = vec![0.0; n * VOIGT * VOIGT];
+    let mut state_out = vec![0.0; n * law.n_state()];
+    let b = MaterialBatch { n, strain, dstrain: &zeros, temperature: &zeros[..n], dt: 0.0, props, state_in };
+    law.evaluate(b, MaterialOut { stress: &mut stress, tangent: &mut tangent, state_out: &mut state_out })
+        .expect("a well-formed batch");
+    (stress, tangent, state_out)
+}
+
+#[test]
+fn j2_metadata_props_checks_and_the_rotated_forwarding() {
+    let law = J2Plasticity;
+    assert_eq!(law.id(), "j2-plasticity");
+    assert_eq!(law.n_props(), J2_PROPS.len());
+    assert_eq!(law.n_state(), 7);
+    assert_eq!(law.prop_names(), J2_PROPS);
+    assert_eq!(law.state_names(), J2_STATE);
+    assert_eq!(law.state_names().iter().position(|n| *n == PEEQ), Some(6));
+    assert_eq!(builtin_law("j2-plasticity").expect("built in").id(), "j2-plasticity");
+    // The elastic laws have no state to name, and the default `check_props` is the exact count.
+    assert!(LinearElastic.state_names().is_empty());
+    assert!(LinearElastic.check_props(&[1.0, 0.3]).is_ok());
+    assert_eq!(LinearElastic.check_props(&[1.0]).expect_err("one prop").code, ErrorCode::MaterialProps);
+    // A table of n points is 4 + 2n values, ascending from zero, positive stresses, H ≥ 0.
+    assert!(law.check_props(&j2_props(1.0, 0.3, 1.0, 0.0)).is_ok());
+    assert!(law.check_props(&j2_table(1.0, 0.3, &[(0.0, 1.0), (0.1, 2.0), (0.5, 2.0)])).is_ok());
+    let cases: Vec<(Vec<f64>, &str)> = vec![
+        (vec![1.0, 0.3], "expected 6 values"),
+        (vec![1.0, 0.3, 0.0, 2.0, 0.0, 1.0], "n = 2 points need 8 values"),
+        (vec![1.0, 0.3, 0.0, 1.5, 0.0, 1.0], "n = 1.5 points"),
+        (vec![1.0, 0.3, -1.0, 1.0, 0.0, 1.0], "H = -1 must be finite"),
+        (vec![1.0, 0.3, 0.0, 1.0, 0.0, 0.0], "stress0 = 0 must be finite and positive"),
+        (vec![1.0, 0.3, 0.0, 1.0, 0.1, 1.0], "plasticStrain0 = 0.1 must ascend from 0"),
+        (j2_table(1.0, 0.3, &[(0.0, 1.0), (0.1, 2.0), (0.1, 3.0)]), "plasticStrain2 = 0.1 must ascend"),
+    ];
+    for (props, cause) in cases {
+        let e = law.check_props(&props).expect_err(cause);
+        assert_eq!(e.code, ErrorCode::MaterialProps, "{cause}");
+        assert!(e.cause.contains(cause), "{}: {}", cause, e.cause);
+    }
+    // and `evaluate` refuses the same props before it indexes them
+    let short = j2_props(1.0, 0.3, 1.0, 0.0);
+    assert_eq!(eval(&law, &short[..5], &[0.0; VOIGT]).expect_err("short").code, ErrorCode::MaterialProps);
+    // An oriented material forwards its state names and its props check to the law it wraps.
+    let r = axis_angle_rotation([0.0, 0.0, 1.0], 0.3);
+    let rotated = Rotated::new(&law, &r);
+    assert_eq!(rotated.state_names(), J2_STATE);
+    assert_eq!(rotated.check_props(&[1.0]).expect_err("forwarded").code, ErrorCode::MaterialProps);
+}
+
+/// The hardening curve is read exactly at, between and beyond its points, with the slope of the
+/// segment that starts at a breakpoint, and the multiplier is the exact root of the consistency
+/// condition whichever segment it lands in.
+#[test]
+fn the_hardening_curve_and_the_plastic_multiplier_are_exact() {
+    let linear = j2_props(200e9, 0.3, 250e6, 20e9);
+    assert_eq!(yield_curve(&linear, 0.0), (250e6, 20e9));
+    assert_eq!(yield_curve(&linear, 0.01), (250e6 + 0.2e9, 20e9));
+    let table = j2_table(200e9, 0.3, &[(0.0, 250e6), (0.002, 300e6), (0.005, 330e6)]);
+    assert_eq!(yield_curve(&table, 0.0), (250e6, 25e9));
+    assert_eq!(yield_curve(&table, 0.001), (275e6, 25e9));
+    assert_eq!(yield_curve(&table, 0.002), (300e6, 10e9), "the slope on a breakpoint is the next segment's");
+    assert_eq!(yield_curve(&table, 0.004), (320e6, 10e9));
+    assert_eq!(yield_curve(&table, 0.005), (330e6, 0.0));
+    assert_eq!(yield_curve(&table, 0.1), (330e6, 0.0), "held flat beyond the last point");
+    let mu = 200e9 / 2.6;
+    // Linear hardening: Δγ = (q − σ_y(ε̄))/(3μ + H) in closed form.
+    let dg = plastic_multiplier(&linear, mu, 0.001, 400e6);
+    assert!((dg - (400e6 - 270e6) / (3.0 * mu + 20e9)).abs() < 1e-18, "{dg}");
+    // The table: every root closes the consistency condition to round-off, from a state on a
+    // breakpoint, from one inside a segment, across one breakpoint and across two.
+    for (ebar, q) in [(0.0, 260e6), (0.001, 300e6), (0.002, 400e6), (0.0015, 1500e6), (0.001, 3000e6), (0.006, 500e6)] {
+        let dg = plastic_multiplier(&table, mu, ebar, q);
+        let g = q - 3.0 * mu * dg - yield_curve(&table, ebar + dg).0;
+        assert!(g.abs() <= 1e-9 * q, "ebar {ebar} q {q}: residual {g}");
+        assert!(dg > 0.0);
+    }
+    // Across two breakpoints the multiplier lands on the flat tail: 3μΔγ = q − 330 MPa.
+    let dg = plastic_multiplier(&table, mu, 0.001, 3000e6);
+    assert!((dg - (3000e6 - 330e6) / (3.0 * mu)).abs() < 1e-15, "{dg}");
+}
+
+/// One point with `ν = 0` under a uniaxial *strain* `ε` (the lateral strain held, so the return
+/// pulls the lateral stresses up): the return map's own algebra in closed form. `Δγ = (Eε −
+/// σ_y)/(1.5E + H)`, `σ₁₁ = E(ε − Δγ)`, `σ₂₂ = σ₃₃ = EΔγ/2`, `ε̄ᵖ = Δγ`, `ε_p = Δγ(1, −½, −½)`;
+/// then from that state a smaller strain is elastic with the plastic strain kept, and a larger
+/// one hardens from where it left off.
+#[test]
+fn the_return_map_matches_its_closed_form_and_carries_its_state() {
+    let (e, sy, h) = (200e9, 250e6, 20e9);
+    let props = j2_props(e, 0.0, sy, h);
+    let law = J2Plasticity;
+    let strain = |eps: f64| [eps, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let zero = vec![0.0; 7];
+    // Elastic: Hooke, Hooke's tangent, no state.
+    let (s, t, st) = eval_from(&law, &props, &strain(1e-3), &zero);
+    close(&s, &[e * 1e-3, 0.0, 0.0, 0.0, 0.0, 0.0], 1e-15);
+    let d: Vec<f64> = isotropic_d(e, 0.0).iter().flatten().copied().collect();
+    close(&t, &d, 1e-15);
+    assert_eq!(st, zero);
+    // Plastic at ε = 3 ε_y.
+    let eps = 3.0 * sy / e;
+    let dg = (e * eps - sy) / (1.5 * e + h);
+    let (s, t, st) = eval_from(&law, &props, &strain(eps), &zero);
+    close(&s, &[e * (eps - dg), e * dg / 2.0, e * dg / 2.0, 0.0, 0.0, 0.0], 1e-14);
+    close(&st, &[dg, -dg / 2.0, -dg / 2.0, 0.0, 0.0, 0.0, dg], 1e-14);
+    // The tangent is symmetric and softer than Hooke along the loading direction.
+    for i in 0..VOIGT {
+        for j in 0..VOIGT {
+            assert!((t[i * VOIGT + j] - t[j * VOIGT + i]).abs() <= 1e-6 * e, "({i},{j})");
+        }
+    }
+    assert!(t[0] < 0.5 * e && t[0] > 0.0, "{}", t[0]);
+    // Unloading from that state is elastic with the plastic strain kept.
+    let (s2, t2, st2) = eval_from(&law, &props, &strain(0.5 * eps), &st);
+    let ee = [0.5 * eps - dg, dg / 2.0, dg / 2.0];
+    close(&s2, &[e * ee[0], e * ee[1], e * ee[2], 0.0, 0.0, 0.0], 1e-14);
+    close(&t2, &d, 1e-15);
+    assert_eq!(st2, st);
+    // Reloading past it hardens from ε̄ᵖ = Δγ: the same formula with σ_y raised by HΔγ and the
+    // strain measured from the plastic strain already there.
+    let eps2 = 5.0 * sy / e;
+    let (s3, _, st3) = eval_from(&law, &props, &strain(eps2), &st);
+    let q_trial = e * (eps2 - dg) - e * dg / 2.0;
+    let dg2 = (q_trial - (sy + h * dg)) / (1.5 * e + h);
+    assert!((st3[6] - (dg + dg2)).abs() < 1e-16, "{} vs {}", st3[6], dg + dg2);
+    assert!((s3[0] - e * (eps2 - dg - dg2)).abs() <= 1e-14 * e, "{}", s3[0]);
+}
+
+/// The algorithmic tangent is the derivative of the returned stress with respect to the strain
+/// that produced it (ADR 0007: calculus against the kernel, not a second implementation), in a
+/// general plastic state with ν = 0.3, from a state that is already plastic, and across a
+/// breakpoint of a hardening table. That derivative is exactly what makes Newton quadratic (L8).
+#[test]
+fn the_consistent_tangent_is_the_derivative_of_the_return_map() {
+    let law = J2Plasticity;
+    let e = 200e9;
+    let state = [1e-3, -4e-4, -6e-4, 5e-4, -2e-4, 3e-4, 1.2e-3];
+    let strain = [3e-3, -1e-3, 5e-4, 2e-3, -1e-3, 1.5e-3];
+    for props in [
+        j2_props(e, 0.3, 250e6, 20e9),
+        j2_props(e, 0.3, 250e6, 0.0),
+        j2_table(e, 0.3, &[(0.0, 250e6), (0.0014, 300e6), (0.005, 330e6)]),
+    ] {
+        let (_, t, st) = eval_from(&law, &props, &strain, &state);
+        assert!(st[6] > state[6], "the point yields");
+        let step = 1e-7;
+        for j in 0..VOIGT {
+            let (mut up, mut down) = (strain, strain);
+            up[j] += step;
+            down[j] -= step;
+            let (sp, _, _) = eval_from(&law, &props, &up, &state);
+            let (sm, _, _) = eval_from(&law, &props, &down, &state);
+            for i in 0..VOIGT {
+                let fd = (sp[i] - sm[i]) / (2.0 * step);
+                assert!((t[i * VOIGT + j] - fd).abs() <= 1e-5 * e, "({i},{j}): tangent {} vs {fd}", t[i * VOIGT + j]);
+            }
+        }
+    }
+}
+
+/// Bar constants for L1 and L2: 1 m of steel with ν = 0 so the axial answer is the 1D one.
+const BAR_E: f64 = 200e9;
+const BAR_SY: f64 = 250e6;
+const BAR_H: f64 = 20e9;
+const BAR_AREA: f64 = 0.01;
+
+/// The bilinear tension curve in the total-Lagrangian measures the procedure integrates:
+/// second Piola–Kirchhoff `S₁₁` and plastic strain at Green–Lagrange `E₁₁` on first loading,
+/// `E E₁₁` up to yield and `σ_y + E_t (E₁₁ − ε_y)` beyond with `E_t = E H / (E + H)`.
+fn bilinear_1d(e: f64, sy: f64, h: f64, e11: f64) -> (f64, f64) {
+    if e * e11 <= sy {
+        (e * e11, 0.0)
+    } else {
+        let et = e * h / (e + h);
+        let s = sy + et * (e11 - sy / e);
+        (s, e11 - s / e)
+    }
+}
+
+/// The bar of L1/L2 pulled to a prescribed end displacement: a `[4, 1, 1]` hex8 box held on
+/// three faces, `pull` on `xmax` scaled by `amplitude`, ν = 0, the given J2 props. Returns the
+/// Result and the progress messages the Newton loop reported.
+fn pull_bar(
+    props: Vec<f64>,
+    u_end: f64,
+    amplitude: Option<procedure::Amplitude>,
+    increments: usize,
+) -> (StepResult, Vec<String>) {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [4, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![
+            fix("root", "xmin", [true, false, false], 0.0),
+            fix("sym_y", "ymin", [false, true, false], 0.0),
+            fix("sym_z", "zmin", [false, false, true], 0.0),
+            fix("pull", "xmax", [true, false, false], u_end),
+        ],
+    );
+    p.materials = vec![j2_material(props)];
+    let o = NlOptions {
+        increments,
+        amplitude,
+        solver: SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() },
+        ..nl_options(increments)
+    };
+    let mut messages = Vec::new();
+    let mut log = |pr: Progress| {
+        messages.push(pr.message);
+        true
+    };
+    let res = run_nonlinear(&p, o, &mut log).expect("the bar converges");
+    (res, messages)
+}
+
+/// `E₁₁ = (λ² − 1)/2` for the stretch the end displacement of a unit bar imposes.
+fn stretch_for(e11: f64) -> f64 {
+    (1.0 + 2.0 * e11).sqrt()
+}
+
+/// Every node of a one-component field, which a homogeneous state makes the same everywhere.
+fn uniform_value(f: &FieldData, tol: f64) -> f64 {
+    assert_eq!(f.comps, 1);
+    let v = f.data[0];
+    for (i, x) in f.data.iter().enumerate() {
+        assert!((x - v).abs() <= tol, "node {i}: {x} vs {v}");
+    }
+    v
+}
+
+/// L1: the uniaxial bar with bilinear hardening. Elastic at half the yield strain, plastic at
+/// three and six times it with the reaction, the Cauchy stress and the plastic strain exact
+/// to round-off (the state is homogeneous, so the mesh plays no part), then unloaded to the
+/// residual strain with the reaction back to zero. The Newton loop needs exactly one
+/// correction per increment on a bilinear law: the tangent *is* the secant of each segment.
+#[test]
+fn the_bilinear_bar_loads_yields_hardens_and_unloads_to_its_residual_strain() {
+    let ey = BAR_SY / BAR_E;
+    let props = j2_props(BAR_E, 0.0, BAR_SY, BAR_H);
+    for factor in [0.5, 3.0, 6.0] {
+        let e11 = factor * ey;
+        let lambda = stretch_for(e11);
+        let (s, ep) = bilinear_1d(BAR_E, BAR_SY, BAR_H, e11);
+        let (res, messages) = pull_bar(props.clone(), lambda - 1.0, None, 4);
+        // The reaction is the nominal force λ S₁₁ A₀.
+        let force = reaction_of(&res, "pull")[0];
+        let want = lambda * s * BAR_AREA;
+        assert!((force - want).abs() <= 1e-9 * want, "{factor} ε_y: force {force} vs {want}");
+        let peeq = res.fields.get(&Field::PlasticStrain).expect("an elastic–plastic Material reports PEEQ");
+        let got = uniform_value(peeq, 1e-14);
+        assert!((got - ep).abs() <= 1e-9 * ey, "{factor} ε_y: PEEQ {got} vs {ep}");
+        // Cauchy stress: `F S Fᵀ / det F` with the lateral stretch from the plastic flow alone
+        // (ν = 0, so `E₂₂ = E₃₃ = −ε_p/2` exactly).
+        let sig = res.fields[&Field::Stress].data.chunks(VOIGT).map(|c| c[0]).collect::<Vec<_>>();
+        let cauchy = lambda * s / (1.0 - ep);
+        for v in &sig {
+            assert!((v - cauchy).abs() <= 1e-9 * cauchy, "{factor} ε_y: σ₁₁ {v} vs {cauchy}");
+        }
+        assert_eq!(res.scalars["yielded_fraction"], if factor > 1.0 { 1.0 } else { 0.0 });
+        eprintln!("L1 {factor} ε_y: {:?}", residuals_by_increment(&messages));
+        eprintln!(
+            "L1 {factor} ε_y: force {force} (exact {want}), PEEQ {got} (exact {ep}), σ₁₁ {} (exact {cauchy})",
+            sig[0]
+        );
+    }
+    // Load to 3 ε_y and unload to the residual Green–Lagrange strain, which is the plastic one.
+    let e11 = 3.0 * ey;
+    let (_, ep) = bilinear_1d(BAR_E, BAR_SY, BAR_H, e11);
+    let (lambda, lambda_res) = (stretch_for(e11), stretch_for(ep));
+    let amplitude = procedure::Amplitude::Table {
+        t: vec![0.0, 0.5, 1.0],
+        value: vec![0.0, 1.0, (lambda_res - 1.0) / (lambda - 1.0)],
+    };
+    let (res, _) = pull_bar(props, lambda - 1.0, Some(amplitude), 8);
+    let peak = lambda * bilinear_1d(BAR_E, BAR_SY, BAR_H, e11).0 * BAR_AREA;
+    let force = reaction_of(&res, "pull")[0];
+    assert!(force.abs() <= 1e-8 * peak, "unloaded to the residual strain the bar carries nothing: {force}");
+    let got = uniform_value(res.fields.get(&Field::PlasticStrain).expect("PEEQ"), 1e-14);
+    assert!((got - ep).abs() <= 1e-9 * ey, "the plastic strain survives unloading: {got} vs {ep}");
+    let vm = uniform_value(&res.fields[&Field::VonMises], 1e-3 * BAR_SY);
+    assert!(vm <= 1e-8 * BAR_SY, "no residual stress in a homogeneous bar: {vm}");
+    assert_eq!(res.scalars["increments_taken"], 8.0);
+    assert_eq!(res.scalars["cutbacks"], 0.0);
+    eprintln!("L1 unload: residual force {force} of peak {peak}, PEEQ {got} (exact {ep})");
+}
+
+/// L2: the same bar with a three-point hardening table, loaded so that the plastic strain lands
+/// inside each segment and on the flat tail, in one Step each: `E₁₁ = ε_p + σ_y(ε_p)/E` inverts
+/// the table exactly, so the reaction and the plastic strain are known to round-off. The
+/// multiplier search walks a breakpoint inside an increment on the way to the second and
+/// third targets.
+#[test]
+fn the_hardening_table_is_read_at_and_across_its_breakpoints() {
+    let table = [(0.0, 250e6), (0.002, 300e6), (0.005, 330e6)];
+    let props = j2_table(BAR_E, 0.0, &table);
+    for (ep, sy) in [(0.001, 275e6), (0.003, 310e6), (0.007, 330e6)] {
+        let e11 = ep + sy / BAR_E;
+        let lambda = stretch_for(e11);
+        let (res, _) = pull_bar(props.clone(), lambda - 1.0, None, 6);
+        let force = reaction_of(&res, "pull")[0];
+        let want = lambda * sy * BAR_AREA;
+        assert!((force - want).abs() <= 1e-9 * want, "ε_p {ep}: force {force} vs {want}");
+        let got = uniform_value(res.fields.get(&Field::PlasticStrain).expect("PEEQ"), 1e-14);
+        assert!((got - ep).abs() <= 1e-9 * ep, "ε_p {ep}: PEEQ {got}");
+        eprintln!("L2 ε_p {ep}: force {force} (exact {want}), PEEQ {got}");
+    }
+}
+
+/// An elastic Model reports no plastic strain field and no yielded fraction, and the recovery
+/// helpers behave on a Problem with no plastic material at all.
+#[test]
+fn an_elastic_model_reports_no_plastic_strain() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let p = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::Solid3d,
+        Formulation::Full,
+        vec![fix("root", "xmin", [true, true, true], 0.0), fix("pull", "xmax", [true, false, false], 1e-4)],
+    );
+    let res = run_nonlinear(&p, nl_options(1), &mut nop).expect("converges");
+    assert!(!res.fields.contains_key(&Field::PlasticStrain));
+    assert!(!res.scalars.contains_key("yielded_fraction"));
+    let state = GpState::new(&p).expect("stateless");
+    assert!(nonlinear::plastic_strain_gp(&p, &state).is_none());
+    let half = FieldData::new(Per::ElemGp, 1, vec![0.0, 1e-3, 0.0, 2e-3]);
+    assert_eq!(nonlinear::yielded_fraction(&half), 0.5);
+    assert_eq!(nonlinear::yielded_fraction(&FieldData::new(Per::ElemGp, 1, Vec::new())), 0.0);
+}
+
+/// Thick-walled cylinder constants for L3: Hill's elastic–perfectly plastic solution needs
+/// `σ_z = (σ_r + σ_θ)/2`, which is exact at ν = ½ and what a near-incompressible ν makes true
+/// to `1 − 2ν`.
+const CYL_A: f64 = 0.1;
+const CYL_B: f64 = 0.2;
+const CYL_E: f64 = 200e9;
+const CYL_NU: f64 = 0.499;
+const CYL_SY: f64 = 250e6;
+
+/// The quarter annulus of L3 in plane strain under an internal pressure `p`, held on its two
+/// symmetry planes.
+fn pressurised_cylinder(
+    kind: ElementKind,
+    n_r: usize,
+    n_theta: usize,
+    p: f64,
+    o: NlOptions,
+) -> (Mesh, Result<StepResult, Error>, Vec<String>) {
+    let mesh = annulus(kind, n_r, n_theta, CYL_A, CYL_B, [0.0, PI / 2.0]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let mut prob = problem(
+        &mesh,
+        &sets,
+        &bodies,
+        Idealisation::PlaneStrain,
+        Formulation::Full,
+        vec![fix("sym_y", "theta0", [false, true, false], 0.0), fix("sym_x", "theta1", [true, false, false], 0.0)],
+    );
+    prob.materials = vec![j2_material(j2_props(CYL_E, CYL_NU, CYL_SY, 0.0))];
+    prob.loads = vec![Load::Pressure { faces: "inner".into(), p }];
+    let mut messages = Vec::new();
+    let mut log = |pr: Progress| {
+        messages.push(pr.message);
+        true
+    };
+    let res = run_nonlinear(&prob, o, &mut log);
+    (mesh, res, messages)
+}
+
+/// Hill's closed form (The Mathematical Theory of Plasticity, §5.2, with `2k = 2σ_y/√3` for a
+/// von Mises material in plane strain): the pressure that puts the elastic–plastic interface
+/// at radius `c`, and the radial and hoop stresses at `r`.
+fn hill_pressure(c: f64) -> f64 {
+    let k = CYL_SY / 3f64.sqrt();
+    k * (1.0 - c * c / (CYL_B * CYL_B) + 2.0 * libm::log(c / CYL_A))
+}
+
+fn hill_stresses(c: f64, r: f64) -> (f64, f64) {
+    let k = CYL_SY / 3f64.sqrt();
+    let p = hill_pressure(c);
+    if r <= c {
+        let sr = -p + 2.0 * k * libm::log(r / CYL_A);
+        (sr, sr + 2.0 * k)
+    } else {
+        // The elastic ring outside `c` is a Lamé cylinder under the interface pressure
+        // `k (1 − c²/b²)`.
+        let pc = k * (1.0 - c * c / (CYL_B * CYL_B));
+        let f = pc * c * c / (CYL_B * CYL_B - c * c);
+        (f * (1.0 - CYL_B * CYL_B / (r * r)), f * (1.0 + CYL_B * CYL_B / (r * r)))
+    }
+}
+
+/// The residual sequence of every Newton increment the loop reported, by increment number.
+fn residuals_by_increment(messages: &[String]) -> BTreeMap<usize, Vec<f64>> {
+    let mut out: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
+    for m in messages {
+        let Some(rest) = m.strip_prefix("increment ") else { continue };
+        let (inc, tail) = rest.split_once(',').expect("increment N, iteration k, ...");
+        let residual = tail.rsplit("relative residual ").next().expect("relative residual r");
+        out.entry(inc.parse().expect("a number")).or_default().push(residual.parse().expect("a float"));
+    }
+    out
+}
+
+/// L3: Hill's thick-walled cylinder, `b = 2a`, elastic–perfectly plastic, plane strain. Loaded
+/// to the pressure that puts the interface at `c = 1.5a`: the plastic zone is where the plastic
+/// strain is, the stresses follow the two-zone closed form, and the outer surface moves by
+/// `2(1 − ν²) k c²/(E b)`. Then to 97 % of the limit pressure `(2σ_y/√3) ln(b/a)`, which the
+/// loop still converges at with most of the wall yielded, while 8 % above it no increment
+/// converges: the Step ends with `newton.diverged` rather than a number.
+///
+/// L8 rides on the same run: the residual of a plastic increment drops quadratically, which is
+/// the consistent tangent seen from outside the law.
+#[test]
+fn the_thick_walled_cylinder_follows_hill_and_stops_at_the_limit_pressure() {
+    let (n_r, n_theta) = (16, 12);
+    let c = 1.5 * CYL_A;
+    let p = hill_pressure(c);
+    let k = CYL_SY / 3f64.sqrt();
+    let direct = SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() };
+    let o = NlOptions { increments: 6, solver: direct, ..nl_options(6) };
+    let (mesh, res, messages) = pressurised_cylinder(ElementKind::Quad8, n_r, n_theta, p, o.clone());
+    let res = res.expect("converges");
+    let h_r = (CYL_B - CYL_A) / n_r as f64;
+    let peeq = &res.fields[&Field::PlasticStrain];
+    let stress = &res.fields[&Field::Stress];
+    let (mut worst_dev, mut worst_mean) = (0.0f64, 0.0f64);
+    for n in 0..mesh.n_nodes() {
+        let x = mesh.node(n as u32);
+        let r = (x[0] * x[0] + x[1] * x[1]).sqrt();
+        // The plastic zone, one element either side of the interface excepted (nodal
+        // averaging straddles it).
+        if r < c - h_r {
+            assert!(peeq.data[n] > 0.0, "node {n} at r = {r} has yielded");
+        } else if r > c + h_r {
+            assert_eq!(peeq.data[n], 0.0, "node {n} at r = {r} is elastic");
+        }
+        let (ct, st) = (x[0] / r, x[1] / r);
+        let s = &stress.data[n * VOIGT..(n + 1) * VOIGT];
+        let sr = s[0] * ct * ct + s[1] * st * st + 2.0 * s[3] * st * ct;
+        let sth = s[0] * st * st + s[1] * ct * ct - 2.0 * s[3] * st * ct;
+        let (sr_want, sth_want) = hill_stresses(c, r);
+        // The deviatoric part `σ_θ − σ_r` is what the yield condition and the Lamé ring fix;
+        // the mean stress of a fully integrated element at ν = 0.499 is the well-known noisy
+        // one, worst at the loaded bore, and is gated separately and more loosely.
+        worst_dev = worst_dev.max(((sth - sr) - (sth_want - sr_want)).abs() / (2.0 * k));
+        worst_mean = worst_mean.max(((sth + sr) - (sth_want + sr_want)).abs() / (4.0 * k));
+    }
+    eprintln!(
+        "L3 stresses: worst σ_θ − σ_r error {worst_dev:.2e} of 2k, worst mean-stress error {worst_mean:.2e} of 2k"
+    );
+    assert!(worst_dev <= 0.02, "{worst_dev}");
+    assert!(worst_mean <= 0.08, "{worst_mean}");
+    // The outer surface displacement.
+    let u = &res.fields[&Field::Displacement];
+    let want_ub = 2.0 * (1.0 - CYL_NU * CYL_NU) * k * c * c / (CYL_E * CYL_B);
+    let outer = node_at(&mesh, [CYL_B, 0.0, 0.0]);
+    let ub = u.data[outer as usize * u.comps];
+    eprintln!("L3 u(b) = {ub} vs {want_ub}, relative {:.2e}", (ub - want_ub).abs() / want_ub);
+    assert!((ub - want_ub).abs() <= 0.01 * want_ub, "{ub} vs {want_ub}");
+    // L8: in the increment that took the most iterations, the residual drops quadratically:
+    // the estimated order over the last two reported ratios is at least 1.8.
+    // The estimated order over the last three residuals above the direct solver's round-off
+    // floor (1e-9 of the force scale) is at least 1.7; the earlier iterations of the same
+    // increment, where the set of yielded points is still changing, are not asymptotic and
+    // are not gated.
+    let by_inc = residuals_by_increment(&messages);
+    let longest = by_inc.values().max_by_key(|v| v.len()).expect("some increment reported");
+    eprintln!("L8 residuals: {by_inc:?}");
+    let above: Vec<f64> = longest.iter().copied().filter(|r| *r > 1e-9).collect();
+    assert!(above.len() >= 3, "a plastic increment needs several corrections: {longest:?}");
+    let n = above.len();
+    let order = libm::log(above[n - 1] / above[n - 2]) / libm::log(above[n - 2] / above[n - 3]);
+    eprintln!("L8 observed order {order:.2} over {:?}", &above[n - 3..]);
+    assert!(order >= 1.7, "Newton is quadratic with a consistent tangent: order {order}");
+    // The limit pressure.
+    let p_lim = 2.0 * k * libm::log(CYL_B / CYL_A);
+    let near = NlOptions { increments: 12, ..o.clone() };
+    let (_, res, _) = pressurised_cylinder(ElementKind::Quad8, n_r, n_theta, 0.97 * p_lim, near);
+    let res = res.expect("97 % of the limit pressure still converges");
+    let fraction = res.scalars["yielded_fraction"];
+    eprintln!("L3 at 0.97 p_lim: yielded fraction {fraction}, increments {}", res.scalars["increments_taken"]);
+    // Hill's interface at this pressure is at `c ≈ 0.86 b`, which by radial element count is
+    // 72 % of the wall.
+    assert!(fraction > 0.65 && fraction < 0.8, "{fraction}");
+    let beyond = NlOptions { increments: 4, max_cutbacks: 3, ..o };
+    let (_, res, _) = pressurised_cylinder(ElementKind::Quad8, n_r, n_theta, 1.08 * p_lim, beyond);
+    let e = res.expect_err("above the limit pressure there is no equilibrium");
+    assert_eq!(e.code, ErrorCode::NewtonDiverged, "{e:?}");
+    assert!(e.cause.contains("after 3 cutbacks"), "{}", e.cause);
+    eprintln!("L3 beyond the limit: {}", e.cause);
+}
+
+/// Bending constants for L4–L7: a stubby hex20 block, `h = 0.1` deep, `b = 0.005` wide, `L =
+/// 0.05` long, elastic–perfectly plastic with `σ_y/E = 1e-4` so the finite-strain terms
+/// (`κh`) stay well below the tolerances.
+const BEAM_L: f64 = 0.05;
+const BEAM_H: f64 = 0.1;
+const BEAM_B: f64 = 0.005;
+const BEAM_E: f64 = 200e9;
+const BEAM_SY: f64 = 20e6;
+
+/// `M_y = σ_y b h²/6` and `κ_y = 2σ_y/(E h)`: first yield of the rectangular section.
+fn beam_yield() -> (f64, f64) {
+    (BEAM_SY * BEAM_B * BEAM_H * BEAM_H / 6.0, 2.0 * BEAM_SY / (BEAM_E * BEAM_H))
+}
+
+/// The elastic–perfectly plastic moment–curvature curve of a rectangular section,
+/// `M/M_y = κ/κ_y` up to yield and `1.5 − 0.5 (κ_y/κ)²` beyond (the plastic hinge's `M_p = 1.5
+/// M_y` as `κ → ∞`).
+fn moment_curvature(kappa_over_yield: f64) -> f64 {
+    if kappa_over_yield <= 1.0 {
+        kappa_over_yield
+    } else {
+        1.5 - 0.5 / (kappa_over_yield * kappa_over_yield)
+    }
+}
+
+/// The block bent to curvature `κ_max · amplitude(t)` by prescribing `u_x = −κ X Y` on both end
+/// faces, `u_y` and `u_z` free there so the section carries no shear or lateral traction, and
+/// held against rigid motion on the neutral line of the root face. Returns the Result and the
+/// `xmax` node ids, from which the moment is read.
+fn bend_block(
+    ny: usize,
+    kappa: f64,
+    amplitude: Option<procedure::Amplitude>,
+    increments: usize,
+) -> (Mesh, StepResult, Vec<u32>) {
+    let mesh = Structured { kind: ElementKind::Hex20, n: [1, ny, 1] }
+        .build(|p| [BEAM_L * p[0], BEAM_H * (p[1] - 0.5), BEAM_B * p[2]]);
+    let mut sets = sets_of(&mesh);
+    let mut constraints = vec![fix("root", "xmin", [true, false, false], 0.0)];
+    let mut end = Vec::new();
+    let mut axis = Vec::new();
+    for n in 0..mesh.n_nodes() as u32 {
+        let x = mesh.node(n);
+        if (x[0] - BEAM_L).abs() < 1e-12 {
+            let name = format!("end{n}");
+            sets.insert(name.clone(), one_node(n));
+            constraints.push(fix(&name, &name, [true, false, false], -kappa * BEAM_L * x[1]));
+            end.push(n);
+        }
+        if x[0].abs() < 1e-12 && x[1].abs() < 1e-12 {
+            axis.push(n);
+        }
+    }
+    sets.insert("axis".into(), ResolvedSet { kind: SetKind::Node, faces: Vec::new(), nodes: axis, elems: Vec::new() });
+    constraints.push(fix("hold", "axis", [false, true, true], 0.0));
+    let bodies = one_body();
+    let mut p = problem(&mesh, &sets, &bodies, Idealisation::Solid3d, Formulation::Full, constraints);
+    p.materials = vec![j2_material(j2_props(BEAM_E, 0.0, BEAM_SY, 0.0))];
+    let o = NlOptions {
+        increments,
+        amplitude,
+        solver: SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() },
+        ..nl_options(increments)
+    };
+    let res = run_nonlinear(&p, o, &mut nop).expect("the block bends");
+    (mesh, res, end)
+}
+
+/// The bending moment the `xmax` face carries: the nodal reactions along `x` times their lever
+/// arm about the neutral axis in the deformed position.
+fn end_moment(mesh: &Mesh, res: &StepResult, end: &[u32]) -> f64 {
+    let (r, u) = (&res.fields[&Field::Reaction], &res.fields[&Field::Displacement]);
+    end.iter()
+        .map(|&n| {
+            let y = mesh.node(n)[1] + u.data[n as usize * 3 + 1];
+            -r.data[n as usize * 3] * y
+        })
+        .sum()
+}
+
+/// L4 and L5: the rectangular section in pure bending. Elastic at half the yield curvature,
+/// then at three times it, where the closed form is `M/M_y = 1.5 − 1/18`, converging at second
+/// order in the depth resolution towards it as the kink of the stress profile is integrated
+/// ever more finely; and at ten times it, within half a percent of the plastic moment `M_p =
+/// 1.5 M_y` — the plastic hinge.
+#[test]
+fn the_rectangular_section_follows_the_moment_curvature_curve_to_the_plastic_hinge() {
+    let (m_y, kappa_y) = beam_yield();
+    let (mesh, res, end) = bend_block(4, 0.5 * kappa_y, None, 1);
+    let m = end_moment(&mesh, &res, &end) / m_y;
+    eprintln!("L4 κ = 0.5 κ_y: M/M_y = {m}");
+    assert!((m - 0.5).abs() <= 1e-3, "elastic bending is exact for hex20: {m}");
+    assert!(!res.fields.contains_key(&Field::PlasticStrain) || res.scalars["yielded_fraction"] == 0.0);
+    // κ = 3 κ_y at 4, 8, 16, 32 elements through the depth: a convergence study.
+    let want = moment_curvature(3.0);
+    let mut errors = Vec::new();
+    let mut h = Vec::new();
+    for ny in [4usize, 8, 16, 32] {
+        let (mesh, res, end) = bend_block(ny, 3.0 * kappa_y, None, 3);
+        let m = end_moment(&mesh, &res, &end) / m_y;
+        eprintln!("L5 κ = 3 κ_y, ny = {ny}: M/M_y = {m} vs {want}, error {:.2e}", (m - want).abs());
+        errors.push((m - want).abs());
+        h.push(BEAM_H / ny as f64);
+        if ny == 8 {
+            assert!((m - want).abs() <= 0.01 * want, "{m} vs {want}");
+        }
+    }
+    assert!(errors[3] <= 5e-4 * want, "{:?}", errors);
+    let rate = observed_rate(&h, &errors);
+    eprintln!("L5 observed rate {rate:.2}");
+    assert!(rate >= 1.3, "second-order in the depth resolution: {rate}");
+    // κ = 10 κ_y: the plastic hinge.
+    let (mesh, res, end) = bend_block(16, 10.0 * kappa_y, None, 5);
+    let m = end_moment(&mesh, &res, &end) / m_y;
+    eprintln!("L4 κ = 10 κ_y: M/M_y = {m} vs {} (M_p = 1.5)", moment_curvature(10.0));
+    assert!((m - moment_curvature(10.0)).abs() <= 5e-3, "{m}");
+    assert!(m < 1.5 && m > 1.49, "below M_p and within half a percent of it: {m}");
+    assert!(res.scalars["yielded_fraction"] > 0.85, "{}", res.scalars["yielded_fraction"]);
+}
+
+/// L6: springback. Bent to `3 κ_y` and unloaded by the elastic curvature `M/(EI)`, the section
+/// carries no moment, keeps the curvature `κ_res = (3 − M/M_y) κ_y`, and holds the classical
+/// residual stress `σ_y (1 − M/M_y)` at the surface — the elastic unloading superposed on the
+/// plastic distribution — with the plastic strain of the loading left in place.
+#[test]
+fn unloading_the_bent_section_leaves_the_residual_stress_of_elastic_springback() {
+    let (m_y, kappa_y) = beam_yield();
+    let m_load = moment_curvature(3.0);
+    let kappa_res = (3.0 - m_load) * kappa_y;
+    let amplitude =
+        procedure::Amplitude::Table { t: vec![0.0, 0.5, 1.0], value: vec![0.0, 1.0, kappa_res / (3.0 * kappa_y)] };
+    let ny = 16;
+    let (mesh, res, end) = bend_block(ny, 3.0 * kappa_y, Some(amplitude), 6);
+    let m = end_moment(&mesh, &res, &end) / m_y;
+    eprintln!("L6 unloaded: M/M_y = {m}");
+    assert!(m.abs() <= 5e-3, "no moment left after springback: {m}");
+    let sigma_res = BEAM_SY * (1.0 - m_load);
+    let stress = &res.fields[&Field::Stress];
+    let peeq = &res.fields[&Field::PlasticStrain];
+    let ey = BEAM_SY / BEAM_E;
+    let mut checked = 0;
+    for n in 0..mesh.n_nodes() {
+        let x = mesh.node(n as u32);
+        if (x[0] - 0.5 * BEAM_L).abs() > 1e-12 || (x[1].abs() - 0.5 * BEAM_H).abs() > 1e-12 {
+            continue;
+        }
+        // Loading compresses the top fibre; unloading adds the elastic `+(M/I) y`.
+        let want = if x[1] > 0.0 { -sigma_res } else { sigma_res };
+        let sxx = stress.data[n * VOIGT];
+        eprintln!(
+            "L6 residual σ_xx at y = {:+.3}: {sxx:.4e} vs {want:.4e}; PEEQ {:.4e} vs {:.4e}",
+            x[1],
+            peeq.data[n],
+            2.0 * ey
+        );
+        assert!((sxx - want).abs() <= 0.02 * BEAM_SY, "{sxx} vs {want}");
+        assert!((peeq.data[n] - 2.0 * ey).abs() <= 0.02 * ey, "{}", peeq.data[n]);
+        checked += 1;
+    }
+    assert_eq!(checked, 4);
+}
+
+/// A perfectly plastic bar squashed under load control past its yield load has no
+/// equilibrium to find: its tangent along the bar is exactly zero from the material and
+/// negative from the compressive initial stress, so the direct solver meets a non-positive
+/// pivot. That is a cutback, not a linear-algebra error, and after the allowed cutbacks the
+/// Step ends with `newton.diverged` — which is how a collapse load reports itself. The same
+/// bar under a load it can carry converges as usual.
+#[test]
+fn a_load_past_the_collapse_load_is_a_cutback_and_then_newton_diverged() {
+    let mesh = Structured { kind: ElementKind::Hex8, n: [2, 1, 1] }.box_([1.0, 0.1, 0.1]);
+    let sets = sets_of(&mesh);
+    let bodies = one_body();
+    let squash = |factor: f64, max_cutbacks: usize| {
+        let mut p = problem(
+            &mesh,
+            &sets,
+            &bodies,
+            Idealisation::Solid3d,
+            Formulation::Full,
+            vec![
+                fix("root", "xmin", [true, false, false], 0.0),
+                fix("sym_y", "ymin", [false, true, false], 0.0),
+                fix("sym_z", "zmin", [false, false, true], 0.0),
+            ],
+        );
+        p.materials = vec![j2_material(j2_props(BAR_E, 0.0, BAR_SY, 0.0))];
+        p.loads = vec![Load::Traction { faces: "xmax".into(), t: [-factor * BAR_SY, 0.0, 0.0] }];
+        let o = NlOptions {
+            increments: 2,
+            max_cutbacks,
+            converge: NlConverge { tolerance: 1e-8, max_newton: 50 },
+            solver: SolveOptions { solver: Solver::CpuDirect, ..SolveOptions::default() },
+            ..nl_options(2)
+        };
+        run_nonlinear(&p, o, &mut nop)
+    };
+    let fine = squash(0.9, 2).expect("below the yield load the bar is elastic");
+    assert_eq!(fine.scalars["yielded_fraction"], 0.0);
+    assert_eq!(fine.scalars["cutbacks"], 0.0);
+    let e = squash(1.2, 2).expect_err("past the yield load a perfectly plastic bar carries nothing more");
+    assert_eq!(e.code, ErrorCode::NewtonDiverged, "{e:?}");
+    assert!(e.cause.contains("after 2 cutbacks"), "{}", e.cause);
 }

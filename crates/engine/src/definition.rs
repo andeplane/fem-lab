@@ -165,6 +165,24 @@ pub(crate) fn command(m: &Model, kind: ObjectKind, name: &str) -> Result<Command
                 k: x.k.filter(|_| isotropic).map(|v| Q::new(v.axes()[0], "W/(m K)")),
                 cp: x.cp.map(|v| Q::new(v, "J/(kg K)")),
                 yield_: x.yield_.map(|v| Q::new(v, "Pa")),
+                plasticity: x.plasticity.as_ref().map(|h| match h {
+                    crate::model::Hardening::Linear { h, .. } => {
+                        crate::command::Plasticity { h: Some(Q::new(*h, "Pa")), table: None }
+                    }
+                    crate::model::Hardening::Table { plastic_strain, stress } => crate::command::Plasticity {
+                        h: None,
+                        table: Some(
+                            plastic_strain
+                                .iter()
+                                .zip(stress)
+                                .map(|(&e, &s)| crate::command::HardeningPoint {
+                                    plastic_strain: e,
+                                    stress: Q::new(s, "Pa"),
+                                })
+                                .collect(),
+                        ),
+                    },
+                }),
                 source: x.source.clone(),
             }
         }

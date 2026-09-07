@@ -9,7 +9,7 @@ use femlab_geometry::Mesh;
 
 use crate::command::{Field, ObjectKind, Procedure, QuantityOfInterest, Solver};
 use crate::engine::{display, Engine, OnProgress};
-use crate::error::{Error, ErrorCode};
+use crate::error::{Error, ErrorCode, Warning};
 use crate::fem::element::Material;
 use crate::fem::heat::HeatLoad;
 use crate::fem::loads::{face_set_area, face_set_polar_moment, Load};
@@ -28,19 +28,29 @@ use crate::units::{
     Dim, Dimension, Force, Frequency, Length, Power, ReactionQuantity, Stress, Temperature, Time, Torque, Q,
 };
 
-/// The two built-in laws a Model material resolves to; plugins add their own later.
+/// The three built-in laws a Model material resolves to; plugins add their own later.
 const LAW: &str = "linear-elastic";
 const ORTHOTROPIC_LAW: &str = "orthotropic-elastic";
+const J2_LAW: &str = "j2-plasticity";
 
 /// One Model material as the numbers an element needs.
 ///
 /// `material.add` guarantees exactly one of the isotropic and orthotropic forms is present. A
 /// Model that says neither — which only a hand-edited file can — resolves to a zero-stiffness
 /// isotropic material rather than panicking, and `fem::checks` reports the singular system.
-fn resolve_material(m: &crate::model::Material) -> Material {
-    let (id, props) = match &m.orthotropic {
-        Some(o) => (ORTHOTROPIC_LAW, o.props()),
-        None => (LAW, vec![m.e.unwrap_or(0.0), m.nu.unwrap_or(0.0)]),
+///
+/// The plasticity block is integrated only by the procedure that carries a Gauss-point history,
+/// `static-nonlinear`; every other procedure evaluates a law *at* a strain rather than along a
+/// path, so it gets the elastic part and the Step says so ([`plasticity_ignored`]).
+fn resolve_material(m: &crate::model::Material, procedure: Procedure) -> Material {
+    let (id, props) = match (&m.orthotropic, &m.plasticity) {
+        (Some(o), _) => (ORTHOTROPIC_LAW, o.props()),
+        (None, Some(h)) if procedure == Procedure::StaticNonlinear => {
+            let mut props = vec![m.e.unwrap_or(0.0), m.nu.unwrap_or(0.0)];
+            props.extend(h.props());
+            (J2_LAW, props)
+        }
+        (None, _) => (LAW, vec![m.e.unwrap_or(0.0), m.nu.unwrap_or(0.0)]),
     };
     Material {
         law: crate::fem::material::builtin_law(id).expect("the built-in law"),
@@ -51,6 +61,34 @@ fn resolve_material(m: &crate::model::Material) -> Material {
         cp: m.cp.unwrap_or(0.0),
         axes: m.orientation.as_ref().map(crate::model::Orientation::rows),
     }
+}
+
+/// The `material.plasticityIgnored` warning a Step that cannot integrate a history carries when
+/// a Material assigned in it has a plasticity block, naming the Materials; `None` when there is
+/// nothing to say.
+fn plasticity_ignored(model: &Model, p: &Problem<'_>, procedure: Procedure) -> Option<Warning> {
+    if procedure == Procedure::StaticNonlinear {
+        return None;
+    }
+    let mut names: Vec<&str> = p
+        .material_of_block
+        .iter()
+        .filter_map(|&i| i.map(|i| &model.materials[i]))
+        .filter(|m| m.plasticity.is_some())
+        .map(|m| m.name.as_str())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    (!names.is_empty()).then(|| Warning {
+        code: "material.plasticityIgnored".to_string(),
+        text: format!(
+            "the {} procedure has no Gauss-point history, so the plasticity of {} was not integrated and the \
+             elastic part was used; step.add with procedure static-nonlinear for the elastic–plastic answer",
+            procedure_name(procedure),
+            names.iter().map(|n| format!("'{n}'")).collect::<Vec<_>>().join(", ")
+        ),
+        where_: Some("material".to_string()),
+    })
 }
 
 /// A `contact.add` without a `tol` pairs across this fraction of the Mesh bounding-box
@@ -66,7 +104,7 @@ pub fn field_dimension(field: Field, reaction: ReactionQuantity) -> Dimension {
             ReactionQuantity::Power => Power::DIM,
         },
         Field::Temperature => Temperature::DIM,
-        Field::Strain | Field::Rotation => Dimension::NONE,
+        Field::Strain | Field::Rotation | Field::PlasticStrain => Dimension::NONE,
         Field::Stress | Field::StressUnaveraged | Field::VonMises | Field::Principal => Stress::DIM,
         Field::SectionForce => Force::DIM,
         Field::SectionMoment => Torque::DIM,
@@ -94,7 +132,7 @@ fn build_problem_with_temperature<'a>(
     previous: Option<&FieldData>,
 ) -> Result<Problem<'a>, Error> {
     let heat = matches!(step.procedure, Procedure::HeatSteady | Procedure::HeatTransient);
-    let materials: Vec<Material> = model.materials.iter().map(resolve_material).collect();
+    let materials: Vec<Material> = model.materials.iter().map(|m| resolve_material(m, step.procedure)).collect();
     let material_of_block = built
         .body_of_block
         .iter()
@@ -752,6 +790,7 @@ impl Engine {
                 )
                 .await?;
                 result.assumptions = assumptions;
+                result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
                 result
             }
         };
@@ -837,6 +876,7 @@ impl Engine {
                 let mut result =
                     procedure::run(&p, &proc_step, &self.pool, self.gpu.as_ref(), None, &mut progress).await?;
                 result.assumptions = assumptions;
+                result.warnings.extend(plasticity_ignored(&self.model, &p, step.procedure));
                 (result, dofs)
             };
             result.solver.time_ms = self.host.now_ms() - started;
@@ -1021,6 +1061,7 @@ impl Engine {
             step: name.to_string(),
             reaction_quantity: res.reaction_quantity,
             storage_power: storage_power.map(|p| display(m, p, Power::DIM)),
+            yielded_fraction: res.scalars.get("yielded_fraction").copied(),
             revision: record.revision,
             stale: *hash != crate::hash::result_hash(&self.model),
             solver: res.solver.solver.to_string(),
@@ -1112,6 +1153,7 @@ pub fn export_fields(res: &StepResult) -> Vec<(&'static str, usize, Vec<f64>)> {
         ),
         ("Stress", Field::Stress),
         ("VonMises", Field::VonMises),
+        ("PlasticStrain", Field::PlasticStrain),
         ("Temperature", Field::Temperature),
     ]
     .iter()
@@ -1153,6 +1195,7 @@ mod tests {
             (Field::Temperature, "temperature", Temperature::DIM),
             (Field::Strain, "strain", Dimension::NONE),
             (Field::Rotation, "rotation", Dimension::NONE),
+            (Field::PlasticStrain, "plasticStrain", Dimension::NONE),
             (Field::Stress, "stress", Stress::DIM),
             (Field::StressUnaveraged, "stressUnaveraged", Stress::DIM),
             (Field::VonMises, "vonMises", Stress::DIM),

@@ -258,6 +258,7 @@ impl Engine {
                 }),
                 rho: mat.rho.map(|r| display(m, r, Density::DIM)),
                 yield_: mat.yield_.map(|y| display(m, y, Stress::DIM)),
+                plasticity: mat.plasticity.is_some(),
                 assigned_to: m
                     .bodies
                     .iter()

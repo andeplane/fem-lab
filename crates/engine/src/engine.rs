@@ -656,7 +656,20 @@ impl Engine {
                 Ok(upsert(&mut self.model.points, pm, |p| &p.name, ObjectKind::Set))
             }
             Command::GeometryRemove { name } => self.geometry_remove(name),
-            Command::MaterialAdd { name, e, nu, orthotropic, orientation, rho, alpha, k, cp, yield_, source } => {
+            Command::MaterialAdd {
+                name,
+                e,
+                nu,
+                orthotropic,
+                orientation,
+                rho,
+                alpha,
+                k,
+                cp,
+                yield_,
+                plasticity,
+                source,
+            } => {
                 check_name(name)?;
                 let isotropic = match (e, nu) {
                     (Some(e), Some(nu)) => Some((e, nu)),
@@ -696,6 +709,8 @@ impl Engine {
                 }
                 let ortho_alpha = orthotropic.as_ref().and_then(|o| o.alpha.as_ref());
                 let ortho_k = orthotropic.as_ref().and_then(|o| o.k.as_ref());
+                let yield_si = opt_si(yield_, "yield")?;
+                let plasticity = plasticity.as_ref().map(|p| plasticity_si(p, yield_si, e_si)).transpose()?;
                 let mat = Material {
                     name: name.clone(),
                     e: e_si,
@@ -706,7 +721,10 @@ impl Engine {
                     alpha: axis_property(alpha, ortho_alpha, "alpha")?,
                     k: axis_property(k, ortho_k, "k")?,
                     cp: opt_si(cp, "cp")?,
-                    yield_: opt_si(yield_, "yield")?,
+                    // A hardening table's first stress is the yield stress, whether or not
+                    // `yield` was also given.
+                    yield_: plasticity.as_ref().map(crate::model::Hardening::initial_yield).or(yield_si),
+                    plasticity,
                     source: source.clone(),
                 };
                 Ok(upsert(&mut self.model.materials, mat, |m| &m.name, ObjectKind::Material))
@@ -1883,6 +1901,102 @@ fn axis_property<D: crate::units::Dim>(
         .suggest(format!("material.add with only one of {field} and orthotropic.{field}"))),
         (Some(v), None) => Ok(Some(Axial::Isotropic(v))),
         (None, per_axis) => Ok(per_axis),
+    }
+}
+
+/// The plasticity block in SI: which hardening form, that it is the only one, that the numbers
+/// are admissible, and that the initial yield is stated exactly once — on `yield` for linear
+/// hardening, as the first table row (and on `yield` too only if it agrees) for a table. J2 is
+/// isotropic, so the Material must have `E` and `nu`.
+fn plasticity_si(
+    p: &crate::command::Plasticity,
+    yield_si: Option<f64>,
+    e_si: Option<f64>,
+) -> Result<crate::model::Hardening, Error> {
+    use crate::model::Hardening;
+    let schema = |cause: String, at: &str, fix: &str| Error::schema(cause).at(at).suggest(fix);
+    if e_si.is_none() {
+        return Err(schema(
+            "plasticity needs an isotropic material: J2 plasticity has no orthotropic form".into(),
+            "plasticity",
+            "material.add with E and nu",
+        ));
+    }
+    match (&p.h, &p.table) {
+        (Some(h), None) => {
+            let h = h.si().map_err(|e| e.at("plasticity.H"))?;
+            if !(h.is_finite() && h >= 0.0) {
+                return Err(schema(
+                    format!("the hardening modulus H must be finite and not negative, got {h} Pa"),
+                    "plasticity.H",
+                    "material.add with H of 0 Pa for perfect plasticity or a positive plastic modulus",
+                ));
+            }
+            let Some(yield_) = yield_si else {
+                return Err(schema(
+                    "plasticity with linear hardening needs the initial yield stress".into(),
+                    "yield",
+                    "material.add with yield, e.g. '355 MPa'",
+                ));
+            };
+            if !(yield_.is_finite() && yield_ > 0.0) {
+                return Err(schema(
+                    format!("the yield stress must be finite and positive, got {yield_} Pa"),
+                    "yield",
+                    "material.add with a positive yield",
+                ));
+            }
+            Ok(Hardening::Linear { yield_, h })
+        }
+        (None, Some(table)) => {
+            if table.len() < 2 {
+                return Err(schema(
+                    format!("a hardening table needs at least two points, got {}", table.len()),
+                    "plasticity.table",
+                    "material.add with a table of (plasticStrain, stress) points, or H for linear hardening",
+                ));
+            }
+            let mut plastic_strain = Vec::with_capacity(table.len());
+            let mut stress = Vec::with_capacity(table.len());
+            for (i, row) in table.iter().enumerate() {
+                let at = format!("plasticity.table[{i}]");
+                let s = row.stress.si().map_err(|e| e.at(format!("{at}.stress")))?;
+                let e = row.plastic_strain;
+                let ascending = if i == 0 { e == 0.0 } else { e.is_finite() && e > plastic_strain[i - 1] };
+                if !ascending {
+                    return Err(schema(
+                        format!("plasticStrain must start at 0 and ascend, got {e} at row {i}"),
+                        &format!("{at}.plasticStrain"),
+                        "material.add with the table rows in ascending plastic strain from 0",
+                    ));
+                }
+                let hardening = s.is_finite() && s > 0.0 && stress.last().is_none_or(|&prev| s >= prev);
+                if !hardening {
+                    return Err(schema(
+                        format!("stress must be positive and not decrease along the table, got {s} Pa at row {i}"),
+                        &format!("{at}.stress"),
+                        "material.add with a non-decreasing, positive stress column",
+                    ));
+                }
+                plastic_strain.push(e);
+                stress.push(s);
+            }
+            if let Some(y) = yield_si {
+                if (y - stress[0]).abs() > 1e-9 * stress[0] {
+                    return Err(schema(
+                        format!("yield ({y} Pa) disagrees with the first table stress ({} Pa)", stress[0]),
+                        "yield",
+                        "material.add with yield omitted or equal to the table's first stress",
+                    ));
+                }
+            }
+            Ok(Hardening::Table { plastic_strain, stress })
+        }
+        _ => Err(schema(
+            "give exactly one of H (linear hardening) and table (a hardening curve)".into(),
+            "plasticity",
+            "material.add with plasticity: { H: '0 Pa' } or plasticity: { table: [...] }",
+        )),
     }
 }
 

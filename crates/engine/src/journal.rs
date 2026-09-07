@@ -225,6 +225,7 @@ mod tests {
                 k: None,
                 cp: None,
                 yield_: Some(Q::text("355 MPa")),
+                plasticity: None,
                 source: None,
             },
             Command::GeometryNameFace {

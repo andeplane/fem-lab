@@ -350,6 +350,9 @@ pub struct MaterialRow {
     /// Current yield strength in the Model's display stress unit, when specified.
     #[serde(rename = "yield", default, skip_serializing_if = "Option::is_none")]
     pub yield_: Option<Valued>,
+    /// Whether the Material carries a plasticity block (J2, isotropic hardening).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plasticity: bool,
     pub assigned_to: Vec<String>,
 }
 
@@ -661,6 +664,11 @@ pub struct ResultSummary {
     /// itself is at the final time. Positive reactions remove heat: applied − removed = storage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_power: Option<Valued>,
+    /// The fraction of the integration points whose equivalent plastic strain is positive:
+    /// how much of the Model has yielded. Only a `static-nonlinear` Step with an
+    /// elastic–plastic Material reports it; 0 there means everything stayed elastic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yielded_fraction: Option<f64>,
     /// Optional material properties the successful procedure actually read as zero because the
     /// Material omitted them. Empty when every solver-used property was explicit.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

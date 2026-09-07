@@ -360,6 +360,7 @@ export type Command =
               }
           )
         | null;
+      plasticity?: Plasticity | null;
       source?: string | null;
       cmd: "material.add";
     }
@@ -1987,7 +1988,9 @@ export type Procedure =
  * global axes, radians, zero where no beam reaches), `sectionForce` (`N` positive in
  * tension, `V_y`, `V_z` along the member's local axes) and `sectionMoment` (`T` about the
  * member axis, `M_y`, `M_z`), the last two per element node (`elementNode` location), one
- * triple at each end of every beam and zeros on every other element.
+ * triple at each end of every beam and zeros on every other element. `plasticStrain` is the
+ * equivalent plastic strain (PEEQ), one component, which only a `static-nonlinear` Step with
+ * an elastic–plastic Material produces.
  */
 export type Field =
   | "displacement"
@@ -1996,6 +1999,7 @@ export type Field =
   | "vonMises"
   | "principal"
   | "strain"
+  | "plasticStrain"
   | "reaction"
   | "temperature"
   | "rotation"
@@ -2759,6 +2763,22 @@ export type ModelFile_RegionPredicate =
  */
 export type Axial = number | [number, number, number];
 /**
+ * The isotropic hardening curve of an elastic–plastic Material, SI: the yield stress as a
+ * function of equivalent plastic strain, either a line or a piecewise-linear table that is held
+ * flat beyond its last point.
+ */
+export type Hardening =
+  | {
+      yield: number;
+      h: number;
+      kind: "linear";
+    }
+  | {
+      plasticStrain: number[];
+      stress: number[];
+      kind: "table";
+    };
+/**
  * A Constraint on a Set.
  */
 export type Constraint = {
@@ -3267,6 +3287,7 @@ export type ModelFile_Command =
               }
           )
         | null;
+      plasticity?: Plasticity | null;
       source?: string | null;
       cmd: "material.add";
     }
@@ -4594,6 +4615,7 @@ export type DocumentSnapshot_Command =
               }
           )
         | null;
+      plasticity?: Plasticity | null;
       source?: string | null;
       cmd: "material.add";
     }
@@ -5479,6 +5501,53 @@ export interface Orientation {
       };
 }
 /**
+ * Rate-independent von Mises (J2) plasticity with isotropic hardening, for an isotropic
+ * Material in a `static-nonlinear` Step. The initial yield stress is `yield` on `material.add`.
+ * Give exactly one of `H` and `table`: `H` is the plastic modulus `dσ_y/dε̄ᵖ` of linear
+ * hardening (the tangent modulus of a tension test is then `E_t = E H / (E + H)`; `"0 Pa"` is
+ * perfect plasticity), `table` is the tension curve as (equivalent plastic strain, yield
+ * stress) points, piecewise linear, starting at plastic strain 0 with `yield` and held flat
+ * beyond its last point. Every other procedure uses the elastic part and warns
+ * `material.plasticityIgnored`. Small strain: not a finite-strain plasticity model.
+ */
+export interface Plasticity {
+  /**
+   * Linear hardening modulus, `σ_y = yield + H ε̄ᵖ`; zero is perfectly plastic.
+   */
+  H?:
+    | (
+        | string
+        | {
+            value: number;
+            unit: string;
+          }
+      )
+    | null;
+  /**
+   * Hardening curve, at least two points with plastic strain ascending from 0 and stress
+   * not decreasing; the first stress is the initial yield.
+   */
+  table?: HardeningPoint[] | null;
+}
+/**
+ * One point of a hardening curve: the yield stress at an equivalent plastic strain.
+ */
+export interface HardeningPoint {
+  /**
+   * Equivalent plastic strain (dimensionless, so 0.02 is 2 %).
+   */
+  plasticStrain: number;
+  /**
+   * A stress with unit, e.g. "210 GPa". Any unit of the right dimension is accepted.
+   */
+  stress:
+    | string
+    | {
+        value: number;
+        unit: string;
+      };
+}
+/**
  * One block of a mapped mesh: a curvilinear quadrilateral filled with a structured grid.
  *
  * `corners` are the four corners counter-clockwise; the block's (u, v) square runs corner 0 to
@@ -5958,6 +6027,10 @@ export interface MaterialRow {
    * Current yield strength in the Model's display stress unit, when specified.
    */
   yield?: Valued | null;
+  /**
+   * Whether the Material carries a plasticity block (J2, isotropic hardening).
+   */
+  plasticity?: boolean;
   assignedTo: string[];
 }
 /**
@@ -6232,6 +6305,12 @@ export interface ResultSummary {
    * itself is at the final time. Positive reactions remove heat: applied − removed = storage.
    */
   storagePower?: Valued | null;
+  /**
+   * The fraction of the integration points whose equivalent plastic strain is positive:
+   * how much of the Model has yielded. Only a `static-nonlinear` Step with an
+   * elastic–plastic Material reports it; 0 there means everything stayed elastic.
+   */
+  yieldedFraction?: number | null;
   /**
    * Optional material properties the successful procedure actually read as zero because the
    * Material omitted them. Empty when every solver-used property was explicit.
@@ -7109,6 +7188,10 @@ export interface Material {
   k?: Axial | null;
   cp?: number | null;
   yield?: number | null;
+  /**
+   * J2 plasticity with this hardening; `None` is elastic.
+   */
+  plasticity?: Hardening | null;
   source?: string | null;
 }
 /**
@@ -7567,6 +7650,10 @@ export interface DocumentSnapshot_Material {
   k?: Axial | null;
   cp?: number | null;
   yield?: number | null;
+  /**
+   * J2 plasticity with this hardening; `None` is elastic.
+   */
+  plasticity?: Hardening | null;
   source?: string | null;
 }
 /**
